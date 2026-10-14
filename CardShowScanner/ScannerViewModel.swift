@@ -48,7 +48,7 @@ import AudioToolbox
                     selected = scan.candidates.first
                     confirmed = scan.accepted && (selected?.confidence ?? 0) >= 90 && selected?.requiresPrintingSelection != true
                 }
-                if let index = scan.candidates.firstIndex(where: { $0.identity.productID == selected?.identity.productID }) {
+                if let index = scan.candidates.firstIndex(where: { $0.identity.productID == self.selected?.identity.productID }) {
                     selected?.confidence = scan.candidates[index].confidence
                 }
                 let defaults = UserDefaults.standard

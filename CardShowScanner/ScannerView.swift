@@ -39,7 +39,7 @@ struct ScannerView: View {
                         Text("Printing is ambiguous. Confirm a finish before adding.").foregroundStyle(.orange)
                     }
                     Text(model.result?.accepted == true ? "Recognized match — review before adding" : "Ambiguous result — select the correct candidate below")
-                        .font(.callout).foregroundStyle(model.confirmed ? .primary : .orange)
+                        .font(.callout).foregroundStyle(model.confirmed ? Color.primary : Color.orange)
                     Text("Possible matches").font(.headline)
                     ForEach(Array((model.result?.candidates ?? []).prefix(5))) { candidate in
                         Button { model.choose(candidate) } label: {
