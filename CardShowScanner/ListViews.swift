@@ -126,7 +126,8 @@ struct CardListView: View {
                 if let shareURL { ShareSheet(url: shareURL) }
             }
             .fileExporter(isPresented: $exporting, document: CSVDocument(text: exportText), contentType: .commaSeparatedText, defaultFilename: "CardShowList.csv") { result in
-                if case .failure(let failure) = result { error = failure.localizedDescription }
+                if case .failure(let failure) = result { DiagnosticLog.shared.failure("csv.export_failed", failure); error = failure.localizedDescription }
+                else { DiagnosticLog.shared.record("csv.exported") }
             }.failureAlert($error)
     }
     private var csv: String { CSVExportService.render(list.cards.sorted { $0.addedAt < $1.addedAt }.map { ExportRow(card: $0.snapshot, quantity: $0.quantity) }) }
@@ -137,6 +138,7 @@ struct CardListView: View {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let url = directory.appendingPathComponent("CardShowList.csv")
             try Data(csv.utf8).write(to: url, options: .atomic); shareURL = url
+            DiagnosticLog.shared.record("csv.share_prepared", ["records": String(list.cards.count)])
         } catch { self.error = error.localizedDescription }
     }
     private func cleanupShare() { if let shareURL { try? FileManager.default.removeItem(at: shareURL.deletingLastPathComponent()) }; shareURL = nil }
@@ -206,7 +208,7 @@ struct CardEditorView: View {
             if let duplicate = item.list?.cards.first(where: { $0.id != item.id && $0.snapshot.identity == card.identity }) {
                 duplicate.quantity += quantity; try duplicate.update(card); context.delete(item)
             } else { item.quantity = quantity; try item.update(card) }
-            try CardListService.save(context); dismiss()
+            try CardListService.save(context); DiagnosticLog.shared.record("inventory.edited"); dismiss()
         } catch { context.rollback(); self.error = error.localizedDescription }
     }
 }

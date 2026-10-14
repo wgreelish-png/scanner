@@ -2,6 +2,12 @@ import SwiftUI
 import SwiftData
 
 @main struct CardShowScannerApp: App {
+    init() {
+        DiagnosticLog.shared.record("app.launch", [
+            "app_version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
+            "build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+        ])
+    }
     var body: some Scene {
         WindowGroup { HomeView() }
             .modelContainer(for: [CardList.self, InventoryCard.self, ScanSession.self])

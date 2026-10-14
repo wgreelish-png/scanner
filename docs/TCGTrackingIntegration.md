@@ -32,12 +32,14 @@ Pause, disappearance, and app backgrounding stop capture. Restart creates a fres
 
 ## Verification and remaining limits
 
-Ten Node tests execute the app-owned JavaScript adapter, including a fake module/camera harness. They verify normalization, five-candidate limits, missing prices, per-printing quotes, partial frames, nonce delivery, camera startup/teardown, backgrounding, missing packs, and camera denial. They do not execute TCGTracking's recognition engine or simulate WebKit.
+Eleven Node tests execute the app-owned JavaScript adapter, including a fake module/camera harness. They verify normalization, five-candidate limits, missing prices, per-printing quotes, partial frames, nonce delivery, camera startup/teardown, backgrounding, missing packs, and camera denial. They do not execute TCGTracking's recognition engine or simulate WebKit.
 
-Swift source has passed grammar parsing and the Xcode project has passed structural checks. Twelve XCTest cases are provided but have not run. This Linux machine has no Swift compiler, iOS SDK, Xcode, simulator, or camera. Direct cloud access to TCGTracking previously returned proxy HTTP 403. HAR success responses are historical evidence, not proof of current reachability. We have not claimed a successful live scan or an iOS build.
+Swift source has passed grammar parsing and the Xcode project has passed structural checks. Fourteen XCTest cases are provided but have not run. This Linux machine has no Swift compiler, iOS SDK, Xcode, simulator, or camera. Direct cloud access to TCGTracking previously returned proxy HTTP 403. HAR success responses are historical evidence, not proof of current reachability. We have not claimed a successful live scan or an iOS build.
 
 Required device checks: module imports under the current site's CSP/import map; worker/WASM support or main-thread fallback; camera permission grant/deny; download/cache behavior and large-pack memory usage; live candidate/finish accuracy and pricing; start/pause/retry/background teardown; duplicate behavior when an identical physical copy is replaced while the original remains recognized. The engine cannot reliably distinguish two identical physical copies without a loss-of-card/new recognition boundary; use **Add Another Copy** in that case. Website updates may break the experimental module contract; maintain mock mode as a development option.
 
 Observed hosts for device networking are `tcgtracking.com`, `nsp-static.tcgtracking.com`, and `cdn.tcgtracking.com`. Existing modules may load further assets based on the live page's configuration. No cloud network configuration was changed. An official published plugin bridge would be preferable when available; the provider isolates this version-dependent adapter so it can be replaced without changing lists or persistence.
 
 No additional files are currently needed: the HAR supplied the backend and pack files required for this implementation. If an actual runtime failure reveals another missing dependency, request that exact file then. TCGTracking CSV import compatibility remains unverified and is not offered.
+
+Local diagnostic logging now records bounded, sampled startup/recognition/add/save events. Settings can export JSON-lines logs, clear them, or disable future recording. See the README for the test-and-share workflow and exclusions.

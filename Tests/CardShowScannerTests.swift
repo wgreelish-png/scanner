@@ -158,4 +158,46 @@ import SwiftData
         provider.stop()
     }
 
+    func testDiagnosticRotationExportAndDataExclusion() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = "CardShowScanner.Tests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "diagnosticsEnabled")
+        let log = DiagnosticLog(directory: directory, maximumBytes: 2048, defaults: defaults)
+        for _ in 0..<100 { log.record("scan.test", ["confidence": "95", "card_name": "PRIVATE_CARD", "reason": "Bearer PRIVATE_TOKEN"]) }
+        XCTAssertFalse(log.storageFailed)
+        for name in ["current.jsonl", "previous.jsonl"] {
+            let data = try Data(contentsOf: directory.appendingPathComponent(name))
+            XCTAssertLessThanOrEqual(data.count, 2048)
+        }
+        let url = try log.export()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let text = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertFalse(text.contains("PRIVATE_CARD")); XCTAssertFalse(text.contains("PRIVATE_TOKEN"))
+        for line in text.split(separator: "\n") { XCTAssertNoThrow(try JSONSerialization.jsonObject(with: Data(line.utf8))) }
+        XCTAssertTrue(text.contains("diagnostics.environment"))
+        try log.clear()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("current.jsonl").path))
+    }
+    func testDiagnosticsDisabledAndSampledEvents() throws {
+        let suite = "CardShowScanner.Tests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let log = DiagnosticLog(directory: directory, defaults: defaults)
+        defaults.set(false, forKey: "diagnosticsEnabled")
+        log.record("disabled.event")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+        defaults.set(true, forKey: "diagnosticsEnabled")
+        for _ in 0..<20 { log.record("scan.sampled", sampleEvery: 60) }
+        let lines = try String(contentsOf: directory.appendingPathComponent("current.jsonl"), encoding: .utf8).split(separator: "\n")
+        XCTAssertEqual(lines.count, 1)
+        log.failure("test.failed", NSError(domain: NSURLErrorDomain, code: -1009, userInfo: [NSLocalizedDescriptionKey: "PRIVATE_URL_TOKEN"]))
+        let text = try String(contentsOf: directory.appendingPathComponent("current.jsonl"), encoding: .utf8)
+        XCTAssertTrue(text.contains("-1009")); XCTAssertFalse(text.contains("PRIVATE_URL_TOKEN"))
+    }
+
 }

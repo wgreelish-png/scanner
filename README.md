@@ -40,9 +40,9 @@ CSV uses explicit app-defined columns (including Language), CRLF records, escape
 
 ## Validation status
 
-This project was created on Linux without Swift, Xcode, an iOS SDK, or a simulator. **It has not been compiled or run on iOS.** Swift grammar parsing passed for all ten Swift source/test files; the Xcode project passed OpenStep parsing and the shared scheme passed XML parsing. These checks do not type-check SDK calls, expand SwiftData macros, run tests, or validate UI behavior.
+This project was created on Linux without Swift, Xcode, an iOS SDK, or a simulator. **It has not been compiled or run on iOS.** Swift grammar parsing passed for all eleven Swift source/test files; the Xcode project passed OpenStep parsing and the shared scheme passed XML parsing. These checks do not type-check SDK calls, expand SwiftData macros, run tests, or validate UI behavior.
 
-Twelve XCTest cases are supplied, but **not executed here**, covering:
+Fourteen XCTest cases are supplied, but **not executed here**, covering:
 
 - Repeated recognition frames versus a new physical-card episode.
 - Ambiguous and low-confidence automatic-add rejection.
@@ -53,7 +53,7 @@ Twelve XCTest cases are supplied, but **not executed here**, covering:
 - Disk-store reopening and cascade deletion.
 - Manual-add episode consumption, bridge partial updates/hide/validation, printing quotes and confirmation, and provider stop/restart.
 
-Ten JavaScript adapter tests pass on Node, including module/camera test doubles for startup, result delivery, teardown, backgrounding, and permission denial:
+Eleven JavaScript adapter tests pass on Node, including module/camera test doubles for startup, result delivery, teardown, backgrounding, and permission denial:
 
 ```sh
 node --experimental-vm-modules --test Tests/JavaScript/bridge.test.cjs
@@ -68,3 +68,18 @@ Before using this for a real collection, run the Xcode build/tests and manually 
 The uploaded source files and HAR have now been inspected. The user confirmed permission to proceed. The app implements a same-origin WKWebView module adapter with game-pack loading, camera startup, five detailed candidates, per-finish SKU/price selection, hide events, nonce-bound message validation, and camera teardown. It uses observed module exports rather than website result-DOM scraping or direct endpoint reimplementation.
 
 **The live path is experimental and has not been run on iOS.** No official stable API has been established. See [integration findings, architecture, evidence and device checks](docs/TCGTrackingIntegration.md). No further source files are currently needed. Xcode/device validation is the next required step; no additional permission confirmation is needed unless the user revokes permission.
+
+## Send a diagnostic log
+
+Logging is enabled by default and stays on the device. After updating and rebuilding:
+
+1. Open **Settings → Diagnostics → Clear Diagnostic Log** to start a focused test.
+2. Run the mock or live workflow, including any failure you want investigated.
+3. Return to **Settings → Diagnostics → Export Diagnostic Log** and save/share `CardShowScanner-diagnostics.jsonl`.
+4. Upload that file here, along with what you expected and what happened. Logs are not uploaded automatically.
+
+The JSON-lines file includes app/build/OS information, timestamps and a random app-run identifier. Events cover web navigation/injection, modules/database/backend/camera startup, sampled scanner timings/confidence, candidate/printing confirmation, repeated-frame and automatic-add decisions, inventory inserts/merges, session saves and errors. Repeated frames and timing samples are limited to roughly one event per five seconds per category. Two rotating files retain up to about 512 KB across app launches; older events are discarded.
+
+The log excludes card/list names, card product/SKU IDs, prices, camera images, credentials, cookies, bridge nonces, raw JavaScript payloads, free-form web status/error strings and request URLs/bodies. Error reports keep only a known domain/category and numeric code. Random recognition-episode IDs correlate updates without exposing card identity. Export includes recent runs, not Apple's entire console log. Turning **Record diagnostics** off stops new event recording; existing logs remain until cleared. Exported temporary files are removed when the share sheet closes. Files you save or send through another app remain under your control.
+
+Eleven JavaScript tests now pass, including structured telemetry and rate limiting. Two additional native diagnostic tests cover rotation, JSON export, opt-out, sampling and data exclusion; fourteen native XCTest cases are supplied in total, still requiring execution in Xcode.

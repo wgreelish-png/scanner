@@ -52,10 +52,12 @@ import SwiftData
 @MainActor enum CardListService {
     static func add(_ card: CardCandidate, to list: CardList, context: ModelContext) throws {
         if let existing = list.cards.first(where: { $0.snapshot.identity == card.identity }) {
+            DiagnosticLog.shared.record("inventory.merge")
             existing.quantity += 1
             // A fresh quote may update the same exact inventory variant.
             if card.marketPrice != nil { try existing.update(card) }
         } else {
+            DiagnosticLog.shared.record("inventory.insert")
             let item = try InventoryCard(card: card)
             context.insert(item); list.cards.append(item)
         }
@@ -67,8 +69,10 @@ import SwiftData
             context.insert(item); copy.cards.append(item)
         }
         try context.save()
+        DiagnosticLog.shared.record("list.duplicated")
     }
     static func save(_ context: ModelContext) throws {
-        do { try context.save() } catch { context.rollback(); throw error }
+        do { try context.save(); DiagnosticLog.shared.record("persistence.saved") }
+        catch { DiagnosticLog.shared.failure("persistence.failed", error); context.rollback(); throw error }
     }
 }

@@ -75,6 +75,7 @@ struct ScannerView: View {
             .onAppear { model.start(game: game, list: list, context: context) }
             .onDisappear { model.stop() }
             .onChange(of: scenePhase) { _, phase in
+                DiagnosticLog.shared.record("app.scene", ["phase": phase == .active ? "active" : (phase == .background ? "background" : "inactive")])
                 if phase == .active && !model.paused { model.start(game: game, list: list, context: context) }
                 else if phase == .background { model.stop() }
             }

@@ -110,3 +110,23 @@ test('camera denial is recoverable and never emits an inventory result', async (
   assert.equal(h.messages.some(m => m.kind === 'scan'), false);
   assert.ok(h.disposed > 0);
 });
+
+test('diagnostics report startup stages, sampled timings and safe camera errors', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3' });
+  await h.elements.find(e => e.tag === 'button').onclick();
+  const diagnostics = () => h.messages.filter(m => m.kind === 'diagnostic');
+  for (const event of ['bridge_ready', 'modules_ready', 'index_ready', 'pack_ready', 'backend_ready', 'camera_requested', 'camera_acquired', 'video_playing', 'scanner_ready']) {
+    assert.ok(diagnostics().some(m => m.event === event), event);
+  }
+  for (let i = 0; i < 20; i++) h.scannerOptions.onStats({ kind: 'worker', scanMs: 42, captureMs: 3, frames: 2 });
+  const stats = diagnostics().filter(m => m.event === 'scan_stats');
+  assert.equal(stats.length, 1); assert.equal(stats[0].scanMS, 42);
+  const denied = harness({ denyCamera: true }); await denied.bridge.install({ nonce: 'n', game: 'tcgp:3' });
+  await denied.elements.find(e => e.tag === 'button').onclick();
+  const failure = denied.messages.find(m => m.kind === 'diagnostic' && m.event === 'startup_failed');
+  assert.equal(failure.stage, 'camera'); assert.equal(failure.errorKind, 'Error');
+  assert.equal('message' in failure, false);
+  h.scannerOptions.onShow({ ref: tuple(), confidence: 96, accepted: true });
+  assert.ok(h.messages.some(m => m.kind === 'scan' && m.candidates[0].name === 'Sample 123'));
+  assert.equal(JSON.stringify(diagnostics()).includes('Sample 123'), false);
+});
