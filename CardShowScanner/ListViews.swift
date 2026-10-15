@@ -24,6 +24,7 @@ struct SavedListsView: View {
     @State private var newName = ""
     @State private var error: String?
     @State private var deleting: CardList?
+    @Query private var sessions: [ScanSession]
     var body: some View {
         List {
             Section("New list") {
@@ -36,7 +37,7 @@ struct SavedListsView: View {
             Section("Saved lists") {
                 ForEach(lists) { list in
                     NavigationLink {
-                        CardListView(list: list)
+                        CardListView(list: list, session: sessions.first { $0.listID == list.id })
                     } label: {
                         VStack(alignment: .leading) {
                             Text(list.name).font(.headline)
@@ -54,7 +55,10 @@ struct SavedListsView: View {
             }
         }.navigationTitle("My Lists").failureAlert($error)
             .confirmationDialog("Delete this list and its cards?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
-                Button("Delete List", role: .destructive) { if let deleting { context.delete(deleting); save() }; deleting = nil }
+                Button("Delete List", role: .destructive) { if let deleting {
+                    do { try SessionService.deleteList(deleting, context: context) }
+                    catch { self.error = error.localizedDescription }
+                }; deleting = nil }
             }
     }
     private func save() {
@@ -65,7 +69,7 @@ struct SavedListsView: View {
 struct CardListView: View {
     @Bindable var list: CardList
     @Environment(\.modelContext) private var context
-    @AppStorage("pricingPercentage") private var percentage = 70.0
+    var session: ScanSession? = nil
     @State private var search = ""
     @State private var sort = "Name"
     @State private var rename = false
@@ -88,11 +92,13 @@ struct CardListView: View {
     var body: some View {
         List {
             Section {
-                LabeledContent("Total quantity", value: String(list.quantity))
-                LabeledContent("Known market subtotal", value: list.knownValue.money)
-                LabeledContent("At \(Int(percentage))%", value: (list.knownValue * Decimal(percentage) / 100).money)
-                if list.unpricedQuantity > 0 { Text("Partial valuation: \(list.unpricedQuantity) copies have no price.").foregroundStyle(.orange) }
-                NavigationLink("Scan into this list") { ScannerView(list: list) }
+                if let session { SessionReviewHeader(session: session, list: list) }
+                else {
+                    LabeledContent("Total quantity", value: String(list.quantity))
+                    LabeledContent("Known market subtotal", value: list.knownValue.money)
+                    if list.unpricedQuantity > 0 { Text("Partial valuation: \(list.unpricedQuantity) copies have no price.").foregroundStyle(.orange) }
+                    Text("Preserved standalone list. Start a new session from Home to scan a new batch.").font(.caption)
+                }
             }
             Picker("Sort", selection: $sort) { ForEach(["Name", "Date", "Value"], id: \.self) { Text($0) } }
             if list.cards.isEmpty { ContentUnavailableView("No cards yet", systemImage: "rectangle.stack", description: Text("Open the scanner to add cards.")) }
@@ -103,12 +109,15 @@ struct CardListView: View {
                         Text("\(item.snapshot.set) • \(item.snapshot.number)").font(.caption)
                         Text("\(item.snapshot.identity.printing) • \(item.snapshot.identity.condition) • \(item.snapshot.identity.language)").font(.caption)
                         Text("Qty \(item.quantity) • \(item.snapshot.marketPrice.map { ($0 * Decimal(item.quantity)).money } ?? "Price unavailable")")
+                        if item.cashOverrideText != nil || item.tradeOverrideText != nil || item.maximumOverrideText != nil {
+                            Text("Per-copy offer overrides applied").font(.caption).foregroundStyle(.secondary)
+                        }
                     }.foregroundStyle(.primary).frame(minHeight: 60)
                 }.swipeActions {
                     Button("Remove", role: .destructive) { context.delete(item); save() }
                 }
             }
-        }.navigationTitle(list.name).searchable(text: $search)
+        }.navigationTitle(session == nil ? list.name : "Review & Offer").searchable(text: $search)
             .toolbar {
                 Menu {
                     Button("Rename") { name = list.name; rename = true }
@@ -158,10 +167,16 @@ struct CardEditorView: View {
     @State private var quantity: Int
     @State private var price: String
     @State private var error: String?
+    @State private var cashOverride: String
+    @State private var tradeOverride: String
+    @State private var maximumOverride: String
     init(item: InventoryCard) {
         self.item = item
         _card = State(initialValue: item.snapshot); _quantity = State(initialValue: item.quantity)
         _price = State(initialValue: CSVExportService.number(item.snapshot.marketPrice))
+        _cashOverride = State(initialValue: item.cashOverrideText ?? "")
+        _tradeOverride = State(initialValue: item.tradeOverrideText ?? "")
+        _maximumOverride = State(initialValue: item.maximumOverrideText ?? "")
     }
     var body: some View {
         NavigationStack {
@@ -184,6 +199,12 @@ struct CardEditorView: View {
                     Text("When changing identity or finish, verify the market price and SKU too.").font(.caption)
                     Text("Added \(item.addedAt.formatted())").font(.caption)
                 }
+                Section("Offer overrides • USD per copy") {
+                    TextField("Cash (blank uses session rate)", text: $cashOverride).keyboardType(.decimalPad)
+                    TextField("Trade (blank uses session rate)", text: $tradeOverride).keyboardType(.decimalPad)
+                    TextField("Maximum buy (blank uses session rate)", text: $maximumOverride).keyboardType(.decimalPad)
+                    Text("Overrides apply to each copy of this exact variant/condition. Unpriced cards remain excluded until a market price is supplied. No automatic bulk classification is performed.").font(.caption)
+                }
             }.navigationTitle("Edit Card")
                 .onChange(of: card.identity.printing) { _, _ in price = ""; card.identity.skuID = nil }
                 .onChange(of: card.identity.productID) { _, _ in price = ""; card.identity.skuID = nil }
@@ -203,11 +224,33 @@ struct CardEditorView: View {
         let text = price.trimmingCharacters(in: .whitespacesAndNewlines)
         let parsed = Decimal(string: text, locale: Locale(identifier: "en_US_POSIX"))
         guard text.isEmpty || (text.range(of: #"^[0-9]+(?:\.[0-9]{1,6})?$"#, options: .regularExpression) != nil && parsed != nil && parsed! >= 0) else { error = "Enter a nonnegative USD price or leave it blank."; return }
+        guard [cashOverride, tradeOverride, maximumOverride].allSatisfy({ $0.isEmpty || MoneyInput.parse($0) != nil }) else {
+            error = "Offer overrides must be nonnegative USD amounts or blank."; return
+        }
+        let cashText = cashOverride.isEmpty ? nil : CSVExportService.number(MoneyInput.parse(cashOverride))
+        let tradeText = tradeOverride.isEmpty ? nil : CSVExportService.number(MoneyInput.parse(tradeOverride))
+        let maximumText = maximumOverride.isEmpty ? nil : CSVExportService.number(MoneyInput.parse(maximumOverride))
+        do {
+            let batches = try context.fetch(FetchDescriptor<ScanSession>())
+            if let batch = batches.first(where: { $0.listID != nil && $0.listID == item.list?.id }), card.identity.game != batch.game {
+                error = "The card game must match this batch. Start a new session for a different game."; return
+            }
+        } catch { self.error = error.localizedDescription; return }
         card.marketPrice = text.isEmpty ? nil : parsed
         do {
             if let duplicate = item.list?.cards.first(where: { $0.id != item.id && $0.snapshot.identity == card.identity }) {
+                guard duplicate.cashOverrideText == cashText,
+                      duplicate.tradeOverrideText == tradeText,
+                      duplicate.maximumOverrideText == maximumText else {
+                    error = "An identical card already has different offer overrides. Match those overrides before merging."; return
+                }
                 duplicate.quantity += quantity; try duplicate.update(card); context.delete(item)
-            } else { item.quantity = quantity; try item.update(card) }
+            } else {
+                item.quantity = quantity; try item.update(card)
+                item.cashOverrideText = cashText
+                item.tradeOverrideText = tradeText
+                item.maximumOverrideText = maximumText
+            }
             try CardListService.save(context); DiagnosticLog.shared.record("inventory.edited"); dismiss()
         } catch { context.rollback(); self.error = error.localizedDescription }
     }

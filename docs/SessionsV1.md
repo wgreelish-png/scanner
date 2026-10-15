@@ -1,0 +1,16 @@
+# Sessions v1 — device acceptance checks
+
+Run ⌘U first. The migration test writes a pre-batch unversioned store and checks that IDs, three card copies and original history totals survive migration without creating an active batch. No native test execution or device migration is claimed from Linux.
+
+1. **Existing data:** export valuable lists in the previous version. Install this update over it without uninstalling. Existing lists/cards and historical session totals must remain. Historical sessions must not create or duplicate cards. If a storage error appears, export diagnostics from that screen and stop; do not delete the app/database.
+2. **First batch:** choose Pokémon on Home and Start New Session. Exactly one timestamped list appears. Start again while active: cancel must leave everything unchanged; confirm must complete the old batch and create exactly one new list.
+3. **Mock scan:** add one card, leave repeated frames visible, then deliberately Add Another Copy. Quantity must be 1 then 2, not grow per frame. Choose a different candidate/finish and confirm ambiguous results. Verify condition/variant separation.
+4. **Reopen:** background, force-quit, reopen, and return later. Home must offer the same session/game/list with saved quantity and price. Merely opening the app or returning to the scanner must not create a list/session. With automatic additions enabled, a just-added card reacquired after restart must not silently add again before a new-card boundary; explicit Add Another Copy remains available.
+5. **Game change:** select Magic in the Pokémon scanner. Cancel preserves the Pokémon batch. Confirm completes it, retains its list and starts a separate Magic batch. No cross-game card enters the old list.
+6. **Review:** a $100 card ×2 plus a $10 card ×3 produces $230 market, $161 cash at 70%, $184 trade at 80%, and $172.50 max at 75%. Set the $10 row's per-copy overrides to cash $1/trade $2/max $3: totals become $143/$166/$159. Cash and trade are alternatives.
+7. **Unknown/zero:** add unpriced copies, including offer overrides. They increase missing-copy counts but do not change offers until given a market price. A real $0 market price is known, not missing. Edit quantity, printing, condition and market price; review totals must update without losing cards.
+8. **Rates/history:** set session cash to 65%; global defaults remain unchanged. Save an offer estimate, then change rates/prices/quantities and global defaults. The saved estimate must keep its original inputs/rates/totals; the live review updates. A newly started batch uses the new global defaults.
+9. **Finish/list rename:** rename the list, finish, and reopen. Original session timestamp/list association persists; no cards are deleted/duplicated. Completed batch still supports edits/offers/CSV. Home offers a new batch, not an auto-created empty one.
+10. **Live and export:** repeat candidate/printing/add/pause/background tests with the experimental provider on an iPhone. Export CSV; validate quantities, variants, prices and empty unknown-price cells. Export diagnostics and report pass/fail by step.
+
+Optional purchase-cost/net-profit projections, full transactions, automatic bulk classification and inventory sync were not added. Offer estimates do not record a purchase.

@@ -19,12 +19,12 @@ import AudioToolbox
     var label: String { provider.label }
     var liveProvider: TCGTrackingScannerProvider? { provider as? TCGTrackingScannerProvider }
     init(provider: (any ScannerProvider)? = nil) { self.provider = provider ?? MockScannerProvider() }
-    func start(game: String, list: CardList, context: ModelContext) {
+    func start(game: String, list: CardList, context: ModelContext, session: ScanSession) {
         guard consumer == nil, !paused else { return }
-        if session == nil {
-            let s = ScanSession(listName: list.name); session = s; context.insert(s)
-            do { try context.save() } catch { DiagnosticLog.shared.failure("session.save_failed", error); context.rollback(); session = nil; self.error = error.localizedDescription; return }
+        guard session.isActive, session.listID == list.id, session.game == game else {
+            self.error = BatchFailure.unavailable.localizedDescription; return
         }
+        self.session = session
         DiagnosticLog.shared.record("scanner.start", ["provider": liveProvider == nil ? "mock" : "live", "automatic": String(UserDefaults.standard.bool(forKey: "automaticAdd"))])
         result = nil; selected = nil; confirmed = false
         provider.start(game: game)
@@ -36,6 +36,8 @@ import AudioToolbox
                 guard !paused else { continue }
                 guard scan.visible else {
                     DiagnosticLog.shared.record("recognition.hidden")
+                    session.lastConsumedRecognitionRef = nil
+                    do { try context.save() } catch { DiagnosticLog.shared.failure("session.save_failed", error); self.error = error.localizedDescription }
                     result = nil; selected = nil; confirmed = false
                     continue
                 }
@@ -46,6 +48,13 @@ import AudioToolbox
                 ], sampleEvery: scan.same ? 5 : 0)
                 let previous = gate.episode
                 gate.receive(scan)
+                if session.lastConsumedRecognitionRef == scan.candidates.first?.identity.productID,
+                   session.lastConsumedRecognitionRef != nil { gate.markAdded() }
+                let marker = gate.hasAdded ? scan.candidates.first?.identity.productID : nil
+                if marker != session.lastConsumedRecognitionRef {
+                    session.lastConsumedRecognitionRef = marker
+                    do { try context.save() } catch { DiagnosticLog.shared.failure("session.save_failed", error); self.error = error.localizedDescription }
+                }
                 result = scan
                 if previous != gate.episode {
                     selected = scan.candidates.first; confirmed = scan.accepted && (selected?.confidence ?? 0) >= 90 && selected?.requiresPrintingSelection != true
@@ -77,10 +86,10 @@ import AudioToolbox
         }
     }
     func stop() { if consumer != nil { DiagnosticLog.shared.record("scanner.stop") }; provider.stop(); consumer?.cancel(); consumer = nil }
-    func togglePause(game: String, list: CardList, context: ModelContext) {
+    func togglePause(game: String, list: CardList, context: ModelContext, session: ScanSession) {
         paused.toggle()
         DiagnosticLog.shared.record("scanner.pause", ["phase": paused ? "paused" : "resumed"])
-        if paused { stop() } else { start(game: game, list: list, context: context) }
+        if paused { stop() } else { start(game: game, list: list, context: context, session: session) }
     }
     func choose(_ candidate: CardCandidate) {
         let index = result?.candidates.firstIndex { $0.id == candidate.id } ?? -1
@@ -112,17 +121,14 @@ import AudioToolbox
         var card = candidate
         card.identity.condition = UserDefaults.standard.string(forKey: "defaultCondition") ?? "Near Mint"
         do {
-            try CardListService.add(card, to: list, context: context)
-            session?.record(card); try context.save(); gate.markAdded(); manualAdds += 1
-            DiagnosticLog.shared.record("add.saved", ["priced": String(card.marketPrice != nil), "quantity": String(session?.addedQuantity ?? 0)])
+            guard let session else { throw BatchFailure.unavailable }
+            try SessionService.add(card, session: session, list: list, context: context, recognitionRef: result?.candidates.first?.identity.productID)
+            gate.markAdded(); manualAdds += 1
+            DiagnosticLog.shared.record("add.saved", ["priced": String(card.marketPrice != nil), "quantity": String(session.addedQuantity)])
             if UserDefaults.standard.object(forKey: "haptics") as? Bool ?? true {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
             }
             if UserDefaults.standard.bool(forKey: "sound") { AudioServicesPlaySystemSound(1104) }
         } catch { DiagnosticLog.shared.failure("persistence.failed", error); context.rollback(); self.error = error.localizedDescription }
-    }
-    func resetSession(context: ModelContext, listName: String) {
-        let fresh = ScanSession(listName: listName); context.insert(fresh); session = fresh
-        do { try context.save(); DiagnosticLog.shared.record("session.reset") } catch { DiagnosticLog.shared.failure("session.save_failed", error); self.error = error.localizedDescription }
     }
 }
