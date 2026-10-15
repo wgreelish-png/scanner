@@ -7,7 +7,9 @@ struct SettingsView: View {
     @AppStorage("automaticAdd") private var automatic = false
     @AppStorage("sound") private var sound = false
     @AppStorage("haptics") private var haptics = true
-    @AppStorage("pricingPercentage") private var percentage = 70.0
+    @AppStorage("cashPercentage") private var cashPercentage = 70.0
+    @AppStorage("tradePercentage") private var tradePercentage = 80.0
+    @AppStorage("maximumBuyPercentage") private var maximumBuyPercentage = 75.0
     @AppStorage("diagnosticsEnabled") private var diagnosticsEnabled = true
     @State private var diagnosticURL: URL?
     @State private var diagnosticError: String?
@@ -23,12 +25,20 @@ struct SettingsView: View {
                 Text("Only accepted results at 90% confidence or above may auto-add. Repeated frames and ambiguous guesses never auto-add.").font(.caption)
                 Toggle("Sound effects", isOn: $sound)
                 Toggle("Haptic feedback", isOn: $haptics)
-                Slider(value: $percentage, in: 0...100, step: 1) { Text("Pricing percentage") }
-                Text("Offer reference: \(Int(percentage))% of known market subtotal")
+            }
+            Section("Offer defaults • new sessions only") {
+                Text("Cash offer: \(Int(cashPercentage))%")
+                Slider(value: $cashPercentage, in: 0...100, step: 1).accessibilityLabel("Cash percentage")
+                Text("Trade credit: \(Int(tradePercentage))%")
+                Slider(value: $tradePercentage, in: 0...100, step: 1).accessibilityLabel("Trade percentage")
+                Text("Maximum buy: \(Int(maximumBuyPercentage))%")
+                Slider(value: $maximumBuyPercentage, in: 0...100, step: 1).accessibilityLabel("Maximum buy percentage")
+                Text("Copied into each new batch. Existing sessions and saved estimates keep their rates. Per-card overrides are entered in the card editor. No automatic bulk classification.").font(.caption)
+
             }
             Section("Scanner") {
                 Text("Choose Mock or experimental TCGTracking on the scanner screen. Live mode requires connectivity for initial module and game database loading.")
-                Text("Reset the current session from its scanner screen. Existing lists are preserved.")
+                Text("Finish a batch from its scanner or review screen. Cards and saved estimates are preserved.")
                 Button(clearingCache ? "Clearing…" : "Clear Scanner Cache") {
                     clearingCache = true
                     Task { await TCGTrackingScannerProvider.clearStoredCache(); clearingCache = false; cacheMessage = true }

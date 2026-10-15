@@ -1,14 +1,14 @@
-# Card Show Scanner
+# Card Show Scanner — Sessions v1
 
-Native iPhone MVP in SwiftUI and SwiftData, targeting iOS 17+. **Two selectable providers: offline mock and experimental live TCGTracking.** The user has confirmed permission for this integration. No third-party scanner code, assets, databases, or credentials are bundled. All mock names and prices are illustrative, not current market quotes.
+Native SwiftUI/SwiftData iPhone app, iOS 17+. One persistent batch session at a time, offline card lists, a Review & Offer calculator, CSV sharing, local diagnostics, and selectable mock / experimental TCGTracking scanning. A session is a general scanning batch, not a purchase transaction.
 
-## Run on a Mac
+The user confirmed permission for the TCGTracking integration. No third-party code, assets, databases or credentials are bundled. The live adapter uses observed website module exports and remains experimental; no official stable API is claimed.
 
-1. Use Xcode 16 or newer with an iOS simulator runtime installed.
-2. Open `CardShowScanner.xcodeproj` and select the shared **CardShowScanner** scheme.
-3. Choose an iPhone simulator and Run (⌘R). No packages, account, server, or credentials are required for mock scanning.
-4. For a physical iPhone, select your own signing team in the application target's Signing & Capabilities settings, choose a unique bundle ID if necessary, and run on an iOS 17+ device.
-5. Run tests with ⌘U. For command-line testing, choose an installed simulator from `xcrun simctl list devices available`, then run:
+## Build and run
+
+Open `CardShowScanner.xcodeproj` in Xcode 16+, select the shared **CardShowScanner** scheme and an iPhone simulator, then Run (⌘R). For a physical iOS 17+ phone, select your signing team under Signing & Capabilities. No Swift packages or server are needed for mock mode. Use a physical iPhone to test live camera scanning.
+
+Tests: ⌘U, or choose an installed simulator from `xcrun simctl list devices available`:
 
 ```sh
 xcodebuild -project CardShowScanner.xcodeproj \
@@ -16,70 +16,87 @@ xcodebuild -project CardShowScanner.xcodeproj \
   -derivedDataPath /tmp/CardShowScannerDerivedData test
 ```
 
-The repository contains a directly openable project; no project generator is needed. Use the existing checkout for development; cloud tasks already have isolated workspaces and do not need additional worktrees.
+Use the existing checkout for development. Cloud tasks already have isolated workspaces; no additional worktree is needed.
 
-## Try the workflow
+## Batch workflow and UI
 
-Create a list from **Start Scanning**, then select it. The orange mock banner stays visible. A new synthetic card arrives every six seconds, with repeated frames in between. Pause to review at your own pace. Select among five candidate buttons; ambiguous or low-confidence results require an explicit selection before adding. Select a printing, tap **Add Selected Card**, then tap **Add Another Copy** only when intentionally adding another physical copy. The camera is intentionally unused by the mock provider. To try live recognition, choose **TCGTracking (experimental)** in the scanner source picker, then tap **Download database & Start Camera** inside its web panel. Initial database downloads may be large. This live path is implemented but has not been validated on an iPhone.
+1. **Home:** select a game and explicitly tap **Start New Session**. This creates one timestamped list and its associated active session. The selected game is remembered. Launching or reopening the app does not create a session or list.
+2. **Current Session:** Home displays the active game, original timestamp, editable list name, quantity, known market subtotal and missing-price warning. Choose **Continue Scanning** or **View List & Offers**. An unfinished session remains resumable regardless of age.
+3. **Scanner:** choose **Mock** or **TCGTracking (experimental)**. Review up to five candidates and select a printing. A confident, unambiguous result permits one-tap addition; ambiguous matches require candidate selection, and ambiguous printings require explicit finish confirmation. Each manual add is one intentional physical copy. A pinned footer shows current batch quantity, known market and cash subtotals, missing-price count and the review link.
+4. **Review & Offer:** search/sort/edit cards, adjust quantities/conditions/prices, see separate market/cash/trade/maximum-buy values, edit session percentages, save immutable offer estimates, rename the list or export CSV. Offers use actual current list quantities. The cash and trade offers are alternatives.
+5. **Finish Session:** marks the batch Completed and keeps its list and estimates. Starting another session while one is active requires explicit finish-and-start confirmation. Changing games in the scanner uses the same confirmation and creates a separate list.
+6. **All Sessions / All Lists:** revisit completed batches or existing lists. Completed lists remain editable/exportable, but cannot receive scanner additions. Original pre-batch sessions remain historical records with their original totals. Standalone lists remain accessible without an inferred session association.
 
-Open the list to search, sort, edit a card, change quantities, or correct its identity. Swipe a card to remove it. List menu actions rename, save CSV, and open the native share sheet. Swipe a saved list to duplicate or delete it. Delete requires confirmation. Settings control default game, condition, confident automatic additions, sound, haptics, and a pricing percentage. Session reset is on the active scanner screen and preserves cards and previous session history. No scanner cache is downloaded in mock mode. Live mode uses the website pack loader’s IndexedDB cache; Settings can clear TCGTracking web database/resource caches without deleting lists or cookies.
+Pause, screen lock/backgrounding and navigation stop capture. Returning resumes the same batch and game; live mode may require another Start Camera tap. No automatic camera activation occurs merely by opening Home. Session deletion is not offered; manually deleting a list requires confirmation, clears its active association and preserves its session record and saved estimates. Duplicating a list copies cards/overrides but does not create another active batch.
 
-Prices are USD. Unknown prices remain `nil` and export as empty cells. UI totals are labeled **known subtotal**, with the number of unpriced copies shown. The scanner uses a selected finish’s own quote and SKU when supplied, otherwise its price remains unknown. Manual identity edits clear old quotes and SKU IDs. Candidate confidence is illustrative in mock mode. Card images load only when a candidate or manually edited card provides an image URL; mock cards use a native symbol instead of redistributing third-party images.
+### Mock scanning
+
+The orange banner explicitly states **MOCK SCANNER • No camera or live prices**. A new synthetic result arrives approximately every six seconds, with repeated-frame updates between results. Samples include five candidates, confidence levels, duplicates, finishes and missing prices. Prices are illustrative. Images use a native placeholder unless a candidate supplies an image URL.
+
+### Live scanning
+
+Choose the experimental provider, then tap **Download database & Start Camera** in the web panel. The adapter loads the selected game pack, creates the browser backend and overlay, requests the rear camera and forwards recognition to the native candidate/list workflow. Initial database downloads may be large. The phone workflow does not require a desktop.
+
+See [integration findings](docs/TCGTrackingIntegration.md). Device validation of live recognition, pricing, WebKit workers/WASM, caching and large-pack performance is still required.
+
+## Pricing
+
+New batches snapshot global defaults: **70% cash, 80% trade, 75% maximum buy**. A previous single pricing-percentage preference becomes the cash default when available. Global changes affect future batches only; session percentages are independently editable.
+
+The card editor supports nonnegative **USD-per-copy** cash, trade and maximum-buy overrides. Blank means use the session percentage. Overrides apply to the entire exact-identity row, including additional copies. Conflicting overrides must be resolved before editing two rows into the same inventory identity. Duplicating a list preserves overrides. No name-based bulk/EX classification is performed.
+
+Unpriced copies remain unknown and are excluded from all offer calculations, even when an offer override exists. A known price of $0 is distinct from an unavailable price. Partial totals and missing-copy counts remain visible. Offer line totals are rounded to cents after multiplying by quantity, then summed; the market sum is rounded to cents at the end. Editing a card's identity clears the previous price and SKU; the scanner uses a finish's own quote/SKU when available.
+
+Potential gross cash resale spread is known market subtotal minus suggested cash offer. It assumes resale at market and excludes fees, shipping, labor and unsold inventory. It is not net profit or a recorded purchase. Actual-paid accounting and transaction tracking are outside this update.
+
+**Save Offer Estimate** preserves the rates, totals, quantities, market prices and per-card overrides used at that time. Later changes to defaults, session rates, prices, cards or quantities do not alter saved estimates. Saved estimates can be inspected from the review screen.
+
+## Persistence and migration
+
+The same `Library/Application Support/default.store` is retained. `StorageSchema.swift` freezes the original three-model schema and defines a lightweight migration to the batch additions. New fields are optional or have defaults. Legacy lists/cards/history retain their IDs and quantities; legacy records become completed historical records without guessing a list association from a mutable name. Migration creates no batches and never re-adds historical quantities.
+
+The app creates the parent directory before opening SwiftData. If storage/migration fails, an error screen offers diagnostic export. It never deletes the database or silently substitutes memory-only storage. The migration fixture test must still be run in Xcode against the original unversioned schema. Preserve/export valuable existing lists before installing development builds; do not uninstall to resolve a migration error, since that removes local data.
+
+Recognition episodes are separate from inventory identity. Exact inventory identity includes game, product ID, SKU, printing, language and condition. Repeated frames cannot automatically add copies. Manual additions consume the episode too. A consumed-recognition marker persists with the batch to conservatively suppress auto-add of the same card after app/camera restart; seeing a different recognition or a hide/new-card boundary releases it. Two identical physical copies held continuously cannot be distinguished reliably; use **Add Another Copy** intentionally.
+
+## CSV and diagnostics
+
+List CSV sharing/export remains available with app-defined headers: Game, Name, Set, Number, Product ID, SKU ID, Printing, Language, Condition, Quantity, Market Price, Total Value. Unknown prices export as empty cells. Quotes/newlines and spreadsheet formula protection are handled. No TCGTracking CSV import compatibility is claimed. Offer estimates are viewed in-app; they are not added to the card CSV format.
+
+To send a focused log:
+
+1. Settings → Diagnostics → **Clear Diagnostic Log**.
+2. Reproduce the workflow or failure.
+3. Settings → Diagnostics → **Export Diagnostic Log**.
+4. Save/share `CardShowScanner-diagnostics.jsonl` and upload it with a description of what happened.
+
+Recording defaults on and stays local. Two rotating files retain about 512 KB across launches. Events include run/episode identifiers, app/build/OS, startup stages, sampled timings/confidence, add decisions, batch lifecycle, offer snapshot/save outcomes and error categories/codes. Card/list contents, prices, product/SKU IDs, images, credentials, cookies, nonces, raw responses and request URLs are excluded. Turning recording off stops new events; clearing deletes stored events. Exported temporary files are removed when sharing closes; user-saved copies remain under user control.
 
 ## Architecture
 
-- `Domain.swift`: Codable candidates, exact inventory identity, recognition episode gate, and CSV serialization.
-- `Persistence.swift`: SwiftData lists, cascade-owned inventory cards, persisted session history, and inventory operations. Inventory and session writes are committed together by the scanner view model.
-- `ScannerProvider.swift`: asynchronous provider contract, continuous mock results, and restartable result streams. `TCGTrackingScannerProvider.swift` hosts the experimental live WKWebView adapter; `Resources/TCGTrackingBridge.js` is its app-owned integration layer.
-- `ScannerViewModel.swift`: confirmation, episode deduplication, session accounting, user feedback, and persistence errors.
-- SwiftUI views: dashboard, scan destination, scanner/candidates, list editor, saved lists, recent sessions, settings, and native CSV sharing.
+- `Domain.swift`: card candidates/printing quotes, recognition gate, CSV serialization.
+- `Persistence.swift`: SwiftData lists, inventory cards, sessions, offer fields and inventory operations.
+- `StorageSchema.swift`: original/current schemas, migration and store initialization.
+- `SessionService.swift`: one-active-batch lifecycle, list association, transactional additions, default-rate snapshots and immutable offer saves.
+- `OfferCalculator.swift`: Decimal pricing, rounding, overrides and snapshot structures.
+- `ScannerProvider.swift`: asynchronous provider contract and mock provider.
+- `TCGTrackingScannerProvider.swift` / `Resources/TCGTrackingBridge.js`: isolated experimental WKWebView integration.
+- `ScannerViewModel.swift`: recognition confirmation/deduplication and batch additions.
+- SwiftUI screens in `CardShowScannerApp.swift`, `ScannerView.swift`, `ListViews.swift`, `SessionReviewView.swift`, and `SettingsView.swift`.
+- `DiagnosticLog.swift`: bounded local logging and export.
 
-Inventory merge identity includes game, product ID, SKU, finish, language, and condition. Recognition episode identity is separate: repeated `same` frames cannot automatically add copies. An accepted result needs at least 90% confidence and an unambiguous printing to auto-add. Manual additions also consume the recognition episode, preventing later confidence upgrades from adding another copy. Manual taps always mean one intentional copy. This threshold still requires calibration on real iPhone scans; manual mode is the default. Editing into an already existing exact identity merges quantities. Historical scan-session values are snapshots and do not change when an inventory card is later edited or deleted.
+## Verification status
 
-CSV uses explicit app-defined columns (including Language), CRLF records, escaped quotes/newlines, and spreadsheet formula protection. **No TCGTracking import compatibility is claimed.** Exported values are snapshots; no pricing refresh or inventory sync occurs.
+This update was developed on Linux without Swift, Xcode or an iOS SDK. It has **not been compiled or run on iOS here**. The user previously built and ran the earlier app version; that does not validate these changes.
 
-## Validation status
-
-This project was created on Linux without Swift, Xcode, an iOS SDK, or a simulator. **It has not been compiled or run on iOS.** Swift grammar parsing passed for all eleven Swift source/test files; the Xcode project passed OpenStep parsing and the shared scheme passed XML parsing. These checks do not type-check SDK calls, expand SwiftData macros, run tests, or validate UI behavior.
-
-Fourteen XCTest cases are supplied, but **not executed here**, covering:
-
-- Repeated recognition frames versus a new physical-card episode.
-- Ambiguous and low-confidence automatic-add rejection.
-- Exact duplicates versus different condition/language/printing.
-- Candidate confirmation and printing quote invalidation.
-- CSV escaping, formula protection, and unknown prices.
-- Unknown-price quantity accounting and list duplication.
-- Disk-store reopening and cascade deletion.
-- Manual-add episode consumption, bridge partial updates/hide/validation, printing quotes and confirmation, and provider stop/restart.
-
-Eleven JavaScript adapter tests pass on Node, including module/camera test doubles for startup, result delivery, teardown, backgrounding, and permission denial:
+**11 JavaScript bridge tests pass:**
 
 ```sh
 node --experimental-vm-modules --test Tests/JavaScript/bridge.test.cjs
 ```
 
-These exercise our adapter, not the third-party engine or WKWebView.
+They use browser/module/camera doubles, not WebKit or the third-party engine. Swift grammar parsing and Xcode project/scheme structural checks pass; these do not type-check SDK APIs or expand SwiftData macros.
 
-Before using this for a real collection, run the Xcode build/tests and manually verify: create/rename/duplicate/delete lists; five-candidate selection; game switching; pause/resume/background/foreground; both add preferences; condition/quantity edits and merges; partial totals; CSV file and share sheet; dark mode; app termination/relaunch; VoiceOver and larger text. No device validation is claimed.
+**24 native XCTest cases are supplied, not executed here.** The ten new tests cover explicit start/one-active enforcement, finish/replacement, wrong-game/rollback, disk reopen, pricing/quantity/overrides, unpriced vs zero, rounding/input validation, fixed defaults/saved estimates, original unversioned-store migration, and linked-list deletion. Existing candidate, duplicate, CSV, persistence, diagnostic and provider tests remain.
 
-## TCGTracking integration
-
-The uploaded source files and HAR have now been inspected. The user confirmed permission to proceed. The app implements a same-origin WKWebView module adapter with game-pack loading, camera startup, five detailed candidates, per-finish SKU/price selection, hide events, nonce-bound message validation, and camera teardown. It uses observed module exports rather than website result-DOM scraping or direct endpoint reimplementation.
-
-**The live path is experimental and has not been run on iOS.** No official stable API has been established. See [integration findings, architecture, evidence and device checks](docs/TCGTrackingIntegration.md). No further source files are currently needed. Xcode/device validation is the next required step; no additional permission confirmation is needed unless the user revokes permission.
-
-## Send a diagnostic log
-
-Logging is enabled by default and stays on the device. After updating and rebuilding:
-
-1. Open **Settings → Diagnostics → Clear Diagnostic Log** to start a focused test.
-2. Run the mock or live workflow, including any failure you want investigated.
-3. Return to **Settings → Diagnostics → Export Diagnostic Log** and save/share `CardShowScanner-diagnostics.jsonl`.
-4. Upload that file here, along with what you expected and what happened. Logs are not uploaded automatically.
-
-The JSON-lines file includes app/build/OS information, timestamps and a random app-run identifier. Events cover web navigation/injection, modules/database/backend/camera startup, sampled scanner timings/confidence, candidate/printing confirmation, repeated-frame and automatic-add decisions, inventory inserts/merges, session saves and errors. Repeated frames and timing samples are limited to roughly one event per five seconds per category. Two rotating files retain up to about 512 KB across app launches; older events are discarded.
-
-The log excludes card/list names, card product/SKU IDs, prices, camera images, credentials, cookies, bridge nonces, raw JavaScript payloads, free-form web status/error strings and request URLs/bodies. Error reports keep only a known domain/category and numeric code. Random recognition-episode IDs correlate updates without exposing card identity. Export includes recent runs, not Apple's entire console log. Turning **Record diagnostics** off stops new event recording; existing logs remain until cleared. Exported temporary files are removed when the share sheet closes. Files you save or send through another app remain under your control.
-
-Eleven JavaScript tests now pass, including structured telemetry and rate limiting. Two additional native diagnostic tests cover rotation, JSON export, opt-out, sampling and data exclusion; fourteen native XCTest cases are supplied in total, still requiring execution in Xcode.
+Follow [Sessions v1 device acceptance checks](docs/SessionsV1.md) before relying on the new workflow.

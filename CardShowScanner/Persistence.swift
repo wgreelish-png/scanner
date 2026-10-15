@@ -18,6 +18,15 @@ import SwiftData
     var quantity: Int
     var addedAt: Date
     var list: CardList?
+    var cashOverrideText: String? = nil
+    var tradeOverrideText: String? = nil
+    var maximumOverrideText: String? = nil
+    var offerLine: OfferLine {
+        OfferLine(price: snapshot.marketPrice, quantity: quantity,
+            cashOverride: cashOverrideText.flatMap { Decimal(string: $0) },
+            tradeOverride: tradeOverrideText.flatMap { Decimal(string: $0) },
+            maximumOverride: maximumOverrideText.flatMap { Decimal(string: $0) })
+    }
     init(card: CardCandidate, quantity: Int = 1) throws {
         id = UUID(); data = try JSONEncoder().encode(card); self.quantity = quantity; addedAt = .now
     }
@@ -37,6 +46,32 @@ import SwiftData
     var addedQuantity: Int
     var knownValueText: String
     var unpricedQuantity: Int
+    // Optional/defaulted additions preserve pre-batch historical sessions.
+    var listID: UUID? = nil
+    var game: String? = nil
+    var statusRaw: String = "completed"
+    var completedAt: Date? = nil
+    var cashRateText: String? = nil
+    var tradeRateText: String? = nil
+    var maximumRateText: String? = nil
+    var savedOffersData: Data? = nil
+    var lastConsumedRecognitionRef: String? = nil
+    var isActive: Bool { statusRaw == "active" && listID != nil }
+    var isBatch: Bool { listID != nil }
+    var rates: OfferRates {
+        OfferRates(cash: cashRateText.flatMap { Decimal(string: $0) } ?? 70,
+            trade: tradeRateText.flatMap { Decimal(string: $0) } ?? 80,
+            maximum: maximumRateText.flatMap { Decimal(string: $0) } ?? 75)
+    }
+    func setRates(_ rates: OfferRates) {
+        cashRateText = CSVExportService.number(rates.cash)
+        tradeRateText = CSVExportService.number(rates.trade)
+        maximumRateText = CSVExportService.number(rates.maximum)
+    }
+    func savedOffers() throws -> [OfferSnapshot] {
+        guard let savedOffersData else { return [] }
+        return try JSONDecoder().decode([OfferSnapshot].self, from: savedOffersData)
+    }
     init(listName: String) {
         id = UUID(); startedAt = .now; self.listName = listName
         addedQuantity = 0; knownValueText = "0"; unpricedQuantity = 0
@@ -66,6 +101,8 @@ import SwiftData
         let copy = CardList(name: list.name + " Copy"); context.insert(copy)
         for card in list.cards {
             let item = try InventoryCard(card: card.snapshot, quantity: card.quantity)
+            item.cashOverrideText = card.cashOverrideText; item.tradeOverrideText = card.tradeOverrideText
+            item.maximumOverrideText = card.maximumOverrideText
             context.insert(item); copy.cards.append(item)
         }
         try context.save()

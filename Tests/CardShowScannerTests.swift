@@ -85,14 +85,14 @@ import SwiftData
         let config = ModelConfiguration(url: directory.appendingPathComponent("test.store"))
         let schema = Schema([CardList.self, InventoryCard.self, ScanSession.self])
         func write() throws {
-            let container = try ModelContainer(for: schema, configurations: config)
+            let container = try ModelContainer(for: schema, configurations: [config])
             let context = ModelContext(container)
             let list = CardList(name: "Persistent"); context.insert(list)
             try CardListService.add(MockScannerProvider.samples(game: "Pokémon", index: 0)[0], to: list, context: context)
             try context.save()
         }
         try write()
-        let reopened = try ModelContainer(for: schema, configurations: config)
+        let reopened = try ModelContainer(for: schema, configurations: [config])
         let context = ModelContext(reopened)
         let lists = try context.fetch(FetchDescriptor<CardList>())
         XCTAssertEqual(lists.count, 1); XCTAssertEqual(lists[0].quantity, 1)
@@ -198,6 +198,137 @@ import SwiftData
         log.failure("test.failed", NSError(domain: NSURLErrorDomain, code: -1009, userInfo: [NSLocalizedDescriptionKey: "PRIVATE_URL_TOKEN"]))
         let text = try String(contentsOf: directory.appendingPathComponent("current.jsonl"), encoding: .utf8)
         XCTAssertTrue(text.contains("-1009")); XCTAssertFalse(text.contains("PRIVATE_URL_TOKEN"))
+    }
+
+    func testBatchStartIsExplicitAndPreventsSecondActiveSession() throws {
+        let container = try store(), context = container.mainContext
+        XCTAssertNil(try SessionService.active(context: context))
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<CardList>()), 0)
+        let session = try SessionService.start(game: "Pokémon", context: context)
+        let list = try XCTUnwrap(SessionService.list(for: session, context: context))
+        XCTAssertTrue(session.isActive); XCTAssertEqual(session.game, "Pokémon")
+        XCTAssertTrue(list.name.hasSuffix("Pokémon")); XCTAssertEqual(list.createdAt, session.startedAt)
+        XCTAssertThrowsError(try SessionService.start(game: "Pokémon", context: context))
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<CardList>()), 1)
+    }
+    func testFinishAndReplacementKeepSeparateListsAndQuantities() throws {
+        let container = try store(), context = container.mainContext
+        let original = try SessionService.start(game: "Pokémon", context: context)
+        let list = try XCTUnwrap(SessionService.list(for: original, context: context))
+        let card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]
+        try SessionService.add(card, session: original, list: list, context: context)
+        list.name = "Renamed"; try context.save()
+        let replacement = try SessionService.replace(original, game: "Magic: The Gathering", context: context)
+        XCTAssertFalse(original.isActive); XCTAssertNotNil(original.completedAt)
+        XCTAssertEqual(list.quantity, 1); XCTAssertEqual(original.listID, list.id)
+        XCTAssertNotEqual(replacement.listID, original.listID)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<CardList>()), 2)
+        XCTAssertThrowsError(try SessionService.add(card, session: original, list: list, context: context))
+        try SessionService.finish(replacement, context: context)
+        XCTAssertNil(try SessionService.active(context: context))
+    }
+    func testInvalidGameReplacementRollsBackAndWrongGameDoesNotAdd() throws {
+        let container = try store(), context = container.mainContext
+        let session = try SessionService.start(game: "Pokémon", context: context)
+        let list = try XCTUnwrap(SessionService.list(for: session, context: context))
+        XCTAssertThrowsError(try SessionService.replace(session, game: "invalid", context: context))
+        XCTAssertTrue(session.isActive)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<CardList>()), 1)
+        XCTAssertThrowsError(try SessionService.add(MockScannerProvider.samples(game: "Yu-Gi-Oh!", index: 0)[0], session: session, list: list, context: context))
+        XCTAssertEqual(list.quantity, 0)
+    }
+    func testBatchReopensWithSameIdentityGameRatesAndSavedCards() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let url = directory.appendingPathComponent("batch.store")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let id: UUID
+        let listID: UUID?
+        do {
+            let container = try AppPersistence.open(url: url), context = container.mainContext
+            let session = try SessionService.start(game: "Pokémon", context: context)
+            id = session.id; listID = session.listID
+            let list = try XCTUnwrap(SessionService.list(for: session, context: context))
+            try SessionService.add(MockScannerProvider.samples(game: "Pokémon", index: 0)[0], session: session, list: list, context: context)
+        }
+        let reopened = try AppPersistence.open(url: url), context = reopened.mainContext
+        let restored = try XCTUnwrap(SessionService.active(context: context))
+        XCTAssertEqual(restored.id, id); XCTAssertEqual(restored.listID, listID); XCTAssertEqual(restored.game, "Pokémon")
+        XCTAssertEqual(restored.lastConsumedRecognitionRef, MockScannerProvider.samples(game: "Pokémon", index: 0)[0].identity.productID)
+        XCTAssertEqual(try SessionService.list(for: restored, context: context)?.quantity, 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<CardList>()), 1)
+    }
+    func testOfferPercentagesQuantitiesAndPerCopyOverrides() {
+        let lines = [OfferLine(price: 100, quantity: 2), OfferLine(price: 10, quantity: 3, cashOverride: 1, tradeOverride: 2, maximumOverride: 3)]
+        let totals = OfferCalculator.calculate(lines, rates: OfferRates())
+        XCTAssertEqual(totals.market, 230); XCTAssertEqual(totals.cash, 143)
+        XCTAssertEqual(totals.trade, 166); XCTAssertEqual(totals.maximum, 159)
+        XCTAssertEqual(totals.quantity, 5); XCTAssertEqual(totals.grossCashSpread, 87)
+    }
+    func testUnpricedCopiesExcludedEvenWithOfferOverridesAndZeroIsKnown() {
+        let lines = [OfferLine(price: nil, quantity: 4, cashOverride: 3), OfferLine(price: 0, quantity: 2)]
+        let totals = OfferCalculator.calculate(lines, rates: OfferRates())
+        XCTAssertEqual(totals.unpricedQuantity, 4); XCTAssertEqual(totals.quantity, 6)
+        XCTAssertEqual(totals.market, 0); XCTAssertEqual(totals.cash, 0)
+    }
+    func testOfferCurrencyRoundingAndNumericInputValidation() {
+        let totals = OfferCalculator.calculate([OfferLine(price: Decimal(string: "0.05"), quantity: 3)], rates: OfferRates())
+        XCTAssertEqual(totals.cash, Decimal(string: "0.11"))
+        XCTAssertEqual(totals.trade, Decimal(string: "0.12"))
+        XCTAssertEqual(totals.maximum, Decimal(string: "0.11"))
+        XCTAssertNil(MoneyInput.parse("10abc")); XCTAssertNil(MoneyInput.parse("-2")); XCTAssertNil(MoneyInput.parse("NaN"))
+        XCTAssertFalse(OfferRates(cash: 101).isValid)
+    }
+    func testGlobalDefaultsDoNotRewriteSessionsOrSavedEstimates() throws {
+        let suite = "BatchTests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(65, forKey: "pricingPercentage")
+        let container = try store(), context = container.mainContext
+        let batch = try SessionService.start(game: "Pokémon", context: context, defaults: defaults)
+        let list = try XCTUnwrap(SessionService.list(for: batch, context: context))
+        XCTAssertEqual(batch.rates.cash, 65); XCTAssertEqual(defaults.string(forKey: "defaultGame"), "Pokémon")
+        try SessionService.add(MockScannerProvider.samples(game: "Pokémon", index: 0)[0], session: batch, list: list, context: context)
+        try SessionService.saveOffer(batch, list: list, context: context)
+        let original = try XCTUnwrap(batch.savedOffers().first)
+        defaults.set(50, forKey: "cashPercentage")
+        list.cards[0].quantity = 10; batch.setRates(OfferRates(cash: 60)); try context.save()
+        let saved = try XCTUnwrap(batch.savedOffers().first)
+        XCTAssertEqual(saved.totals, original.totals); XCTAssertEqual(saved.rates.cash, 65)
+        XCTAssertEqual(saved.lines[0].quantity, 1); XCTAssertEqual(batch.rates.cash, 60)
+    }
+    func testLegacyUnversionedStoreMigrationPreservesDataWithoutCreatingBatch() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("legacy.store")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let listID: UUID, historyID: UUID
+        do {
+            // No versioned container/plan: reproduces the original app's unversioned store.
+            let schema = Schema(ScannerSchemaV1.models)
+            let config = ModelConfiguration("default", schema: schema, url: url, cloudKitDatabase: .none)
+            let container = try ModelContainer(for: schema, configurations: [config]), context = container.mainContext
+            let list = ScannerSchemaV1.CardList(name: "Legacy list"); listID = list.id; context.insert(list)
+            let data = try JSONEncoder().encode(MockScannerProvider.samples(game: "Pokémon", index: 0)[0])
+            let card = ScannerSchemaV1.InventoryCard(data: data, quantity: 3); context.insert(card); list.cards.append(card)
+            let history = ScannerSchemaV1.ScanSession(listName: "Legacy list"); historyID = history.id
+            history.addedQuantity = 3; history.knownValueText = "3.75"; context.insert(history); try context.save()
+        }
+        let migrated = try AppPersistence.open(url: url), context = migrated.mainContext
+        let lists = try context.fetch(FetchDescriptor<CardList>()), history = try context.fetch(FetchDescriptor<ScanSession>())
+        XCTAssertEqual(lists.count, 1); XCTAssertEqual(lists[0].id, listID); XCTAssertEqual(lists[0].quantity, 3)
+        XCTAssertEqual(history.count, 1); XCTAssertEqual(history[0].id, historyID); XCTAssertEqual(history[0].knownValue, Decimal(string: "3.75"))
+        XCTAssertNil(history[0].listID); XCTAssertFalse(history[0].isActive)
+        XCTAssertNil(try SessionService.active(context: context))
+        XCTAssertNil(lists[0].cards[0].cashOverrideText)
+    }
+    func testDeletingLinkedListPreservesSessionRecordAndClearsActiveState() throws {
+        let container = try store(), context = container.mainContext
+        let batch = try SessionService.start(game: "Pokémon", context: context)
+        let list = try XCTUnwrap(SessionService.list(for: batch, context: context))
+        try SessionService.deleteList(list, context: context)
+        XCTAssertNil(batch.listID); XCTAssertFalse(batch.isActive)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<ScanSession>()), 1)
+        XCTAssertNil(try SessionService.active(context: context))
     }
 
 }

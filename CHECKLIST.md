@@ -1,31 +1,28 @@
-# Implementation checklist
+# Card Show Sessions v1
 
-- [x] SwiftUI project, shared scheme, iOS 17 deployment target.
-- [x] Dashboard, scan destination, recent sessions, settings.
-- [x] SwiftData lists and cards, exact variant identity, session records.
-- [x] Create, rename, duplicate, delete, search, sort, edit and correct cards.
-- [x] Quantity/condition/language/printing edits and exact-identity merge.
-- [x] Known-price subtotals and explicit unpriced quantities.
-- [x] Native CSV file export and activity share sheet.
-- [x] Provider interface and clearly labeled continuous mock provider.
-- [x] Five candidates, confidence, confirmation and finish selection.
-- [x] Recognition deduplication separate from inventory quantities.
-- [x] Low-confidence/ambiguous auto-add prevention; intentional extra copies.
-- [x] Preferences, feedback, percentage reference, session reset, cache explanation.
-- [x] XCTest source and Mac build/run instructions.
-- [x] Static Swift syntax/project/scheme validation on Linux.
-- [ ] Xcode compilation and fourteen XCTest executions (Mac required).
-- [ ] Simulator/device lifecycle, persistence, accessibility and share-sheet validation.
-- [x] Inspect supplied mobile, quickscan, candidate-resolution source and HAR module bodies.
-- [x] Record user-confirmed permission and inspect browser module/pack/backend interfaces.
-- [x] Implement experimental same-origin WKWebView adapter and native bridge.
-- [x] Preserve per-finish quotes/SKUs, partial frames, hide events and manual-add deduplication.
-- [x] Run eleven JavaScript adapter/harness tests.
-- [ ] Establish an official stable plugin API contract if one becomes available.
-- [ ] Validate live scanning, camera, database downloads, pricing and lifecycle on an iPhone.
-- [ ] Verify any TCGTracking-compatible import format before adding that export option.
+## Implemented
 
-Advanced sales, cash reconciliation, purchases and inventory sync are intentionally outside the MVP.
-- [x] Bounded persistent diagnostics, opt-out, clear and native file sharing.
-- [x] Startup/recognition/add/save telemetry and JavaScript diagnostics test (11 JS tests total).
-- [ ] Execute 14 native tests in Xcode, including new log rotation/export/privacy checks.
+- [x] Extend the existing SwiftUI/SwiftData app and preserve scanner providers, CSV and diagnostics.
+- [x] Explicit new batch creates one timestamped list; one active batch at a time.
+- [x] Persist session/list ID, selected game, status, dates and rates.
+- [x] Resume the active batch without creating empty sessions on launch/navigation.
+- [x] Confirm finish/start when replacing a batch or changing its game.
+- [x] Home current-session card, All Sessions, review links and pinned scanner totals.
+- [x] Finish retains list/cards; rename preserves identity/date; old history remains separate.
+- [x] Decimal offer calculator with cash/trade/maximum percentages and per-copy overrides.
+- [x] Exclude/highlight unpriced copies; distinguish known zero.
+- [x] Snapshot new-session rates; immutable saved offer estimates and original inputs.
+- [x] Preserve recognition deduplication and a consumed marker across camera/app restarts.
+- [x] Versioned migration from original fields; visible storage errors without destructive fallback.
+- [x] Add ten native session/pricing/migration regression tests (24 total).
+- [x] Run eleven JavaScript bridge tests and static Swift/project validation.
+
+## Required on Mac/iPhone
+
+- [ ] Compile this update in Xcode.
+- [ ] Run all 24 native tests, including the original-store migration fixture.
+- [ ] Verify migration on an existing app install without uninstalling.
+- [ ] Perform [device acceptance checks](docs/SessionsV1.md) for resume, game change, offers, saved estimates, CSV and live scanning.
+- [ ] Review accessibility, larger text, dark mode and long-session performance.
+
+Automatic bulk classification, actual-paid accounting, net-profit projections, sales/cash transactions, inventory sync and TCGTracking CSV compatibility remain outside this update.

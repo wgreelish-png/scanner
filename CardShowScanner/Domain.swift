@@ -42,6 +42,7 @@ struct RecognitionGate {
     private(set) var episode = UUID()
     private var sourceID: UUID?
     private var consumed = false
+    var hasAdded: Bool { consumed }
     mutating func receive(_ result: ScanResult) {
         guard result.visible else { return }
         if result.id != sourceID {
