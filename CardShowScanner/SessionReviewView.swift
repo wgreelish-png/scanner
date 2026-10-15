@@ -43,7 +43,7 @@ struct SessionReviewHeader: View {
         }
         NavigationLink("Saved Offer Estimates") { SavedOffersView(session: session) }
         if session.isActive {
-            NavigationLink("Continue Scanning", systemImage: "viewfinder") { ScannerView(session: session, list: list) }
+            NavigationLink { ScannerView(session: session, list: list) } label: { Label("Continue Scanning", systemImage: "viewfinder") }
             FinishSessionButton(session: session)
         }
         Text("Editing cards updates this review. Saved estimates retain their original rates, prices, quantities and overrides.").font(.caption).foregroundStyle(.secondary)

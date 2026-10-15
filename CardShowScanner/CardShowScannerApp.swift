@@ -83,9 +83,9 @@ struct HomeView: View {
                     Text("Creates a timestamped batch. Scanning does not record a purchase.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section {
-                    NavigationLink("All Sessions", systemImage: "clock") { SessionHistoryView() }
-                    NavigationLink("All Lists", systemImage: "list.bullet.rectangle") { SavedListsView() }
-                    NavigationLink("Settings", systemImage: "gearshape") { SettingsView() }
+                    NavigationLink { SessionHistoryView() } label: { Label("All Sessions", systemImage: "clock") }
+                    NavigationLink { SavedListsView() } label: { Label("All Lists", systemImage: "list.bullet.rectangle") }
+                    NavigationLink { SettingsView() } label: { Label("Settings", systemImage: "gearshape") }
                 }
             }.navigationTitle("Card Show Scanner")
                 .navigationDestination(item: $destination) { id in
@@ -120,8 +120,8 @@ struct ActiveSessionCard: View {
             LabeledContent("Cards in batch", value: String(list.quantity))
             LabeledContent("Known market subtotal", value: list.knownValue.money)
             if list.unpricedQuantity > 0 { Text("\(list.unpricedQuantity) unpriced copies need review").foregroundStyle(.orange) }
-            NavigationLink("Continue Scanning", systemImage: "viewfinder") { ScannerView(session: session, list: list) }
-            NavigationLink("View List & Offers", systemImage: "dollarsign.circle") { SessionReviewView(session: session, list: list) }
+            NavigationLink { ScannerView(session: session, list: list) } label: { Label("Continue Scanning", systemImage: "viewfinder") }
+            NavigationLink { SessionReviewView(session: session, list: list) } label: { Label("View List & Offers", systemImage: "dollarsign.circle") }
         } else {
             Text("The active session's list is unavailable.")
             FinishSessionButton(session: session)
