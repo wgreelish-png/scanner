@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		32EAD5C6AF7A6FFB0C99B53A /* StorageSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = 640FC94546D69DD8166B6EA6 /* StorageSchema.swift */; };
+		E2E8418F74774C4FFFFF927D /* SessionReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A565D8AFD09E49E798ED2CF /* SessionReviewView.swift */; };
+		F529F7613E819487A37E9C6B /* SessionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24E83F6B82BBA1964E981DB7 /* SessionService.swift */; };
+		624F5D5887247482353747B6 /* OfferCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = D97A2093E6BC3926E45BAD73 /* OfferCalculator.swift */; };
 		2C9F0C9F7DCDBA2F41BE8C58 /* Persistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBF54F815C07C1419836C419 /* Persistence.swift */; };
 		52B0DD50C8023322CBF93C90 /* ScannerProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E6F05226FE238B92339C1C6 /* ScannerProvider.swift */; };
 		5E591D6D1666D4DE5CC4A31C /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8BE7E97BDD1700DC90EBB5D /* SettingsView.swift */; };
@@ -32,6 +36,10 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		640FC94546D69DD8166B6EA6 /* StorageSchema.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageSchema.swift; sourceTree = "<group>"; };
+		6A565D8AFD09E49E798ED2CF /* SessionReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionReviewView.swift; sourceTree = "<group>"; };
+		24E83F6B82BBA1964E981DB7 /* SessionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionService.swift; sourceTree = "<group>"; };
+		D97A2093E6BC3926E45BAD73 /* OfferCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfferCalculator.swift; sourceTree = "<group>"; };
 		00444E2C37DD529B70E931A2 /* CardShowScannerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = CardShowScannerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		30357ABBB88AE891B5E2895C /* CardShowScannerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardShowScannerApp.swift; sourceTree = "<group>"; };
 		41D1E2C53C699A5AF5791217 /* TCGTrackingScannerProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TCGTrackingScannerProvider.swift; sourceTree = "<group>"; };
@@ -86,6 +94,10 @@
 		878A52FC5FF6A57D50B7B870 /* CardShowScanner */ = {
 			isa = PBXGroup;
 			children = (
+				640FC94546D69DD8166B6EA6 /* StorageSchema.swift */,
+				6A565D8AFD09E49E798ED2CF /* SessionReviewView.swift */,
+				24E83F6B82BBA1964E981DB7 /* SessionService.swift */,
+				D97A2093E6BC3926E45BAD73 /* OfferCalculator.swift */,
 				A48FF278A76C44EF913E7601 /* DiagnosticLog.swift */,
 				30357ABBB88AE891B5E2895C /* CardShowScannerApp.swift */,
 				73192BC70F03088E4EFB1C34 /* Domain.swift */,
@@ -216,6 +228,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				32EAD5C6AF7A6FFB0C99B53A /* StorageSchema.swift in Sources */,
+				E2E8418F74774C4FFFFF927D /* SessionReviewView.swift in Sources */,
+				F529F7613E819487A37E9C6B /* SessionService.swift in Sources */,
+				624F5D5887247482353747B6 /* OfferCalculator.swift in Sources */,
 				A48FF278A76C44EF913E7602 /* DiagnosticLog.swift in Sources */,
 				7CA6F4925258CE0E0E1056FE /* CardShowScannerApp.swift in Sources */,
 				81BF388651615F530556BD24 /* Domain.swift in Sources */,
