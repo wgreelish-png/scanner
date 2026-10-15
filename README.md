@@ -100,3 +100,25 @@ They use browser/module/camera doubles, not WebKit or the third-party engine. Sw
 **24 native XCTest cases are supplied, not executed here.** The ten new tests cover explicit start/one-active enforcement, finish/replacement, wrong-game/rollback, disk reopen, pricing/quantity/overrides, unpriced vs zero, rounding/input validation, fixed defaults/saved estimates, original unversioned-store migration, and linked-list deletion. Existing candidate, duplicate, CSV, persistence, diagnostic and provider tests remain.
 
 Follow [Sessions v1 device acceptance checks](docs/SessionsV1.md) before relying on the new workflow.
+
+## Keep personal signing settings out of Git
+
+The project inherits `Config/Signing.xcconfig`, which optionally includes **`Config/Signing.local.xcconfig`**. The local file is ignored by Git. Set your team there once, rather than selecting a team again in Xcode's project editor. Structural project changes still belong in `project.pbxproj`; do not ignore that file or use skip-worktree/assume-unchanged.
+
+For an existing checkout with local signing edits, **close Xcode** and run these commands from the repository folder. They save the old project and stash its tracked edits before pulling. Do not use them while Git reports an unresolved merge/rebase; resolve that operation first.
+
+```sh
+signing_backup=$(mktemp -t CardShowScanner-signing)
+cp CardShowScanner.xcodeproj/project.pbxproj "$signing_backup"
+git stash push -m "Preserve local Xcode project settings" -- CardShowScanner.xcodeproj/project.pbxproj
+git pull origin main
+python3 scripts/configure_signing.py --from-project "$signing_backup"
+```
+
+Reopen `CardShowScanner.xcodeproj` and build. The backup and any stash remain available for review. Do not reapply the old project wholesale; doing so can remove new source references again. If the backup contains multiple team IDs, the helper asks for an explicit team instead:
+
+```sh
+python3 scripts/configure_signing.py --team YOUR_10_CHARACTER_TEAM_ID
+```
+
+For a new checkout, use the explicit-team command. The helper is idempotent for the same team and refuses to overwrite a differing local configuration. Edit the local xcconfig directly when switching teams. No Apple account passwords, certificates or provisioning profiles are stored in it. You still need the Apple account available in Xcode and normal device provisioning; this does not change Personal Team expiration limits.

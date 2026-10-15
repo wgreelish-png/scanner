@@ -4,3 +4,8 @@ DerivedData/
 xcuserdata/
 *.xcresult
 .build/
+
+# Personal Xcode signing settings
+Config/Signing.local.xcconfig
+__pycache__/
+*.pyc

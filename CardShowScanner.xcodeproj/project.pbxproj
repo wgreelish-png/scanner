@@ -36,6 +36,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		F0C011A95C6B44F68A001701 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Signing.xcconfig; sourceTree = SOURCE_ROOT; };
 		640FC94546D69DD8166B6EA6 /* StorageSchema.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageSchema.swift; sourceTree = "<group>"; };
 		6A565D8AFD09E49E798ED2CF /* SessionReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionReviewView.swift; sourceTree = "<group>"; };
 		24E83F6B82BBA1964E981DB7 /* SessionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionService.swift; sourceTree = "<group>"; };
@@ -116,6 +117,7 @@
 		E991C021ABBD2DA6DF032C23 = {
 			isa = PBXGroup;
 			children = (
+				F0C011A95C6B44F68A001701 /* Signing.xcconfig */,
 				878A52FC5FF6A57D50B7B870 /* CardShowScanner */,
 				59830EBC3A4184110566BF1A /* Tests */,
 				0A3E27B8CA818264D75C8D81 /* Products */,
@@ -258,6 +260,7 @@
 /* Begin XCBuildConfiguration section */
 		0B0C687DF8B6B8DC790B519C /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = F0C011A95C6B44F68A001701 /* Signing.xcconfig */;
 			buildSettings = {
 				CLANG_ENABLE_MODULES = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -273,7 +276,7 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 3J6GDJAZRX;
+
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Recognize trading cards using the TCGTracking live scanner.";
@@ -289,6 +292,7 @@
 		};
 		73EBF6644258C120893E685D /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = F0C011A95C6B44F68A001701 /* Signing.xcconfig */;
 			buildSettings = {
 				CLANG_ENABLE_MODULES = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
@@ -305,7 +309,7 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 3J6GDJAZRX;
+
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Recognize trading cards using the TCGTracking live scanner.";
