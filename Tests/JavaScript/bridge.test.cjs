@@ -81,6 +81,8 @@ test('camera bootstrap uses module interfaces and delivers scan/hide with nonce'
   assert.ok(h.scannerOptions); assert.equal(button.hidden, true);
   h.scannerOptions.onShow({ ref: tuple(), accepted: true, confidence: 96 });
   assert.equal(h.messages.at(-1).kind, 'scan'); assert.equal(h.messages.at(-1).nonce, 'test-nonce');
+  h.scannerOptions.onHide(); assert.equal(h.messages.at(-1).kind, 'scan');
+  h.bridge.releaseReview();
   h.scannerOptions.onHide(); assert.equal(h.messages.at(-1).kind, 'hide');
   h.bridge.stop(); assert.ok(h.stopped >= 2); assert.equal(h.disposed, 1);
   const count = h.messages.length; h.scannerOptions.onShow({ ref: tuple() }); assert.equal(h.messages.length, count);
@@ -129,4 +131,35 @@ test('diagnostics report startup stages, sampled timings and safe camera errors'
   h.scannerOptions.onShow({ ref: tuple(), confidence: 96, accepted: true });
   assert.ok(h.messages.some(m => m.kind === 'scan' && m.candidates[0].name === 'Sample 123'));
   assert.equal(JSON.stringify(diagnostics()).includes('Sample 123'), false);
+});
+
+test('review freezes full payload, including captured image, until explicitly released', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  assert.ok(h.scannerOptions, 'local scanner starts without a mock or website button');
+  h.scannerOptions.onShow({ ref: tuple(), accepted: true, confidence: 96, thumb: 'data:image/jpeg;base64,/9j/AA==' });
+  const first = h.messages.at(-1);
+  assert.equal(first.capturedImageBase64, '/9j/AA==');
+  const count = h.messages.length;
+  h.scannerOptions.onShow({ ref: tuple(124), confidence: 99 });
+  h.scannerOptions.onHide(); assert.equal(h.messages.length, count);
+  h.bridge.resetRecognition();
+  h.scannerOptions.onShow({ ref: tuple(124), confidence: 99 });
+  assert.equal(h.messages.at(-1).candidates[0].ref, 'p:124');
+});
+test('recognition does not depend on the online catalog detail callback', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  assert.equal(h.scannerOptions.fetchDetails, null);
+  assert.equal(h.scannerOptions.resolveCandidates, false);
+});
+
+test('saving waits for card removal instead of latching a duplicate frame', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  h.scannerOptions.onShow({ ref: tuple(), accepted: true, confidence: 96 });
+  h.bridge.releaseReview();
+  const count = h.messages.length;
+  h.scannerOptions.onShow({ ref: tuple(), accepted: true, confidence: 96 });
+  assert.equal(h.messages.length, count);
+  h.scannerOptions.onHide(); assert.equal(h.messages.at(-1).kind, 'hide');
+  h.scannerOptions.onShow({ ref: tuple(), accepted: true, confidence: 96 });
+  assert.equal(h.messages.at(-1).kind, 'scan');
 });

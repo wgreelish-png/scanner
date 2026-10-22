@@ -29,7 +29,7 @@ import SwiftData
         scan = ScanResult(id: UUID(), candidates: cards, accepted: true, same: false)
         gate.receive(scan); XCTAssertFalse(gate.consumeAutomatic(scan))
     }
-    func testExactVariantsMergeButConditionLanguageAndFinishStaySeparate() throws {
+    func testEveryScanRemainsSeparateIncludingExactVariants() throws {
         let container = try store(); let context = container.mainContext
         let list = CardList(name: "Show"); context.insert(list)
         let card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]
@@ -42,8 +42,8 @@ import SwiftData
         variant = card; variant.identity.printing = "Holofoil"
         try CardListService.add(variant, to: list, context: context)
         try context.save()
-        XCTAssertEqual(list.cards.count, 4); XCTAssertEqual(list.quantity, 5)
-        XCTAssertEqual(list.cards.first(where: { $0.snapshot.identity == card.identity })?.quantity, 2)
+        XCTAssertEqual(list.cards.count, 5); XCTAssertEqual(list.quantity, 5)
+        XCTAssertTrue(list.cards.allSatisfy { $0.quantity == 1 })
     }
     func testCandidateConfirmationAndPrintingPriceInvalidation() {
         let model = ScannerViewModel()
@@ -142,8 +142,8 @@ import SwiftData
         card.printingQuotes = [CardPrinting(label: "Holofoil", skuID: "22", marketPrice: 4.5)]
         model.choose(card); XCTAssertFalse(model.confirmed)
         model.changePrinting("Holofoil")
-        XCTAssertTrue(model.confirmed); XCTAssertEqual(model.selected?.identity.skuID, "22")
-        XCTAssertEqual(model.selected?.marketPrice, Decimal(string: "4.5"))
+        XCTAssertTrue(model.confirmed); XCTAssertNil(model.selected?.identity.skuID)
+        XCTAssertNil(model.selected?.marketPrice, "An old cached printing quote must not masquerade as an online value")
     }
     func testMockProviderSupportsStopAndRestart() async {
         let provider = MockScannerProvider()
@@ -331,4 +331,99 @@ import SwiftData
         XCTAssertNil(try SessionService.active(context: context))
     }
 
+    func testReviewIgnoresNewFramesAndKeepsCondition() async throws {
+        let model = ScannerViewModel(provider: TestScannerProvider(), pricing: TestMarketPricing())
+        let cards = MockScannerProvider.samples(game: "Pokémon", index: 0)
+        let first = ScanResult(id: UUID(), candidates: cards, accepted: true, same: false)
+        model.receive(first)
+        XCTAssertEqual(model.selected?.identity.condition, "Near Mint")
+        model.changeCondition("Lightly Played")
+        model.receive(ScanResult(id: UUID(), candidates: Array(cards.reversed()), accepted: true, same: false))
+        model.receive(ScanResult(id: UUID(), candidates: [], accepted: false, same: true, visible: false))
+        XCTAssertEqual(model.result?.id, first.id)
+        XCTAssertEqual(model.selected?.identity.condition, "Lightly Played")
+        for _ in 0..<50 { if !model.priceLoading { break }; await Task.yield() }
+        XCTAssertEqual(model.selected?.marketPrice, 2)
+    }
+    func testSaveFailureKeepsReviewAndRetryAddsOnlyOnce() async throws {
+        let container = try store(), context = container.mainContext
+        let session = try SessionService.start(game: "Pokémon", context: context)
+        let list = try XCTUnwrap(SessionService.list(for: session, context: context))
+        var fail = true
+        let model = ScannerViewModel(provider: TestScannerProvider(), pricing: TestMarketPricing(), saveCard: { card, session, list, context, ref in
+            if fail { throw NSError(domain: "TestSave", code: 1) }
+            try SessionService.add(card, session: session, list: list, context: context, recognitionRef: ref)
+        })
+        model.start(game: "Pokémon", list: list, context: context, session: session)
+        let scan = ScanResult(id: UUID(), candidates: MockScannerProvider.samples(game: "Pokémon", index: 0), accepted: true, same: false)
+        model.receive(scan)
+        for _ in 0..<50 { if !model.priceLoading { break }; await Task.yield() }
+        model.addSelected(list: list, context: context)
+        XCTAssertNotNil(model.error); XCTAssertNotNil(model.selected)
+        XCTAssertEqual(list.quantity, 0); XCTAssertNil(session.lastConsumedRecognitionRef)
+        fail = false
+        model.addSelected(list: list, context: context)
+        XCTAssertNil(model.selected); XCTAssertEqual(list.quantity, 1)
+        model.addSelected(list: list, context: context)
+        model.receive(scan)
+        XCTAssertEqual(list.quantity, 1); XCTAssertNil(model.selected)
+        model.scanNextCard(); model.receive(scan)
+        XCTAssertNotNil(model.selected, "An intentional next-card action allows an identical copy")
+        model.stop()
+    }
+    func testOnlinePriceUsesExactPrintingLanguageAndCondition() throws {
+        var card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]
+        card.identity.productID = "p:123"
+        let data = Data(#"{"items":{"p:123":{"printings":[{"key":"Normal","label":"Normal","market_price":99,"quotes":{"English|Near Mint":{"market_price":5,"sku_id":10},"English|Lightly Played":{"market_price":2,"sku_id":"11"}}}]}}}"#.utf8)
+        XCTAssertEqual(try OnlineMarketPricing.parse(data, for: card), MarketQuote(marketPrice: 5, skuID: "10"))
+        card.identity.condition = "Lightly Played"
+        XCTAssertEqual(try OnlineMarketPricing.parse(data, for: card), MarketQuote(marketPrice: 2, skuID: "11"))
+        card.identity.condition = "Damaged"
+        XCTAssertNil(try OnlineMarketPricing.parse(data, for: card))
+        card.identity.condition = "Near Mint"; card.identity.printing = "Holofoil"
+        XCTAssertNil(try OnlineMarketPricing.parse(data, for: card))
+    }
+    func testDuplicateScanOrderSurvivesStoreReopenAndCSV() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("order.store")
+        let cards = MockScannerProvider.samples(game: "Pokémon", index: 0)
+        let expected = [cards[0], cards[1], cards[0]]
+        do {
+            let container = try AppPersistence.open(url: url), context = container.mainContext
+            let session = try SessionService.start(game: "Pokémon", context: context)
+            let list = try XCTUnwrap(SessionService.list(for: session, context: context))
+            for card in expected { try SessionService.add(card, session: session, list: list, context: context) }
+        }
+        let container = try AppPersistence.open(url: url), context = container.mainContext
+        let list = try XCTUnwrap(context.fetch(FetchDescriptor<CardList>()).first)
+        XCTAssertEqual(list.orderedCards.map { $0.snapshot.identity }, expected.map(\.identity))
+        XCTAssertEqual(list.orderedCards.map(\.quantity), [1, 1, 1])
+        let csv = CSVExportService.render(list.orderedCards.map { ExportRow(card: $0.snapshot, quantity: $0.quantity) })
+        XCTAssertEqual(csv.components(separatedBy: "\r\n").filter { !$0.isEmpty }.count, 4)
+    }
+    func testCompletedSessionCanContinueWithoutReplacingList() throws {
+        let container = try store(), context = container.mainContext
+        let original = try SessionService.start(game: "Pokémon", context: context)
+        let list = try XCTUnwrap(SessionService.list(for: original, context: context))
+        try SessionService.finish(original, context: context)
+        let other = try SessionService.start(game: "Magic: The Gathering", context: context)
+        try SessionService.resume(original, context: context)
+        XCTAssertTrue(original.isActive); XCTAssertFalse(other.isActive)
+        XCTAssertEqual(original.listID, list.id)
+    }
+
+}
+
+@MainActor private final class TestScannerProvider: ScannerProvider {
+    let label = "Test"
+    let results: AsyncStream<ScanResult> = AsyncStream { _ in }
+    func start(game: String) {}
+    func stop() {}
+    func clearCache() async throws {}
+}
+private struct TestMarketPricing: MarketPricing {
+    func quote(for card: CardCandidate) async throws -> MarketQuote? {
+        MarketQuote(marketPrice: card.identity.condition == "Near Mint" ? 5 : 2, skuID: "10")
+    }
 }

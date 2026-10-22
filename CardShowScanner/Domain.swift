@@ -35,6 +35,7 @@ struct ScanResult: Identifiable {
     var accepted: Bool
     var same: Bool
     var visible: Bool = true
+    var capturedImageData: Data? = nil
 }
 
 /// Tracks recognition episodes, independently of inventory identity and quantity.

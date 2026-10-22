@@ -1,0 +1,290 @@
+{
+  "source": "TCGTracking authorized scanner integration",
+  "retrieved": "2026-10-22",
+  "files": [
+    {
+      "path": "/newscanplus/assets/js/core/cv.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/core/cv.js?v=1791240624",
+      "sha256": "c4ff80d50436d58617105920b9029fb2fc7a5941d4d793a1396682026005d8a9",
+      "bytes": 7015
+    },
+    {
+      "path": "/newscanplus/assets/js/core/detect.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/core/detect.js?v=1792156492",
+      "sha256": "74df3e9cbc3606029b07c98681b7acc01e0a82bbcc990ab728d2ae9a58a77e7e",
+      "bytes": 18069
+    },
+    {
+      "path": "/newscanplus/assets/js/core/edgefit.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/core/edgefit.js?v=1791243907",
+      "sha256": "90295cbdbaa5cb8cdb5c9857a8d30734111f571a609ea7421d10e675d7b940bd",
+      "bytes": 9362
+    },
+    {
+      "path": "/newscanplus/assets/js/core/frame.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/core/frame.js?v=1791239278",
+      "sha256": "ba2c3f5f1938cc07bd52278e330a688c7816b2de253655d0c1a7a3e03bb1ce65",
+      "bytes": 8340
+    },
+    {
+      "path": "/newscanplus/assets/js/core/geom.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/core/geom.js?v=1791244174",
+      "sha256": "8f6fc996d3588fd578f6c5d1b4bfcdbb3375637ba748d84ec530c243b1899797",
+      "bytes": 8775
+    },
+    {
+      "path": "/newscanplus/assets/js/core/hash.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/core/hash.js?v=1791239521",
+      "sha256": "0f3659b74d22cc64cfb5752f597fdc5b929bf0b61fa58289aa27e76291b9307c",
+      "bytes": 7005
+    },
+    {
+      "path": "/newscanplus/assets/js/core/image-rules.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/core/image-rules.js?v=1792152342",
+      "sha256": "cd4aef6dad0e72ad8b72403593902fcdc974fc3ec9e21ba5c7baaf20e44c909c",
+      "bytes": 5957
+    },
+    {
+      "path": "/newscanplus/assets/js/core/lines.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/core/lines.js?v=1791286889",
+      "sha256": "2a7cfc0aa225db87664e4a2588a498851b1438aa419320b694a2b645590be7bb",
+      "bytes": 6094
+    },
+    {
+      "path": "/newscanplus/assets/js/core/localmatch.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/core/localmatch.js?v=1792528691",
+      "sha256": "946aee80410e76a02e48f7848bd022616d335fe55fd458c448598ab0b9b74648",
+      "bytes": 14738
+    },
+    {
+      "path": "/newscanplus/assets/js/core/motion.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/core/motion.js?v=1791239305",
+      "sha256": "a26278e7b5a4a7be04f501b890bba1f82faf0453bf12f5f5c7402b4b98cdef2c",
+      "bytes": 4386
+    },
+    {
+      "path": "/newscanplus/assets/js/core/overlay.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/core/overlay.js?v=1791285654",
+      "sha256": "14d7b68a91187b9c4d61d77bb54559f3d3333091f595f253b8ebd8aaf4d3adba",
+      "bytes": 8009
+    },
+    {
+      "path": "/newscanplus/assets/js/core/pack.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/core/pack.js?v=1792508181",
+      "sha256": "781d6439117d99b3a83ef6e8284d6580911ab74d2b9842b1a01a7f3ead3bb42e",
+      "bytes": 22472
+    },
+    {
+      "path": "/newscanplus/assets/js/core/quadtrack.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/core/quadtrack.js?v=1791243383",
+      "sha256": "09653436158dadec8516a32e1426a069b233b731b51eef0749baa73f017c0cf9",
+      "bytes": 3746
+    },
+    {
+      "path": "/newscanplus/assets/js/core/quality.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/core/quality.js?v=1791238363",
+      "sha256": "95fe6ed760ff951cb0b89ebf1fd7876b2a7581991c028fd294874e4a9437c19d",
+      "bytes": 2401
+    },
+    {
+      "path": "/newscanplus/assets/js/core/setrank.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/core/setrank.js?v=1792010515",
+      "sha256": "0488182c2413fc29e31801a5f22d909d30f72536332e37e0114d0777b2f2c31a",
+      "bytes": 2617
+    },
+    {
+      "path": "/newscanplus/assets/js/core/static.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/core/static.js?v=1791391648",
+      "sha256": "b591ee5637d456eed19cdbf6a34f5480192a755585c427052a5fecc7b7ada781",
+      "bytes": 963
+    },
+    {
+      "path": "/newscanplus/assets/js/core/warp.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/core/warp.js?v=1791244453",
+      "sha256": "b9cc55e8e639d29fc298790eb3ad295e46334e63e1f880643ae357be67afab6c",
+      "bytes": 5287
+    },
+    {
+      "path": "/newscanplus/assets/js/core/ocr/engine.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/core/ocr/engine.js?v=1791391678",
+      "sha256": "ed9c0fbc09014c14cd7d4580271d29923b36409a09438a3918141170556dfc4a",
+      "bytes": 20154
+    },
+    {
+      "path": "/newscanplus/assets/js/core/ocr/layouts.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/core/ocr/layouts.js?v=1792692321",
+      "sha256": "9bf49395ce80e920b75e1a74e9f7ad26db51adc7f165148c35c20dd7b9d0bbce",
+      "bytes": 11196
+    },
+    {
+      "path": "/newscanplus/assets/js/core/ocr/tiebreak.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/core/ocr/tiebreak.js?v=1792679078",
+      "sha256": "ced4f7420556593c4bbb1aa306343d33832b5643672656e78af3e6167bff8f57",
+      "bytes": 18970
+    },
+    {
+      "path": "/newscanplus/assets/js/app/desk-images.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/desk-images.js?v=1792671347",
+      "sha256": "75192070e9b1c2de0c88ed3388c3ac922bbc223d574eeccbc9bbd6e3436d22a3",
+      "bytes": 17146
+    },
+    {
+      "path": "/newscanplus/assets/js/app/desk-results.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/desk-results.js?v=1792686717",
+      "sha256": "92fadfed7112cf545002e8811e5634eda505e6c553d011d6c4b01506ed09b485",
+      "bytes": 42321
+    },
+    {
+      "path": "/newscanplus/assets/js/app/desk-variance.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/desk-variance.js?v=1791820037",
+      "sha256": "131814204260d09c76bdf06a0d9c817462f97ca1197f1f377a2579cb1f5eba83",
+      "bytes": 29311
+    },
+    {
+      "path": "/newscanplus/assets/js/app/image-ocr.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/image-ocr.js?v=1792692338",
+      "sha256": "e16427b3be904c8b49705d280cc2975764412a56efef62ed476fd7bb12a2bc35",
+      "bytes": 29605
+    },
+    {
+      "path": "/newscanplus/assets/js/app/image-scan.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/image-scan.js?v=1792528707",
+      "sha256": "f4d41cc1da9e3e1a85b06ef9e3561c2aa30ef0b7abae2d1b6fdc5b8f0cfe9540",
+      "bytes": 21419
+    },
+    {
+      "path": "/newscanplus/assets/js/app/module-graph.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/module-graph.js?v=1791240114",
+      "sha256": "b44002091230a763735e90bed8b784ab3ba96f2c5ebcd72406f520a516573164",
+      "bytes": 2135
+    },
+    {
+      "path": "/newscanplus/assets/js/app/pokemon-watermark-protos.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/pokemon-watermark-protos.js?v=1791921580",
+      "sha256": "077acfe4641e82d7c64f857d1ac33c8b3b471df0143a644d820fa10853580ba7",
+      "bytes": 40421
+    },
+    {
+      "path": "/newscanplus/assets/js/app/pokemon-watermark.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/pokemon-watermark.js?v=1792504705",
+      "sha256": "6458aced8ea1ee029c34c53405e37e8caf48541dcbf284288778db6e3e7b0473",
+      "bytes": 20018
+    },
+    {
+      "path": "/newscanplus/assets/js/app/quickscan-worker.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/quickscan-worker.js?v=1792678406",
+      "sha256": "54b3aa7769c5e20943c5aa7b1525e5384f62611bac88884e3d0975d538f91975",
+      "bytes": 6349
+    },
+    {
+      "path": "/newscanplus/assets/js/app/quickscan.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/quickscan.js?v=1792447586",
+      "sha256": "b6b0bae298408d2f237f48f2b30ba84a99f842f9fd6004da679c29a4fd115c4e",
+      "bytes": 13719,
+      "upstream_sha256": "2ced8f09522bb1d22949ad4b420191f56b12a0ef8bec6433fc9a338713f52cc6",
+      "adaptation": "Optional resolveCandidates=false skips online image-assisted reranking; preserves captured thumbnail and local pack candidates."
+    },
+    {
+      "path": "/newscanplus/assets/js/app/reprint-rerank.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/reprint-rerank.js?v=1792692323",
+      "sha256": "8474e68d793729c25659b54500669c5a722848bbde4062d771b5b8c9c46745c8",
+      "bytes": 31831
+    },
+    {
+      "path": "/newscanplus/assets/js/app/scan-backends.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/scan-backends.js?v=1792678406",
+      "sha256": "53743874a9ad9744b4c7cc06e838746de3501b32d07f921a56253b74ece2a5d5",
+      "bytes": 12354
+    },
+    {
+      "path": "/newscanplus/assets/js/app/scan-engine.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/scan-engine.js?v=1792238053",
+      "sha256": "78e54cb99a218467c6be80faedfea8ca7580110d89bb42380c906768832b6515",
+      "bytes": 13263
+    },
+    {
+      "path": "/newscanplus/assets/js/app/shared.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/shared.js?v=1792086111",
+      "sha256": "d1c9ef16e8bc5fd2c5e8585174a542a59054a6d65c9a620d8dcdba37caf18879",
+      "bytes": 7007
+    },
+    {
+      "path": "/newscanplus/assets/js/app/video-frames.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/video-frames.js?v=1791240136",
+      "sha256": "aabe1a5a5b38b0d6e7c1d3daada612f867888a3359f0caf5601ac7c27e6c16ec",
+      "bytes": 1227
+    },
+    {
+      "path": "/newscanplus/assets/js/app/variants/common.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/variants/common.js?v=1792153444",
+      "sha256": "7ad4b6048f9557c2ebcd471b853bf2c6fc8e731be3ffd359e19a0e9897c67d57",
+      "bytes": 39441
+    },
+    {
+      "path": "/newscanplus/assets/js/app/variants/gundam.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/variants/gundam.js?v=1792683511",
+      "sha256": "6156def0635e48d7142da5f6382b5d6f0291daf6a0b9f0a8efadb7723f37e897",
+      "bytes": 8292
+    },
+    {
+      "path": "/newscanplus/assets/js/app/variants/index.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/variants/index.js?v=1792447325",
+      "sha256": "764d510d7b619fcecf72b23c3a15c111f42fb2dc18a1d19ab39783e6513e21b2",
+      "bytes": 1944
+    },
+    {
+      "path": "/newscanplus/assets/js/app/variants/lorcana.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/variants/lorcana.js?v=1792097593",
+      "sha256": "1cc8a2e6b2b71439e19a516419a815863d0781edf243618787f573736958a532",
+      "bytes": 2821
+    },
+    {
+      "path": "/newscanplus/assets/js/app/variants/mtg.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/variants/mtg.js?v=1792685732",
+      "sha256": "927b67b9080cd03aa622dd108e848115d41026ce08da371b73bf8bbf606f604e",
+      "bytes": 43249
+    },
+    {
+      "path": "/newscanplus/assets/js/app/variants/onepiece.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/variants/onepiece.js?v=1792153458",
+      "sha256": "3a905af2aba39d79e9f3ee5f7c9712cde404b87419793dbae999d88d19b1a268",
+      "bytes": 22253
+    },
+    {
+      "path": "/newscanplus/assets/js/app/variants/pokemon.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/variants/pokemon.js?v=1792683596",
+      "sha256": "66a3fa11b889257d0f53f6ccfcc94bc87fc6be90e0e38d62ae75a6dde935fb22",
+      "bytes": 33197
+    },
+    {
+      "path": "/newscanplus/assets/js/app/variants/riftbound.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/variants/riftbound.js?v=1792153457",
+      "sha256": "54cc3d7689782bf8a0b5ce7ebec16d3c8e487c9f0125d45d1faa994494fafc64",
+      "bytes": 11731
+    },
+    {
+      "path": "/newscanplus/assets/js/app/variants/sorcery.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/variants/sorcery.js?v=1792498242",
+      "sha256": "0fa35e2425390a33dda72c9563733ce8cad8ed0cff2cbb0d4ac7735efe052d7c",
+      "bytes": 7449
+    },
+    {
+      "path": "/newscanplus/assets/js/app/variants/yugioh.js",
+      "url": "https://tcgtracking.com/newscanplus/assets/js/app/variants/yugioh.js?v=1792158455",
+      "sha256": "3554b4a5bb74f0c5e569caa90a5c5a2d22366eff28c8dcb53390c6dfaef2ab52",
+      "bytes": 19423
+    },
+    {
+      "path": "/newscanplus/assets/vendor/opencv-nsp-412-simd.js",
+      "url": "https://nsp-static.tcgtracking.com/vendor/opencv-nsp-412-simd.js?v=7897def770500a1aab5c83bf5709ae7e",
+      "sha256": "1ea216c6c8e061e8db74db0c55c51b11af10b2b8e8e4bad308d2694fb965e4ad",
+      "bytes": 4182359
+    },
+    {
+      "path": "/newscanplus/assets/vendor/opencv-nsp-412.js",
+      "url": "https://nsp-static.tcgtracking.com/vendor/opencv-nsp-412.js?v=29c5b0841e8499b4b42d51a25259414d",
+      "sha256": "a5aea53a584075f3e04381eddb69d23c08403babf76a5e07ed554e6e79d1cea8",
+      "bytes": 2752495
+    }
+  ]
+}

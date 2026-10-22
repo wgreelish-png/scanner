@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        A1B2C3D40000000000000001 /* LocalScannerServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000002; };
+        A1B2C3D40000000000000003 /* ScannerRuntime in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000004; };
 		32EAD5C6AF7A6FFB0C99B53A /* StorageSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = 640FC94546D69DD8166B6EA6 /* StorageSchema.swift */; };
 		E2E8418F74774C4FFFFF927D /* SessionReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A565D8AFD09E49E798ED2CF /* SessionReviewView.swift */; };
 		F529F7613E819487A37E9C6B /* SessionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24E83F6B82BBA1964E981DB7 /* SessionService.swift */; };
@@ -36,6 +38,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        A1B2C3D40000000000000002 /* LocalScannerServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalScannerServer.swift; sourceTree = "<group>"; };
+        A1B2C3D40000000000000004 /* ScannerRuntime */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/ScannerRuntime; sourceTree = "<group>"; };
 		F0C011A95C6B44F68A001701 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Signing.xcconfig; sourceTree = SOURCE_ROOT; };
 		640FC94546D69DD8166B6EA6 /* StorageSchema.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageSchema.swift; sourceTree = "<group>"; };
 		6A565D8AFD09E49E798ED2CF /* SessionReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionReviewView.swift; sourceTree = "<group>"; };
@@ -95,6 +99,8 @@
 		878A52FC5FF6A57D50B7B870 /* CardShowScanner */ = {
 			isa = PBXGroup;
 			children = (
+                A1B2C3D40000000000000002 /* LocalScannerServer.swift */,
+                A1B2C3D40000000000000004 /* ScannerRuntime */,
 				640FC94546D69DD8166B6EA6 /* StorageSchema.swift */,
 				6A565D8AFD09E49E798ED2CF /* SessionReviewView.swift */,
 				24E83F6B82BBA1964E981DB7 /* SessionService.swift */,
@@ -211,6 +217,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                A1B2C3D40000000000000003 /* ScannerRuntime in Resources */,
 				F2201FCA8583F235EFCD47BE /* Resources/TCGTrackingBridge.js in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -230,6 +237,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                A1B2C3D40000000000000001 /* LocalScannerServer.swift in Sources */,
 				32EAD5C6AF7A6FFB0C99B53A /* StorageSchema.swift in Sources */,
 				E2E8418F74774C4FFFFF927D /* SessionReviewView.swift in Sources */,
 				F529F7613E819487A37E9C6B /* SessionService.swift in Sources */,
@@ -280,7 +288,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Recognize trading cards using the TCGTracking live scanner.";
-				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_FILE = Config/AppInfo.plist;
+                INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.cardshow.CardShowScanner;
@@ -313,7 +322,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Recognize trading cards using the TCGTracking live scanner.";
-				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_FILE = Config/AppInfo.plist;
+                INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.cardshow.CardShowScanner;

@@ -44,9 +44,11 @@
     return { kind: 'scan', same: false, accepted: view?.accepted === true, confidence: confidence(view?.confidence), candidates: rows };
   }
   let dispose = () => {};
+  let resetRecognition = () => {};
+  let releaseReview = () => {};
   async function install(config) {
     dispose();
-    let running = true, stopLoop = null, stream = null, backend = null, starting = false;
+    let running = true, stopLoop = null, stream = null, backend = null, starting = false, held = false, awaitingRemoval = false, beginLoop = null;
     const post = message => { if (running) window.webkit?.messageHandlers?.scanResult?.postMessage({ ...message, nonce: config.nonce }); };
     const diagnostic = (event, fields = {}) => post({ kind: 'diagnostic', event, ...fields });
     const clock = () => globalThis.performance?.now?.() ?? Date.now();
@@ -59,7 +61,7 @@
     const root = document.createElement('section');
     root.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#111;color:white;font:16px system-ui;display:flex;flex-direction:column;padding:8px;box-sizing:border-box';
     const button = document.createElement('button');
-    button.textContent = 'Download database & Start Camera';
+    button.textContent = 'Download Game Database & Start Camera';
     button.style.cssText = 'font:600 17px system-ui;min-height:52px;border-radius:12px;margin-bottom:8px';
     const hint = document.createElement('div'); hint.setAttribute('role', 'status'); hint.style.minHeight = '40px';
     const frame = document.createElement('div'); frame.style.cssText = 'position:relative;flex:1;min-height:0';
@@ -114,14 +116,29 @@
         diagnostic('video_playing', { elapsedMS: clock() - began });
         stage = 'scan';
         const overlay = overlays.createOverlay(canvas, { fit: 'cover' });
-        stopLoop = quick.startQuickScan({ video, overlay, backend, pack, fetchDetails: shared.catalogDetail,
-          onShow: view => post(normalizeView(view)), onHide: () => post({ kind: 'hide' }),
+        beginLoop = () => quick.startQuickScan({ video, overlay, backend, pack, fetchDetails: null, resolveCandidates: false,
+          onShow: view => {
+            if (held || awaitingRemoval) return;
+            const result = normalizeView(view);
+            if (result.same || !result.candidates?.length) return;
+            if (typeof view.thumb === 'string' && view.thumb.startsWith('data:image/jpeg;base64,') && view.thumb.length <= 1_000_000) {
+              result.capturedImageBase64 = view.thumb.slice('data:image/jpeg;base64,'.length);
+            }
+            held = true;
+            post(result);
+          }, onHide: () => { if (!held) { awaitingRemoval = false; post({ kind: 'hide' }); } },
           onHint: report, onStats: stats => {
             const now = clock();
             if (now - lastStats < 5000) return;
             lastStats = now;
             diagnostic('scan_stats', { backend: stats.kind, scanMS: stats.scanMs, captureMS: stats.captureMs, frames: stats.frames });
           } });
+        resetRecognition = () => {
+          held = false; awaitingRemoval = false; stopLoop?.(); backend.reset?.();
+          if (running && stream) stopLoop = beginLoop();
+        };
+        releaseReview = () => { held = false; awaitingRemoval = true; };
+        stopLoop = beginLoop();
         diagnostic('scanner_ready');
         button.hidden = true; report('Live camera ready — hold a card steady.');
       } catch (error) {
@@ -131,6 +148,7 @@
         button.hidden = false; button.textContent = 'Retry Scanner';
       } finally { starting = false; button.disabled = false; }
     };
+    if (config.autoStart) await button.onclick();
   }
-  globalThis.CardShowBridge = { install, stop: () => dispose(), normalizeView };
+  globalThis.CardShowBridge = { install, stop: () => dispose(), resetRecognition: () => resetRecognition(), releaseReview: () => releaseReview(), normalizeView };
 })();

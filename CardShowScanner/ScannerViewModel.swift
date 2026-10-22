@@ -4,6 +4,7 @@ import Observation
 import UIKit
 import AudioToolbox
 
+/// The first complete recognition is a review snapshot. Frames cannot mutate it.
 @MainActor @Observable final class ScannerViewModel {
     var result: ScanResult?
     var selected: CardCandidate?
@@ -11,124 +12,130 @@ import AudioToolbox
     var paused = false
     var error: String?
     var session: ScanSession?
-    var manualAdds = 0
-    private var gate = RecognitionGate()
-    private var userReviewed = false
+    var waitingForRemoval = false
+    var saving = false
+    var priceLoading = false
+    var priceMessage: String?
     private var consumer: Task<Void, Never>?
+    private var priceTask: Task<Void, Never>?
+    private var priceRequestID = UUID()
     private let provider: any ScannerProvider
+    private let pricing: any MarketPricing
+    // Injection makes a failed transaction/retry testable without corrupting a store.
+    private let saveCard: (CardCandidate, ScanSession, CardList, ModelContext, String?) throws -> Void
     var label: String { provider.label }
     var liveProvider: TCGTrackingScannerProvider? { provider as? TCGTrackingScannerProvider }
-    init(provider: (any ScannerProvider)? = nil) { self.provider = provider ?? MockScannerProvider() }
+    init(provider: (any ScannerProvider)? = nil, pricing: any MarketPricing = OnlineMarketPricing(),
+         saveCard: @escaping (CardCandidate, ScanSession, CardList, ModelContext, String?) throws -> Void = {
+             try SessionService.add($0, session: $1, list: $2, context: $3, recognitionRef: $4)
+         }) {
+        self.provider = provider ?? TCGTrackingScannerProvider()
+        self.pricing = pricing; self.saveCard = saveCard
+    }
     func start(game: String, list: CardList, context: ModelContext, session: ScanSession) {
         guard consumer == nil, !paused else { return }
         guard session.isActive, session.listID == list.id, session.game == game else {
-            self.error = BatchFailure.unavailable.localizedDescription; return
+            error = BatchFailure.unavailable.localizedDescription; return
         }
         self.session = session
-        DiagnosticLog.shared.record("scanner.start", ["provider": liveProvider == nil ? "mock" : "live", "automatic": String(UserDefaults.standard.bool(forKey: "automaticAdd"))])
-        result = nil; selected = nil; confirmed = false
+        if selected == nil { waitingForRemoval = false }
         provider.start(game: game)
         let stream = provider.results
         consumer = Task { [weak self] in
-            guard let self else { return }
             for await scan in stream {
-                guard !Task.isCancelled else { return }
-                guard !paused else { continue }
-                guard scan.visible else {
-                    DiagnosticLog.shared.record("recognition.hidden")
-                    session.lastConsumedRecognitionRef = nil
-                    do { try context.save() } catch { DiagnosticLog.shared.failure("session.save_failed", error); self.error = error.localizedDescription }
-                    result = nil; selected = nil; confirmed = false
-                    continue
-                }
-                DiagnosticLog.shared.record(scan.same ? "recognition.refresh" : "recognition.result", [
-                    "episode": scan.id.uuidString, "same": String(scan.same), "accepted": String(scan.accepted),
-                    "confidence": String(Int(scan.candidates.first?.confidence ?? 0)), "candidates": String(scan.candidates.count),
-                    "printing_required": String(scan.candidates.first?.requiresPrintingSelection == true)
-                ], sampleEvery: scan.same ? 5 : 0)
-                let previous = gate.episode
-                gate.receive(scan)
-                if session.lastConsumedRecognitionRef == scan.candidates.first?.identity.productID,
-                   session.lastConsumedRecognitionRef != nil { gate.markAdded() }
-                let marker = gate.hasAdded ? scan.candidates.first?.identity.productID : nil
-                if marker != session.lastConsumedRecognitionRef {
-                    session.lastConsumedRecognitionRef = marker
-                    do { try context.save() } catch { DiagnosticLog.shared.failure("session.save_failed", error); self.error = error.localizedDescription }
-                }
-                result = scan
-                if previous != gate.episode {
-                    selected = scan.candidates.first; confirmed = scan.accepted && (selected?.confidence ?? 0) >= 90 && selected?.requiresPrintingSelection != true
-                    manualAdds = 0; userReviewed = false
-                }
-                if !userReviewed {
-                    selected = scan.candidates.first
-                    confirmed = scan.accepted && (selected?.confidence ?? 0) >= 90 && selected?.requiresPrintingSelection != true
-                }
-                if let index = scan.candidates.firstIndex(where: { $0.identity.productID == self.selected?.identity.productID }) {
-                    selected?.confidence = scan.candidates[index].confidence
-                }
-                let defaults = UserDefaults.standard
-                if !userReviewed, defaults.bool(forKey: "automaticAdd"), gate.consumeAutomatic(scan), let selected, selected.identity.productID == scan.candidates.first?.identity.productID {
-                    DiagnosticLog.shared.record("add.decision", ["reason": "automatic_eligible", "episode": scan.id.uuidString])
-                    add(selected, list: list, context: context)
-                } else {
-                    let reason: String
-                    if userReviewed { reason = "user_reviewed" }
-                    else if !defaults.bool(forKey: "automaticAdd") { reason = "manual_mode" }
-                    else if scan.same { reason = "repeat_frame" }
-                    else if !scan.accepted { reason = "not_accepted" }
-                    else if (scan.candidates.first?.confidence ?? 0) < 90 { reason = "low_confidence" }
-                    else if scan.candidates.first?.requiresPrintingSelection == true { reason = "printing_confirmation" }
-                    else { reason = "already_consumed" }
-                    DiagnosticLog.shared.record("add.decision", ["reason": reason, "episode": scan.id.uuidString], sampleEvery: scan.same ? 5 : 0)
-                }
+                guard let self, !Task.isCancelled else { return }
+                self.receive(scan)
             }
         }
     }
-    func stop() { if consumer != nil { DiagnosticLog.shared.record("scanner.stop") }; provider.stop(); consumer?.cancel(); consumer = nil }
+    func receive(_ scan: ScanResult) {
+        guard !paused, !saving, selected == nil else { return }
+        if !scan.visible { waitingForRemoval = false; return }
+        guard !waitingForRemoval, !scan.same, let first = scan.candidates.first else { return }
+        result = scan
+        var card = first; card.identity.condition = "Near Mint"
+        selected = card
+        confirmed = !card.requiresPrintingSelection.orFalse
+        refreshPrice()
+        DiagnosticLog.shared.record("recognition.result", ["episode": scan.id.uuidString, "candidates": String(scan.candidates.count)])
+    }
+    func stop() {
+        provider.stop(); consumer?.cancel(); consumer = nil
+        // Keep the pending review and price selection across navigation/backgrounding.
+    }
     func togglePause(game: String, list: CardList, context: ModelContext, session: ScanSession) {
         paused.toggle()
-        DiagnosticLog.shared.record("scanner.pause", ["phase": paused ? "paused" : "resumed"])
         if paused { stop() } else { start(game: game, list: list, context: context, session: session) }
     }
     func choose(_ candidate: CardCandidate) {
-        let index = result?.candidates.firstIndex { $0.id == candidate.id } ?? -1
-        DiagnosticLog.shared.record("candidate.selected", ["candidate_index": String(index), "priced": String(candidate.marketPrice != nil), "printing_required": String(candidate.requiresPrintingSelection == true)])
-        userReviewed = true; selected = candidate; confirmed = candidate.requiresPrintingSelection != true
+        let condition = selected?.identity.condition ?? "Near Mint"
+        selected = candidate; selected?.identity.condition = condition
+        confirmed = candidate.requiresPrintingSelection != true
+        refreshPrice()
     }
-    func confirmPrinting() {
-        DiagnosticLog.shared.record("printing.confirmed")
-        userReviewed = true
-        selected?.requiresPrintingSelection = false; confirmed = selected != nil
-    }
+    func confirmPrinting() { selected?.requiresPrintingSelection = false; confirmed = selected != nil }
     func changePrinting(_ printing: String) {
         guard var card = selected else { return }
-        userReviewed = true
         card.identity.printing = printing
-        let quote = card.printingQuotes?.first { $0.label == printing }
-        card.identity.skuID = quote?.skuID
-        card.marketPrice = quote?.marketPrice // Never transfer a quote from another finish.
-        card.requiresPrintingSelection = false
-        DiagnosticLog.shared.record("printing.changed", ["priced": String(card.marketPrice != nil)])
-        selected = card; confirmed = true
+        card.identity.skuID = nil; card.marketPrice = nil; card.requiresPrintingSelection = false
+        selected = card; confirmed = true; refreshPrice()
+    }
+    func changeCondition(_ condition: String) {
+        guard CatalogOptions.conditions.contains(condition) else { return }
+        selected?.identity.condition = condition
+        refreshPrice()
+    }
+    func refreshPrice() {
+        priceTask?.cancel(); priceRequestID = UUID()
+        guard var card = selected else { return }
+        // Never retain a quote for a previous printing or condition.
+        card.marketPrice = nil; card.identity.skuID = nil; selected = card
+        let requestID = priceRequestID
+        priceLoading = true; priceMessage = nil
+        priceTask = Task { [weak self, pricing] in
+            do {
+                let quote = try await pricing.quote(for: card)
+                guard let self, !Task.isCancelled, self.priceRequestID == requestID, self.selected?.identity == card.identity else { return }
+                self.selected?.marketPrice = quote?.marketPrice
+                self.selected?.identity.skuID = quote?.skuID
+                self.priceLoading = false
+                self.priceMessage = quote?.marketPrice == nil ? "Market value unavailable for this printing and condition." : nil
+            } catch {
+                guard let self, !Task.isCancelled, self.priceRequestID == requestID else { return }
+                self.priceLoading = false
+                self.priceMessage = "Online price lookup failed. Retry, or confirm with market value unavailable."
+            }
+        }
     }
     func addSelected(list: CardList, context: ModelContext) {
-        guard confirmed, let selected else { DiagnosticLog.shared.record("add.blocked", ["reason": "confirmation_required"]); return }
-        DiagnosticLog.shared.record("add.decision", ["reason": "manual_tap"])
-        add(selected, list: list, context: context)
-    }
-    private func add(_ candidate: CardCandidate, list: CardList, context: ModelContext) {
-        var card = candidate
-        card.identity.condition = UserDefaults.standard.string(forKey: "defaultCondition") ?? "Near Mint"
+        guard confirmed, !saving, !priceLoading, let selected, let session else { return }
+        saving = true
+        defer { saving = false }
         do {
-            guard let session else { throw BatchFailure.unavailable }
-            try SessionService.add(card, session: session, list: list, context: context, recognitionRef: result?.candidates.first?.identity.productID)
-            gate.markAdded(); manualAdds += 1
-            DiagnosticLog.shared.record("add.saved", ["priced": String(card.marketPrice != nil), "quantity": String(session.addedQuantity)])
+            try saveCard(selected, session, list, context, result?.candidates.first?.identity.productID)
+            // Only a committed transaction releases the review snapshot.
+            priceTask?.cancel(); priceRequestID = UUID()
+            result = nil; self.selected = nil; confirmed = false; priceMessage = nil
+            waitingForRemoval = true; error = nil
+            liveProvider?.releaseReview()
+            DiagnosticLog.shared.record("add.saved", ["priced": String(selected.marketPrice != nil)])
             if UserDefaults.standard.object(forKey: "haptics") as? Bool ?? true {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
             }
             if UserDefaults.standard.bool(forKey: "sound") { AudioServicesPlaySystemSound(1104) }
-        } catch { DiagnosticLog.shared.failure("persistence.failed", error); context.rollback(); self.error = error.localizedDescription }
+        } catch {
+            context.rollback(); self.error = "The card was not saved. Your selection is kept; tap Confirm & Add to retry."
+            DiagnosticLog.shared.failure("persistence.failed", error)
+        }
     }
+    func scanNextCard() {
+        // Intentional re-arm allows a second identical physical copy without identity merging.
+        priceTask?.cancel(); priceRequestID = UUID(); priceLoading = false
+        result = nil; selected = nil; confirmed = false; waitingForRemoval = false; priceMessage = nil
+        liveProvider?.resetRecognition()
+    }
+}
+
+private extension Optional where Wrapped == Bool {
+    var orFalse: Bool { self ?? false }
 }

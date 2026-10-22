@@ -1,3 +1,5 @@
+> **2026-10-22 workflow update:** The scan-confirmation branch replaces the remote scanner page with bundled recognition assets, defaults to live scanning, requires review/confirmation, looks up exact condition prices online, and preserves separate duplicate rows in scan order. See [current workflow and validation](docs/ScanConfirmationWorkflow.md). Earlier implementation notes below describe the previous behavior where they conflict. Native build and real-iPhone validation are still required.
+
 # Card Show Scanner — Sessions v1
 
 Native SwiftUI/SwiftData iPhone app, iOS 17+. One persistent batch session at a time, offline card lists, a Review & Offer calculator, CSV sharing, local diagnostics, and selectable mock / experimental TCGTracking scanning. A session is a general scanning batch, not a purchase transaction.

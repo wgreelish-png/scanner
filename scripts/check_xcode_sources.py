@@ -8,7 +8,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT = ROOT / 'CardShowScanner.xcodeproj' / 'project.pbxproj'
-REQUIRED = ['OfferCalculator.swift', 'SessionService.swift', 'SessionReviewView.swift', 'StorageSchema.swift']
+REQUIRED = sorted(p.name for p in (ROOT / 'CardShowScanner').glob('*.swift'))
 
 
 def check(project):
@@ -16,17 +16,17 @@ def check(project):
     targets = [o for o in objects.values() if o.get('isa') == 'PBXNativeTarget' and o.get('name') == 'CardShowScanner']
     if len(targets) != 1:
         raise ValueError('Expected exactly one CardShowScanner application target.')
-    sources = set()
+    sources = []
     for phase_id in targets[0].get('buildPhases', []):
         phase = objects[phase_id]
         if phase.get('isa') == 'PBXSourcesBuildPhase':
             for build_id in phase.get('files', []):
                 ref = objects.get(objects.get(build_id, {}).get('fileRef'), {})
-                sources.add(Path(ref.get('path', '')).name)
+                sources.append(Path(ref.get('path', '')).name)
     failures = 0
     for filename in REQUIRED:
         exists = (ROOT / 'CardShowScanner' / filename).is_file()
-        included = filename in sources
+        included = sources.count(filename) == 1
         print(f'{filename}: on disk={exists}; in app Compile Sources={included}')
         failures += not (exists and included)
     print('App Compile Sources count:', len(sources))

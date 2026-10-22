@@ -69,25 +69,24 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section { Text("Your scanning workspace").foregroundStyle(.secondary) }
-                if let active {
-                    Section("Current Session • Active") { ActiveSessionCard(session: active) }
-                }
-                Section("New Session") {
-                    Picker(hasChosenGame ? "Game" : "Choose your first game", selection: $game) {
+                Section("Start New Scan") {
+                    Picker("Game", selection: $game) {
                         ForEach(CatalogOptions.games, id: \.self) { Text($0) }
                     }
-                    Button("Start New Session", systemImage: "plus.circle.fill") {
+                    Button("Start New Scan", systemImage: "viewfinder") {
                         if active != nil { confirmingNew = true } else { start() }
                     }.font(.headline).padding(.vertical, 8)
-                    Text("Creates a timestamped batch. Scanning does not record a purchase.").font(.caption).foregroundStyle(.secondary)
+                    Text("Creates a new list and opens the live camera scanner.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section {
-                    NavigationLink { SessionHistoryView() } label: { Label("All Sessions", systemImage: "clock") }
-                    NavigationLink { SavedListsView() } label: { Label("All Lists", systemImage: "list.bullet.rectangle") }
-                    NavigationLink { SettingsView() } label: { Label("Settings", systemImage: "gearshape") }
+                    NavigationLink { SavedListsView() } label: {
+                        Label("Open Existing List", systemImage: "list.bullet.rectangle")
+                    }.font(.headline).padding(.vertical, 8)
                 }
             }.navigationTitle("Card Show Scanner")
+                .toolbar {
+                    NavigationLink { SettingsView() } label: { Image(systemName: "gearshape") }
+                }
                 .navigationDestination(item: $destination) { id in
                     if let session = sessions.first(where: { $0.id == id }) { BatchScannerDestination(session: session) }
                 }
