@@ -7,6 +7,9 @@ import SwiftData
     var createdAt: Date
     @Relationship(deleteRule: .cascade, inverse: \InventoryCard.list) var cards: [InventoryCard] = []
     init(name: String) { id = UUID(); self.name = name; createdAt = .now }
+    var orderedCards: [InventoryCard] {
+        cards.sorted { $0.addedAt == $1.addedAt ? $0.id.uuidString < $1.id.uuidString : $0.addedAt < $1.addedAt }
+    }
     var quantity: Int { cards.reduce(0) { $0 + $1.quantity } }
     var knownValue: Decimal { cards.reduce(Decimal.zero) { $0 + ($1.snapshot.marketPrice ?? 0) * Decimal($1.quantity) } }
     var unpricedQuantity: Int { cards.filter { $0.snapshot.marketPrice == nil }.reduce(0) { $0 + $1.quantity } }
@@ -86,21 +89,31 @@ import SwiftData
 
 @MainActor enum CardListService {
     static func add(_ card: CardCandidate, to list: CardList, context: ModelContext) throws {
-        if let existing = list.cards.first(where: { $0.snapshot.identity == card.identity }) {
-            DiagnosticLog.shared.record("inventory.merge")
-            existing.quantity += 1
-            // A fresh quote may update the same exact inventory variant.
-            if card.marketPrice != nil { try existing.update(card) }
-        } else {
-            DiagnosticLog.shared.record("inventory.insert")
-            let item = try InventoryCard(card: card)
-            context.insert(item); list.cards.append(item)
+        // Every confirmation is a physical card, including exact duplicates.
+        let item = try InventoryCard(card: card)
+        if let last = list.orderedCards.last {
+            item.addedAt = max(Date.now, last.addedAt.addingTimeInterval(0.001))
         }
+        context.insert(item); list.cards.append(item)
+        DiagnosticLog.shared.record("inventory.insert")
     }
+
+    /// Editing never coalesces physical rows, even when their identities become equal.
+    static func edit(_ item: InventoryCard, card: CardCandidate, quantity: Int,
+                     cashOverride: String?, tradeOverride: String?, maximumOverride: String?, context: ModelContext) throws {
+        guard quantity > 0 else { throw BatchFailure.invalidQuantity }
+        do {
+            try item.update(card); item.quantity = quantity
+            item.cashOverrideText = cashOverride; item.tradeOverrideText = tradeOverride; item.maximumOverrideText = maximumOverride
+            try context.save()
+        } catch { context.rollback(); throw error }
+    }
+
     static func duplicate(_ list: CardList, context: ModelContext) throws {
         let copy = CardList(name: list.name + " Copy"); context.insert(copy)
-        for card in list.cards {
+        for card in list.orderedCards {
             let item = try InventoryCard(card: card.snapshot, quantity: card.quantity)
+            item.addedAt = card.addedAt
             item.cashOverrideText = card.cashOverrideText; item.tradeOverrideText = card.tradeOverrideText
             item.maximumOverrideText = card.maximumOverrideText
             context.insert(item); copy.cards.append(item)

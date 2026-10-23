@@ -2,13 +2,14 @@ import Foundation
 import SwiftData
 
 enum BatchFailure: LocalizedError {
-    case activeSessionExists, unavailable, wrongGame, invalidRates
+    case activeSessionExists, unavailable, wrongGame, invalidRates, invalidQuantity
     var errorDescription: String? {
         switch self {
         case .activeSessionExists: return "Finish the active session before starting another batch."
         case .unavailable: return "This session is completed or its list is no longer available."
         case .wrongGame: return "A batch can contain only its selected game. Start another session to change games."
         case .invalidRates: return "Each offer percentage must be between 0 and 100."
+        case .invalidQuantity: return "Quantity must be at least one."
         }
     }
 }
@@ -66,6 +67,35 @@ enum BatchFailure: LocalizedError {
         do { return try start(game: game, context: context, defaults: defaults) }
         catch { context.rollback(); throw error }
     }
+    static func continueList(_ list: CardList, game: String, context: ModelContext, finishingOtherSession: Bool = false) throws -> ScanSession {
+        guard CatalogOptions.games.contains(game), list.cards.allSatisfy({ $0.snapshot.identity.game == game }) else { throw BatchFailure.wrongGame }
+        let sessions = try context.fetch(FetchDescriptor<ScanSession>())
+        if let existing = sessions.first(where: { $0.listID == list.id }) {
+            try resume(existing, context: context, finishingOtherSession: finishingOtherSession); return existing
+        }
+        if let current = try active(context: context) {
+            guard finishingOtherSession else { throw BatchFailure.activeSessionExists }
+            current.statusRaw = "completed"; current.completedAt = .now
+        }
+        let session = ScanSession(listName: list.name)
+        session.listID = list.id; session.game = game; session.statusRaw = "active"
+        session.setRates(defaults()); context.insert(session)
+        try CardListService.save(context)
+        return session
+    }
+    static func resume(_ session: ScanSession, context: ModelContext, finishingOtherSession: Bool = false) throws {
+        guard let list = try list(for: session, context: context), let game = session.game,
+              CatalogOptions.games.contains(game), list.cards.allSatisfy({ $0.snapshot.identity.game == game }) else {
+            throw BatchFailure.unavailable
+        }
+        if let current = try active(context: context), current.id != session.id {
+            guard finishingOtherSession else { throw BatchFailure.activeSessionExists }
+            current.statusRaw = "completed"; current.completedAt = .now
+        }
+        session.statusRaw = "active"; session.completedAt = nil
+        session.lastConsumedRecognitionRef = nil
+        try CardListService.save(context)
+    }
     static func add(_ card: CardCandidate, session: ScanSession, list: CardList, context: ModelContext, recognitionRef: String? = nil) throws {
         guard session.isActive, session.listID == list.id else { throw BatchFailure.unavailable }
         guard session.game == card.identity.game else { throw BatchFailure.wrongGame }
@@ -78,7 +108,7 @@ enum BatchFailure: LocalizedError {
     }
     static func saveOffer(_ session: ScanSession, list: CardList, context: ModelContext) throws {
         guard session.listID == list.id, session.rates.isValid else { throw BatchFailure.invalidRates }
-        let lines = list.cards.map { item in
+        let lines = list.orderedCards.map { item in
             let card = item.snapshot, input = item.offerLine
             return SavedOfferLine(inventoryID: item.id, name: card.name, productID: card.identity.productID,
                 printing: card.identity.printing, condition: card.identity.condition, language: card.identity.language,

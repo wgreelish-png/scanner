@@ -13,7 +13,7 @@ struct ScannerView: View {
     @State private var confirmGame = false
     @State private var nextSessionID: UUID?
     @State private var model = ScannerViewModel()
-    @State private var mode = "Mock"
+    @State private var mode = "Live"
     init(session: ScanSession, list: CardList) {
         self.session = session; self.list = list
         _game = State(initialValue: session.game ?? "Pokémon")
@@ -25,13 +25,15 @@ struct ScannerView: View {
                 Picker("Game", selection: $game) {
                     ForEach(CatalogOptions.games, id: \.self) { Text($0) }
                 }.pickerStyle(.menu)
-                Picker("Scanner source", selection: $mode) {
-                    Text("Mock").tag("Mock")
-                    Text("TCGTracking (experimental)").tag("Live")
-                }.pickerStyle(.menu)
+                DisclosureGroup("Developer Testing") {
+                    Picker("Scanner source", selection: $mode) {
+                        Text("Live Camera").tag("Live")
+                        Text("Mock — sample cards").tag("Mock")
+                    }
+                }
                 if let live = model.liveProvider {
                     LiveScannerPanel(provider: live) { model.stop(); model.paused = false; model.start(game: session.game ?? game, list: list, context: context, session: session) }
-                    Text("Live module integration uses your TCGTracking permission. iPhone validation is pending.").font(.caption)
+                    Text("Bundled recognition runs on this phone. Download the game database before use; market values require internet. iPhone validation is pending.").font(.caption)
                 } else {
                     Text("Synthetic database loaded locally. Sample prices are illustrative.").font(.caption).foregroundStyle(.secondary)
                 }
@@ -40,7 +42,17 @@ struct ScannerView: View {
                     Spacer()
                 }.buttonStyle(.bordered)
                 if let card = model.selected {
+                    if let data = model.result?.capturedImageData, let image = UIImage(data: data) {
+                        Image(uiImage: image).resizable().scaledToFit().frame(height: 160)
+                            .accessibilityLabel("Captured card")
+                    }
                     CardSummaryView(card: card)
+                    Picker("Condition", selection: Binding(get: { card.identity.condition }, set: { model.changeCondition($0) })) {
+                        ForEach(CatalogOptions.conditions, id: \.self) { Text($0) }
+                    }
+                    if model.priceLoading { ProgressView("Looking up market value…") }
+                    if let message = model.priceMessage { Text(message).font(.caption).foregroundStyle(.orange) }
+                    Button("Refresh Market Value") { model.refreshPrice() }.disabled(model.priceLoading)
                     Picker("Printing", selection: Binding(get: { card.identity.printing }, set: { model.changePrinting($0) })) {
                         ForEach(card.printings.isEmpty ? [card.identity.printing] : card.printings, id: \.self) { Text($0) }
                     }
@@ -64,12 +76,17 @@ struct ScannerView: View {
                             }.frame(minHeight: 48).frame(maxWidth: .infinity, alignment: .leading)
                         }.buttonStyle(.bordered)
                     }
-                    Button(model.manualAdds > 0 ? "Add Another Copy" : "Add Selected Card", systemImage: "plus.circle.fill") {
+                    Button("Confirm & Add", systemImage: "checkmark.circle.fill") {
                         model.addSelected(list: list, context: context)
                     }.buttonStyle(.borderedProminent).controlSize(.large).frame(maxWidth: .infinity)
-                        .disabled(!model.confirmed || !session.isActive)
-                    Text("Each tap adds one physical copy. Camera frame updates never count as extra copies.").font(.caption).foregroundStyle(.secondary)
-                } else { Text(model.liveProvider == nil ? "Waiting for mock recognition…" : "Start the live camera above, then hold a card steady.") }
+                        .disabled(!model.confirmed || !session.isActive || model.saving || model.priceLoading)
+                    Text("Confirm saves one card as its own row. Incoming frames are ignored during review.").font(.caption).foregroundStyle(.secondary)
+                    Button("Discard & Scan Again") { model.scanNextCard() }
+                } else if model.waitingForRemoval {
+                    Text("Card saved. Remove it from the camera to scan the next card.")
+                    Button("Scan Next Card") { model.scanNextCard() }
+                    Text("Use Scan Next Card after replacing it with an identical copy.").font(.caption)
+                } else { Text(model.liveProvider == nil ? "Waiting for mock recognition…" : "Hold a card steady in the live camera.") }
                 Text("Batch: \(list.name)").font(.caption).foregroundStyle(.secondary)
                 if session.isActive { FinishSessionButton(session: session) { model.stop(); dismiss() } }
                 else { Text("This session is completed. Its list is available for review and export.") }
@@ -78,7 +95,7 @@ struct ScannerView: View {
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: 6) {
                     let totals = OfferCalculator.calculate(list.cards.map(\.offerLine), rates: session.rates)
-                    Text("\(totals.quantity) cards • \(totals.market.money) market • \(totals.cash.money) cash").font(.subheadline.bold())
+                    Text("\(totals.quantity) cards • \(totals.market.money) market").font(.subheadline.bold())
                     if totals.unpricedQuantity > 0 { Text("\(totals.unpricedQuantity) unpriced — partial totals").font(.caption).foregroundStyle(.orange) }
                     NavigationLink("View List / Review & Offer") { SessionReviewView(session: session, list: list) }
                 }.frame(maxWidth: .infinity).padding().background(.regularMaterial)

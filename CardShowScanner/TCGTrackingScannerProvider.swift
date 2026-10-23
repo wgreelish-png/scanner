@@ -11,6 +11,7 @@ struct TCGBridgeEnvelope: Decodable {
     var confidence: Double?
     var candidates: [TCGBridgeCandidate]?
     var message: String?
+    var capturedImageBase64: String?
     var event: String?
     var stage: String?
     var errorKind: String?
@@ -90,6 +91,9 @@ struct TCGBridgeNormalizer {
             episode = current.id
         } else { episode = UUID() }
         var result = ScanResult(id: episode, candidates: normalized, accepted: accepted, same: false)
+        if let encoded = envelope.capturedImageBase64, encoded.count <= 1_000_000 {
+            result.capturedImageData = Data(base64Encoded: encoded)
+        }
         result.candidates[0].confidence = confidence
         current = result; return result
     }
@@ -98,7 +102,7 @@ struct TCGBridgeNormalizer {
 /// Experimental module adapter, based on the user's supplied sources and permission.
 /// Does not claim an official TCGTracking API contract.
 @MainActor final class TCGTrackingScannerProvider: NSObject, ObservableObject, ScannerProvider, WKNavigationDelegate, WKUIDelegate {
-    let label = "LIVE • TCGTracking experimental integration"
+    let label = "LIVE CAMERA • On-device recognition"
     private(set) var results: AsyncStream<ScanResult>
     private var continuation: AsyncStream<ScanResult>.Continuation
     let webView: WKWebView
@@ -107,7 +111,7 @@ struct TCGBridgeNormalizer {
     private var game = "Pokémon"
     private var nonce = UUID().uuidString
     private var normalizer = TCGBridgeNormalizer()
-    static let pageURL = URL(string: "https://tcgtracking.com/newscanplus/quick")!
+    static let pageURL = LocalScannerServer.pageURL
     static let gameKeys = ["Pokémon": "tcgp:3", "Magic: The Gathering": "tcgp:1", "Yu-Gi-Oh!": "tcgp:2"]
     private var messageProxy: WeakScanMessageHandler?
 
@@ -131,8 +135,15 @@ struct TCGBridgeNormalizer {
         results = stream.stream; continuation = stream.continuation
         DiagnosticLog.shared.record("web.load_started", ["game": Self.gameKeys[game] == "tcgp:3" ? "pokemon" : (Self.gameKeys[game] == "tcgp:1" ? "magic" : "yugioh")])
         self.game = game; active = true; nonce = UUID().uuidString; normalizer = TCGBridgeNormalizer()
-        status = "Loading TCGTracking. Tap Start Camera when the page is ready."
-        webView.load(URLRequest(url: Self.pageURL))
+        status = "Starting bundled scanner…"
+        let startupNonce = nonce
+        Task {
+            do {
+                try await LocalScannerServer.shared.start()
+                guard active, nonce == startupNonce else { return }
+                webView.load(URLRequest(url: Self.pageURL))
+            } catch { status = "Local scanner could not start: " + error.localizedDescription }
+        }
     }
     func stop() {
         if active { DiagnosticLog.shared.record("web.stopped") }
@@ -150,15 +161,23 @@ struct TCGBridgeNormalizer {
         let store = WKWebsiteDataStore.default()
         let types: Set<String> = [WKWebsiteDataTypeIndexedDBDatabases, WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache]
         let records = await store.dataRecords(ofTypes: types)
-        let matching = records.filter { $0.displayName == "tcgtracking.com" || $0.displayName.hasSuffix(".tcgtracking.com") }
+        let matching = records.filter { $0.displayName == "127.0.0.1" || $0.displayName == "tcgtracking.com" || $0.displayName.hasSuffix(".tcgtracking.com") }
         await store.removeData(ofTypes: types, for: matching)
         DiagnosticLog.shared.record("cache.cleared", ["records": String(matching.count)])
     }
     private static func allowed(_ url: URL?) -> Bool {
         guard let url else { return false }
-        return url.scheme == "https" && url.host == "tcgtracking.com" && url.user == nil && url.password == nil &&
-            (url.path == "/newscanplus/quick" || url.path == "/newscanplus/quick/") && url.query == nil
+        return url.scheme == "http" && url.host == "127.0.0.1" && url.port == Int(LocalScannerServer.port) &&
+            url.path == "/index.html" && url.query == nil && url.user == nil && url.password == nil
     }
+    func releaseReview() {
+        webView.evaluateJavaScript("window.CardShowBridge?.releaseReview()", completionHandler: nil)
+    }
+    func resetRecognition() {
+        normalizer = TCGBridgeNormalizer()
+        webView.evaluateJavaScript("window.CardShowBridge?.resetRecognition()", completionHandler: nil)
+    }
+
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         let permitted = active && action.targetFrame?.isMainFrame == true && Self.allowed(action.request.url)
         if !permitted { DiagnosticLog.shared.record("web.navigation_blocked") }
@@ -170,20 +189,20 @@ struct TCGBridgeNormalizer {
         guard let url = Bundle.main.url(forResource: "TCGTrackingBridge", withExtension: "js"),
               let source = try? String(contentsOf: url, encoding: .utf8),
               let gameKey = Self.gameKeys[game],
-              let data = try? JSONSerialization.data(withJSONObject: ["nonce": nonce, "game": gameKey]),
+              let data = try? JSONSerialization.data(withJSONObject: ["nonce": nonce, "game": gameKey, "autoStart": true]),
               let config = String(data: data, encoding: .utf8) else {
             DiagnosticLog.shared.record("web.resource_missing")
             status = "Scanner adapter resource or game configuration is missing."; return
         }
         webView.evaluateJavaScript(source + "\nwindow.CardShowBridge.install(" + config + "); null;") { [weak self] _, error in
-            if let error { DiagnosticLog.shared.failure("web.injection_failed", error); self?.status = "Could not initialize scanner modules. Retry or use mock scanning." }
+            if let error { DiagnosticLog.shared.failure("web.injection_failed", error); self?.status = "Could not initialize bundled scanner modules. Retry Live Scanner." }
         }
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        if active { DiagnosticLog.shared.failure("web.load_failed", error); status = "TCGTracking could not load: \(error.localizedDescription)" }
+        if active { DiagnosticLog.shared.failure("web.load_failed", error); status = "Bundled scanner could not load: \(error.localizedDescription)" }
     }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        if active { DiagnosticLog.shared.failure("web.navigation_failed", error); status = "TCGTracking navigation failed: \(error.localizedDescription)" }
+        if active { DiagnosticLog.shared.failure("web.navigation_failed", error); status = "Bundled scanner navigation failed: \(error.localizedDescription)" }
     }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         DiagnosticLog.shared.record("web.process_terminated")
@@ -193,7 +212,7 @@ struct TCGBridgeNormalizer {
     func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
                  initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType,
                  decisionHandler: @escaping (WKPermissionDecision) -> Void) {
-        guard active, origin.protocol == "https", origin.host == "tcgtracking.com", frame.isMainFrame, type == .camera else {
+        guard active, origin.protocol == "http", origin.host == "127.0.0.1", origin.port == Int(LocalScannerServer.port), frame.isMainFrame, type == .camera else {
             DiagnosticLog.shared.record("camera.permission_request", ["reason": "denied_origin_or_type"])
             decisionHandler(.deny); return
         }
@@ -202,12 +221,13 @@ struct TCGBridgeNormalizer {
     }
     fileprivate func receive(_ message: WKScriptMessage) {
         guard active, message.frameInfo.isMainFrame,
-              message.frameInfo.securityOrigin.protocol == "https",
-              message.frameInfo.securityOrigin.host == "tcgtracking.com",
+              message.frameInfo.securityOrigin.protocol == "http",
+              message.frameInfo.securityOrigin.host == "127.0.0.1",
+              message.frameInfo.securityOrigin.port == Int(LocalScannerServer.port),
               Self.allowed(webView.url) else { return }
         do {
             let data = try JSONSerialization.data(withJSONObject: message.body)
-            guard data.count <= 131072 else { throw BridgeFailure.invalidPayload }
+            guard data.count <= 1_200_000 else { throw BridgeFailure.invalidPayload }
             let envelope = try JSONDecoder().decode(TCGBridgeEnvelope.self, from: data)
             guard envelope.nonce == nonce else { return }
             if envelope.kind == "diagnostic" { logDiagnostic(envelope); return }

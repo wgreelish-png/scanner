@@ -20,9 +20,7 @@ struct SettingsView: View {
         Form {
             Section("Defaults") {
                 Picker("Game", selection: $game) { ForEach(CatalogOptions.games, id: \.self) { Text($0) } }
-                Picker("Condition", selection: $condition) { ForEach(CatalogOptions.conditions, id: \.self) { Text($0) } }
-                Toggle("Automatically add confident scans", isOn: $automatic)
-                Text("Only accepted results at 90% confidence or above may auto-add. Repeated frames and ambiguous guesses never auto-add.").font(.caption)
+                Text("Every scan starts at Near Mint and requires confirmation before saving.").font(.caption)
                 Toggle("Sound effects", isOn: $sound)
                 Toggle("Haptic feedback", isOn: $haptics)
             }
@@ -37,7 +35,7 @@ struct SettingsView: View {
 
             }
             Section("Scanner") {
-                Text("Choose Mock or experimental TCGTracking on the scanner screen. Live mode requires connectivity for initial module and game database loading.")
+                Text("Live camera scanning opens by default. Download the selected game database once before scanning. Market values use an online lookup. Mock scanning is under Developer Testing.")
                 Text("Finish a batch from its scanner or review screen. Cards and saved estimates are preserved.")
                 Button(clearingCache ? "Clearing…" : "Clear Scanner Cache") {
                     clearingCache = true

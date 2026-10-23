@@ -70,8 +70,12 @@ struct CardListView: View {
     @Bindable var list: CardList
     @Environment(\.modelContext) private var context
     var session: ScanSession? = nil
+    @Query private var sessions: [ScanSession]
+    @State private var continueGame = "Pokémon"
+    @State private var confirmContinue = false
+    @State private var continuedID: UUID?
     @State private var search = ""
-    @State private var sort = "Name"
+    @State private var sort = "Scan Order"
     @State private var rename = false
     @State private var name = ""
     @State private var error: String?
@@ -80,10 +84,10 @@ struct CardListView: View {
     @State private var exporting = false
     @State private var shareURL: URL?
     var filtered: [InventoryCard] {
-        list.cards.filter { search.isEmpty || [$0.snapshot.name, $0.snapshot.set, $0.snapshot.number, $0.snapshot.identity.productID].contains { $0.localizedCaseInsensitiveContains(search) } }
+        list.orderedCards.filter { search.isEmpty || [$0.snapshot.name, $0.snapshot.set, $0.snapshot.number, $0.snapshot.identity.productID].contains { $0.localizedCaseInsensitiveContains(search) } }
             .sorted {
                 switch sort {
-                case "Date": return $0.addedAt > $1.addedAt
+                case "Scan Order": return $0.addedAt == $1.addedAt ? $0.id.uuidString < $1.id.uuidString : $0.addedAt < $1.addedAt
                 case "Value": return ($0.snapshot.marketPrice ?? -1) * Decimal($0.quantity) > ($1.snapshot.marketPrice ?? -1) * Decimal($1.quantity)
                 default: return $0.snapshot.name.localizedStandardCompare($1.snapshot.name) == .orderedAscending
                 }
@@ -97,10 +101,13 @@ struct CardListView: View {
                     LabeledContent("Total quantity", value: String(list.quantity))
                     LabeledContent("Known market subtotal", value: list.knownValue.money)
                     if list.unpricedQuantity > 0 { Text("Partial valuation: \(list.unpricedQuantity) copies have no price.").foregroundStyle(.orange) }
-                    Text("Preserved standalone list. Start a new session from Home to scan a new batch.").font(.caption)
+                    Picker("Game for continued scanning", selection: $continueGame) {
+                        ForEach(CatalogOptions.games, id: \.self) { Text($0) }
+                    }
+                    Button("Continue Scanning") { confirmContinue = true }
                 }
             }
-            Picker("Sort", selection: $sort) { ForEach(["Name", "Date", "Value"], id: \.self) { Text($0) } }
+            Picker("Sort", selection: $sort) { ForEach(["Scan Order", "Name", "Value"], id: \.self) { Text($0) } }
             if list.cards.isEmpty { ContentUnavailableView("No cards yet", systemImage: "rectangle.stack", description: Text("Open the scanner to add cards.")) }
             ForEach(filtered) { item in
                 Button { editing = item } label: {
@@ -118,6 +125,16 @@ struct CardListView: View {
                 }
             }
         }.navigationTitle(session == nil ? list.name : "Review & Offer").searchable(text: $search)
+            .onAppear { continueGame = list.orderedCards.first?.snapshot.identity.game ?? "Pokémon" }
+            .confirmationDialog("Continue this list?", isPresented: $confirmContinue) {
+                Button("Continue Scanning") {
+                    do { continuedID = try SessionService.continueList(list, game: continueGame, context: context, finishingOtherSession: true).id }
+                    catch { self.error = error.localizedDescription }
+                }
+            } message: { Text("New cards append to this list. Any other active session will be finished and kept.") }
+            .navigationDestination(item: $continuedID) { id in
+                if let resumed = sessions.first(where: { $0.id == id }) { ScannerView(session: resumed, list: list) }
+            }
             .toolbar {
                 Menu {
                     Button("Rename") { name = list.name; rename = true }
@@ -139,7 +156,7 @@ struct CardListView: View {
                 else { DiagnosticLog.shared.record("csv.exported") }
             }.failureAlert($error)
     }
-    private var csv: String { CSVExportService.render(list.cards.sorted { $0.addedAt < $1.addedAt }.map { ExportRow(card: $0.snapshot, quantity: $0.quantity) }) }
+    private var csv: String { CSVExportService.render(list.orderedCards.map { ExportRow(card: $0.snapshot, quantity: $0.quantity) }) }
     private func save() { do { try CardListService.save(context) } catch { self.error = error.localizedDescription } }
     private func share() {
         do {
@@ -209,6 +226,7 @@ struct CardEditorView: View {
                 .onChange(of: card.identity.printing) { _, _ in price = ""; card.identity.skuID = nil }
                 .onChange(of: card.identity.productID) { _, _ in price = ""; card.identity.skuID = nil }
                 .onChange(of: card.identity.game) { _, _ in price = ""; card.identity.skuID = nil }
+                .onChange(of: card.identity.condition) { _, _ in price = ""; card.identity.skuID = nil }
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                     ToolbarItem(placement: .confirmationAction) { Button("Save") { save() } }
@@ -238,20 +256,9 @@ struct CardEditorView: View {
         } catch { self.error = error.localizedDescription; return }
         card.marketPrice = text.isEmpty ? nil : parsed
         do {
-            if let duplicate = item.list?.cards.first(where: { $0.id != item.id && $0.snapshot.identity == card.identity }) {
-                guard duplicate.cashOverrideText == cashText,
-                      duplicate.tradeOverrideText == tradeText,
-                      duplicate.maximumOverrideText == maximumText else {
-                    error = "An identical card already has different offer overrides. Match those overrides before merging."; return
-                }
-                duplicate.quantity += quantity; try duplicate.update(card); context.delete(item)
-            } else {
-                item.quantity = quantity; try item.update(card)
-                item.cashOverrideText = cashText
-                item.tradeOverrideText = tradeText
-                item.maximumOverrideText = maximumText
-            }
-            try CardListService.save(context); DiagnosticLog.shared.record("inventory.edited"); dismiss()
+            try CardListService.edit(item, card: card, quantity: quantity,
+                cashOverride: cashText, tradeOverride: tradeText, maximumOverride: maximumText, context: context)
+            DiagnosticLog.shared.record("inventory.edited"); dismiss()
         } catch { context.rollback(); self.error = error.localizedDescription }
     }
 }

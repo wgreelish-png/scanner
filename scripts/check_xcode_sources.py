@@ -8,7 +8,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT = ROOT / 'CardShowScanner.xcodeproj' / 'project.pbxproj'
-REQUIRED = ['OfferCalculator.swift', 'SessionService.swift', 'SessionReviewView.swift', 'StorageSchema.swift']
+REQUIRED = sorted(p.name for p in (ROOT / 'CardShowScanner').glob('*.swift'))
 
 
 def check(project):
@@ -16,19 +16,45 @@ def check(project):
     targets = [o for o in objects.values() if o.get('isa') == 'PBXNativeTarget' and o.get('name') == 'CardShowScanner']
     if len(targets) != 1:
         raise ValueError('Expected exactly one CardShowScanner application target.')
-    sources = set()
+    sources = []
     for phase_id in targets[0].get('buildPhases', []):
         phase = objects[phase_id]
         if phase.get('isa') == 'PBXSourcesBuildPhase':
             for build_id in phase.get('files', []):
                 ref = objects.get(objects.get(build_id, {}).get('fileRef'), {})
-                sources.add(Path(ref.get('path', '')).name)
+                sources.append(Path(ref.get('path', '')).name)
     failures = 0
     for filename in REQUIRED:
         exists = (ROOT / 'CardShowScanner' / filename).is_file()
-        included = filename in sources
+        included = sources.count(filename) == 1
         print(f'{filename}: on disk={exists}; in app Compile Sources={included}')
         failures += not (exists and included)
+    test_targets = [o for o in objects.values() if o.get('isa') == 'PBXNativeTarget' and o.get('name') == 'CardShowScannerTests']
+    if len(test_targets) != 1:
+        raise ValueError('Expected one native test target.')
+    test_sources = []
+    resources = []
+    for target, destination, phase_kind in [(test_targets[0], test_sources, 'PBXSourcesBuildPhase'), (targets[0], resources, 'PBXResourcesBuildPhase')]:
+        for phase_id in target.get('buildPhases', []):
+            phase = objects[phase_id]
+            if phase.get('isa') == phase_kind:
+                for build_id in phase.get('files', []):
+                    file = objects[objects[build_id]['fileRef']]
+                    destination.append(Path(file.get('path', '')).name)
+    expected_tests = sorted(p.name for p in (ROOT / 'Tests').glob('*.swift'))
+    for filename in expected_tests:
+        included = test_sources.count(filename) == 1 and filename not in sources
+        print(f'{filename}: in test target only={included}')
+        failures += not included
+    for filename in ['TCGTrackingBridge.js', 'ScannerRuntime']:
+        included = resources.count(filename) == 1
+        print(f'{filename}: in application Copy Bundle Resources={included}')
+        failures += not included
+    for object in objects.values():
+        if object.get('isa') == 'XCBuildConfiguration':
+            settings = object.get('buildSettings', {})
+            if settings.get('PRODUCT_NAME') == '$(TARGET_NAME)' and settings.get('PRODUCT_BUNDLE_IDENTIFIER') == 'com.cardshow.CardShowScanner':
+                failures += settings.get('INFOPLIST_FILE') != 'Config/AppInfo.plist'
     print('App Compile Sources count:', len(sources))
     return failures
 

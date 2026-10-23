@@ -30,6 +30,8 @@ struct SessionReviewHeader: View {
     let list: CardList
     @Environment(\.modelContext) private var context
     @State private var editRates = false
+    @State private var resumed = false
+    @State private var confirmResume = false
     @State private var error: String?
     var body: some View {
         Text(list.name).font(.headline)
@@ -45,8 +47,17 @@ struct SessionReviewHeader: View {
         if session.isActive {
             NavigationLink { ScannerView(session: session, list: list) } label: { Label("Continue Scanning", systemImage: "viewfinder") }
             FinishSessionButton(session: session)
+        } else {
+            Button("Continue Scanning", systemImage: "viewfinder") { confirmResume = true }
         }
         Text("Editing cards updates this review. Saved estimates retain their original rates, prices, quantities and overrides.").font(.caption).foregroundStyle(.secondary)
+            .confirmationDialog("Continue this list?", isPresented: $confirmResume) {
+                Button("Continue Scanning") {
+                    do { try SessionService.resume(session, context: context, finishingOtherSession: true); resumed = true }
+                    catch { self.error = error.localizedDescription }
+                }
+            } message: { Text("New cards append to this list. Any other active session will be finished and kept.") }
+            .navigationDestination(isPresented: $resumed) { ScannerView(session: session, list: list) }
             .sheet(isPresented: $editRates) { SessionRatesView(session: session) }
             .failureAlert($error)
     }
