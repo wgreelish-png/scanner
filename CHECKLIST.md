@@ -54,4 +54,5 @@ See docs/ScanConfirmationWorkflow.md. Neither offline iPhone support nor a succe
 - [x] Native sign-in, optional device-only Keychain storage/Forget, guarded form submission and one-action Return implemented.
 - [x] Modern trade/cash summary, My Card Price, all five scenarios and immutable saved transactions implemented.
 - [x] 62 JavaScript and 20 Python tests pass locally; target/resource and Swift grammar checks pass.
-- [ ] Native Keychain and trade regression CI, then iPhone remembered sign-in, return and offer layout acceptance.
+- [x] CI at 61830c3 passes all 73 native cases, including actual Keychain and trade regressions, and the unsigned Release iPhone build.
+- [ ] iPhone remembered sign-in, single-tap return, offer layout/keyboard and wide-window acceptance.

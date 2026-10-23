@@ -12,7 +12,7 @@ For market value M, trade fraction t and cash fraction c, with no per-card overr
 - Remaining market value = unused trade credit ÷ t.
 - Cash payout = remaining market value × c.
 
-The implementation allocates the unused fraction of the combined trade valuation proportionally across the combined market and cash valuations: remaining market = M × unused/T; cash payout = C × unused/T. This preserves existing per-card overrides and per-line rounding, and matches the formulas above for uniform rates. It does not choose specific physical cards from the collector's list. A custom whole-list cash offer applies only to Cash Only, so it never silently changes the rate used to buy remaining value.
+The implementation allocates the unused fraction of the combined trade valuation proportionally across the combined market and cash valuations: remaining market = M × unused/T; cash payout = C × unused/T. This preserves existing per-card overrides and per-line rounding. It matches the formulas above when the aggregate offers equal market times their rates; any existing per-line rounding remains part of the displayed offer totals. It does not choose specific physical cards from the collector's list. A custom whole-list cash offer applies only to Cash Only, so it never silently changes the rate used to buy remaining value.
 
 | Mode | Market | Trade value | Cash value | My Card Price | Result |
 | --- | ---: | ---: | ---: | ---: | --- |
@@ -27,3 +27,10 @@ All arithmetic uses Decimal. Final currency values round to cents using the exis
 Saved offer estimates retain immutable transaction inputs and results in an optional field in their existing JSON. Older estimates decode without that field; no SwiftData schema or migration change is introduced. Saving an estimate does not record a completed purchase or a future credit liability.
 
 On an iPhone, check numeric keyboard dismissal, immediate recalculation, large text, long amounts, custom cash, all five scenarios and saved-estimate reopening. The native layout also adapts to wide windows; a separate desktop app target is not introduced.
+
+Implementation files:
+
+- `CardShowScanner/SessionReviewView.swift`: modern offer cards, price input, transaction controls and immutable saved-estimate presentation.
+- `CardShowScanner/TradeTransactionCalculator.swift`: reusable Decimal transaction calculation and validation.
+- `CardShowScanner/OfferCalculator.swift` and `CardShowScanner/SessionService.swift`: optional transaction JSON and saved-estimate integration.
+- `Tests/TradeTransactionTests.swift`: 11 native tests covering scenarios, boundaries and persistence.
