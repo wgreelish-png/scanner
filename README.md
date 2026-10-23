@@ -42,6 +42,8 @@ Saved lists retain search, sorting, edits, conditions, quantities, renaming, dup
 
 Settings → Diagnostics can clear/export `CardShowScanner-diagnostics.jsonl`. Logs record startup stages, pricing outcomes, save errors and recognition lifecycle without card/list contents, credentials, raw payloads or images. Upload the exported file with the failed step when reporting device behavior. Unconfirmed review is held in memory across navigation/backgrounding within the current screen; it is not persisted across force-quit.
 
+When running a Debug build on a connected iPhone, these same filtered events also appear live in Xcode's debug console. Press **Shift–Command–Y**, select console output, and filter for **`[CardShowScanner]`**. Keep **Settings → Diagnostics → Record diagnostics** enabled, reproduce the issue, and copy the relevant lines directly. macOS Console can also display them with the connected iPhone selected and the **Diagnostics** category. Release builds retain the file export without the console mirror.
+
 The user's permission for TCGTracking integration remains established. This uses observed module and catalog interfaces, not a claimed stable official API. Asset provenance/adaptations/hashes are recorded in the bundled manifest. Source comments are preserved. See [workflow and device checks](docs/ScanConfirmationWorkflow.md) and [release gates](docs/ReleaseReadiness.md).
 
 ## Keep personal signing settings out of Git
