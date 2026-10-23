@@ -14,6 +14,8 @@ struct SettingsView: View {
     @State private var confirmClear = false
     @State private var cacheMessage = false
     @State private var clearingCache = false
+    @State private var showingConnection = false
+    @AppStorage("tcgTrackingConnectionIntroduced") private var connectionIntroduced = false
     var body: some View {
         Form {
             Section("Defaults") {
@@ -31,6 +33,10 @@ struct SettingsView: View {
                 Slider(value: $maximumBuyPercentage, in: 0...100, step: 1).accessibilityLabel("Maximum buy percentage")
                 Text("Copied into each new batch. Existing sessions and saved estimates keep their rates. Per-card overrides are entered in the card editor. No automatic bulk classification.").font(.caption)
 
+            }
+            Section("TCGTracking prices") {
+                Button("Connect TCGTracking", systemImage: "person.crop.circle") { showingConnection = true }
+                Text("Open TCGTracking and sign in if the website asks. Its session is remembered in this app for market prices. You can scan and save cards when prices are unavailable.").font(.caption)
             }
             Section("Scanner") {
                 Text("Live camera scanning opens by default. Download the selected game database once before scanning. Later camera openings load the saved database. Use Scanner options → Check Database Updates when you want to update it. Market values use an online lookup. Mock scanning is under Developer Testing.")
@@ -57,6 +63,12 @@ struct SettingsView: View {
             }
             Section("Privacy") { Text("Lists, sessions and diagnostic logs stay on this iPhone unless you export them. Camera frames are processed by the bundled recognition engine on this phone. Game databases download from TCGTracking; card images and market quotes use internet requests. CSV sharing sends the selected list through the iOS share sheet.") }
         }.navigationTitle("Settings")
+            .fullScreenCover(isPresented: $showingConnection) {
+                TCGTrackingConnectionView {
+                    connectionIntroduced = true
+                    OnlineMarketPricing.connectionDidChange()
+                }
+            }
             .sheet(isPresented: Binding(get: { diagnosticURL != nil }, set: { if !$0 { cleanupDiagnostics() } })) {
                 if let diagnosticURL { ShareSheet(url: diagnosticURL) }
             }

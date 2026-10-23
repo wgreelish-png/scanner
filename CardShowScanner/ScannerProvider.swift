@@ -78,7 +78,7 @@ enum MarketPricingFailure: LocalizedError, Equatable {
     case accessRejected(Int), publicPageUnavailable
     var errorDescription: String? {
         switch self {
-        case .accessRejected(let status): return "TCGTracking rejected the public price request (\(status)). Retry Market Price. You can still save this card unpriced."
+        case .accessRejected(let status): return "TCGTracking rejected this price request (\(status)). Connect TCGTracking or retry Market Price. You can still save this card unpriced."
         case .publicPageUnavailable: return "TCGTracking Quick Scan could not open for pricing. Retry when your connection is available. You can still save this card unpriced."
         }
     }
@@ -144,15 +144,25 @@ struct PublicPricingPagePolicy {
                 else { continuation.resume(throwing: MarketPricingFailure.publicPageUnavailable) }
             }
         }
+        guard !contentRulesInstalled else { return }
         webView.configuration.userContentController.add(list)
         contentRulesInstalled = true
     }
     func prepare() async throws {
+        try Task.checkCancellation()
         if ready && Self.permitted(webView.url) { return }
-        if let startup { return try await startup.value }
+        if let startup {
+            let id = startupID
+            try await startup.value
+            try Task.checkCancellation()
+            guard startupID == id, ready else { throw CancellationError() }
+            return
+        }
         let id = UUID(); startupID = id
         let task = Task { @MainActor in
             try await installContentRules()
+            try Task.checkCancellation()
+            guard startupID == id else { throw CancellationError() }
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 pendingLoad = continuation
                 var request = URLRequest(url: Self.page)
@@ -168,8 +178,25 @@ struct PublicPricingPagePolicy {
             }
         }
         startup = task
-        do { try await task.value; if startupID == id { startup = nil } }
+        do {
+            try await task.value
+            try Task.checkCancellation()
+            guard startupID == id else { throw CancellationError() }
+            startup = nil
+        }
         catch { if startupID == id { startup = nil }; throw error }
+    }
+    func connectionDidChange() {
+        // A visible first-party website may have established or refreshed its
+        // session. Discard this document, never its persistent website data.
+        ready = false
+        startupID = UUID()
+        startup?.cancel(); startup = nil
+        let continuation = pendingLoad
+        pendingLoad = nil; navigation = nil
+        watchdog?.cancel(); watchdog = nil
+        webView.stopLoading()
+        continuation?.resume(throwing: CancellationError())
     }
     private func finishLoad(_ error: Error? = nil, navigation completed: WKNavigation? = nil) {
         if let completed, completed !== navigation { return }
@@ -181,11 +208,13 @@ struct PublicPricingPagePolicy {
     }
     func detail(refs: [String]) async throws -> (status: Int, data: Data) {
         try await prepare(); try Task.checkCancellation()
-        guard Self.permitted(webView.url),
+        let id = startupID
+        guard ready, Self.permitted(webView.url),
               let resource = Bundle.main.url(forResource: "PricingRequest", withExtension: "js") else { throw MarketPricingFailure.publicPageUnavailable }
         let script = try String(contentsOf: resource, encoding: .utf8)
         let result = try await webView.callAsyncJavaScript(script, arguments: ["refs": refs], in: nil, contentWorld: .page)
         try Task.checkCancellation()
+        guard startupID == id, ready else { throw CancellationError() }
         guard let reply = result as? [String: Any], let status = reply["status"] as? Int, (100...599).contains(status),
               let body = reply["body"] as? String, let data = body.data(using: .utf8), data.count <= 2_000_000 else { throw URLError(.cannotParseResponse) }
         let reason = PublicPricingPagePolicy.safeReason(reply["serverReason"] as? String)
@@ -215,6 +244,7 @@ struct PublicPricingPagePolicy {
 /// Online catalog details expose quotes by exact language and condition.
 struct OnlineMarketPricing: MarketPricing {
     static let endpoint = URL(string: "https://tcgtracking.com/newscanplus/api/detail.php")!
+    @MainActor static func connectionDidChange() { PublicMarketBrowser.shared.connectionDidChange() }
     func prepare() async {
         do { try await PublicMarketBrowser.shared.prepare() }
         catch { await MainActor.run { DiagnosticLog.shared.failure("pricing.page_warmup_failed", error) } }

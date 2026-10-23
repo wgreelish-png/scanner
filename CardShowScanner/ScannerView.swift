@@ -9,6 +9,7 @@ struct ScannerView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("tcgTrackingConnectionIntroduced") private var connectionIntroduced = false
     @Query private var sessions: [ScanSession]
     @State private var game: String
     @State private var pendingGame: String?
@@ -17,6 +18,8 @@ struct ScannerView: View {
     @State private var model = ScannerViewModel()
     @State private var mode = "Live"
     @State private var editingMatch = false
+    @State private var showingConnection = false
+    @State private var showingReviewConnection = false
     init(session: ScanSession, list: CardList) {
         self.session = session; self.list = list
         _game = State(initialValue: session.game ?? "Pokémon")
@@ -48,11 +51,12 @@ struct ScannerView: View {
                 .presentationDragIndicator(.visible)
                 .interactiveDismissDisabled()
         }
-        .onAppear { visible = true; if session.isActive { model.start(game: session.game ?? game, list: list, context: context, session: session) } }
+        .fullScreenCover(isPresented: $showingConnection, onDismiss: finishConnection) { connectionView }
+        .onAppear { visible = true; startIfReady() }
         .onDisappear { visible = false; model.stop() }
         .onChange(of: scenePhase) { _, phase in
             DiagnosticLog.shared.record("app.scene", ["phase": phase == .active ? "active" : (phase == .background ? "background" : "inactive")])
-            if phase == .active && visible && !model.paused && session.isActive { model.start(game: session.game ?? game, list: list, context: context, session: session) }
+            if phase == .active { startIfReady() }
             else if phase == .background { model.stop() }
         }
         .onChange(of: game) { _, newGame in
@@ -89,7 +93,8 @@ struct ScannerView: View {
                         .font(.caption.bold()).foregroundStyle(mode == "Live" ? Color.white : Color.orange)
                 }.frame(maxWidth: .infinity, alignment: .leading)
                 Button {
-                    model.togglePause(game: session.game ?? game, list: list, context: context, session: session)
+                    model.paused.toggle()
+                    if model.paused { model.stop() } else { startIfReady() }
                 } label: {
                     Image(systemName: model.paused ? "play.fill" : "pause.fill").frame(width: 44, height: 44)
                 }.accessibilityLabel(model.paused ? "Resume camera" : "Pause camera")
@@ -97,8 +102,11 @@ struct ScannerView: View {
                     Picker("Game", selection: $game) { ForEach(CatalogOptions.games, id: \.self) { Text($0) } }
                     Button("Retry Live Scanner") {
                         model.stop(); model.paused = false
-                        model.start(game: session.game ?? game, list: list, context: context, session: session)
+                        startIfReady()
                     }.disabled(model.liveProvider == nil)
+                    Button("Connect TCGTracking", systemImage: "person.crop.circle") {
+                        openConnection()
+                    }.disabled(model.liveProvider == nil || model.selectionInProgress || model.saving)
                     Button("Check Database Updates", systemImage: "arrow.down.circle") {
                         model.liveProvider?.refreshDatabase()
                     }.disabled(model.liveProvider == nil || model.paused || model.selected != nil)
@@ -156,6 +164,11 @@ struct ScannerView: View {
                             .font(.subheadline).foregroundStyle(.secondary)
                         if let message = model.priceMessage {
                             Text(message).font(.caption).foregroundStyle(.secondary)
+                            if model.priceConnectionRequired && model.liveProvider != nil {
+                                Button("Connect TCGTracking", systemImage: "person.crop.circle") {
+                                    openConnection(inReview: true)
+                                }.disabled(model.selectionInProgress || model.saving)
+                            }
                             Button("Retry Market Price") { model.refreshPrice() }.disabled(model.priceLoading || model.selectionInProgress)
                         }
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: dynamicTypeSize.isAccessibilitySize ? 1 : 2), alignment: .leading, spacing: 16) {
@@ -193,7 +206,29 @@ struct ScannerView: View {
                     }.padding().frame(maxWidth: .infinity).background(.regularMaterial)
                 }
                 .failureAlert($model.error)
+                .fullScreenCover(isPresented: $showingReviewConnection, onDismiss: finishConnection) { connectionView }
         }
+    }
+
+    private var connectionView: some View {
+        TCGTrackingConnectionView(continueTitle: connectionIntroduced ? "Return to Scanner" : "Continue to Scanner") {
+            // This records an explicit setup choice, never authentication success.
+            connectionIntroduced = true
+            OnlineMarketPricing.connectionDidChange()
+        }
+    }
+    private func openConnection(inReview: Bool = false) {
+        guard model.suspendForPricingConnection() else { return }
+        if inReview { showingReviewConnection = true } else { showingConnection = true }
+    }
+    private func finishConnection() {
+        if model.selected != nil { model.refreshPrice() }
+        startIfReady()
+    }
+    private func startIfReady() {
+        guard visible, session.isActive, !model.paused, !showingConnection, !showingReviewConnection else { return }
+        if model.liveProvider != nil && !connectionIntroduced { openConnection(); return }
+        model.start(game: session.game ?? game, list: list, context: context, session: session)
     }
 
     private func restart() {
@@ -201,7 +236,7 @@ struct ScannerView: View {
         let provider: any ScannerProvider
         if mode == "Live" { provider = TCGTrackingScannerProvider() } else { provider = MockScannerProvider() }
         model = ScannerViewModel(provider: provider)
-        model.start(game: session.game ?? game, list: list, context: context, session: session)
+        startIfReady()
     }
 }
 

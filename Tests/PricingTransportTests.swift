@@ -25,6 +25,26 @@ import WebKit
             XCTAssertEqual(PublicPricingPagePolicy.safeReason(text), "unknown_http_error")
         }
     }
+    func testConnectionBrowserAllowsWebsiteSignInAndVerificationFrames() async {
+        XCTAssertEqual(TCGTrackingConnectionPolicy.startURL.absoluteString, "https://tcgtracking.com/")
+        for text in ["https://tcgtracking.com/", "https://tcgtracking.com/login.php?return=/newscanplus/quick",
+                     "https://www.tcgtracking.com/account", "https://tcgtracking.com:443/newscanplus/quick"] {
+            XCTAssertTrue(TCGTrackingConnectionPolicy.allows(URL(string: text)))
+        }
+        for text in ["http://tcgtracking.com/", "https://tcgtracking.com.evil/", "https://other.tcgtracking.com/",
+                     "https://user:secret@tcgtracking.com/", "https://tcgtracking.com:444/",
+                     "javascript:alert(1)", "data:text/html,login", "about:blank", "about:srcdoc", "scanner://callback"] {
+            XCTAssertFalse(TCGTrackingConnectionPolicy.allows(URL(string: text)))
+        }
+        XCTAssertFalse(TCGTrackingConnectionPolicy.allows(nil))
+        XCTAssertTrue(TCGTrackingConnectionPolicy.allowsSubframe(URL(string: "https://challenges.cloudflare.com/")))
+        XCTAssertTrue(TCGTrackingConnectionPolicy.allowsSubframe(URL(string: "about:blank")))
+        XCTAssertTrue(TCGTrackingConnectionPolicy.allowsSubframe(URL(string: "about:srcdoc")))
+        for text in ["http://example.com/", "data:text/html,login", "javascript:alert(1)",
+                     "https://user:secret@example.com/", "https://example.com:444/"] {
+            XCTAssertFalse(TCGTrackingConnectionPolicy.allowsSubframe(URL(string: text)))
+        }
+    }
     func testRealQuickScanCandidateBatchPreservesTheSelectedNidoran() async {
         let refs = ["p:84922", "p:86027", "p:87718", "p:87727", "p:89273"]
         let cards = refs.map(card)
