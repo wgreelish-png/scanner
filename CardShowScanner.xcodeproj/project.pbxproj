@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        F32586CC414E405F92C90001 /* TradeTransactionCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F32586CC414E405F92C90002; };
+        F32586CC414E405F92C90003 /* TradeTransactionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F32586CC414E405F92C90004; };
         8F3B2A904EAD4B17B4880001 /* TCGTrackingCredentials.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F3B2A904EAD4B17B4880002; };
         8F3B2A904EAD4B17B4880003 /* TCGTrackingCredentialsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F3B2A904EAD4B17B4880004; };
         8F3B2A904EAD4B17B4880005 /* WebsiteSignIn.js in Resources */ = {isa = PBXBuildFile; fileRef = 8F3B2A904EAD4B17B4880006; };
@@ -49,6 +51,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        F32586CC414E405F92C90002 /* TradeTransactionCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TradeTransactionCalculator.swift; sourceTree = "<group>"; };
+        F32586CC414E405F92C90004 /* TradeTransactionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TradeTransactionTests.swift; sourceTree = "<group>"; };
         8F3B2A904EAD4B17B4880002 /* TCGTrackingCredentials.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TCGTrackingCredentials.swift; sourceTree = "<group>"; };
         8F3B2A904EAD4B17B4880004 /* TCGTrackingCredentialsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TCGTrackingCredentialsTests.swift; sourceTree = "<group>"; };
         8F3B2A904EAD4B17B4880006 /* WebsiteSignIn.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = Resources/WebsiteSignIn.js; sourceTree = "<group>"; };
@@ -113,6 +117,7 @@
 		59830EBC3A4184110566BF1A /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+                F32586CC414E405F92C90004 /* TradeTransactionTests.swift */,
                 8F3B2A904EAD4B17B4880004 /* TCGTrackingCredentialsTests.swift */,
                 D22ACDAC86B9A04D643B3BD2 /* PricingTransportTests.swift */,
                 09AD9D7D5A6368792386E837 /* ScannerDatabaseCacheTests.swift */,
@@ -126,6 +131,7 @@
 		878A52FC5FF6A57D50B7B870 /* CardShowScanner */ = {
 			isa = PBXGroup;
 			children = (
+                F32586CC414E405F92C90002 /* TradeTransactionCalculator.swift */,
                 8F3B2A904EAD4B17B4880002 /* TCGTrackingCredentials.swift */,
                 8F3B2A904EAD4B17B4880006 /* WebsiteSignIn.js */,
                 74CECC55071444FDB59E8432 /* TCGTrackingConnectionView.swift */,
@@ -266,6 +272,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                F32586CC414E405F92C90003 /* TradeTransactionTests.swift in Sources */,
                 8F3B2A904EAD4B17B4880003 /* TCGTrackingCredentialsTests.swift in Sources */,
                 E4EBC0007BCBA93C02A7ED7E /* PricingTransportTests.swift in Sources */,
                 AC3DFED3A441BEA4122631C9 /* ScannerDatabaseCacheTests.swift in Sources */,
@@ -278,6 +285,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                F32586CC414E405F92C90001 /* TradeTransactionCalculator.swift in Sources */,
                 2D4112386E9A02AA267C9F0E /* ScannerDatabaseCache.swift in Sources */,
                 A1B2C3D40000000000000001 /* LocalScannerServer.swift in Sources */,
 				32EAD5C6AF7A6FFB0C99B53A /* StorageSchema.swift in Sources */,

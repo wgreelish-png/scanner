@@ -41,7 +41,7 @@ struct SettingsView: View {
                     showingConnection = true
                     DiagnosticLog.shared.record("connection.opened", ["phase": "settings"])
                 }.disabled(returningFromConnection)
-                Text("Open TCGTracking and sign in if the website asks. Its session is remembered in this app for market prices. You can scan and save cards when prices are unavailable.").font(.caption)
+                Text("Enter your sign-in details or use the website. Remember sign-in stores your details in this iPhone's Keychain; remove them with Forget Saved Sign-In. The website session is shared with market pricing. You can scan and save cards without prices.").font(.caption)
             }
             Section("Scanner") {
                 Text("Live camera scanning opens by default. Download the selected game database once before scanning. Later camera openings load the saved database. Use Scanner options → Check Database Updates when you want to update it. Market values use an online lookup. Mock scanning is under Developer Testing.")
