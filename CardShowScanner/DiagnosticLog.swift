@@ -1,9 +1,13 @@
 import Foundation
 import Observation
+import OSLog
 
 /// Local, bounded JSON-lines diagnostics. Callers supply event codes, never user content.
 @MainActor @Observable final class DiagnosticLog {
     static let shared = DiagnosticLog()
+    #if DEBUG
+    private static let console = Logger(subsystem: Bundle.main.bundleIdentifier ?? "CardShowScanner", category: "Diagnostics")
+    #endif
     private(set) var storageFailed = false
     private let directory: URL
     private let maximumBytes: Int
@@ -39,6 +43,12 @@ import Observation
         do {
             var data = try JSONSerialization.data(withJSONObject: entry, options: [.sortedKeys]); data.append(10)
             guard data.count <= maximumBytes else { return }
+            #if DEBUG
+            // Mirror the same filtered event, even if writing the local file fails.
+            // Notice-level events are visible in Xcode and macOS Console while attached.
+            let line = String(decoding: data.dropLast(), as: UTF8.self)
+            Self.console.notice("[CardShowScanner] \(line, privacy: .public)")
+            #endif
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let attributes = try? FileManager.default.attributesOfItem(atPath: current.path)
             let size = (attributes?[.size] as? NSNumber)?.intValue ?? 0
