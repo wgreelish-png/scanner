@@ -514,6 +514,7 @@ import SwiftData
         model.selectAndAdd(cards[0], list: list, context: context)
         try await waitForRequests(2, pricing: pricing)
         XCTAssertTrue(model.selectionInProgress); XCTAssertEqual(list.quantity, 0)
+        XCTAssertFalse(model.suspendForPricingConnection(), "Connection must not interrupt an explicit confirmation")
         await pricing.resolve(1, with: MarketQuote(marketPrice: 0, skuID: "22"))
         await waitForIdle(model)
         XCTAssertEqual(list.quantity, 1)
@@ -676,7 +677,43 @@ import SwiftData
         await waitForIdle(model)
         XCTAssertTrue(model.priceMessage?.contains("401") == true)
         XCTAssertFalse(model.priceMessage?.lowercased().contains("sign in") == true)
+        XCTAssertTrue(model.priceConnectionRequired)
         XCTAssertNotNil(model.selected); XCTAssertNil(model.selected?.marketPrice)
+        model.scanNextCard()
+        XCTAssertFalse(model.priceConnectionRequired)
+    }
+    func testConnectionKeepsFrozenCardAndRejectsQuotesFromBeforeTheVisit() async throws {
+        let container = try store(), context = container.mainContext
+        let session = try SessionService.start(game: "Pokémon", context: context)
+        let list = try XCTUnwrap(SessionService.list(for: session, context: context))
+        try SessionService.saveOffer(session, list: list, context: context)
+        let savedOffers = session.savedOffersData
+        let pricing = ControlledPricing()
+        let model = ScannerViewModel(provider: TestScannerProvider(), pricing: pricing)
+        model.start(game: "Pokémon", list: list, context: context, session: session)
+        let scan = ScanResult(id: UUID(), candidates: MockScannerProvider.samples(game: "Pokémon", index: 0), accepted: true, same: false)
+        model.receive(scan); try await waitForRequests(1, pricing: pricing)
+        model.choose(scan.candidates[1]); try await waitForRequests(2, pricing: pricing)
+        model.changeCondition("Lightly Played"); try await waitForRequests(3, pricing: pricing)
+        model.changePrinting("Holofoil"); try await waitForRequests(4, pricing: pricing)
+        let identity = try XCTUnwrap(model.selected).identity
+        XCTAssertTrue(model.suspendForPricingConnection())
+        XCTAssertFalse(model.priceLoading)
+        for index in 0..<4 { await pricing.resolve(index, with: MarketQuote(marketPrice: 999, skuID: "old")) }
+        for _ in 0..<10 { await Task.yield() }
+        model.receive(ScanResult(id: UUID(), candidates: MockScannerProvider.samples(game: "Pokémon", index: 2), accepted: true, same: false))
+        XCTAssertEqual(model.result?.id, scan.id)
+        XCTAssertEqual(model.selected?.identity, identity)
+        XCTAssertNil(model.selected?.marketPrice); XCTAssertNil(model.selected?.identity.skuID)
+        XCTAssertEqual(model.session?.id, session.id); XCTAssertEqual(session.listID, list.id)
+        XCTAssertEqual(session.savedOffersData, savedOffers); XCTAssertEqual(list.quantity, 0)
+        model.refreshPrice(); try await waitForRequests(5, pricing: pricing)
+        await pricing.resolve(4, with: MarketQuote(marketPrice: 2, skuID: "new"))
+        await waitForIdle(model)
+        XCTAssertEqual(model.selected?.marketPrice, 2); XCTAssertEqual(model.selected?.identity.skuID, "new")
+        XCTAssertEqual(model.selected?.identity.printing, "Holofoil")
+        XCTAssertEqual(model.selected?.identity.condition, "Lightly Played")
+        model.stop()
     }
     private func waitForIdle(_ model: ScannerViewModel) async {
         for _ in 0..<100 {

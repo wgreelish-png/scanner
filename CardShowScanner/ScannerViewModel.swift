@@ -18,6 +18,7 @@ import AudioToolbox
     var saving = false
     var priceLoading = false
     var priceMessage: String?
+    var priceConnectionRequired = false
     private var consumer: Task<Void, Never>?
     private var priceTask: Task<Void, Never>?
     private var confirmationDeadline: Task<Void, Never>?
@@ -138,6 +139,7 @@ import AudioToolbox
     }
     func refreshPrice() {
         priceTask?.cancel(); priceRequestID = UUID()
+        priceConnectionRequired = false
         guard var card = selected else { return }
         // Never retain a quote for a previous printing or condition.
         card.marketPrice = nil; card.identity.skuID = nil; selected = card
@@ -161,9 +163,20 @@ import AudioToolbox
                 self.priceLoading = false
                 DiagnosticLog.shared.failure("pricing.failed", error)
                 self.priceMessage = (error as? MarketPricingFailure)?.errorDescription ?? "Price unavailable. You can still add the card."
+                if let failure = error as? MarketPricingFailure, case .accessRejected = failure {
+                    self.priceConnectionRequired = true
+                }
                 self.finishPendingConfirmation()
             }
         }
+    }
+    /// Visiting the website keeps the physical-card review and invalidates old quotes.
+    @discardableResult func suspendForPricingConnection() -> Bool {
+        guard !selectionInProgress, !saving else { return false }
+        priceTask?.cancel(); priceRequestID = UUID(); priceLoading = false
+        selected?.marketPrice = nil; selected?.identity.skuID = nil
+        stop()
+        return true
     }
     func addSelected(list: CardList, context: ModelContext) {
         guard confirmed, !saving, !priceLoading, let selected, let session else { return }
@@ -175,7 +188,7 @@ import AudioToolbox
             }
             // Only a committed transaction releases the review snapshot.
             priceTask?.cancel(); priceRequestID = UUID()
-            result = nil; self.selected = nil; confirmed = false; priceMessage = nil
+            result = nil; self.selected = nil; confirmed = false; priceMessage = nil; priceConnectionRequired = false
             waitingForRemoval = true; error = nil
             liveProvider?.releaseReview()
             DiagnosticLog.shared.record("add.saved", ["priced": String(selected.marketPrice != nil)])
@@ -193,7 +206,7 @@ import AudioToolbox
         pendingConfirmation = nil; selectionInProgress = false
         // Intentional re-arm allows a second identical physical copy without identity merging.
         priceTask?.cancel(); priceRequestID = UUID(); priceLoading = false
-        result = nil; selected = nil; confirmed = false; waitingForRemoval = false; priceMessage = nil; error = nil
+        result = nil; selected = nil; confirmed = false; waitingForRemoval = false; priceMessage = nil; priceConnectionRequired = false; error = nil
         liveProvider?.resetRecognition()
         DiagnosticLog.shared.record("recognition.rearmed")
     }
