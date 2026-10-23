@@ -27,6 +27,7 @@ struct OfferBreakdownView: View {
     let totals: OfferTotals
     let rates: OfferRates
     var customCashOffer: Decimal? = nil
+    var transactionMode: TradeTransactionMode = .cashOnly
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     private var cashTotal: Decimal { customCashOffer ?? totals.cash }
     var body: some View {
@@ -37,8 +38,12 @@ struct OfferBreakdownView: View {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), alignment: .top), count: dynamicTypeSize.isAccessibilitySize ? 1 : 2), alignment: .leading, spacing: 12) {
                 OfferMetricCard(title: "Trade Credit", amount: totals.trade,
                                 caption: "\(CSVExportService.number(rates.trade))% base rate", accent: .blue)
-                OfferMetricCard(title: "Cash Offer", amount: cashTotal,
-                                caption: customCashOffer == nil ? "\(CSVExportService.number(rates.cash))% base rate" : "Custom whole-list amount", accent: .green)
+                OfferMetricCard(title: transactionMode == .cashOnly ? "Cash Offer" : "Cash Value",
+                                amount: transactionMode == .cashOnly ? cashTotal : totals.cash,
+                                caption: transactionMode == .cashOnly && customCashOffer != nil ? "Custom whole-list amount" : "\(CSVExportService.number(rates.cash))% base rate", accent: .green)
+            }
+            if transactionMode != .cashOnly, let customCashOffer {
+                LabeledContent("Custom cash-only alternative", value: customCashOffer.money).font(.caption)
             }
             if totals.unpricedQuantity > 0 {
                 Label("Partial estimate: \(totals.unpricedQuantity) unpriced copies are excluded from market-based values.", systemImage: "exclamationmark.circle")
@@ -175,7 +180,7 @@ struct SessionReviewHeader: View {
                 Text("No trade credit is available. Choose Cash Only to make a cash offer for these cards.")
                     .font(.caption).foregroundStyle(.orange)
             }
-            OfferBreakdownView(totals: totals, rates: session.rates, customCashOffer: customAmount)
+            OfferBreakdownView(totals: totals, rates: session.rates, customCashOffer: customAmount, transactionMode: transactionMode)
             cashNegotiationControls
             offerActions
         }.padding(.vertical, 8)
@@ -358,7 +363,8 @@ struct SavedOffersView: View {
                         Section("Saved \(estimate.savedAt.formatted())") {
                             VStack(alignment: .leading, spacing: 20) {
                                 if let transaction = estimate.tradeTransaction { TradeTransactionSummary(transaction: transaction) }
-                                OfferBreakdownView(totals: estimate.totals, rates: estimate.rates, customCashOffer: estimate.customCashOffer)
+                                OfferBreakdownView(totals: estimate.totals, rates: estimate.rates, customCashOffer: estimate.customCashOffer,
+                                                   transactionMode: estimate.tradeTransaction?.mode ?? .cashOnly)
                             }.padding(.vertical, 8)
                         }
                         Section("Original valuation inputs") {
