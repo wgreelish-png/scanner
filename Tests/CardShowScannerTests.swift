@@ -591,6 +591,60 @@ import SwiftData
         XCTAssertEqual(list.quantity, 1); XCTAssertNil(list.orderedCards[0].snapshot.marketPrice)
         model.stop()
     }
+    private func quickScanFixture() throws -> Data {
+        let url = try XCTUnwrap(Bundle(for: CardShowScannerTests.self).url(forResource: "quickscan-detail", withExtension: "json", subdirectory: "Fixtures"))
+        return try Data(contentsOf: url)
+    }
+    func testCapturedQuickScanNidoranUsesExactConditionAndPrintingQuotes() throws {
+        let data = try quickScanFixture()
+        var card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]
+        card.identity.productID = "p:87718"; card.identity.printing = "Normal"
+        XCTAssertEqual(try OnlineMarketPricing.parse(data, for: card), MarketQuote(marketPrice: Decimal(string: "0.28"), skuID: "1193687"))
+        card.identity.condition = "Lightly Played"
+        XCTAssertEqual(try OnlineMarketPricing.parse(data, for: card), MarketQuote(marketPrice: Decimal(string: "0.27"), skuID: "1201033"))
+        card.identity.printing = "Reverse Holofoil"; card.identity.condition = "Near Mint"
+        XCTAssertEqual(try OnlineMarketPricing.parse(data, for: card), MarketQuote(marketPrice: Decimal(string: "1.84"), skuID: "1261658"))
+    }
+    func testCapturedMissingMarketNeverFallsBackToDirectLiveOrOtherPrices() throws {
+        let data = try quickScanFixture()
+        var card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]
+        card.identity.productID = "p:86027"; card.identity.printing = "Reverse Holofoil"
+        XCTAssertEqual(try OnlineMarketPricing.parse(data, for: card), MarketQuote(marketPrice: nil, skuID: "1262173"))
+        card.identity.productID = "p:87727"; card.identity.printing = "Normal"; card.identity.condition = "Damaged"
+        XCTAssertEqual(try OnlineMarketPricing.parse(data, for: card), MarketQuote(marketPrice: nil, skuID: "1223080"))
+    }
+    func testCapturedNidoranAlternativeSavesSelectedCardInsteadOfFirstGuess() async throws {
+        let container = try store(), context = container.mainContext
+        let session = try SessionService.start(game: "Pokémon", context: context)
+        let list = try XCTUnwrap(SessionService.list(for: session, context: context))
+        let model = ScannerViewModel(provider: TestScannerProvider(), pricing: CapturedMarketPricing(data: try quickScanFixture()))
+        model.start(game: "Pokémon", list: list, context: context, session: session)
+        var cards = Array(MockScannerProvider.samples(game: "Pokémon", index: 0).prefix(3))
+        for (index, entry) in [("p:84922", "Drapion"), ("p:86027", "Haunter"), ("p:87718", "Nidoran F")].enumerated() {
+            cards[index].identity.productID = entry.0; cards[index].name = entry.1
+        }
+        model.receive(ScanResult(id: UUID(), candidates: cards, accepted: true, same: false))
+        XCTAssertEqual(list.quantity, 0)
+        model.selectAndAdd(cards[2], list: list, context: context)
+        await waitForIdle(model)
+        XCTAssertEqual(list.quantity, 1)
+        let saved = try XCTUnwrap(list.orderedCards.first).snapshot
+        XCTAssertEqual(saved.identity.productID, "p:87718"); XCTAssertEqual(saved.name, "Nidoran F")
+        XCTAssertEqual(saved.marketPrice, Decimal(string: "0.28")); XCTAssertEqual(saved.identity.skuID, "1193687")
+        model.stop()
+    }
+    func testPublicPricingAccessFailureRetainsReviewAndRemainsActionable() async throws {
+        XCTAssertThrowsError(try OnlineMarketPricing.validate(status: 401)) { error in
+            XCTAssertEqual(error as? MarketPricingFailure, .accessRejected(401))
+        }
+        XCTAssertThrowsError(try OnlineMarketPricing.validate(status: 403))
+        let model = ScannerViewModel(provider: TestScannerProvider(), pricing: RejectedPublicPricing())
+        model.receive(ScanResult(id: UUID(), candidates: MockScannerProvider.samples(game: "Pokémon", index: 0), accepted: true, same: false))
+        await waitForIdle(model)
+        XCTAssertTrue(model.priceMessage?.contains("401") == true)
+        XCTAssertFalse(model.priceMessage?.lowercased().contains("sign in") == true)
+        XCTAssertNotNil(model.selected); XCTAssertNil(model.selected?.marketPrice)
+    }
     private func waitForIdle(_ model: ScannerViewModel) async {
         for _ in 0..<100 {
             if !model.priceLoading && !model.selectionInProgress { return }
@@ -635,4 +689,12 @@ private actor ControlledPricing: MarketPricing {
 
 private struct FailingMarketPricing: MarketPricing {
     func quote(for card: CardCandidate) async throws -> MarketQuote? { throw URLError(.badServerResponse) }
+}
+
+private struct CapturedMarketPricing: MarketPricing {
+    let data: Data
+    func quote(for card: CardCandidate) async throws -> MarketQuote? { try OnlineMarketPricing.parse(data, for: card) }
+}
+private struct RejectedPublicPricing: MarketPricing {
+    func quote(for card: CardCandidate) async throws -> MarketQuote? { throw MarketPricingFailure.accessRejected(401) }
 }

@@ -7,6 +7,7 @@ struct ScannerView: View {
     let list: CardList
     @Environment(\.modelContext) private var context
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.dismiss) private var dismiss
     @Query private var sessions: [ScanSession]
     @State private var game: String
@@ -98,6 +99,9 @@ struct ScannerView: View {
                         model.stop(); model.paused = false
                         model.start(game: session.game ?? game, list: list, context: context, session: session)
                     }.disabled(model.liveProvider == nil)
+                    Button("Check Database Updates", systemImage: "arrow.down.circle") {
+                        model.liveProvider?.refreshDatabase()
+                    }.disabled(model.liveProvider == nil || model.paused || model.selected != nil)
                     Menu("Developer Testing") {
                         Picker("Scanner source", selection: $mode) {
                             Text("Live Camera").tag("Live")
@@ -150,29 +154,21 @@ struct ScannerView: View {
                         }
                         Text("Tap the correct match to add it, then scan the next card.")
                             .font(.subheadline).foregroundStyle(.secondary)
-                        ForEach(Array((model.result?.candidates ?? []).prefix(5))) { candidate in
-                            Button { model.selectAndAdd(candidate, list: list, context: context) } label: {
-                                HStack(spacing: 12) {
-                                    AsyncImage(url: candidate.imageURL) { image in image.resizable().scaledToFit() } placeholder: {
-                                        Image(systemName: "rectangle.portrait")
-                                    }.frame(width: 52, height: 74)
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(candidate.name).font(.headline)
-                                        Text("\(candidate.set) • \(candidate.number)").font(.caption)
-                                        Text("\(candidate.identity.productID == card.identity.productID ? card.identity.printing : candidate.identity.printing) • \(card.identity.condition)")
-                                            .font(.caption).foregroundStyle(.secondary)
-                                        if candidate.identity.productID == card.identity.productID {
-                                            Text(model.priceLoading ? "Checking market value…" : (card.marketPrice?.money ?? "Price unavailable")).font(.caption.bold())
-                                        }
+                        if let message = model.priceMessage {
+                            Text(message).font(.caption).foregroundStyle(.secondary)
+                            Button("Retry Market Price") { model.refreshPrice() }.disabled(model.priceLoading || model.selectionInProgress)
+                        }
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: dynamicTypeSize.isAccessibilitySize ? 1 : 2), alignment: .leading, spacing: 16) {
+                            ForEach(Array((model.result?.candidates ?? []).prefix(5))) { candidate in
+                                Button { model.selectAndAdd(candidate, list: list, context: context) } label: {
+                                    CandidateMatchTile(candidate: candidate, selected: card, priceLoading: model.priceLoading)
+                                }.buttonStyle(.plain).disabled(model.selectionInProgress || !session.isActive)
+                                    .contextMenu {
+                                        Button("Review printing & condition") { model.choose(candidate); editingMatch = true }
                                     }
-                                    Spacer(minLength: 0)
-                                    Image(systemName: "plus.circle.fill")
-                                }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
-                            }.buttonStyle(.bordered).disabled(model.selectionInProgress || !session.isActive)
-                                .contextMenu {
-                                    Button("Review printing & condition") { model.choose(candidate); editingMatch = true }
-                                }
-                                .accessibilityHint("Adds this match to your list. Touch and hold to review its printing and condition.")
+                                    .accessibilityElement(children: .combine)
+                                    .accessibilityHint("Adds this match to your list. Touch and hold to review its printing and condition.")
+                            }
                         }
                         DisclosureGroup("Condition & printing", isExpanded: $editingMatch) {
                             Picker("Condition", selection: Binding(get: { card.identity.condition }, set: { model.changeCondition($0) })) {
@@ -184,7 +180,7 @@ struct ScannerView: View {
                             Text("Touch and hold a match to review its printing. Other matches use their displayed printing. Every new card starts at Near Mint.").font(.caption).foregroundStyle(.secondary)
                         }.disabled(model.selectionInProgress)
                         if model.priceLoading && !model.selectionInProgress { ProgressView("Checking market value…") }
-                        if let message = model.priceMessage { Text(message).font(.caption).foregroundStyle(.secondary) }
+
 
                     }
                 }.padding().padding(.top, 8)
@@ -206,6 +202,49 @@ struct ScannerView: View {
         if mode == "Live" { provider = TCGTrackingScannerProvider() } else { provider = MockScannerProvider() }
         model = ScannerViewModel(provider: provider)
         model.start(game: session.game ?? game, list: list, context: context, session: session)
+    }
+}
+
+/// Full artwork at the available column width; metadata stays readable below it.
+struct CandidateMatchTile: View {
+    let candidate: CardCandidate
+    let selected: CardCandidate
+    let priceLoading: Bool
+    private var isSelected: Bool { candidate.identity.productID == selected.identity.productID }
+    private var artworkURL: URL? {
+        guard let url = candidate.imageURL, url.scheme == "https", url.host == "cdn.tcgtracking.com", url.query == nil,
+              url.path.range(of: #"^/product/[0-9]+_200w\.jpg$"#, options: .regularExpression) != nil,
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return candidate.imageURL }
+        // The public detail response supplies this 400px format for full artwork.
+        components.path = url.path.replacingOccurrences(of: "_200w.jpg", with: "_400w.jpg")
+        return components.url ?? url
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ZStack {
+                Color.secondary.opacity(0.08)
+                AsyncImage(url: artworkURL) { phase in
+                    if let image = phase.image { image.resizable().scaledToFit() }
+                    else { Image(systemName: "rectangle.portrait").font(.largeTitle).foregroundStyle(.secondary) }
+                }.padding(4)
+            }.aspectRatio(5.0 / 7.0, contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: 10)).accessibilityHidden(true)
+            Text(candidate.name).font(.headline).foregroundStyle(.primary)
+            Text("\(candidate.set) • \(candidate.number)").font(.caption).foregroundStyle(.secondary)
+            Text("\(isSelected ? selected.identity.printing : candidate.identity.printing) • \(selected.identity.condition)")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack(alignment: .top) {
+                if isSelected {
+                    Text(priceLoading ? "Checking market value…" : (selected.marketPrice?.money ?? "Price unavailable"))
+                        .font(.caption.bold()).foregroundStyle(.primary)
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "plus.circle.fill").font(.title3).foregroundStyle(Color.accentColor).accessibilityHidden(true)
+            }
+        }.padding(10).frame(maxWidth: .infinity, alignment: .topLeading)
+            .background(.background, in: RoundedRectangle(cornerRadius: 14))
+            .overlay { RoundedRectangle(cornerRadius: 14).stroke(.secondary.opacity(0.25), lineWidth: 1) }
+            .contentShape(RoundedRectangle(cornerRadius: 14))
     }
 }
 

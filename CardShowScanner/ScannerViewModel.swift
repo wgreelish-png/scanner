@@ -45,6 +45,7 @@ import AudioToolbox
         self.session = session
         DiagnosticLog.shared.record("scanner.start", ["provider": liveProvider == nil ? "mock" : "live"])
         if selected == nil { waitingForRemoval = false }
+        Task { [pricing] in await pricing.prepare() }
         provider.start(game: game)
         let stream = provider.results
         consumer = Task { [weak self] in
@@ -158,7 +159,7 @@ import AudioToolbox
                 guard let self, !Task.isCancelled, self.priceRequestID == requestID else { return }
                 self.priceLoading = false
                 DiagnosticLog.shared.failure("pricing.failed", error)
-                self.priceMessage = "Price unavailable. You can still add the card."
+                self.priceMessage = (error as? MarketPricingFailure)?.errorDescription ?? "Price unavailable. You can still add the card."
                 self.finishPendingConfirmation()
             }
         }

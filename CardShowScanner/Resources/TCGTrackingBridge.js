@@ -1,6 +1,6 @@
 /* App-owned adapter for the user-authorized TCGTracking module integration.
  * Uses module exports observed in the supplied source; no DOM scraping or endpoint reimplementation.
- * Loaded in the HTTPS quick page so its import map, static host and browser origin remain intact.
+ * Loaded from bundled resources on the app's stable loopback origin.
  */
 (() => {
   const referencePattern = /^(?:p|t|ts|u):\d{1,12}$/;
@@ -46,6 +46,7 @@
   let dispose = () => {};
   let resetRecognition = () => {};
   let releaseReview = () => {};
+  let refreshDatabase = () => {};
   async function install(config) {
     dispose();
     let pending = null;
@@ -68,7 +69,7 @@
     const root = document.createElement('section');
     root.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#111;color:white;font:16px system-ui;box-sizing:border-box';
     const button = document.createElement('button');
-    button.textContent = 'Download Game Database & Start Camera';
+    button.textContent = 'Open Game Database & Start Camera';
     button.style.cssText = 'position:absolute;top:42%;left:24px;right:24px;z-index:2;font:600 17px system-ui;min-height:52px;border-radius:12px';
     const hint = document.createElement('div'); hint.setAttribute('role', 'status'); hint.style.cssText = 'position:absolute;top:calc(42% + 68px);left:24px;right:24px;z-index:2;text-align:center;pointer-events:none';
     const frame = document.createElement('div'); frame.style.cssText = 'position:absolute;inset:0';
@@ -81,8 +82,8 @@
     const visibility = () => { if (document.hidden) { diagnostic('camera_backgrounded'); pending = null; stopCamera(); post({ kind: 'hide' }); button.disabled = false; button.hidden = false; button.textContent = 'Resume Camera'; } };
     document.addEventListener('visibilitychange', visibility);
     dispose = () => { diagnostic('bridge_stopped'); running = false; pending = null; stopCamera(); backend?.dispose(); backend = null; root.remove(); document.removeEventListener('visibilitychange', visibility); window.removeEventListener?.('error', onError); window.removeEventListener?.('unhandledrejection', onRejection); };
-    report('Ready. Database downloads may be large; use Wi-Fi for initial setup.');
-    button.onclick = async () => {
+    report('Ready. Saved databases are reused; the first download may be large.');
+    button.onclick = async (options = {}) => {
       if (starting || !running) return;
       starting = true; button.disabled = true;
       let stage = 'modules', began = clock(), lastStats = -Infinity;
@@ -97,16 +98,27 @@
         if (!running) return;
         diagnostic('modules_ready', { elapsedMS: clock() - began });
         shared.useScope('price');
-        stage = 'index'; began = clock();
-        const index = await packs.loadPackIndex();
-        if (!index.games?.[config.game]) throw new Error('No downloadable pack is available for this game.');
-        diagnostic('index_ready', { elapsedMS: clock() - began });
         stage = 'pack'; began = clock();
+        report(options.refreshDatabase ? 'Checking for database updates…' : 'Opening saved game database…');
+        let packStats = null;
         const pack = await packs.loadPack(config.game, (loaded, total, stats) => {
-          if (running) report(stats?.label || `Downloading database: ${Math.round(100 * loaded / Math.max(1, total))}%`);
-        });
+          if (!running) return;
+          if (stats) packStats = { ...stats };
+          if (stats?.downloaded === 0 && stats?.total === 0) report('Using saved game database');
+          else report(stats?.label || `Downloading database: ${Math.round(100 * loaded / Math.max(1, total))}%`);
+        }, { cacheFirst: !options.refreshDatabase });
         if (!running) return;
-        diagnostic('pack_ready', { elapsedMS: clock() - began });
+        const cachedShards = (packStats?.cachedHashShards || 0) + (packStats?.cachedMetaShards || 0);
+        const cacheFields = {
+          downloadedBytes: Number.isFinite(packStats?.downloaded) ? packStats.downloaded : 0,
+          cachedShards,
+          cacheState: ['ok', 'failed', 'unavailable'].includes(packStats?.cache) ? packStats.cache : 'unknown',
+          cacheSource: !packStats ? 'unknown' : !packStats.downloaded ? 'cache' : cachedShards ? 'mixed' : 'download',
+          storagePersisted: packStats?.storage?.persisted === true
+        };
+        diagnostic('pack_ready', { elapsedMS: clock() - began, ...cacheFields });
+        const cacheWarning = ['failed', 'unavailable'].includes(cacheFields.cacheState);
+        if (cacheWarning) diagnostic('pack_cache_warning', cacheFields);
         stage = 'backend'; began = clock();
         backend?.dispose(); backend = await backends.createBackend();
         if (!running) { backend.dispose(); return; }
@@ -180,7 +192,7 @@
         releaseReview = () => { pending = null; held = false; awaitingRemoval = true; };
         stopLoop = beginLoop();
         diagnostic('scanner_ready');
-        button.hidden = true; report('Live camera ready — hold a card steady.'); hint.hidden = true;
+        button.hidden = true; report(cacheWarning ? 'Camera ready. Database could not be saved; it may download again next time.' : 'Live camera ready — hold a card steady.'); hint.hidden = true;
       } catch (error) {
         diagnostic('startup_failed', { stage, errorKind: errorKind(error), elapsedMS: clock() - began });
         stopCamera(); backend?.dispose(); backend = null;
@@ -188,7 +200,12 @@
         button.hidden = false; button.textContent = 'Retry Scanner';
       } finally { starting = false; button.disabled = false; }
     };
+    refreshDatabase = () => {
+      if (!running || starting || held) return;
+      stopCamera(); pending = null; awaitingRemoval = false;
+      return button.onclick({ refreshDatabase: true });
+    };
     if (config.autoStart) await button.onclick();
   }
-  globalThis.CardShowBridge = { install, stop: () => dispose(), resetRecognition: () => resetRecognition(), releaseReview: () => releaseReview(), normalizeView };
+  globalThis.CardShowBridge = { install, stop: () => dispose(), resetRecognition: () => resetRecognition(), releaseReview: () => releaseReview(), refreshDatabase: () => refreshDatabase(), normalizeView };
 })();

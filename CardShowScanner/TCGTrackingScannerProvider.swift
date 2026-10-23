@@ -20,6 +20,11 @@ struct TCGBridgeEnvelope: Decodable {
     var scanMS: Double?
     var captureMS: Double?
     var frames: Int?
+    var downloadedBytes: Double?
+    var cachedShards: Int?
+    var cacheState: String?
+    var cacheSource: String?
+    var storagePersisted: Bool?
 }
 
 struct TCGBridgeCandidate: Decodable {
@@ -173,6 +178,11 @@ struct TCGBridgeNormalizer {
     func releaseReview() {
         webView.evaluateJavaScript("window.CardShowBridge?.releaseReview()", completionHandler: nil)
     }
+    func refreshDatabase() {
+        guard active else { return }
+        status = "Checking for database updates…"
+        webView.evaluateJavaScript("window.CardShowBridge?.refreshDatabase(); null;", completionHandler: nil)
+    }
     func resetRecognition() {
         normalizer = TCGBridgeNormalizer()
         webView.evaluateJavaScript("window.CardShowBridge?.resetRecognition()", completionHandler: nil)
@@ -236,7 +246,7 @@ struct TCGBridgeNormalizer {
         } catch { DiagnosticLog.shared.failure("bridge.result_rejected", error); status = "Scanner result rejected: \(error.localizedDescription)" }
     }
     private func logDiagnostic(_ message: TCGBridgeEnvelope) {
-        let allowed: Set<String> = ["bridge_ready", "bridge_stopped", "startup_started", "modules_ready", "index_ready", "pack_ready",
+        let allowed: Set<String> = ["bridge_ready", "bridge_stopped", "startup_started", "modules_ready", "index_ready", "pack_ready", "pack_cache_warning",
             "backend_ready", "camera_requested", "camera_acquired", "video_playing", "scanner_ready", "startup_failed",
             "scan_stats", "recognition_settled", "camera_interrupted", "camera_backgrounded", "javascript_error", "javascript_rejection"]
         guard let event = message.event, allowed.contains(event) else { return }
@@ -247,6 +257,11 @@ struct TCGBridgeNormalizer {
         for (key, value) in [("elapsed_ms", message.elapsedMS), ("scan_ms", message.scanMS), ("capture_ms", message.captureMS)] {
             if let value, value.isFinite, (0...86400000).contains(value) { fields[key] = String(Int(value)) }
         }
+        if let bytes = message.downloadedBytes, bytes.isFinite, (0...10_000_000_000).contains(bytes) { fields["downloaded_bytes"] = String(Int64(bytes)) }
+        if let shards = message.cachedShards, (0...1_000_000).contains(shards) { fields["cached_shards"] = String(shards) }
+        if let state = message.cacheState, ["ok", "failed", "unavailable", "unknown"].contains(state) { fields["cache"] = state }
+        if let source = message.cacheSource, ["cache", "download", "mixed", "unknown"].contains(source) { fields["source"] = source }
+        if let persisted = message.storagePersisted { fields["persisted"] = String(persisted) }
         if let frames = message.frames, (0...1000000).contains(frames) { fields["frames"] = String(frames) }
         DiagnosticLog.shared.record("web." + event, fields, sampleEvery: event == "scan_stats" ? 5 : 0)
     }

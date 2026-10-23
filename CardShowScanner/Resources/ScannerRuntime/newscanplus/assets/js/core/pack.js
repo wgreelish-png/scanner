@@ -100,7 +100,7 @@ export async function loadPackIndex() {
         const res = await fetch(primary, { cache: 'no-store' });
         if (!res.ok) throw new Error(`pack index ${res.status}`);
         const index = await res.json();
-        idbPut('index', index).catch(() => {});
+        await idbPut('index', index).catch(() => {});
         return index;
     } catch (err) {
         // The static host can be unreachable while Cloudways is fine (content
@@ -112,7 +112,7 @@ export async function loadPackIndex() {
                 const res = await fetch(sameOrigin, { cache: 'no-store' });
                 if (!res.ok) throw new Error(`pack index ${res.status}`);
                 const index = await res.json();
-                idbPut('index', index).catch(() => {});
+                await idbPut('index', index).catch(() => {});
                 return index;
             } catch { /* fall through to the cached index */ }
         }
@@ -122,7 +122,19 @@ export async function loadPackIndex() {
     }
 }
 
-export async function loadPack(gameKey, onProgress, { groups = null } = {}) {
+export async function loadPack(gameKey, onProgress, { groups = null, cacheFirst = false } = {}) {
+    // App adaptation: reopening the camera should use a complete saved database
+    // without checking the network. Updates are an explicit user action.
+    if (cacheFirst) {
+        const cachedIndex = await idbGet('index').catch(() => null);
+        const entry = cachedIndex?.games?.[gameKey];
+        const previous = await idbGet(`cur:${gameKey}`).catch(() => null);
+        const path = previous || entry?.v2?.manifest;
+        try {
+            if (path) return await loadV2(gameKey, path, onProgress, groups, { cacheOnly: true });
+            if (entry && !entry.v2?.manifest) return await loadV1(gameKey, entry, onProgress, { cacheOnly: true });
+        } catch { /* A missing, evicted or damaged cache is repaired below. */ }
+    }
     const index = await loadPackIndex();
     const entry = index.games?.[gameKey];
     if (entry?.v2?.manifest) {
@@ -157,21 +169,22 @@ export function parsePack(game, buf, refs) {
 
 // ---------------------------------------------------------------- v2
 
-async function getManifest(path, cacheOnly) {
+async function getManifest(path, cacheOnly, cacheFailed) {
     const key = `M:${path}`;
     const cached = await idbGet(key).catch(() => null);
-    if (cached) return cached;
+    if (cached?.v === 2 && Array.isArray(cached.shards)) return cached;
+    if (cached) await idbDelete((key) => key === `M:${path}`);
     if (cacheOnly) throw new Error('pack not cached');
     const manifest = JSON.parse(new TextDecoder().decode(await gunzipIfNeeded(await fetchBytes(packBase() + path))));
     if (manifest.v !== 2 || !Array.isArray(manifest.shards)) throw new Error('bad pack manifest');
-    await idbPut(key, manifest).catch(() => {});
+    await idbPut(key, manifest).catch(() => cacheFailed?.());
     return manifest;
 }
 
 async function loadV2(gameKey, manifestPath, onProgress, groups, { cacheOnly = false } = {}) {
     const persistP = requestPersistence();
     const stats = emptyStats();
-    const manifest = await getManifest(manifestPath, cacheOnly);
+    const manifest = await getManifest(manifestPath, cacheOnly, () => { stats.cache = 'failed'; });
     const dir = manifestPath.slice(0, manifestPath.lastIndexOf('/') + 1);
     const want = groups ? new Set(groups.map(Number)) : null;
     const shards = manifest.shards.filter((s) => !want || want.has(Number(s.group_id)));
@@ -208,7 +221,7 @@ async function loadV2(gameKey, manifestPath, onProgress, groups, { cacheOnly = f
     for (const [j, s] of shards.entries()) {
         let bin = got[2 * j] ?? sessionCache.get(hKey(s)) ?? null;
         let meta = got[2 * j + 1] ?? sessionCache.get(mKey(s)) ?? null;
-        if (!bin || !meta || shardKeysum(bin) !== meta.k) {
+        if (!validShardPair(bin, meta)) {
             if (cacheOnly) throw new Error('pack cache damaged');
             // Cache evicted or damaged between the key listing and now: refetch this pair once.
             await runJobs([
@@ -217,20 +230,21 @@ async function loadV2(gameKey, manifestPath, onProgress, groups, { cacheOnly = f
             ], onProgress, stats);
             bin = sessionCache.get(hKey(s)) ?? await idbGet(hKey(s)).catch(() => null);
             meta = sessionCache.get(mKey(s)) ?? await idbGet(mKey(s)).catch(() => null);
-            if (!bin || !meta || shardKeysum(bin) !== meta.k) throw new Error('pack meta mismatch');
+            if (!validShardPair(bin, meta)) throw new Error('pack meta mismatch');
         }
         parts.push({ bin, refs: meta.refs, group: Number(s.group_id) });
+    }
+    const pack = assemble(gameKey, manifestPath, parts);
+    if (!want) {
+        // Wait for the complete-pack marker before the camera may navigate away.
+        await idbPut(`cur:${gameKey}`, manifestPath).catch(() => { stats.cache = 'failed'; });
+        idbPruneV2(dir, manifestPath, manifest, gameKey).catch(() => {});
     }
     stats.storage = await persistP;
     finishStats(stats);
     if (stats.downloaded === 0) onProgress?.(1, 1, stats);
     else onProgress?.(stats.downloaded, Math.max(stats.downloaded, stats.total), stats);
-    const pack = assemble(gameKey, manifestPath, parts);
 
-    if (!want) {
-        idbPut(`cur:${gameKey}`, manifestPath).catch(() => {});
-        idbPruneV2(dir, manifestPath, manifest, gameKey).catch(() => {});
-    }
     return pack;
 }
 
@@ -280,6 +294,15 @@ async function runJobs(jobs, onProgress, stats) {
 function checkShard(buf) {
     const magic = String.fromCharCode(...new Uint8Array(buf, 0, 4));
     if (magic !== 'NSPS' || new DataView(buf).getUint32(4, true) !== 2) throw new Error('bad pack shard');
+}
+
+function validShardPair(bin, meta) {
+    try {
+        if (!bin || !Array.isArray(meta?.refs)) return false;
+        checkShard(bin);
+        const layout = shardLayout(bin);
+        return layout.n === meta.refs.length && layout.pg + layout.n * 4 <= bin.byteLength && shardKeysum(bin) === meta.k;
+    } catch { return false; }
 }
 
 function shardKeysum(buf) {
@@ -357,12 +380,17 @@ function assemble(game, ver, parts) {
 
 // ---------------------------------------------------------------- v1
 
-async function loadV1(gameKey, entry, onProgress) {
+async function loadV1(gameKey, entry, onProgress, { cacheOnly = false } = {}) {
     const persistP = requestPersistence();
     const stats = emptyStats();
     const key = `${gameKey}@${entry.ver}`;
-    let cached = await idbGet(key).catch(() => null);
+    let cached = await idbGet(key).catch(() => { stats.cache = 'unavailable'; return null; }) ?? sessionCache.get(key);
+    if (cached) {
+        try { parseV1(gameKey, cached.bin, cached.refs); stats.cachedHashShards = 1; stats.cachedMetaShards = 1; }
+        catch { cached = null; await idbDelete((savedKey) => savedKey === key); }
+    }
     if (!cached) {
+        if (cacheOnly) throw new Error('pack not cached');
         const total = entry.bin_bytes + entry.meta_bytes;
         stats.total = total;
         let metaLoaded = 0;
