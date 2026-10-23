@@ -50,7 +50,12 @@ enum BatchFailure: LocalizedError {
         session.startedAt = now; session.listID = list.id; session.game = game; session.statusRaw = "active"
         session.setRates(Self.defaults(defaults))
         context.insert(list); context.insert(session)
-        do { try context.save() } catch { context.rollback(); throw error }
+        do { try context.save() }
+        catch {
+            // A failed start must not discard other edits staged in this context.
+            context.delete(session); context.delete(list); context.processPendingChanges()
+            throw error
+        }
         defaults.set(game, forKey: "defaultGame")
         DiagnosticLog.shared.record("batch.started")
         return session
@@ -64,9 +69,15 @@ enum BatchFailure: LocalizedError {
     /// Both operations commit together: a failed replacement keeps the old active batch.
     static func replace(_ current: ScanSession, game: String, context: ModelContext, defaults: UserDefaults = .standard) throws -> ScanSession {
         guard current.isActive else { throw BatchFailure.unavailable }
+        guard CatalogOptions.games.contains(game) else { throw BatchFailure.wrongGame }
+        let previousStatus = current.statusRaw, previousCompletion = current.completedAt
         current.statusRaw = "completed"; current.completedAt = .now
         do { return try start(game: game, context: context, defaults: defaults) }
-        catch { context.rollback(); throw error }
+        catch {
+            current.statusRaw = previousStatus; current.completedAt = previousCompletion
+            context.processPendingChanges()
+            throw error
+        }
     }
     static func continueList(_ list: CardList, game: String, context: ModelContext, finishingOtherSession: Bool = false) throws -> ScanSession {
         guard CatalogOptions.games.contains(game), list.cards.allSatisfy({ $0.snapshot.identity.game == game }) else { throw BatchFailure.wrongGame }
@@ -100,12 +111,34 @@ enum BatchFailure: LocalizedError {
     static func add(_ card: CardCandidate, session: ScanSession, list: CardList, context: ModelContext, recognitionRef: String? = nil) throws {
         guard session.isActive, session.listID == list.id else { throw BatchFailure.unavailable }
         guard session.game == card.identity.game else { throw BatchFailure.wrongGame }
-        do {
+        try withScanSave(session: session, list: list, context: context) {
             try CardListService.add(card, to: list, context: context)
             session.record(card)
             session.lastConsumedRecognitionRef = recognitionRef ?? card.identity.productID
             try context.save()
-        } catch { context.rollback(); throw error }
+        }
+    }
+    /// SwiftData rollback can leave a live relationship's cached array mutated.
+    /// Undo this scan's staged rows and counters explicitly, preserving unrelated edits.
+    static func withScanSave(session: ScanSession, list: CardList, context: ModelContext,
+                             operation: () throws -> Void) rethrows {
+        let cards = list.cards
+        let insertedBefore = Set(context.insertedModelsArray.map { ObjectIdentifier($0) })
+        let quantity = session.addedQuantity, value = session.knownValueText
+        let unpriced = session.unpricedQuantity, recognitionRef = session.lastConsumedRecognitionRef
+        do { try operation() }
+        catch {
+            let listObjects = Set(list.cards.map { ObjectIdentifier($0) })
+            let stagedCards = context.insertedModelsArray.compactMap { $0 as? InventoryCard }.filter {
+                !insertedBefore.contains(ObjectIdentifier($0)) && listObjects.contains(ObjectIdentifier($0))
+            }
+            list.cards = cards
+            for item in stagedCards { context.delete(item) }
+            session.addedQuantity = quantity; session.knownValueText = value
+            session.unpricedQuantity = unpriced; session.lastConsumedRecognitionRef = recognitionRef
+            context.processPendingChanges()
+            throw error
+        }
     }
     static func saveOffer(_ session: ScanSession, list: CardList, context: ModelContext, customCashOffer: Decimal? = nil) throws {
         guard session.listID == list.id, session.rates.isValid else { throw BatchFailure.invalidRates }
