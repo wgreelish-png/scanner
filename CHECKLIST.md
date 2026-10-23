@@ -38,6 +38,6 @@ See docs/ScanConfirmationWorkflow.md. Neither offline iPhone support nor a succe
 - [ ] Verify build 2 live pricing, native-cache persistence, portrait behavior and custom offers on iPhone.
 
 - [x] macOS CI at 0025768: app/test compilation and unsigned Release iPhone build passed.
-- [ ] Native XCTest execution: runner aborted before tests; async discovery alone did not resolve it; framework runpaths and crash-reason capture await CI.
+- [ ] Native XCTest execution: crash capture identifies the simulator's missing Swift WebKit library; runtime fallback workaround awaits CI.
 - [x] Build 3 native cache path-alias handling, safe inventory diagnostics and Debug Safari inspection supplied.
 - [ ] Compare app HTTP 401 request with working signed-out Safari; verify zero-download phone reopening.
