@@ -31,7 +31,11 @@ jobs:
           xcodebuild test -project CardShowScanner.xcodeproj -scheme CardShowScanner -destination "platform=iOS Simulator,id=$DEVICE_ID" CODE_SIGNING_ALLOWED=NO -resultBundlePath TestResults.xcresult 2>&1 | tee NativeTests.log
       - name: Report native test failures
         if: failure() && steps.native_tests.outcome == 'failure'
-        run: python3 scripts/annotate_xcode_errors.py NativeTests.log --fallback 'Native tests failed; see the native-test-results artifact.'
+        shell: bash
+        run: |
+          python3 scripts/annotate_xcode_errors.py NativeTests.log --fallback 'Native tests failed; see the native-test-results artifact.'
+          xcrun xcresulttool export diagnostics --path TestResults.xcresult --output-path NativeDiagnostics || true
+          python3 scripts/report_simulator_crash.py NativeDiagnostics "$HOME/Library/Logs/DiagnosticReports" | tee NativeCrashSummary.log
       - name: Build Release configuration for iPhone
         id: native_release
         if: ${{ !cancelled() && steps.native_tests.outcome != 'skipped' }}
@@ -50,3 +54,4 @@ jobs:
             TestResults.xcresult
             NativeTests.log
             NativeRelease.log
+            NativeCrashSummary.log
