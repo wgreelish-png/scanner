@@ -170,7 +170,9 @@ import AudioToolbox
         saving = true
         defer { saving = false }
         do {
-            try saveCard(selected, session, list, context, result?.candidates.first?.identity.productID)
+            try SessionService.withScanSave(session: session, list: list, context: context) {
+                try self.saveCard(selected, session, list, context, self.result?.candidates.first?.identity.productID)
+            }
             // Only a committed transaction releases the review snapshot.
             priceTask?.cancel(); priceRequestID = UUID()
             result = nil; self.selected = nil; confirmed = false; priceMessage = nil
@@ -182,7 +184,7 @@ import AudioToolbox
             }
             if UserDefaults.standard.bool(forKey: "sound") { AudioServicesPlaySystemSound(1104) }
         } catch {
-            context.rollback(); self.error = "The card was not saved. Your selection is kept; tap your match again to retry."
+            self.error = "The card was not saved. Your selection is kept; tap your match again to retry."
             DiagnosticLog.shared.failure("persistence.failed", error)
         }
     }

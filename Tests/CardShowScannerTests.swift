@@ -233,6 +233,9 @@ import SwiftData
         let list = try XCTUnwrap(SessionService.list(for: session, context: context))
         XCTAssertThrowsError(try SessionService.replace(session, game: "invalid", context: context))
         XCTAssertTrue(session.isActive)
+        XCTAssertNil(session.completedAt)
+        XCTAssertEqual(try SessionService.active(context: context)?.id, session.id)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<ScanSession>()), 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<CardList>()), 1)
         XCTAssertThrowsError(try SessionService.add(MockScannerProvider.samples(game: "Yu-Gi-Oh!", index: 0)[0], session: session, list: list, context: context))
         XCTAssertEqual(list.quantity, 0)
@@ -349,6 +352,11 @@ import SwiftData
         let container = try store(), context = container.mainContext
         let session = try SessionService.start(game: "Pokémon", context: context)
         let list = try XCTUnwrap(SessionService.list(for: session, context: context))
+        try SessionService.saveOffer(session, list: list, context: context)
+        let savedOffers = session.savedOffersData
+        let pendingList = CardList(name: "Keep this pending list")
+        context.insert(pendingList)
+        let pendingID = pendingList.id
         var fail = true
         let model = ScannerViewModel(provider: TestScannerProvider(), pricing: TestMarketPricing(), saveCard: { card, session, list, context, ref in
             if fail {
@@ -365,9 +373,20 @@ import SwiftData
         model.addSelected(list: list, context: context)
         XCTAssertNotNil(model.error); XCTAssertNotNil(model.selected)
         XCTAssertEqual(list.quantity, 0); XCTAssertNil(session.lastConsumedRecognitionRef)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<InventoryCard>()), 0)
+        XCTAssertEqual(session.addedQuantity, 0); XCTAssertEqual(session.knownValue, 0)
+        XCTAssertEqual(session.unpricedQuantity, 0); XCTAssertEqual(session.savedOffersData, savedOffers)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<CardList>()).contains { $0.id == pendingID })
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<CardList>()), 1,
+                       "The unrelated list remains staged until a successful save")
         fail = false
         model.addSelected(list: list, context: context)
         XCTAssertNil(model.selected); XCTAssertEqual(list.quantity, 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<InventoryCard>()), 1)
+        XCTAssertEqual(session.addedQuantity, 1); XCTAssertEqual(session.savedOffersData, savedOffers)
+        let reopened = ModelContext(container)
+        XCTAssertEqual(try reopened.fetch(FetchDescriptor<CardList>()).first { $0.id == pendingID }?.name,
+                       "Keep this pending list")
         model.addSelected(list: list, context: context)
         model.receive(scan)
         XCTAssertEqual(list.quantity, 1); XCTAssertNil(model.selected)
@@ -609,9 +628,23 @@ import SwiftData
         let data = try quickScanFixture()
         var card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]
         card.identity.productID = "p:86027"; card.identity.printing = "Reverse Holofoil"
-        XCTAssertEqual(try OnlineMarketPricing.parse(data, for: card), MarketQuote(marketPrice: nil, skuID: "1262173"))
+        XCTAssertNil(try OnlineMarketPricing.parse(data, for: card), "The newer captured batch does not include Haunter")
+        // Haunter's missing NM market quote comes from the user's earlier example,
+        // while the bundled HAR fixture contains a different five-card batch.
+        let haunter = Data("""
+        {"items":{"p:86027":{"market_price":5.97,"printings":[
+          {"key":"Normal","quotes":{"English|Near Mint":{"sku_id":1191996,"market_price":5.97}}},
+          {"key":"Reverse Holofoil","market_price":null,"direct_price":999.02,"quotes":{
+            "English|Near Mint":{"sku_id":1262173,"direct_price":498.98,"gold_price":98.97,"gold2_price":98.99,"live_price":98.97},
+            "English|Lightly Played":{"sku_id":1262174,"market_price":39.46}
+          }}
+        ]}}}
+        """.utf8)
+        XCTAssertEqual(try OnlineMarketPricing.parse(haunter, for: card), MarketQuote(marketPrice: nil, skuID: "1262173"))
         card.identity.productID = "p:87727"; card.identity.printing = "Normal"; card.identity.condition = "Damaged"
         XCTAssertEqual(try OnlineMarketPricing.parse(data, for: card), MarketQuote(marketPrice: nil, skuID: "1223080"))
+        card.identity.printing = "Reverse Holofoil"; card.identity.condition = "Heavily Played"
+        XCTAssertEqual(try OnlineMarketPricing.parse(data, for: card), MarketQuote(marketPrice: nil, skuID: "1260711"))
     }
     func testCapturedNidoranAlternativeSavesSelectedCardInsteadOfFirstGuess() async throws {
         let container = try store(), context = container.mainContext
