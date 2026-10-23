@@ -22,6 +22,7 @@ struct TCGBridgeEnvelope: Decodable {
     var frames: Int?
     var downloadedBytes: Double?
     var cachedShards: Int?
+    var cacheBackend: String?
     var cacheState: String?
     var cacheSource: String?
     var storagePersisted: Bool?
@@ -160,9 +161,11 @@ struct TCGBridgeNormalizer {
     }
     func clearCache() async throws {
         stop()
-        await Self.clearStoredCache()
+        try await Self.clearStoredCache()
     }
-    static func clearStoredCache() async {
+    static func clearStoredCache() async throws {
+        do { try await ScannerDatabaseCache.shared.clear() }
+        catch { DiagnosticLog.shared.failure("cache.native_clear_failed", error); throw error }
         let store = WKWebsiteDataStore.default()
         let types: Set<String> = [WKWebsiteDataTypeIndexedDBDatabases, WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache]
         let records = await store.dataRecords(ofTypes: types)
@@ -199,7 +202,7 @@ struct TCGBridgeNormalizer {
         guard let url = Bundle.main.url(forResource: "TCGTrackingBridge", withExtension: "js"),
               let source = try? String(contentsOf: url, encoding: .utf8),
               let gameKey = Self.gameKeys[game],
-              let data = try? JSONSerialization.data(withJSONObject: ["nonce": nonce, "game": gameKey, "autoStart": true]),
+              let data = try? JSONSerialization.data(withJSONObject: ["nonce": nonce, "game": gameKey, "autoStart": true, "cacheToken": LocalScannerServer.shared.cacheToken]),
               let config = String(data: data, encoding: .utf8) else {
             DiagnosticLog.shared.record("web.resource_missing")
             status = "Scanner adapter resource or game configuration is missing."; return
@@ -259,6 +262,7 @@ struct TCGBridgeNormalizer {
         }
         if let bytes = message.downloadedBytes, bytes.isFinite, (0...10_000_000_000).contains(bytes) { fields["downloaded_bytes"] = String(Int64(bytes)) }
         if let shards = message.cachedShards, (0...1_000_000).contains(shards) { fields["cached_shards"] = String(shards) }
+        if let backend = message.cacheBackend, ["native", "indexeddb", "unknown"].contains(backend) { fields["cache_backend"] = backend }
         if let state = message.cacheState, ["ok", "failed", "unavailable", "unknown"].contains(state) { fields["cache"] = state }
         if let source = message.cacheSource, ["cache", "download", "mixed", "unknown"].contains(source) { fields["source"] = source }
         if let persisted = message.storagePersisted { fields["persisted"] = String(persisted) }

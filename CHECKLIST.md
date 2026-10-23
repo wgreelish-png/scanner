@@ -10,8 +10,8 @@
 - [x] No edit-time merge; preserve legacy quantities and unknown historical copy order.
 - [x] Resume existing lists with identity/offers retained and acknowledged active-session switches.
 - [x] Preserve migration, offers, diagnostics, CSV and ignored personal signing configuration.
-- [x] 40 JS tests and 2 Python tests pass; packaged real-engine smoke, manifest, Swift grammar and target checks pass.
-- [ ] Xcode build and 42 native tests (xcodebuild unavailable here).
+- [x] 49 JS tests and 2 Python tests pass; packaged real-engine smoke, manifest, Swift grammar and target checks pass.
+- [ ] Xcode build and 58 native tests (xcodebuild unavailable here).
 - [ ] Physical-iPhone camera, worker/WASM, pack download/cache, real recognition and offline relaunch verification.
 - [ ] Physical-iPhone condition prices, review freeze, save retry, double taps, editing, ordered resume/export checks.
 
@@ -29,3 +29,10 @@ See docs/ScanConfirmationWorkflow.md. Neither offline iPhone support nor a succe
 - [x] HAR-backed public first-party browser pricing request; no account requirement or fabricated headers.
 - [x] Captured Nidoran condition/SKU and alternative-selection regression cases supplied.
 - [ ] iPhone: verify public pricing transport, zero-download reopen, update behavior and large-grid layout.
+
+- [x] Build 2 portrait-only app configuration and revision in diagnostics.
+- [x] Native Application Support database cache with migration, atomic writes and explicit failure reporting.
+- [x] Normal public-page initialization/page-world/batched pricing, finite rejection diagnostics.
+- [x] Custom whole-list cash offers stored in existing estimate JSON; old snapshots preserved.
+- [x] 49 JS + 2 Python tests pass; 58 native cases supplied but unrun locally.
+- [ ] Verify build 2 live pricing, native-cache persistence, portrait behavior and custom offers on iPhone.
