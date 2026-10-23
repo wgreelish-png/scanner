@@ -44,6 +44,43 @@ class XcodeAnnotationTests(unittest.TestCase):
         self.assertIn('Cannot find type OfferLine', summary[0].message)
         self.assertEqual(len(extract_annotations('** TEST FAILED **\n', self.root)), 1)
 
+    def test_test_startup_runtime_failures_preserve_the_abort_reason(self):
+        diagnostics = [
+            "Could not cast value of type '(ScannerTests.OfferTests) -> @Swift.MainActor () -> ()' to '(ScannerTests.OfferTests) -> () -> ()'.",
+            'Fatal error: Unexpectedly found nil while unwrapping an Optional value',
+            "Terminating app due to uncaught exception 'NSInvalidArgumentException', reason: 'Invalid test invocation'",
+        ]
+        for diagnostic in diagnostics:
+            with self.subTest(diagnostic=diagnostic):
+                log = '2026-10-23 10:00:00.000 ScannerTests-Runner[123:456] *** ' + diagnostic + '\n** TEST FAILED **\n'
+                self.assertEqual(extract_annotations(log, self.root), [Annotation(diagnostic)])
+
+    def test_xctest_crash_summaries_are_available_before_tests_start(self):
+        diagnostics = [
+            'Test crashed with signal abrt before starting test execution.))',
+            'XCTest (123) crashed with signal SIGABRT.',
+            'Test runner crashed before running any tests.',
+        ]
+        for diagnostic in diagnostics:
+            with self.subTest(diagnostic=diagnostic):
+                self.assertEqual(extract_annotations('    ' + diagnostic + '\n', self.root), [Annotation(diagnostic)])
+        general = 'Failed to establish communication. (Test crashed with signal abrt before starting test execution.))'
+        self.assertEqual(extract_annotations('xcodebuild: error: ' + general + '\n', self.root), [Annotation(general)])
+
+    def test_runtime_failure_prefix_does_not_publish_external_source_paths(self):
+        errors = extract_annotations('/Users/runner/Library/Developer/DerivedData/Generated.swift:2: Fatal error: Invalid invocation\n', self.root)
+        self.assertEqual(errors, [Annotation('Fatal error: Invalid invocation')])
+
+    def test_cli_deduplicates_and_escapes_runtime_failures(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / 'native.log'
+            diagnostic = 'Fatal error: 100% ::warning:: untrusted detail'
+            log.write_text('\x1b[31m' + diagnostic + '\x1b[0m\n' + diagnostic + '\n')
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                main([str(log)])
+            self.assertEqual(output.getvalue(), '::error title=Xcode native check::Fatal error: 100%25 ::warning:: untrusted detail\n')
+
     def test_outside_build_paths_are_not_published_as_repository_files(self):
         errors = extract_annotations('/Users/runner/Library/Developer/DerivedData/Generated.swift:2:3: error: Generated failure\n../outside.swift:4: error: Outside failure\n', self.root)
         self.assertEqual(len(errors), 2)

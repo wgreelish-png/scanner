@@ -12,7 +12,7 @@ import SwiftData
         card.marketPrice = value
         return card
     }
-    func testCustomAmountAcceptsZeroAndCentsAndRejectsInvalidAmounts() {
+    func testCustomAmountAcceptsZeroAndCentsAndRejectsInvalidAmounts() async {
         XCTAssertEqual(CustomOfferAmount.parse("0"), 0)
         XCTAssertEqual(CustomOfferAmount.parse(" 85.50\n"), Decimal(string: "85.50"))
         XCTAssertEqual(CustomOfferAmount.parse("85."), 85)
@@ -23,7 +23,7 @@ import SwiftData
         XCTAssertFalse(CustomOfferAmount.isValid(.nan))
         XCTAssertFalse(CustomOfferAmount.isValid(Decimal(string: "0.001")!))
     }
-    func testLegacySnapshotsDecodeWithoutCustomCashAndZeroRoundTrips() throws {
+    func testLegacySnapshotsDecodeWithoutCustomCashAndZeroRoundTrips() async throws {
         let totals = OfferTotals(quantity: 1, market: 100, cash: 70, trade: 80, maximum: 75)
         let legacy = OfferSnapshot(rates: OfferRates(), totals: totals, lines: [])
         let encoded = try JSONEncoder().encode(legacy)
@@ -39,7 +39,7 @@ import SwiftData
         XCTAssertEqual(reopened.selectedCashOffer, 0)
         XCTAssertEqual(reopened.selectedCashSpread, 100)
     }
-    func testSavingCustomOfferPreservesCalculatedRatesAndEarlierSnapshots() throws {
+    func testSavingCustomOfferPreservesCalculatedRatesAndEarlierSnapshots() async throws {
         let container = try store(), context = container.mainContext
         let session = try SessionService.start(game: "Pokémon", context: context)
         session.setRates(OfferRates(cash: 70, trade: 80, maximum: 75))
@@ -63,7 +63,7 @@ import SwiftData
         XCTAssertEqual(saved[2].selectedCashOffer, 70)
         XCTAssertEqual(list.cards.count, 1)
     }
-    func testInvalidCustomAmountDoesNotMutateSavedOffers() throws {
+    func testInvalidCustomAmountDoesNotMutateSavedOffers() async throws {
         let container = try store(), context = container.mainContext
         let session = try SessionService.start(game: "Pokémon", context: context)
         let list = try XCTUnwrap(SessionService.list(for: session, context: context))
@@ -75,7 +75,7 @@ import SwiftData
         }
         XCTAssertEqual(try session.savedOffers().first?.customCashOffer, 0)
     }
-    func testCustomWholeListOfferSurvivesReopeningWithUnpricedCards() throws {
+    func testCustomWholeListOfferSurvivesReopeningWithUnpricedCards() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }

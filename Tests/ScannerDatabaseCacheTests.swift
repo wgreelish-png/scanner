@@ -27,6 +27,27 @@ import XCTest
         let attributes = try directory.resourceValues(forKeys: [.isExcludedFromBackupKey])
         XCTAssertEqual(attributes.isExcludedFromBackup, true)
     }
+    func testExistingRecordsReopenThroughDirectoryAliasAndRejectWrongHashFilename() async throws {
+        let parent = try self.directory()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let physical = parent.appendingPathComponent("physical-cache", isDirectory: true)
+        let writer = ScannerDatabaseCache(directory: physical)
+        let original = Data([0, 12, 34, 56])
+        try await writer.write("index", data: original)
+        let validRecord = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: physical, includingPropertiesForKeys: nil).first)
+        try FileManager.default.copyItem(at: validRecord, to: physical.appendingPathComponent("unexpected.entry"))
+        let alias = parent.appendingPathComponent("cache-alias", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: physical)
+        let reopened = ScannerDatabaseCache(directory: alias)
+        let restored = try await reopened.read("index")
+        let keys = try await reopened.keys()
+        XCTAssertEqual(restored, original)
+        XCTAssertEqual(keys, ["index"], "A valid key inside a record cannot bypass its hashed filename")
+        try await reopened.write("cur:tcgp:3", data: Data([0, 99]))
+        let physicalReader = ScannerDatabaseCache(directory: physical)
+        let completeMarker = try await physicalReader.read("cur:tcgp:3")
+        XCTAssertEqual(completeMarker, Data([0, 99]))
+    }
     func testClearOnlyRemovesDedicatedDatabaseStorage() async throws {
         let parent = try directory()
         defer { try? FileManager.default.removeItem(at: parent) }
@@ -77,7 +98,7 @@ import XCTest
         let keys = try await reopened.keys()
         XCTAssertTrue(keys.isEmpty)
     }
-    func testLoopbackCacheRequiresSecretAndRejectsForeignOrigins() {
+    func testLoopbackCacheRequiresSecretAndRejectsForeignOrigins() async {
         let origin = "http://127.0.0.1:18764", token = "test-cache-token"
         let allowed = ["host": "127.0.0.1:18764", "x-scanner-cache": token, "origin": origin]
         XCTAssertTrue(ScannerCacheRequestPolicy.permits(headers: allowed, origin: origin, token: token))

@@ -126,6 +126,9 @@ struct PublicPricingPagePolicy {
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
         webView.navigationDelegate = self; webView.uiDelegate = self
+        #if DEBUG
+        webView.isInspectable = true
+        #endif
     }
     private static func permitted(_ url: URL?) -> Bool { PublicPricingPagePolicy.allows(url) }
     private func installContentRules() async throws {

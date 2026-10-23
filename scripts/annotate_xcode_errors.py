@@ -22,6 +22,14 @@ ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 FILE_ERROR = re.compile(r"^\s*(.+?):([0-9]+)(?::([0-9]+))?:\s*(?:fatal\s+)?error:\s*(.+)$")
 GENERAL_ERROR = re.compile(r"\berror:\s*(.+)$", re.IGNORECASE)
 TESTING_FAILED = re.compile(r"^\s*Testing failed:\s*(.*)$", re.IGNORECASE)
+RUNTIME_FAILURE = re.compile(
+    r"\b(?:Could not cast value of type\b|Fatal error:|Terminating app due to uncaught exception\b).*",
+    re.IGNORECASE,
+)
+TEST_CRASH = re.compile(
+    r"\b(?:Test crashed\b|(?:XCTest|test runner)\b.*?\bcrashed\b).*",
+    re.IGNORECASE,
+)
 
 
 def escape_data(value: str) -> str:
@@ -89,9 +97,19 @@ def extract_annotations(text: str, repo_root: Path) -> list[Annotation]:
             if testing[1]:
                 summary.append(testing[1])
             continue
+        runtime_failure = RUNTIME_FAILURE.search(raw)
+        if runtime_failure:
+            annotations.append(Annotation(runtime_failure[0]))
+            collecting_summary = False
+            continue
         general = GENERAL_ERROR.search(raw)
         if general:
             annotations.append(Annotation(general[1]))
+            collecting_summary = False
+            continue
+        test_crash = TEST_CRASH.search(raw)
+        if test_crash:
+            annotations.append(Annotation(test_crash[0]))
             collecting_summary = False
             continue
         stripped = raw.strip()

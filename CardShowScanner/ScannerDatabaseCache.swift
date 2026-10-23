@@ -12,8 +12,9 @@ actor ScannerDatabaseCache {
     private var sizes: [String: Int]?
 
     init(directory: URL? = nil) {
-        root = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let selected = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("ScannerDatabase-v1", isDirectory: true)
+        root = selected.standardizedFileURL.resolvingSymlinksInPath()
     }
     static func validKey(_ key: String) -> Bool {
         guard key.utf8.count <= 512, !key.contains(".."), !key.contains("\\"), !key.contains("\0") else { return false }
@@ -31,12 +32,24 @@ actor ScannerDatabaseCache {
         try directory.setResourceValues(values)
         if sizes == nil {
             var loaded: [String: Int] = [:]
+            var rejected = 0
             for url in try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey]) where url.pathExtension == "entry" {
-                let properties = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey])
-                guard properties.isRegularFile == true, properties.isSymbolicLink != true,
-                      let size = properties.fileSize, size <= Self.maximumEntryBytes + 516,
-                      let key = try? storedKey(at: url), Self.validKey(key), (try? location(key)) == url else { continue }
-                loaded[key] = size
+                do {
+                    let properties = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey])
+                    guard properties.isRegularFile == true, properties.isSymbolicLink != true,
+                          let size = properties.fileSize, size <= Self.maximumEntryBytes + 516,
+                          let key = try? storedKey(at: url), Self.validKey(key),
+                          let expected = try? location(key), expected.lastPathComponent == url.lastPathComponent else {
+                        rejected += 1; continue
+                    }
+                    // Directory enumeration already confines records to this root.
+                    // Hash filenames, rather than URL object equality, survive iOS path aliases.
+                    loaded[key] = size
+                } catch { rejected += 1 }
+            }
+            let acceptedRecords = loaded.count, rejectedRecords = rejected
+            Task { @MainActor in
+                DiagnosticLog.shared.record("cache.native_inventory", ["records": String(acceptedRecords), "rejected_records": String(rejectedRecords)])
             }
             sizes = loaded
         }

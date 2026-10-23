@@ -16,7 +16,7 @@ import OSLog
     private var lastSamples: [String: Date] = [:]
     private let keys: Set<String> = ["provider", "game", "episode", "same", "accepted", "confidence", "candidates",
         "printing_required", "priced", "merged", "automatic", "quantity", "reason", "stage", "backend", "elapsed_ms",
-        "scan_ms", "capture_ms", "frames", "domain", "code", "records", "phase", "candidate_index", "app_version", "build", "downloaded_bytes", "cached_shards", "cache", "source", "persisted", "cache_backend", "revision"]
+        "scan_ms", "capture_ms", "frames", "domain", "code", "records", "rejected_records", "phase", "candidate_index", "app_version", "build", "downloaded_bytes", "cached_shards", "cache", "source", "persisted", "cache_backend", "revision"]
     private var current: URL { directory.appendingPathComponent("current.jsonl") }
     private var previous: URL { directory.appendingPathComponent("previous.jsonl") }
     var enabled: Bool { defaults.object(forKey: "diagnosticsEnabled") as? Bool ?? true }
