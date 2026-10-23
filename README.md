@@ -1,6 +1,6 @@
 # Card Show Scanner — confirmed physical scans
 
-Native SwiftUI/SwiftData iPhone app, iOS 17+. Open **Start New Scan** to create a timestamped saved list and open the live scanner, or **Open Existing List** to review and append cards. Mock scanning is only an explicit choice under **Developer Testing**; live failures never switch to mock.
+Native SwiftUI/SwiftData iPhone app, iOS 17+. **Start New Scan** immediately finishes any active session, creates a timestamped saved list and opens the live scanner without a confirmation dialog. Previous lists and saved offers remain available through **Open Existing List** for review or continued scanning. Mock scanning is only an explicit choice under **Developer Testing**; live failures never switch to mock.
 
 Before the first live scan, **Connect TCGTracking** opens the website inside the app. Sign in if the website asks, then choose **Continue to Scanner**; continuing without prices is also allowed. The website session is remembered in WebKit's persistent store. The app records only that the setup step was acknowledged, never a presumed login status. Settings and scanner options reopen the connection screen. A rejected price lookup also offers it directly from the frozen card review; returning preserves the card, printing and condition and retries the exact quote.
 
