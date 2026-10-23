@@ -238,7 +238,7 @@ struct TCGBridgeNormalizer {
     private func logDiagnostic(_ message: TCGBridgeEnvelope) {
         let allowed: Set<String> = ["bridge_ready", "bridge_stopped", "startup_started", "modules_ready", "index_ready", "pack_ready",
             "backend_ready", "camera_requested", "camera_acquired", "video_playing", "scanner_ready", "startup_failed",
-            "scan_stats", "camera_backgrounded", "javascript_error", "javascript_rejection"]
+            "scan_stats", "recognition_settled", "camera_interrupted", "camera_backgrounded", "javascript_error", "javascript_rejection"]
         guard let event = message.event, allowed.contains(event) else { return }
         var fields: [String: String] = [:]
         if let stage = message.stage, ["modules", "index", "pack", "backend", "camera", "video", "scan"].contains(stage) { fields["stage"] = stage }

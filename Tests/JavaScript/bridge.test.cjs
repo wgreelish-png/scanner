@@ -5,8 +5,9 @@ const vm = require('node:vm');
 const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '../../CardShowScanner/Resources/TCGTrackingBridge.js'), 'utf8');
 function harness({ denyCamera = false } = {}) {
-  const messages = [], elements = [], events = new Map();
-  let captureOptions, scannerOptions, stopped = 0, disposed = 0;
+  const messages = [], elements = [], events = new Map(), windowEvents = new Map(), trackEvents = new Map(), draws = [];
+  let overlayDestroyed = 0;
+  let captureOptions, scannerOptions, stopped = 0, disposed = 0, now = 0;
   const element = tag => {
     const e = { tag, style: {}, children: [], append(...items) { this.children.push(...items); }, setAttribute() {},
       remove() { this.removed = true; }, async play() {} };
@@ -19,13 +20,13 @@ function harness({ denyCamera = false } = {}) {
   const modules = {
     'core/pack.js': { loadPackIndex: async () => ({ games: { 'tcgp:3': {} } }), loadPack: async () => ({ game: 'tcgp:3' }) },
     'app/scan-backends.js': { createBackend: async () => backend },
-    'core/overlay.js': { createOverlay: () => ({}) },
+    'core/overlay.js': { createOverlay: () => ({ draw(options) { draws.push(options); }, clear() {}, setSource() {}, destroy() { overlayDestroyed++; } }) },
     'app/quickscan.js': { startQuickScan(options) { scannerOptions = options; return () => { stopped++; }; } },
     'app/shared.js': { useScope(scope) { assert.equal(scope, 'price'); }, catalogDetail() {} }
   };
-  const sandbox = { URL, console, document,
-    navigator: { mediaDevices: { async getUserMedia(options) { if (denyCamera) throw new Error("Camera permission denied"); captureOptions = options; return { getTracks: () => [{ stop() { stopped++; } }] }; } } },
-    window: { webkit: { messageHandlers: { scanResult: { postMessage: m => messages.push(JSON.parse(JSON.stringify(m))) } } } }
+  const sandbox = { URL, console, document, performance: { now: () => now },
+    navigator: { mediaDevices: { async getUserMedia(options) { if (denyCamera) throw new Error("Camera permission denied"); captureOptions = options; return { getTracks: () => [{ stop() { stopped++; }, addEventListener(name, fn) { trackEvents.set(name, fn); } }] }; } } },
+    window: { addEventListener(name, fn) { windowEvents.set(name, fn); }, removeEventListener(name) { windowEvents.delete(name); }, webkit: { messageHandlers: { scanResult: { postMessage: m => messages.push(JSON.parse(JSON.stringify(m))) } } } }
   };
   const context = vm.createContext(sandbox);
   const script = new vm.Script(source, { importModuleDynamically: async specifier => {
@@ -35,11 +36,18 @@ function harness({ denyCamera = false } = {}) {
     await mod.link(() => {}); await mod.evaluate(); return mod;
   } });
   script.runInContext(context);
-  return { bridge: sandbox.CardShowBridge, messages, elements, events, document,
+  return { bridge: sandbox.CardShowBridge, messages, elements, events, windowEvents, trackEvents, draws, document, get overlayDestroyed() { return overlayDestroyed; }, advance(ms) { now += ms; },
     get scannerOptions() { return scannerOptions; }, get captureOptions() { return captureOptions; }, get stopped() { return stopped; }, get disposed() { return disposed; } };
 }
 const tuple = (id = 123, variants = [{ id: 10, label: 'Normal', nm: 1.25, primary: true }, { id: 11, label: 'Holofoil', nm: 2.5 }]) =>
   [`p:${id}`, `Sample ${id}`, '1/10', 'DEMO', 'Demo Set', '', 'https://cdn.tcgtracking.com/test.jpg', variants];
+function settle(h, view) {
+  h.scannerOptions.onShow(view);
+  for (let i = 0; i < 2; i++) {
+    h.advance(400);
+    h.scannerOptions.onShow({ same: true, accepted: true, confidence: view.confidence });
+  }
+}
 function clean(value) { return JSON.parse(JSON.stringify(value)); }
 test('winner, candidate metadata and per-printing price/SKU survive', () => {
   const { bridge } = harness();
@@ -79,7 +87,7 @@ test('camera bootstrap uses module interfaces and delivers scan/hide with nonce'
   const button = h.elements.find(e => e.tag === 'button'); await button.onclick();
   assert.equal(h.captureOptions.audio, false); assert.equal(h.captureOptions.video.facingMode.ideal, 'environment');
   assert.ok(h.scannerOptions); assert.equal(button.hidden, true);
-  h.scannerOptions.onShow({ ref: tuple(), accepted: true, confidence: 96 });
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
   assert.equal(h.messages.at(-1).kind, 'scan'); assert.equal(h.messages.at(-1).nonce, 'test-nonce');
   h.scannerOptions.onHide(); assert.equal(h.messages.at(-1).kind, 'scan');
   h.bridge.releaseReview();
@@ -128,7 +136,7 @@ test('diagnostics report startup stages, sampled timings and safe camera errors'
   const failure = denied.messages.find(m => m.kind === 'diagnostic' && m.event === 'startup_failed');
   assert.equal(failure.stage, 'camera'); assert.equal(failure.errorKind, 'Error');
   assert.equal('message' in failure, false);
-  h.scannerOptions.onShow({ ref: tuple(), confidence: 96, accepted: true });
+  settle(h, { ref: tuple(), confidence: 96, accepted: true });
   assert.ok(h.messages.some(m => m.kind === 'scan' && m.candidates[0].name === 'Sample 123'));
   assert.equal(JSON.stringify(diagnostics()).includes('Sample 123'), false);
 });
@@ -136,14 +144,14 @@ test('diagnostics report startup stages, sampled timings and safe camera errors'
 test('review freezes full payload, including captured image, until explicitly released', async () => {
   const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
   assert.ok(h.scannerOptions, 'local scanner starts without a mock or website button');
-  h.scannerOptions.onShow({ ref: tuple(), accepted: true, confidence: 96, thumb: 'data:image/jpeg;base64,/9j/AA==' });
+  settle(h, { ref: tuple(), accepted: true, confidence: 96, thumb: 'data:image/jpeg;base64,/9j/AA==' });
   const first = h.messages.at(-1);
   assert.equal(first.capturedImageBase64, '/9j/AA==');
   const count = h.messages.length;
-  h.scannerOptions.onShow({ ref: tuple(124), confidence: 99 });
+  settle(h, { ref: tuple(124), confidence: 99 });
   h.scannerOptions.onHide(); assert.equal(h.messages.length, count);
   h.bridge.resetRecognition();
-  h.scannerOptions.onShow({ ref: tuple(124), confidence: 99 });
+  settle(h, { ref: tuple(124), confidence: 99 });
   assert.equal(h.messages.at(-1).candidates[0].ref, 'p:124');
 });
 test('recognition does not depend on the online catalog detail callback', async () => {
@@ -154,12 +162,79 @@ test('recognition does not depend on the online catalog detail callback', async 
 
 test('saving waits for card removal instead of latching a duplicate frame', async () => {
   const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
-  h.scannerOptions.onShow({ ref: tuple(), accepted: true, confidence: 96 });
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
   h.bridge.releaseReview();
   const count = h.messages.length;
-  h.scannerOptions.onShow({ ref: tuple(), accepted: true, confidence: 96 });
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
   assert.equal(h.messages.length, count);
   h.scannerOptions.onHide(); assert.equal(h.messages.at(-1).kind, 'hide');
-  h.scannerOptions.onShow({ ref: tuple(), accepted: true, confidence: 96 });
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
   assert.equal(h.messages.at(-1).kind, 'scan');
+});
+
+ test('a corrected first guess must settle before presenting candidates', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  h.scannerOptions.onShow({ ref: tuple(123), accepted: true, confidence: 95 });
+  h.advance(400);
+  h.scannerOptions.onShow({ ref: tuple(124), accepted: true, confidence: 96 });
+  assert.equal(h.messages.filter(m => m.kind === 'scan').length, 0);
+  h.advance(400); h.scannerOptions.onShow({ same: true, accepted: true, confidence: 97 });
+  assert.equal(h.messages.filter(m => m.kind === 'scan').length, 0);
+  h.advance(400); h.scannerOptions.onShow({ same: true, accepted: true, confidence: 98 });
+  assert.equal(h.messages.at(-1).candidates[0].ref, 'p:124');
+});
+test('low confidence and removed cards cannot open a stale review', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  h.scannerOptions.onShow({ ref: tuple(), accepted: false, confidence: 30 });
+  for (let i = 0; i < 6; i++) { h.advance(400); h.scannerOptions.onShow({ same: true, accepted: false, confidence: 30 }); }
+  assert.equal(h.messages.filter(m => m.kind === 'scan').length, 0);
+  h.scannerOptions.onHide();
+  h.advance(800); h.scannerOptions.onShow({ same: true, accepted: true, confidence: 98 });
+  assert.equal(h.messages.filter(m => m.kind === 'scan').length, 0);
+  settle(h, { ref: tuple(124), accepted: true, confidence: 96 });
+  assert.equal(h.messages.at(-1).candidates[0].ref, 'p:124');
+});
+test('stable ambiguous results remain selectable after a longer settling period', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  h.scannerOptions.onShow({ ref: tuple(), accepted: false, confidence: 65, cands: [{ tuple: tuple(124), confidence: 60 }] });
+  for (let i = 0; i < 3; i++) { h.advance(400); h.scannerOptions.onShow({ same: true, accepted: false, confidence: 65 }); }
+  assert.equal(h.messages.filter(m => m.kind === 'scan').length, 0);
+  h.advance(400); h.scannerOptions.onShow({ same: true, accepted: false, confidence: 65 });
+  assert.equal(h.messages.at(-1).accepted, false);
+  assert.equal(h.messages.at(-1).candidates.length, 2);
+});
+
+test('tentative card names and prices never flash over the live camera', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  h.scannerOptions.overlay.draw({ state: 'matched', quad: [1, 2], label: { name: 'Wrong guess', price: 100 } });
+  assert.equal(h.draws.at(-1).label, null);
+  assert.equal(h.draws.at(-1).state, 'matched');
+  h.bridge.stop(); assert.equal(h.overlayDestroyed, 1);
+  assert.equal(h.windowEvents.size, 0);
+});
+test('a camera interruption offers retry and releases its resources', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  h.trackEvents.get('ended')();
+  const button = h.elements.find(e => e.tag === 'button');
+  assert.equal(button.textContent, 'Retry Scanner'); assert.equal(button.hidden, false);
+  assert.equal(h.overlayDestroyed, 1); assert.ok(h.stopped >= 2);
+  await button.onclick(); assert.equal(button.hidden, true);
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
+  assert.equal(h.messages.at(-1).kind, 'scan');
+});
+test('a rejected scanner operation stops the loop and offers explicit retry', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  h.windowEvents.get('unhandledrejection')({ reason: new TypeError('private details') });
+  assert.equal(h.elements.find(e => e.tag === 'button').textContent, 'Retry Scanner');
+  assert.equal(h.messages.some(m => JSON.stringify(m).includes('private details')), false);
+  assert.equal(h.overlayDestroyed, 1);
+});
+
+test('a slow frame restarts settling without losing the candidate payload', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  h.scannerOptions.onShow({ ref: tuple(), accepted: true, confidence: 96 });
+  h.advance(2000); h.scannerOptions.onShow({ same: true, accepted: true, confidence: 96 });
+  assert.equal(h.messages.filter(m => m.kind === 'scan').length, 0);
+  for (let i = 0; i < 2; i++) { h.advance(400); h.scannerOptions.onShow({ same: true, accepted: true, confidence: 96 }); }
+  assert.equal(h.messages.at(-1).candidates[0].ref, 'p:123');
 });

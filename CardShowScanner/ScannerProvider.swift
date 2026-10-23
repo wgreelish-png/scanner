@@ -72,12 +72,15 @@ struct OnlineMarketPricing: MarketPricing {
     func quote(for card: CardCandidate) async throws -> MarketQuote? {
         guard card.identity.productID.range(of: #"^(p|t|ts|u):[0-9]{1,12}$"#, options: .regularExpression) != nil else { return nil }
         var request = URLRequest(url: Self.endpoint)
-        request.httpMethod = "POST"; request.timeoutInterval = 15
+        request.httpMethod = "POST"; request.timeoutInterval = 4
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: ["refs": [card.identity.productID]])
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let response = response as? HTTPURLResponse, response.statusCode == 200, data.count <= 2_000_000 else {
+            if let http = response as? HTTPURLResponse {
+                await MainActor.run { DiagnosticLog.shared.record("pricing.http_failed", ["code": String(http.statusCode)]) }
+            }
             throw URLError(.badServerResponse)
         }
         return try Self.parse(data, for: card)

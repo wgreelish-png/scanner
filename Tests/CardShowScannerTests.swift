@@ -481,6 +481,123 @@ import SwiftData
         for _ in 0..<10 { await Task.yield() }
         XCTAssertNil(model.selected)
     }
+    func testOneTapCandidateConfirmationIgnoresDoubleTapsAndOldQuotes() async throws {
+        let container = try store(), context = container.mainContext
+        let session = try SessionService.start(game: "Pokémon", context: context)
+        let list = try XCTUnwrap(SessionService.list(for: session, context: context))
+        let pricing = ControlledPricing()
+        let model = ScannerViewModel(provider: TestScannerProvider(), pricing: pricing)
+        model.start(game: "Pokémon", list: list, context: context, session: session)
+        let cards = MockScannerProvider.samples(game: "Pokémon", index: 0)
+        model.receive(ScanResult(id: UUID(), candidates: cards, accepted: false, same: false))
+        try await waitForRequests(1, pricing: pricing)
+        model.selectAndAdd(cards[1], list: list, context: context)
+        model.selectAndAdd(cards[0], list: list, context: context)
+        try await waitForRequests(2, pricing: pricing)
+        XCTAssertTrue(model.selectionInProgress); XCTAssertEqual(list.quantity, 0)
+        await pricing.resolve(1, with: MarketQuote(marketPrice: 0, skuID: "22"))
+        await waitForIdle(model)
+        XCTAssertEqual(list.quantity, 1)
+        XCTAssertEqual(list.orderedCards[0].snapshot.identity.productID, cards[1].identity.productID)
+        XCTAssertEqual(list.orderedCards[0].snapshot.identity.condition, "Near Mint")
+        XCTAssertEqual(list.orderedCards[0].snapshot.marketPrice, 0)
+        XCTAssertEqual(list.orderedCards[0].snapshot.identity.skuID, "22")
+        await pricing.resolve(0, with: MarketQuote(marketPrice: 999, skuID: "99"))
+        for _ in 0..<10 { await Task.yield() }
+        model.selectAndAdd(cards[1], list: list, context: context)
+        XCTAssertEqual(list.quantity, 1); XCTAssertNil(model.selected)
+        model.stop()
+    }
+    func testDiscardWhileConfirmingCannotSaveAfterLateQuote() async throws {
+        let container = try store(), context = container.mainContext
+        let session = try SessionService.start(game: "Pokémon", context: context)
+        let list = try XCTUnwrap(SessionService.list(for: session, context: context))
+        let pricing = ControlledPricing()
+        let model = ScannerViewModel(provider: TestScannerProvider(), pricing: pricing)
+        model.start(game: "Pokémon", list: list, context: context, session: session)
+        let cards = MockScannerProvider.samples(game: "Pokémon", index: 0)
+        model.receive(ScanResult(id: UUID(), candidates: cards, accepted: true, same: false))
+        try await waitForRequests(1, pricing: pricing)
+        model.selectAndAdd(cards[1], list: list, context: context)
+        try await waitForRequests(2, pricing: pricing)
+        model.scanNextCard()
+        await pricing.resolve(1, with: MarketQuote(marketPrice: 2, skuID: "20"))
+        await pricing.resolve(0, with: MarketQuote(marketPrice: 10, skuID: "10"))
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(list.quantity, 0); XCTAssertFalse(model.selectionInProgress)
+        XCTAssertNil(model.selected); model.stop()
+    }
+    func testOneTapSaveFailureRetainsEditedPrintingAndConditionForRetry() async throws {
+        let container = try store(), context = container.mainContext
+        let session = try SessionService.start(game: "Pokémon", context: context)
+        let list = try XCTUnwrap(SessionService.list(for: session, context: context))
+        var fail = true
+        let model = ScannerViewModel(provider: TestScannerProvider(), pricing: TestMarketPricing(), saveCard: { card, session, list, context, ref in
+            if fail { throw CocoaError(.fileWriteOutOfSpace) }
+            try SessionService.add(card, session: session, list: list, context: context, recognitionRef: ref)
+        })
+        model.start(game: "Pokémon", list: list, context: context, session: session)
+        let cards = MockScannerProvider.samples(game: "Pokémon", index: 0)
+        model.receive(ScanResult(id: UUID(), candidates: cards, accepted: true, same: false))
+        model.changeCondition("Lightly Played"); model.changePrinting("Holofoil")
+        await waitForIdle(model)
+        model.selectAndAdd(cards[0], list: list, context: context)
+        await waitForIdle(model)
+        XCTAssertEqual(list.quantity, 0); XCTAssertNotNil(model.error)
+        XCTAssertEqual(model.selected?.identity.printing, "Holofoil")
+        XCTAssertEqual(model.selected?.identity.condition, "Lightly Played")
+        XCTAssertFalse(model.selectionInProgress)
+        fail = false
+        model.selectAndAdd(cards[0], list: list, context: context)
+        await waitForIdle(model)
+        XCTAssertEqual(list.quantity, 1); XCTAssertNil(model.selected)
+        XCTAssertEqual(list.orderedCards[0].snapshot.identity.printing, "Holofoil")
+        XCTAssertEqual(list.orderedCards[0].snapshot.identity.condition, "Lightly Played")
+        model.stop()
+    }
+    func testPricingFailureDoesNotBlockExplicitCandidateSave() async throws {
+        let container = try store(), context = container.mainContext
+        let session = try SessionService.start(game: "Pokémon", context: context)
+        let list = try XCTUnwrap(SessionService.list(for: session, context: context))
+        let model = ScannerViewModel(provider: TestScannerProvider(), pricing: FailingMarketPricing())
+        model.start(game: "Pokémon", list: list, context: context, session: session)
+        let cards = MockScannerProvider.samples(game: "Pokémon", index: 0)
+        model.receive(ScanResult(id: UUID(), candidates: cards, accepted: true, same: false))
+        model.selectAndAdd(cards[1], list: list, context: context)
+        await waitForIdle(model)
+        XCTAssertEqual(list.quantity, 1)
+        XCTAssertNil(list.orderedCards[0].snapshot.marketPrice)
+        XCTAssertNil(list.orderedCards[0].snapshot.identity.skuID)
+        XCTAssertNil(model.selected); XCTAssertFalse(model.selectionInProgress)
+        model.stop()
+    }
+    func testUnresponsivePricingHasDeadlineAndCannotChangeSavedCardLater() async throws {
+        let container = try store(), context = container.mainContext
+        let session = try SessionService.start(game: "Pokémon", context: context)
+        let list = try XCTUnwrap(SessionService.list(for: session, context: context))
+        let pricing = ControlledPricing()
+        let model = ScannerViewModel(provider: TestScannerProvider(), pricing: pricing, confirmationTimeout: .milliseconds(30))
+        model.start(game: "Pokémon", list: list, context: context, session: session)
+        let cards = MockScannerProvider.samples(game: "Pokémon", index: 0)
+        model.receive(ScanResult(id: UUID(), candidates: cards, accepted: true, same: false))
+        try await waitForRequests(1, pricing: pricing)
+        model.selectAndAdd(cards[1], list: list, context: context)
+        try await waitForRequests(2, pricing: pricing)
+        await waitForIdle(model)
+        XCTAssertEqual(list.quantity, 1); XCTAssertNil(list.orderedCards[0].snapshot.marketPrice)
+        await pricing.resolve(1, with: MarketQuote(marketPrice: 999, skuID: "99"))
+        await pricing.resolve(0, with: MarketQuote(marketPrice: 999, skuID: "99"))
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(list.quantity, 1); XCTAssertNil(list.orderedCards[0].snapshot.marketPrice)
+        model.stop()
+    }
+    private func waitForIdle(_ model: ScannerViewModel) async {
+        for _ in 0..<100 {
+            if !model.priceLoading && !model.selectionInProgress { return }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Scanner did not finish the selected card")
+    }
     private func waitForRequests(_ count: Int, pricing: ControlledPricing) async throws {
         for _ in 0..<100 {
             let received = await pricing.count
@@ -514,4 +631,8 @@ private actor ControlledPricing: MarketPricing {
     func resolve(_ index: Int, with quote: MarketQuote?) {
         let continuation = pending[index]; pending[index] = nil; continuation?.resume(returning: quote)
     }
+}
+
+private struct FailingMarketPricing: MarketPricing {
+    func quote(for card: CardCandidate) async throws -> MarketQuote? { throw URLError(.badServerResponse) }
 }

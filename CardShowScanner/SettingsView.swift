@@ -3,8 +3,6 @@ import SwiftData
 
 struct SettingsView: View {
     @AppStorage("defaultGame") private var game = "Pokémon"
-    @AppStorage("defaultCondition") private var condition = "Near Mint"
-    @AppStorage("automaticAdd") private var automatic = false
     @AppStorage("sound") private var sound = false
     @AppStorage("haptics") private var haptics = true
     @AppStorage("cashPercentage") private var cashPercentage = 70.0
@@ -53,7 +51,7 @@ struct SettingsView: View {
                 if DiagnosticLog.shared.storageFailed { Text("Diagnostics could not be written to local storage.").foregroundStyle(.orange) }
                 Text("Keeps up to about 512 KB of recent local events across app launches. Includes scanner stages, timings, confidence, add decisions and save errors. Excludes card/list contents, credentials and camera images. Logs leave this device only when you share them.").font(.caption)
             }
-            Section("Privacy") { Text("Lists and sessions are stored locally on this iPhone. Live mode loads TCGTracking and its resources, and uses its browser scanner and catalog requests. CSV sharing sends the selected list through the iOS share sheet.") }
+            Section("Privacy") { Text("Lists, sessions and diagnostic logs stay on this iPhone unless you export them. Camera frames are processed by the bundled recognition engine on this phone. Game databases download from TCGTracking; card images and market quotes use internet requests. CSV sharing sends the selected list through the iOS share sheet.") }
         }.navigationTitle("Settings")
             .sheet(isPresented: Binding(get: { diagnosticURL != nil }, set: { if !$0 { cleanupDiagnostics() } })) {
                 if let diagnosticURL { ShareSheet(url: diagnosticURL) }

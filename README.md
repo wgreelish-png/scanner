@@ -4,13 +4,13 @@ Native SwiftUI/SwiftData iPhone app, iOS 17+. Open **Start New Scan** to create 
 
 ## Scan and confirm
 
-Live scanning uses an edge-to-edge camera with floating controls. Recognized cards open a draggable confirmation sheet; Confirm/Discard remain pinned while you review details. The camera is no longer confined to a small embedded window.
+Live scanning uses an edge-to-edge camera with floating controls. A short consistency check filters early guesses before opening a full-height list of possible matches. Tap the correct match to save it and return to the camera; Discard stays pinned. Tentative names and cached prices never flash over the camera. The camera is no longer confined to a small embedded window.
 
 The app bundles camera capture, recognition JavaScript, worker/module dependencies and scalar/SIMD OpenCV (embedded WASM) in `Resources/ScannerRuntime`. A loopback-only asset server supplies a stable local WebKit origin. The selected game's database downloads/caches using the packaged pack loader. Market pricing uses the online catalog; offline pricing is deferred.
 
-A recognition freezes its image, suggested card and alternative candidates/reprints. Later frames and hide/refresh events cannot replace that review. Select the candidate, finish and condition; each new card starts at **Near Mint**. A new selection immediately clears the prior price/SKU, requests the exact returned `language|condition` quote, and ignores stale lookup responses. Zero is a known price; missing quotes show **Price unavailable**, without estimated discounts or an inherited NM price.
+A settled recognition freezes its image and alternative candidates/reprints. Later frames and hide/refresh events cannot replace that review. Touch and hold a candidate to review its finish, or expand Condition & printing; each new card starts at **Near Mint**. A new selection immediately clears the prior price/SKU, requests the exact returned `language|condition` quote, and ignores stale lookup responses. Zero is a known price; missing quotes show **Price unavailable**, without estimated discounts or an inherited NM price.
 
-**Confirm & Add** is the only save action. Save failure retains the entire selection for retry; only a successful transaction releases the review. Repeated frames and double taps cannot save another row. Remove the card, explicitly **Scan Next Card** for an identical copy, or **Discard & Scan Again** to abandon a result. Confirmation shows market value only. Cash/trade/maximum offers remain in list review.
+**Tapping a candidate is explicit confirmation and saves that card.** There is no second Confirm button. An exact quote already loaded is reused; otherwise pricing has a four-second confirmation deadline and failure saves an unpriced row. Save failure retains the entire selection for retry; only a successful transaction releases the review. Repeated frames and double taps cannot save another row. Remove the card, explicitly **Scan Next Card** for an identical copy, or **Discard & Scan Again** to abandon a result. Confirmation shows market value only. Cash/trade/maximum offers remain in list review.
 
 Every new physical confirmation appends its own quantity-one row: A, B, A remains three rows. Review and CSV default to persisted scan order. Editing never merges rows. Legacy merged quantities are retained as historical rows; the original order of their individual copies is unknown. Existing sessions, list identity, offer snapshots, export, diagnostics, and the unchanged storage migration path are retained. Continuing a different list explains and confirms finishing the other active session.
 
@@ -25,9 +25,9 @@ python3 scripts/check_xcode_sources.py
 python3 scripts/check_scanner_runtime.py
 ```
 
-**Passed in this Linux workspace:** 16 JavaScript tests (14 adapter tests and 2 real bundled OpenCV/engine smoke tests); 2 Python signing-helper tests; Swift grammar parsing; app/test source and bundled-resource membership; 47-asset hash/dependency verification. The real-engine tests initialize each WASM build in an isolated Node process, hash and match synthetic input, and reject an empty frame. They do not exercise an iPhone camera or establish real-card recognition accuracy.
+**Passed in this Linux workspace:** 23 JavaScript tests (21 adapter tests and 2 real bundled OpenCV/engine smoke tests); 2 Python signing-helper tests; Swift grammar parsing; app/test source and bundled-resource membership; 47-asset hash/dependency verification. The real-engine tests initialize each WASM build in an isolated Node process, hash and match synthetic input, and reject an empty frame. They do not exercise an iPhone camera or establish real-card recognition accuracy.
 
-**Unrun:** 33 native XCTest cases, Xcode build, and physical-iPhone acceptance. Attempting `xcodebuild` here returns `command not found`. The PR includes a macOS workflow; no passing CI result is claimed. Choose an installed iPhone simulator ID from `xcrun simctl list devices available` on a Mac:
+**Unrun:** 38 native XCTest cases, Xcode build, and physical-iPhone acceptance. Attempting `xcodebuild` here returns `command not found`. The PR includes a macOS workflow; no passing CI result is claimed. Choose an installed iPhone simulator ID from `xcrun simctl list devices available` on a Mac:
 
 ```sh
 xcodebuild test -project CardShowScanner.xcodeproj -scheme CardShowScanner \
@@ -42,7 +42,7 @@ Saved lists retain search, sorting, edits, conditions, quantities, renaming, dup
 
 Settings → Diagnostics can clear/export `CardShowScanner-diagnostics.jsonl`. Logs record startup stages, pricing outcomes, save errors and recognition lifecycle without card/list contents, credentials, raw payloads or images. Upload the exported file with the failed step when reporting device behavior. Unconfirmed review is held in memory across navigation/backgrounding within the current screen; it is not persisted across force-quit.
 
-The user's permission for TCGTracking integration remains established. This uses observed module and catalog interfaces, not a claimed stable official API. Asset provenance/adaptations/hashes are recorded in the bundled manifest. Source comments are preserved. See [workflow and device checks](docs/ScanConfirmationWorkflow.md).
+The user's permission for TCGTracking integration remains established. This uses observed module and catalog interfaces, not a claimed stable official API. Asset provenance/adaptations/hashes are recorded in the bundled manifest. Source comments are preserved. See [workflow and device checks](docs/ScanConfirmationWorkflow.md) and [release gates](docs/ReleaseReadiness.md).
 
 ## Keep personal signing settings out of Git
 

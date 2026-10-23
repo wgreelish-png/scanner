@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        197E712A7D5B4FAABBCC0001 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 197E712A7D5B4FAABBCC0002; };
         A1B2C3D40000000000000001 /* LocalScannerServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000002; };
         A1B2C3D40000000000000003 /* ScannerRuntime in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000004; };
 		32EAD5C6AF7A6FFB0C99B53A /* StorageSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = 640FC94546D69DD8166B6EA6 /* StorageSchema.swift */; };
@@ -38,6 +39,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        197E712A7D5B4FAABBCC0002 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = Resources/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
         A1B2C3D40000000000000002 /* LocalScannerServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalScannerServer.swift; sourceTree = "<group>"; };
         A1B2C3D40000000000000004 /* ScannerRuntime */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/ScannerRuntime; sourceTree = "<group>"; };
 		F0C011A95C6B44F68A001701 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Signing.xcconfig; sourceTree = SOURCE_ROOT; };
@@ -101,6 +103,7 @@
 			children = (
                 A1B2C3D40000000000000002 /* LocalScannerServer.swift */,
                 A1B2C3D40000000000000004 /* ScannerRuntime */,
+                197E712A7D5B4FAABBCC0002 /* PrivacyInfo.xcprivacy */,
 				640FC94546D69DD8166B6EA6 /* StorageSchema.swift */,
 				6A565D8AFD09E49E798ED2CF /* SessionReviewView.swift */,
 				24E83F6B82BBA1964E981DB7 /* SessionService.swift */,
@@ -218,6 +221,7 @@
 			buildActionMask = 2147483647;
 			files = (
                 A1B2C3D40000000000000003 /* ScannerRuntime in Resources */,
+                197E712A7D5B4FAABBCC0001 /* PrivacyInfo.xcprivacy in Resources */,
 				F2201FCA8583F235EFCD47BE /* Resources/TCGTrackingBridge.js in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

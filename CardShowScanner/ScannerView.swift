@@ -15,6 +15,7 @@ struct ScannerView: View {
     @State private var nextSessionID: UUID?
     @State private var model = ScannerViewModel()
     @State private var mode = "Live"
+    @State private var editingMatch = false
     init(session: ScanSession, list: CardList) {
         self.session = session; self.list = list
         _game = State(initialValue: session.game ?? "Pokémon")
@@ -42,7 +43,7 @@ struct ScannerView: View {
         .statusBarHidden()
         .sheet(isPresented: Binding(get: { model.selected != nil }, set: { _ in })) {
             confirmationReview
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
                 .interactiveDismissDisabled()
         }
@@ -71,6 +72,7 @@ struct ScannerView: View {
         .navigationDestination(item: $nextSessionID) { id in
             if let next = sessions.first(where: { $0.id == id }) { BatchScannerDestination(session: next) }
         }
+        .onChange(of: model.result?.id) { _, _ in editingMatch = false }
         .onChange(of: mode) { _, _ in restart() }
         .failureAlert(Binding(get: { model.selected == nil ? model.error : nil }, set: { model.error = $0 }))
     }
@@ -114,7 +116,7 @@ struct ScannerView: View {
     private var cameraFooter: some View {
         VStack(spacing: 10) {
             if model.waitingForRemoval {
-                Text("Saved. Remove the card or replace it with the next copy.").font(.subheadline)
+                Text("Saved. Remove this card, then present the next one.").font(.subheadline)
                 Button("Scan Next Card", systemImage: "viewfinder") { model.scanNextCard() }
                     .buttonStyle(.borderedProminent).controlSize(.large).tint(.blue)
             } else {
@@ -143,50 +145,54 @@ struct ScannerView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     if let card = model.selected {
                         if let data = model.result?.capturedImageData, let image = UIImage(data: data) {
-                            Image(uiImage: image).resizable().scaledToFit().frame(height: 160)
+                            Image(uiImage: image).resizable().scaledToFit().frame(height: 100)
                                 .accessibilityLabel("Captured card")
                         }
-                        CardSummaryView(card: card)
-                        Picker("Condition", selection: Binding(get: { card.identity.condition }, set: { model.changeCondition($0) })) {
-                            ForEach(CatalogOptions.conditions, id: \.self) { Text($0) }
-                        }
-                        if model.priceLoading { ProgressView("Looking up market value…") }
-                        if let message = model.priceMessage { Text(message).font(.caption).foregroundStyle(.orange) }
-                        Button("Refresh Market Value") { model.refreshPrice() }.disabled(model.priceLoading)
-                        Picker("Printing", selection: Binding(get: { card.identity.printing }, set: { model.changePrinting($0) })) {
-                            ForEach(card.printings.isEmpty ? [card.identity.printing] : card.printings, id: \.self) { Text($0) }
-                        }
-                        if card.requiresPrintingSelection == true {
-                            Button("Confirm \(card.identity.printing) Printing") { model.confirmPrinting() }.buttonStyle(.bordered)
-                            Text("Printing is ambiguous. Confirm a finish before adding.").foregroundStyle(.orange)
-                        }
-                        Text(model.result?.accepted == true ? "Recognized match — review before adding" : "Ambiguous result — select the correct candidate below")
-                            .font(.callout).foregroundStyle(model.confirmed ? Color.primary : Color.orange)
-                        Text("Possible matches").font(.headline)
+                        Text("Tap the correct match to add it, then scan the next card.")
+                            .font(.subheadline).foregroundStyle(.secondary)
                         ForEach(Array((model.result?.candidates ?? []).prefix(5))) { candidate in
-                            Button { model.choose(candidate) } label: {
-                                HStack {
-                                    VStack(alignment: .leading) {
+                            Button { model.selectAndAdd(candidate, list: list, context: context) } label: {
+                                HStack(spacing: 12) {
+                                    AsyncImage(url: candidate.imageURL) { image in image.resizable().scaledToFit() } placeholder: {
+                                        Image(systemName: "rectangle.portrait")
+                                    }.frame(width: 52, height: 74)
+                                    VStack(alignment: .leading, spacing: 4) {
                                         Text(candidate.name).font(.headline)
-                                        Text("\(candidate.set) • \(candidate.number) • \(Int(candidate.confidence))%")
-                                            .font(.caption)
+                                        Text("\(candidate.set) • \(candidate.number)").font(.caption)
+                                        Text("\(candidate.identity.productID == card.identity.productID ? card.identity.printing : candidate.identity.printing) • \(card.identity.condition)")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                        if candidate.identity.productID == card.identity.productID {
+                                            Text(model.priceLoading ? "Checking market value…" : (card.marketPrice?.money ?? "Price unavailable")).font(.caption.bold())
+                                        }
                                     }
-                                    Spacer()
-                                    if candidate.id == card.id { Image(systemName: "checkmark.circle.fill") }
-                                }.frame(minHeight: 48).frame(maxWidth: .infinity, alignment: .leading)
-                            }.buttonStyle(.bordered)
+                                    Spacer(minLength: 0)
+                                    Image(systemName: "plus.circle.fill")
+                                }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
+                            }.buttonStyle(.bordered).disabled(model.selectionInProgress || !session.isActive)
+                                .contextMenu {
+                                    Button("Review printing & condition") { model.choose(candidate); editingMatch = true }
+                                }
+                                .accessibilityHint("Adds this match to your list. Touch and hold to review its printing and condition.")
                         }
+                        DisclosureGroup("Condition & printing", isExpanded: $editingMatch) {
+                            Picker("Condition", selection: Binding(get: { card.identity.condition }, set: { model.changeCondition($0) })) {
+                                ForEach(CatalogOptions.conditions, id: \.self) { Text($0) }
+                            }
+                            Picker("Printing for \(card.name)", selection: Binding(get: { card.identity.printing }, set: { model.changePrinting($0) })) {
+                                ForEach(card.printings.isEmpty ? [card.identity.printing] : card.printings, id: \.self) { Text($0) }
+                            }
+                            Text("Touch and hold a match to review its printing. Other matches use their displayed printing. Every new card starts at Near Mint.").font(.caption).foregroundStyle(.secondary)
+                        }.disabled(model.selectionInProgress)
+                        if model.priceLoading && !model.selectionInProgress { ProgressView("Checking market value…") }
+                        if let message = model.priceMessage { Text(message).font(.caption).foregroundStyle(.secondary) }
 
                     }
                 }.padding().padding(.top, 8)
-            }.navigationTitle("Confirm Card").navigationBarTitleDisplayMode(.inline)
+            }.navigationTitle("Choose the Card").navigationBarTitleDisplayMode(.inline)
                 .toolbar(.visible, for: .navigationBar)
                 .safeAreaInset(edge: .bottom) {
                     VStack(spacing: 8) {
-                        Button("Confirm & Add", systemImage: "checkmark.circle.fill") {
-                            model.addSelected(list: list, context: context)
-                        }.buttonStyle(.borderedProminent).controlSize(.large).frame(maxWidth: .infinity)
-                            .disabled(!model.confirmed || !session.isActive || model.saving || model.priceLoading)
+                        if model.selectionInProgress { ProgressView("Adding your card…") }
                         Button("Discard & Scan Again") { model.scanNextCard() }.frame(minHeight: 44)
                     }.padding().frame(maxWidth: .infinity).background(.regularMaterial)
                 }
