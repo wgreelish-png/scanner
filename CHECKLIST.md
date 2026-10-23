@@ -46,5 +46,5 @@ See docs/ScanConfirmationWorkflow.md. Neither offline iPhone support nor a succe
 - [x] User reports an in-app price after a 200 response without signing in; no login requirement is established.
 - [ ] Repeated iPhone pricing across scans/restarts, exact condition changes and zero-download reopening.
 - [x] Explicit first-use website connection/sign-in step, persistent WebKit session and frozen-review recovery implemented.
-- [ ] Follow-up CI for 61 native cases including connection navigation and held-card/late-quote recovery.
+- [x] CI at ccbb816: 61 native cases including connection navigation/held-card recovery and unsigned Release iPhone build pass.
 - [ ] iPhone: actual website login/session sharing, setup continuation, review recovery and session persistence.
