@@ -48,32 +48,39 @@
   let releaseReview = () => {};
   async function install(config) {
     dispose();
-    let running = true, stopLoop = null, stream = null, backend = null, starting = false, held = false, awaitingRemoval = false, beginLoop = null;
+    let pending = null;
+    let running = true, stopLoop = null, stream = null, backend = null, overlay = null, starting = false, held = false, awaitingRemoval = false, beginLoop = null;
     const post = message => { if (running) window.webkit?.messageHandlers?.scanResult?.postMessage({ ...message, nonce: config.nonce }); };
     const diagnostic = (event, fields = {}) => post({ kind: 'diagnostic', event, ...fields });
     const clock = () => globalThis.performance?.now?.() ?? Date.now();
     const errorKind = error => ['NotAllowedError', 'NotFoundError', 'NotReadableError', 'AbortError', 'SecurityError', 'TypeError', 'RangeError'].includes(error?.name) ? error.name : 'Error';
-    const onError = event => diagnostic('javascript_error', { errorKind: errorKind(event.error) });
-    const onRejection = event => diagnostic('javascript_rejection', { errorKind: errorKind(event.reason) });
+    const recover = () => {
+      if (!running || !stream) return;
+      pending = null; stopCamera(); backend?.dispose(); backend = null;
+      report('Camera interrupted. Tap Retry Scanner to continue.');
+      button.disabled = false; button.hidden = false; button.textContent = 'Retry Scanner';
+    };
+    const onError = event => { diagnostic('javascript_error', { errorKind: errorKind(event.error) }); recover(); };
+    const onRejection = event => { diagnostic('javascript_rejection', { errorKind: errorKind(event.reason) }); recover(); };
     window.addEventListener?.('error', onError);
     window.addEventListener?.('unhandledrejection', onRejection);
     diagnostic('bridge_ready');
     const root = document.createElement('section');
-    root.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#111;color:white;font:16px system-ui;display:flex;flex-direction:column;padding:8px;box-sizing:border-box';
+    root.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#111;color:white;font:16px system-ui;box-sizing:border-box';
     const button = document.createElement('button');
     button.textContent = 'Download Game Database & Start Camera';
-    button.style.cssText = 'font:600 17px system-ui;min-height:52px;border-radius:12px;margin-bottom:8px';
-    const hint = document.createElement('div'); hint.setAttribute('role', 'status'); hint.style.minHeight = '40px';
-    const frame = document.createElement('div'); frame.style.cssText = 'position:relative;flex:1;min-height:0';
+    button.style.cssText = 'position:absolute;top:42%;left:24px;right:24px;z-index:2;font:600 17px system-ui;min-height:52px;border-radius:12px';
+    const hint = document.createElement('div'); hint.setAttribute('role', 'status'); hint.style.cssText = 'position:absolute;top:calc(42% + 68px);left:24px;right:24px;z-index:2;text-align:center;pointer-events:none';
+    const frame = document.createElement('div'); frame.style.cssText = 'position:absolute;inset:0';
     const video = document.createElement('video'); video.muted = true; video.autoplay = true; video.playsInline = true;
     video.style.cssText = 'width:100%;height:100%;object-fit:cover';
     const canvas = document.createElement('canvas'); canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none';
-    frame.append(video, canvas); root.append(button, hint, frame); document.body.append(root);
-    const report = value => { hint.textContent = text(value); post({ kind: 'status', message: text(value) }); };
-    const stopCamera = () => { stopLoop?.(); stopLoop = null; stream?.getTracks().forEach(t => t.stop()); stream = null; video.srcObject = null; };
-    const visibility = () => { if (document.hidden) { diagnostic('camera_backgrounded'); stopCamera(); post({ kind: 'hide' }); button.disabled = false; button.hidden = false; button.textContent = 'Resume Camera'; } };
+    frame.append(video, canvas); root.append(frame, button, hint); document.body.append(root);
+    const report = value => { hint.hidden = !!stream; hint.textContent = text(value); post({ kind: 'status', message: text(value) }); };
+    const stopCamera = () => { stopLoop?.(); stopLoop = null; stream?.getTracks().forEach(t => t.stop()); stream = null; video.srcObject = null; overlay?.destroy?.(); overlay = null; };
+    const visibility = () => { if (document.hidden) { diagnostic('camera_backgrounded'); pending = null; stopCamera(); post({ kind: 'hide' }); button.disabled = false; button.hidden = false; button.textContent = 'Resume Camera'; } };
     document.addEventListener('visibilitychange', visibility);
-    dispose = () => { diagnostic('bridge_stopped'); running = false; stopCamera(); backend?.dispose(); root.remove(); document.removeEventListener('visibilitychange', visibility); window.removeEventListener?.('error', onError); window.removeEventListener?.('unhandledrejection', onRejection); };
+    dispose = () => { diagnostic('bridge_stopped'); running = false; pending = null; stopCamera(); backend?.dispose(); backend = null; root.remove(); document.removeEventListener('visibilitychange', visibility); window.removeEventListener?.('error', onError); window.removeEventListener?.('unhandledrejection', onRejection); };
     report('Ready. Database downloads may be large; use Wi-Fi for initial setup.');
     button.onclick = async () => {
       if (starting || !running) return;
@@ -111,22 +118,55 @@
         if (!running || document.hidden) { captured.getTracks().forEach(t => t.stop()); return; }
         diagnostic('camera_acquired', { elapsedMS: clock() - began });
         stage = 'video'; began = clock();
-        stream = captured; video.srcObject = stream; await video.play();
+        stream = captured;
+        for (const track of stream.getTracks()) track.addEventListener?.('ended', () => {
+          if (stream !== captured) return;
+          diagnostic('camera_interrupted'); recover();
+        }, { once: true });
+        video.srcObject = stream; await video.play();
         if (!running) { stopCamera(); return; }
         diagnostic('video_playing', { elapsedMS: clock() - began });
         stage = 'scan';
-        const overlay = overlays.createOverlay(canvas, { fit: 'cover' });
-        beginLoop = () => quick.startQuickScan({ video, overlay, backend, pack, fetchDetails: null, resolveCandidates: false,
+        overlay = overlays.createOverlay(canvas, { fit: 'cover' });
+        // The camera outlines a detection; only the candidate sheet names a card.
+        // Avoid flashing an upstream tentative name or cached NM price over video.
+        const scanOverlay = {
+          setSource: (...args) => overlay?.setSource(...args),
+          clear: () => overlay?.clear(),
+          draw: options => overlay?.draw({ ...options, label: null })
+        };
+        beginLoop = () => quick.startQuickScan({ video, overlay: scanOverlay, backend, pack, fetchDetails: null, resolveCandidates: false,
           onShow: view => {
             if (held || awaitingRemoval) return;
-            const result = normalizeView(view);
-            if (result.same || !result.candidates?.length) return;
-            if (typeof view.thumb === 'string' && view.thumb.startsWith('data:image/jpeg;base64,') && view.thumb.length <= 1_000_000) {
-              result.capturedImageBase64 = view.thumb.slice('data:image/jpeg;base64,'.length);
+            const update = normalizeView(view);
+            if (!update.same && !update.candidates?.length) return;
+            const now = clock();
+            if (!update.same) {
+              const ref = update.candidates[0].ref;
+              if (!pending || pending.ref !== ref || now - pending.last > 1200) {
+                pending = { ref, since: now, observations: 0, last: now, result: update };
+              }
+              pending.result = update;
+              if (typeof view.thumb === 'string' && view.thumb.startsWith('data:image/jpeg;base64,') && view.thumb.length <= 1_000_000) {
+                pending.result.capturedImageBase64 = view.thumb.slice('data:image/jpeg;base64,'.length);
+              }
             }
+            if (!pending) return;
+            if (now - pending.last > 1200) { pending.since = now; pending.observations = 0; }
+            pending.last = now;
+            if (update.confidence < 50) { pending.observations = 0; pending.since = now; return; }
+            pending.observations++;
+            pending.result.accepted = update.accepted;
+            pending.result.confidence = update.confidence;
+            // same:true contains no tuples: retain the full candidate snapshot.
+            // Require repeated observations, never a timer firing on a stale frame.
+            const settled = pending.observations >= 3 && now - pending.since >= (update.accepted ? 600 : 1500);
+            if (!settled || update.confidence < 50) return;
             held = true;
-            post(result);
-          }, onHide: () => { if (!held) { awaitingRemoval = false; post({ kind: 'hide' }); } },
+            diagnostic('recognition_settled', { elapsedMS: now - pending.since, frames: pending.observations });
+            post(pending.result);
+            pending = null;
+          }, onHide: () => { if (!held) { pending = null; awaitingRemoval = false; post({ kind: 'hide' }); } },
           onHint: report, onStats: stats => {
             const now = clock();
             if (now - lastStats < 5000) return;
@@ -134,13 +174,13 @@
             diagnostic('scan_stats', { backend: stats.kind, scanMS: stats.scanMs, captureMS: stats.captureMs, frames: stats.frames });
           } });
         resetRecognition = () => {
-          held = false; awaitingRemoval = false; stopLoop?.(); backend.reset?.();
+          pending = null; held = false; awaitingRemoval = false; stopLoop?.(); backend.reset?.();
           if (running && stream) stopLoop = beginLoop();
         };
-        releaseReview = () => { held = false; awaitingRemoval = true; };
+        releaseReview = () => { pending = null; held = false; awaitingRemoval = true; };
         stopLoop = beginLoop();
         diagnostic('scanner_ready');
-        button.hidden = true; report('Live camera ready — hold a card steady.');
+        button.hidden = true; report('Live camera ready — hold a card steady.'); hint.hidden = true;
       } catch (error) {
         diagnostic('startup_failed', { stage, errorKind: errorKind(error), elapsedMS: clock() - began });
         stopCamera(); backend?.dispose(); backend = null;

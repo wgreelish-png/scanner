@@ -10,9 +10,16 @@
 - [x] No edit-time merge; preserve legacy quantities and unknown historical copy order.
 - [x] Resume existing lists with identity/offers retained and acknowledged active-session switches.
 - [x] Preserve migration, offers, diagnostics, CSV and ignored personal signing configuration.
-- [x] 16 JS tests and 2 Python tests pass; packaged real-engine smoke, manifest, Swift grammar and target checks pass.
-- [ ] Xcode build and 33 native tests (xcodebuild unavailable here).
+- [x] 23 JS tests and 2 Python tests pass; packaged real-engine smoke, manifest, Swift grammar and target checks pass.
+- [ ] Xcode build and 38 native tests (xcodebuild unavailable here).
 - [ ] Physical-iPhone camera, worker/WASM, pack download/cache, real recognition and offline relaunch verification.
 - [ ] Physical-iPhone condition prices, review freeze, save retry, double taps, editing, ordered resume/export checks.
 
 See docs/ScanConfirmationWorkflow.md. Neither offline iPhone support nor a successful live iPhone scan is claimed before those checks pass.
+
+- [x] Consistent recognition before review; no tentative camera name/price flash.
+- [x] Candidate-first sheet; one tap confirms/saves; optional condition/printing details.
+- [x] Four-second confirmation deadline; failed/unavailable pricing does not block saving.
+- [x] Camera interruption recovery and overlay cleanup; privacy manifest target membership.
+- [ ] Passing macOS native tests and Release iPhone build from CI.
+- [ ] Resolve/verify real catalog HTTP failures and complete release gates in docs/ReleaseReadiness.md.
