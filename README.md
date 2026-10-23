@@ -4,9 +4,9 @@ Native SwiftUI/SwiftData iPhone app, iOS 17+. Open **Start New Scan** to create 
 
 ## Scan and confirm
 
-Live scanning uses an edge-to-edge camera with floating controls. A short consistency check filters early guesses before opening a full-height list of possible matches. Tap the correct match to save it and return to the camera; Discard stays pinned. Tentative names and cached prices never flash over the camera. The camera is no longer confined to a small embedded window.
+Live scanning uses an edge-to-edge camera with floating controls. Matches use a two-column grid with large full-card artwork (one column at accessibility text sizes). A short consistency check filters early guesses before opening a full-height list of possible matches. Tap the correct match to save it and return to the camera; Discard stays pinned. Tentative names and cached prices never flash over the camera. The camera is no longer confined to a small embedded window.
 
-The app bundles camera capture, recognition JavaScript, worker/module dependencies and scalar/SIMD OpenCV (embedded WASM) in `Resources/ScannerRuntime`. A loopback-only asset server supplies a stable local WebKit origin. The selected game's database downloads/caches using the packaged pack loader. Market pricing uses the online catalog; offline pricing is deferred.
+The app bundles camera capture, recognition JavaScript, worker/module dependencies and scalar/SIMD OpenCV (embedded WASM) in `Resources/ScannerRuntime`. A loopback-only asset server supplies a stable local WebKit origin. The selected game’s database downloads once and uses the complete validated cache when the camera reopens. Scanner options → Check Database Updates explicitly checks updates; missing/damaged files are repaired, and storage failures are shown. Market pricing follows the public Quick Scan browser request flow; offline pricing is deferred.
 
 A settled recognition freezes its image and alternative candidates/reprints. Later frames and hide/refresh events cannot replace that review. Touch and hold a candidate to review its finish, or expand Condition & printing; each new card starts at **Near Mint**. A new selection immediately clears the prior price/SKU, requests the exact returned `language|condition` quote, and ignores stale lookup responses. Zero is a known price; missing quotes show **Price unavailable**, without estimated discounts or an inherited NM price.
 
@@ -25,16 +25,16 @@ python3 scripts/check_xcode_sources.py
 python3 scripts/check_scanner_runtime.py
 ```
 
-**Passed in this Linux workspace:** 23 JavaScript tests (21 adapter tests and 2 real bundled OpenCV/engine smoke tests); 2 Python signing-helper tests; Swift grammar parsing; app/test source and bundled-resource membership; 47-asset hash/dependency verification. The real-engine tests initialize each WASM build in an isolated Node process, hash and match synthetic input, and reject an empty frame. They do not exercise an iPhone camera or establish real-card recognition accuracy.
+**Passed in this Linux workspace:** 40 JavaScript tests (23 bridge, 6 database-cache, 9 public-pricing request and 2 real bundled OpenCV/engine smoke tests); 2 Python signing-helper tests; Swift grammar parsing; app/test source and bundled-resource membership; 47-asset hash/dependency verification. The real-engine tests initialize each WASM build in an isolated Node process, hash and match synthetic input, and reject an empty frame. They do not exercise an iPhone camera or establish real-card recognition accuracy.
 
-**Unrun:** 38 native XCTest cases, Xcode build, and physical-iPhone acceptance. Attempting `xcodebuild` here returns `command not found`. The PR includes a macOS workflow; no passing CI result is claimed. Choose an installed iPhone simulator ID from `xcrun simctl list devices available` on a Mac:
+**Unrun:** 42 native XCTest cases, Xcode build, and physical-iPhone acceptance. Attempting `xcodebuild` here returns `command not found`. The PR includes a macOS workflow; no passing CI result is claimed. Choose an installed iPhone simulator ID from `xcrun simctl list devices available` on a Mac:
 
 ```sh
 xcodebuild test -project CardShowScanner.xcodeproj -scheme CardShowScanner \
   -destination 'platform=iOS Simulator,id=YOUR_SIMULATOR_UDID' CODE_SIGNING_ALLOWED=NO
 ```
 
-Before relying on this app, complete [the physical-iPhone acceptance checks](docs/ScanConfirmationWorkflow.md): local-origin camera permissions, real engine/worker initialization, a real card scan, downloaded-pack caching/relaunch, exact condition/SKU prices, frozen review, retry/double taps, A-B-A ordering, editing and resumed-list CSV. **Bundling/caching is not verified offline support.** No successful iPhone scan is claimed for this implementation. Keep existing data installed to test migration; export valuable lists before development upgrades.
+Before relying on this app, complete [the physical-iPhone acceptance checks](docs/ScanConfirmationWorkflow.md): local-origin camera permissions, real engine/worker initialization, a real card scan, downloaded-pack caching/relaunch, exact condition/SKU prices, frozen review, retry/double taps, A-B-A ordering, editing and resumed-list CSV. **Bundling/caching is not verified offline support.** Supplied phone logs show recognition-worker initialization and candidate results; the updated cache, pricing transport and grid still need device validation. Keep existing data installed to test migration; export valuable lists before development upgrades.
 
 ## Review, offers and diagnostics
 
@@ -65,3 +65,9 @@ python3 scripts/configure_signing.py --team YOUR_10_CHARACTER_TEAM_ID
 ```
 
 For a new checkout, use the explicit-team command. The helper is idempotent for the same team and refuses to overwrite a differing local configuration. Edit the local xcconfig directly when switching teams. No Apple account passwords, certificates or provisioning profiles are stored in it. You still need the Apple account available in Xcode and normal device provisioning; this does not change Personal Team expiration limits.
+
+## Latest diagnostics and public pricing
+
+The latest phone log records four HTTP 401 price failures. The new HAR confirms a successful signed-out POST to `/newscanplus/api/detail.php`, with the genuine Quick Scan first-party browser origin and no Cookie or Authorization header. Pricing now uses that actual public document context through WebKit, with a bundled isolated request function. It does not add a sign-in requirement, fabricate browser headers, scrape the page, or use remote recognition. Website content JavaScript and capture permissions are disabled in that pricing view; the bundled request uses normal browser fetch with a four-second timeout and two-MB response limit.
+
+`Tests/Fixtures/quickscan-detail.json` contains only the public response, without HAR request headers, cookies or tokens, and belongs to the native test target only. Tests cover selecting Nidoran instead of the first guess, exact condition/printing/SKU quotes and missing `market_price` fields despite other price fields being present. A passing fixture/request test is not a verified successful live iPhone price lookup.

@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        197E712A7D5B4FAABBCC0010 /* PricingRequest.js in Resources */ = {isa = PBXBuildFile; fileRef = 197E712A7D5B4FAABBCC0011; };
+        197E712A7D5B4FAABBCC0012 /* Fixtures in Resources */ = {isa = PBXBuildFile; fileRef = 197E712A7D5B4FAABBCC0013; };
         197E712A7D5B4FAABBCC0001 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 197E712A7D5B4FAABBCC0002; };
         A1B2C3D40000000000000001 /* LocalScannerServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000002; };
         A1B2C3D40000000000000003 /* ScannerRuntime in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000004; };
@@ -39,6 +41,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        197E712A7D5B4FAABBCC0011 /* PricingRequest.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = Resources/PricingRequest.js; sourceTree = "<group>"; };
+        197E712A7D5B4FAABBCC0013 /* Fixtures */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Fixtures; sourceTree = "<group>"; };
         197E712A7D5B4FAABBCC0002 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = Resources/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
         A1B2C3D40000000000000002 /* LocalScannerServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalScannerServer.swift; sourceTree = "<group>"; };
         A1B2C3D40000000000000004 /* ScannerRuntime */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/ScannerRuntime; sourceTree = "<group>"; };
@@ -94,6 +98,7 @@
 			isa = PBXGroup;
 			children = (
 				DE7C8B270A8037F995CD888D /* CardShowScannerTests.swift */,
+                197E712A7D5B4FAABBCC0013 /* Fixtures */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -119,6 +124,7 @@
 				A8BE7E97BDD1700DC90EBB5D /* SettingsView.swift */,
 				41D1E2C53C699A5AF5791217 /* TCGTrackingScannerProvider.swift */,
 				8791FB21D413B0F6FFFF64B1 /* Resources/TCGTrackingBridge.js */,
+                197E712A7D5B4FAABBCC0011 /* PricingRequest.js */,
 			);
 			path = CardShowScanner;
 			sourceTree = "<group>";
@@ -213,6 +219,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                197E712A7D5B4FAABBCC0012 /* Fixtures in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -222,6 +229,7 @@
 			files = (
                 A1B2C3D40000000000000003 /* ScannerRuntime in Resources */,
                 197E712A7D5B4FAABBCC0001 /* PrivacyInfo.xcprivacy in Resources */,
+                197E712A7D5B4FAABBCC0010 /* PricingRequest.js in Resources */,
 				F2201FCA8583F235EFCD47BE /* Resources/TCGTrackingBridge.js in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

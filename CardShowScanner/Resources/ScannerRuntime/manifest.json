@@ -71,8 +71,9 @@
     {
       "path": "/newscanplus/assets/js/core/pack.js",
       "url": "https://tcgtracking.com/newscanplus/assets/js/core/pack.js?v=1792508181",
-      "sha256": "781d6439117d99b3a83ef6e8284d6580911ab74d2b9842b1a01a7f3ead3bb42e",
-      "bytes": 22472
+      "sha256": "13b2ab54182313f5eb1b64fd3ccc1e238be28011254aac8b092d79b1ebac8a1a",
+      "bytes": 24195,
+      "adaptation": "App cached-first camera startup; await durable index/complete-pack markers; validate and repair damaged cached shards; expose cache source and byte counts without weakening original format/keysum validation."
     },
     {
       "path": "/newscanplus/assets/js/core/quadtrack.js",

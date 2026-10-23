@@ -4,9 +4,10 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '../../CardShowScanner/Resources/TCGTrackingBridge.js'), 'utf8');
-function harness({ denyCamera = false } = {}) {
+function harness({ denyCamera = false, cacheState = 'ok' } = {}) {
   const messages = [], elements = [], events = new Map(), windowEvents = new Map(), trackEvents = new Map(), draws = [];
   let overlayDestroyed = 0;
+  const packOptions = [];
   let captureOptions, scannerOptions, stopped = 0, disposed = 0, now = 0;
   const element = tag => {
     const e = { tag, style: {}, children: [], append(...items) { this.children.push(...items); }, setAttribute() {},
@@ -18,7 +19,12 @@ function harness({ denyCamera = false } = {}) {
     addEventListener(name, fn) { events.set(name, fn); }, removeEventListener(name) { events.delete(name); } };
   const backend = { setPack() {}, dispose() { disposed++; } };
   const modules = {
-    'core/pack.js': { loadPackIndex: async () => ({ games: { 'tcgp:3': {} } }), loadPack: async () => ({ game: 'tcgp:3' }) },
+    'core/pack.js': { async loadPack(game, progress, options) {
+      packOptions.push(options);
+      if (game !== 'tcgp:3') throw new Error('No downloadable pack is available for this game.');
+      progress(1, 1, { downloaded: 0, total: 0, cache: cacheState, cachedHashShards: 1, cachedMetaShards: 1, storage: { persisted: false } });
+      return { game };
+    } },
     'app/scan-backends.js': { createBackend: async () => backend },
     'core/overlay.js': { createOverlay: () => ({ draw(options) { draws.push(options); }, clear() {}, setSource() {}, destroy() { overlayDestroyed++; } }) },
     'app/quickscan.js': { startQuickScan(options) { scannerOptions = options; return () => { stopped++; }; } },
@@ -37,7 +43,7 @@ function harness({ denyCamera = false } = {}) {
   } });
   script.runInContext(context);
   return { bridge: sandbox.CardShowBridge, messages, elements, events, windowEvents, trackEvents, draws, document, get overlayDestroyed() { return overlayDestroyed; }, advance(ms) { now += ms; },
-    get scannerOptions() { return scannerOptions; }, get captureOptions() { return captureOptions; }, get stopped() { return stopped; }, get disposed() { return disposed; } };
+    packOptions, get scannerOptions() { return scannerOptions; }, get captureOptions() { return captureOptions; }, get stopped() { return stopped; }, get disposed() { return disposed; } };
 }
 const tuple = (id = 123, variants = [{ id: 10, label: 'Normal', nm: 1.25, primary: true }, { id: 11, label: 'Holofoil', nm: 2.5 }]) =>
   [`p:${id}`, `Sample ${id}`, '1/10', 'DEMO', 'Demo Set', '', 'https://cdn.tcgtracking.com/test.jpg', variants];
@@ -125,7 +131,7 @@ test('diagnostics report startup stages, sampled timings and safe camera errors'
   const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3' });
   await h.elements.find(e => e.tag === 'button').onclick();
   const diagnostics = () => h.messages.filter(m => m.kind === 'diagnostic');
-  for (const event of ['bridge_ready', 'modules_ready', 'index_ready', 'pack_ready', 'backend_ready', 'camera_requested', 'camera_acquired', 'video_playing', 'scanner_ready']) {
+  for (const event of ['bridge_ready', 'modules_ready', 'pack_ready', 'backend_ready', 'camera_requested', 'camera_acquired', 'video_playing', 'scanner_ready']) {
     assert.ok(diagnostics().some(m => m.event === event), event);
   }
   for (let i = 0; i < 20; i++) h.scannerOptions.onStats({ kind: 'worker', scanMs: 42, captureMs: 3, frames: 2 });
@@ -237,4 +243,25 @@ test('a slow frame restarts settling without losing the candidate payload', asyn
   assert.equal(h.messages.filter(m => m.kind === 'scan').length, 0);
   for (let i = 0; i < 2; i++) { h.advance(400); h.scannerOptions.onShow({ same: true, accepted: true, confidence: 96 }); }
   assert.equal(h.messages.at(-1).candidates[0].ref, 'p:123');
+});
+
+test('camera startup prefers a saved database and reports actual cache use', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  assert.equal(h.packOptions[0].cacheFirst, true);
+  const ready = h.messages.find(m => m.event === 'pack_ready');
+  assert.equal(ready.downloadedBytes, 0); assert.equal(ready.cachedShards, 2);
+  assert.equal(ready.cacheSource, 'cache'); assert.equal(ready.cacheState, 'ok');
+  assert.ok(h.messages.some(m => m.kind === 'status' && m.message === 'Using saved game database'));
+  assert.equal(h.messages.some(m => m.kind === 'status' && m.message.startsWith('Downloading database')), false);
+  await h.bridge.refreshDatabase();
+  assert.equal(h.packOptions[1].cacheFirst, false, 'only explicit updates check remote versions');
+});
+test('cache failures are visible and explicit updates cannot discard a held review', async () => {
+  const h = harness({ cacheState: 'failed' });
+  await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  assert.ok(h.messages.some(m => m.event === 'pack_cache_warning' && m.cacheState === 'failed'));
+  assert.ok(h.messages.some(m => m.kind === 'status' && m.message.includes('could not be saved')));
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
+  await h.bridge.refreshDatabase();
+  assert.equal(h.packOptions.length, 1);
 });

@@ -33,8 +33,9 @@ def check(project):
     if len(test_targets) != 1:
         raise ValueError('Expected one native test target.')
     test_sources = []
+    test_resources = []
     resources = []
-    for target, destination, phase_kind in [(test_targets[0], test_sources, 'PBXSourcesBuildPhase'), (targets[0], resources, 'PBXResourcesBuildPhase')]:
+    for target, destination, phase_kind in [(test_targets[0], test_sources, 'PBXSourcesBuildPhase'), (targets[0], resources, 'PBXResourcesBuildPhase'), (test_targets[0], test_resources, 'PBXResourcesBuildPhase')]:
         for phase_id in target.get('buildPhases', []):
             phase = objects[phase_id]
             if phase.get('isa') == phase_kind:
@@ -46,10 +47,13 @@ def check(project):
         included = test_sources.count(filename) == 1 and filename not in sources
         print(f'{filename}: in test target only={included}')
         failures += not included
-    for filename in ['TCGTrackingBridge.js', 'ScannerRuntime', 'PrivacyInfo.xcprivacy']:
+    for filename in ['TCGTrackingBridge.js', 'PricingRequest.js', 'ScannerRuntime', 'PrivacyInfo.xcprivacy']:
         included = resources.count(filename) == 1
         print(f'{filename}: in application Copy Bundle Resources={included}')
         failures += not included
+    fixture_in_tests = test_resources.count('Fixtures') == 1 and 'Fixtures' not in resources
+    print('Captured public-price fixture: in test resources only=', fixture_in_tests)
+    failures += not fixture_in_tests
     for object in objects.values():
         if object.get('isa') == 'XCBuildConfiguration':
             settings = object.get('buildSettings', {})

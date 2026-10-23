@@ -33,7 +33,7 @@ struct SettingsView: View {
 
             }
             Section("Scanner") {
-                Text("Live camera scanning opens by default. Download the selected game database once before scanning. Market values use an online lookup. Mock scanning is under Developer Testing.")
+                Text("Live camera scanning opens by default. Download the selected game database once before scanning. Later camera openings load the saved database. Use Scanner options → Check Database Updates when you want to update it. Market values use an online lookup. Mock scanning is under Developer Testing.")
                 Text("Finish a batch from its scanner or review screen. Cards and saved estimates are preserved.")
                 Button(clearingCache ? "Clearing…" : "Clear Scanner Cache") {
                     clearingCache = true
