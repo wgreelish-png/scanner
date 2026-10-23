@@ -265,14 +265,10 @@ struct TCGScannerWebView: UIViewRepresentable {
     func updateUIView(_ uiView: WKWebView, context: Context) {}
 }
 
-struct LiveScannerPanel: View {
+struct CameraStatusView: View {
     @ObservedObject var provider: TCGTrackingScannerProvider
-    var retry: () -> Void
     var body: some View {
-        VStack(alignment: .leading) {
-            TCGScannerWebView(provider: provider).frame(height: 300).clipShape(RoundedRectangle(cornerRadius: 12))
-            Text(provider.status).font(.caption)
-            Button("Retry Live Scanner", action: retry)
-        }
+        Text(provider.status).font(.caption).multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity).accessibilityAddTraits(.updatesFrequently)
     }
 }

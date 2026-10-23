@@ -59,17 +59,17 @@
     window.addEventListener?.('unhandledrejection', onRejection);
     diagnostic('bridge_ready');
     const root = document.createElement('section');
-    root.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#111;color:white;font:16px system-ui;display:flex;flex-direction:column;padding:8px;box-sizing:border-box';
+    root.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#111;color:white;font:16px system-ui;box-sizing:border-box';
     const button = document.createElement('button');
     button.textContent = 'Download Game Database & Start Camera';
-    button.style.cssText = 'font:600 17px system-ui;min-height:52px;border-radius:12px;margin-bottom:8px';
-    const hint = document.createElement('div'); hint.setAttribute('role', 'status'); hint.style.minHeight = '40px';
-    const frame = document.createElement('div'); frame.style.cssText = 'position:relative;flex:1;min-height:0';
+    button.style.cssText = 'position:absolute;top:42%;left:24px;right:24px;z-index:2;font:600 17px system-ui;min-height:52px;border-radius:12px';
+    const hint = document.createElement('div'); hint.setAttribute('role', 'status'); hint.style.cssText = 'position:absolute;top:calc(42% + 68px);left:24px;right:24px;z-index:2;text-align:center;pointer-events:none';
+    const frame = document.createElement('div'); frame.style.cssText = 'position:absolute;inset:0';
     const video = document.createElement('video'); video.muted = true; video.autoplay = true; video.playsInline = true;
     video.style.cssText = 'width:100%;height:100%;object-fit:cover';
     const canvas = document.createElement('canvas'); canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none';
-    frame.append(video, canvas); root.append(button, hint, frame); document.body.append(root);
-    const report = value => { hint.textContent = text(value); post({ kind: 'status', message: text(value) }); };
+    frame.append(video, canvas); root.append(frame, button, hint); document.body.append(root);
+    const report = value => { hint.hidden = !!stream; hint.textContent = text(value); post({ kind: 'status', message: text(value) }); };
     const stopCamera = () => { stopLoop?.(); stopLoop = null; stream?.getTracks().forEach(t => t.stop()); stream = null; video.srcObject = null; };
     const visibility = () => { if (document.hidden) { diagnostic('camera_backgrounded'); stopCamera(); post({ kind: 'hide' }); button.disabled = false; button.hidden = false; button.textContent = 'Resume Camera'; } };
     document.addEventListener('visibilitychange', visibility);
@@ -140,7 +140,7 @@
         releaseReview = () => { held = false; awaitingRemoval = true; };
         stopLoop = beginLoop();
         diagnostic('scanner_ready');
-        button.hidden = true; report('Live camera ready — hold a card steady.');
+        button.hidden = true; report('Live camera ready — hold a card steady.'); hint.hidden = true;
       } catch (error) {
         diagnostic('startup_failed', { stage, errorKind: errorKind(error), elapsedMS: clock() - began });
         stopCamera(); backend?.dispose(); backend = null;

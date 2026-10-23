@@ -47,3 +47,9 @@ Further fixes remove the editor's residual merge path, require explicit service-
 Passed: 16 JavaScript tests, including actual packaged scalar/SIMD WASM initialization, synthetic hash/match and blank-frame pipeline rejection; 2 signing-helper tests; 47-asset integrity/dependency checks; Swift grammar and Xcode source/test/resource membership checks. The scalar and SIMD runtimes are isolated in separate Node processes, matching the app's one-build-per-JavaScript-realm design.
 
 There are 33 native tests supplied. `xcodebuild` was attempted and is unavailable on this Linux machine (exit 127), so neither a native build nor native test pass is claimed. Physical-iPhone checks remain unverified. Cached files, Node initialization and mocked camera callbacks are not evidence of offline iPhone scanning. Use the steps above and attach diagnostic/native test results to PR #1 when a Mac/iPhone is available.
+
+## Full-screen camera UI
+
+Live camera fills the scanner edge-to-edge; it is no longer a fixed-height panel in a scrolling page. Floating controls provide back, pause/resume, game/provider options and retry. The bottom overlay shows market-only batch totals, list review, finish, and an explicit next-card action after saving. Mock mode remains explicitly labeled and lives under Developer Testing.
+
+Recognition presents a medium/large draggable confirmation sheet over the camera. Candidate/printing/condition and market-value details scroll inside it; Confirm and Discard stay pinned. Swipe dismissal is disabled so a pending result cannot be abandoned accidentally. Saving or discarding closes the review and returns to the full camera. Camera backgrounding/navigation guards are retained. Native rendering, safe-area layout, rotation, larger text and sheet behavior still require an iPhone/Xcode check.

@@ -4,6 +4,8 @@ Native SwiftUI/SwiftData iPhone app, iOS 17+. Open **Start New Scan** to create 
 
 ## Scan and confirm
 
+Live scanning uses an edge-to-edge camera with floating controls. Recognized cards open a draggable confirmation sheet; Confirm/Discard remain pinned while you review details. The camera is no longer confined to a small embedded window.
+
 The app bundles camera capture, recognition JavaScript, worker/module dependencies and scalar/SIMD OpenCV (embedded WASM) in `Resources/ScannerRuntime`. A loopback-only asset server supplies a stable local WebKit origin. The selected game's database downloads/caches using the packaged pack loader. Market pricing uses the online catalog; offline pricing is deferred.
 
 A recognition freezes its image, suggested card and alternative candidates/reprints. Later frames and hide/refresh events cannot replace that review. Select the candidate, finish and condition; each new card starts at **Near Mint**. A new selection immediately clears the prior price/SKU, requests the exact returned `language|condition` quote, and ignores stale lookup responses. Zero is a known price; missing quotes show **Price unavailable**, without estimated discounts or an inherited NM price.
