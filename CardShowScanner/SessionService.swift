@@ -2,7 +2,7 @@ import Foundation
 import SwiftData
 
 enum BatchFailure: LocalizedError {
-    case activeSessionExists, unavailable, wrongGame, invalidRates, invalidQuantity
+    case activeSessionExists, unavailable, wrongGame, invalidRates, invalidQuantity, invalidOfferAmount
     var errorDescription: String? {
         switch self {
         case .activeSessionExists: return "Finish the active session before starting another batch."
@@ -10,6 +10,7 @@ enum BatchFailure: LocalizedError {
         case .wrongGame: return "A batch can contain only its selected game. Start another session to change games."
         case .invalidRates: return "Each offer percentage must be between 0 and 100."
         case .invalidQuantity: return "Quantity must be at least one."
+        case .invalidOfferAmount: return "Enter a custom cash offer from $0 to $999,999,999.99 with at most two decimal places."
         }
     }
 }
@@ -106,8 +107,9 @@ enum BatchFailure: LocalizedError {
             try context.save()
         } catch { context.rollback(); throw error }
     }
-    static func saveOffer(_ session: ScanSession, list: CardList, context: ModelContext) throws {
+    static func saveOffer(_ session: ScanSession, list: CardList, context: ModelContext, customCashOffer: Decimal? = nil) throws {
         guard session.listID == list.id, session.rates.isValid else { throw BatchFailure.invalidRates }
+        guard customCashOffer.map(CustomOfferAmount.isValid) ?? true else { throw BatchFailure.invalidOfferAmount }
         let lines = list.orderedCards.map { item in
             let card = item.snapshot, input = item.offerLine
             return SavedOfferLine(inventoryID: item.id, name: card.name, productID: card.identity.productID,
@@ -116,7 +118,7 @@ enum BatchFailure: LocalizedError {
                 tradeOverride: input.tradeOverride, maximumOverride: input.maximumOverride)
         }
         var saved = try session.savedOffers()
-        saved.append(OfferSnapshot(rates: session.rates, totals: OfferCalculator.calculate(list.cards.map(\.offerLine), rates: session.rates), lines: lines))
+        saved.append(OfferSnapshot(rates: session.rates, totals: OfferCalculator.calculate(list.cards.map(\.offerLine), rates: session.rates), lines: lines, customCashOffer: customCashOffer))
         session.savedOffersData = try JSONEncoder().encode(saved)
         try CardListService.save(context)
         DiagnosticLog.shared.record("offer.snapshot_saved")

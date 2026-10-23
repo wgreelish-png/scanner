@@ -143,11 +143,12 @@ import AudioToolbox
         card.marketPrice = nil; card.identity.skuID = nil; selected = card
         let requestID = priceRequestID
         let requestCard = card
+        let frozenCandidates = result?.candidates ?? [requestCard]
         DiagnosticLog.shared.record("pricing.started")
         priceLoading = true; priceMessage = nil
         priceTask = Task { [weak self, pricing] in
             do {
-                let quote = try await pricing.quote(for: requestCard)
+                let quote = try await pricing.quote(for: requestCard, candidates: frozenCandidates)
                 guard let self, !Task.isCancelled, self.priceRequestID == requestID, self.selected?.identity == requestCard.identity else { return }
                 self.selected?.marketPrice = quote?.marketPrice
                 self.selected?.identity.skuID = quote?.skuID

@@ -5,7 +5,7 @@
  *   loadPackIndex() -> Promise<{games: {key: {name, n, bin_bytes, meta_bytes, v2?: {manifest, shards, ...}, ...}}}>
  *     Network first (no-store). If index.json is unreachable, the last index seen is served from IndexedDB
  *     (result.offline = true); throws only when nothing was ever cached.
- *   loadPack(gameKey, onProgress?(loaded, total, stats?), {groups?: number[]}) -> Promise<Pack>
+ *   loadPack(gameKey, onProgress?(loaded, total, stats?), {groups?: number[], cacheFirst?: boolean}) -> Promise<Pack>
  *     groups: optional set filter (group_ids); only those sets are downloaded/assembled (v2 packs only).
  *     onProgress counts bytes still to download. The optional stats object is
  *       {downloaded, total, hashBytes, metaBytes, hashShards, metaShards, cachedHashShards, cachedMetaShards,
@@ -26,7 +26,9 @@
  *   The printing groups ride in cl so the existing worker plumbing ({n, lo, hi, cl}) carries them; index cl only
  *   below n for clusters. groups = loaded group_ids (v2) or null (v1). format = 1 | 2.
  *
- * Cache (IndexedDB 'nsp-packs'/'packs'): v2 files are keyed by their content-addressed name ('h:'/'m:'/'M:' +
+ * App adaptation: a nonce-authenticated loopback binary store saves data in native Application Support.
+ * IndexedDB 'nsp-packs'/'packs' remains a read-through migration source. Standalone/browser use keeps IndexedDB.
+ * Cache keys are unchanged: v2 files are keyed by their content-addressed name ('h:'/'m:'/'M:' +
  * path), so a rebuild that leaves a set unchanged costs nothing; only missing shards are fetched. After a
  * complete load, entries of that game no longer listed by its manifest are dropped, and 'cur:{game}' remembers
  * the manifest so a failed download falls back to the last complete pack. v1 packs are cached per game+version.
@@ -49,7 +51,7 @@ const sessionCache = new Map();
 function emptyStats() {
     return {
         downloaded: 0, total: 0, hashBytes: 0, metaBytes: 0, hashShards: 0, metaShards: 0,
-        cachedHashShards: 0, cachedMetaShards: 0, upToDate: false, label: '', cache: 'ok', storage: null,
+        cachedHashShards: 0, cachedMetaShards: 0, upToDate: false, label: '', cache: 'ok', storage: null, cacheBackend: nativeAvailable() ? 'native' : 'indexeddb',
     };
 }
 
@@ -60,6 +62,7 @@ function formatBytes(n) {
 }
 
 function finishStats(stats) {
+    if (stats.cacheBackend === 'native' && stats.storage) stats.storage = { persisted: stats.cache === 'ok', reason: stats.cache === 'ok' ? 'native_application_support' : 'native_write_failed' };
     stats.downloaded = stats.hashBytes + stats.metaBytes;
     stats.upToDate = stats.downloaded === 0;
     if (stats.downloaded === 0) {
@@ -73,6 +76,7 @@ function finishStats(stats) {
 }
 
 async function requestPersistence() {
+    if (nativeAvailable()) return { persisted: true, reason: 'native_application_support' };
     const storage = globalThis.navigator?.storage;
     if (!storage?.persist) return { persisted: false, reason: 'unsupported' };
     try {
@@ -237,8 +241,9 @@ async function loadV2(gameKey, manifestPath, onProgress, groups, { cacheOnly = f
     const pack = assemble(gameKey, manifestPath, parts);
     if (!want) {
         // Wait for the complete-pack marker before the camera may navigate away.
-        await idbPut(`cur:${gameKey}`, manifestPath).catch(() => { stats.cache = 'failed'; });
-        idbPruneV2(dir, manifestPath, manifest, gameKey).catch(() => {});
+        const committed = await idbPut(`cur:${gameKey}`, manifestPath).then(() => true, () => { stats.cache = 'failed'; return false; });
+        // Never prune the previous complete pack when its replacement marker failed.
+        if (committed) await idbPruneV2(dir, manifestPath, manifest, gameKey).catch(() => {});
     }
     stats.storage = await persistP;
     finishStats(stats);
@@ -480,6 +485,93 @@ async function gunzipIfNeeded(bytes) {
     return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
+// The app's native store is the primary cache. IndexedDB is retained for older
+// installs and as a read-through migration source, not relied on for durability.
+function nativeAvailable() {
+    return globalThis.location?.origin === 'http://127.0.0.1:18764' &&
+        typeof globalThis.CardShowNativeCache?.token === 'string' && globalThis.CardShowNativeCache.token.length >= 32;
+}
+async function nativeRequest(path, { method = 'GET', body } = {}) {
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 10000);
+    try {
+        const result = await fetch('/scanner-cache/' + path, {
+            method, body, cache: 'no-store', credentials: 'same-origin', signal: controller.signal,
+            headers: { 'X-Scanner-Cache': globalThis.CardShowNativeCache.token, ...(body ? { 'Content-Type': 'application/octet-stream' } : {}) }
+        });
+        if (!result.ok && result.status !== 404) throw new Error('Native database cache unavailable');
+        const length = Number(result.headers.get('Content-Length'));
+        if (Number.isFinite(length) && length > 32 * 1024 * 1024) throw new RangeError('Native database entry too large');
+        const bytes = await result.arrayBuffer();
+        if (bytes.byteLength > 32 * 1024 * 1024) throw new RangeError('Native database entry too large');
+        return { status: result.status, arrayBuffer: async () => bytes, json: async () => JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) };
+    } finally { clearTimeout(timer); }
+}
+function encodeNative(value) {
+    if (value instanceof ArrayBuffer) {
+        const bytes = new Uint8Array(1 + value.byteLength); bytes[0] = 1; bytes.set(new Uint8Array(value), 1); return bytes;
+    }
+    if (value?.bin instanceof ArrayBuffer && Array.isArray(value.refs)) {
+        const meta = new TextEncoder().encode(JSON.stringify(value.refs));
+        const bytes = new Uint8Array(5 + meta.byteLength + value.bin.byteLength); bytes[0] = 2;
+        new DataView(bytes.buffer).setUint32(1, meta.byteLength, false);
+        bytes.set(meta, 5); bytes.set(new Uint8Array(value.bin), 5 + meta.byteLength); return bytes;
+    }
+    const json = JSON.stringify(value);
+    if (json === undefined) throw new TypeError('Invalid database value');
+    const data = new TextEncoder().encode(json), bytes = new Uint8Array(1 + data.byteLength);
+    bytes.set(data, 1); return bytes;
+}
+function decodeNative(buffer) {
+    const bytes = new Uint8Array(buffer), decoder = new TextDecoder('utf-8', { fatal: true });
+    if (bytes[0] === 0) return JSON.parse(decoder.decode(bytes.subarray(1)));
+    if (bytes[0] === 1) return buffer.slice(1);
+    if (bytes[0] === 2 && bytes.length >= 5) {
+        const count = new DataView(buffer).getUint32(1, false);
+        if (count > bytes.length - 5) throw new Error('Invalid native database entry');
+        const refs = JSON.parse(decoder.decode(bytes.subarray(5, 5 + count)));
+        if (!Array.isArray(refs)) throw new Error('Invalid native database metadata');
+        return { refs, bin: buffer.slice(5 + count) };
+    }
+    throw new Error('Invalid native database entry');
+}
+async function nativePut(key, value) {
+    const bytes = encodeNative(value);
+    if (bytes.byteLength > 32 * 1024 * 1024) throw new RangeError('Database entry too large');
+    const response = await nativeRequest('entry?key=' + encodeURIComponent(key), { method: 'PUT', body: bytes });
+    if (response.status !== 204) throw new Error('Native database cache did not commit');
+}
+async function idbGet(key) {
+    if (!nativeAvailable()) return webIdbGet(key);
+    try {
+        const response = await nativeRequest('entry?key=' + encodeURIComponent(key));
+        if (response.status !== 404) return decodeNative(await response.arrayBuffer());
+    } catch { /* Repair damaged native entries or migrate an older website cache below. */ }
+    const previous = await webIdbGet(key).catch(() => null);
+    if (previous != null) await nativePut(key, previous).catch(() => {});
+    return previous;
+}
+async function idbGetMany(keys) {
+    if (!nativeAvailable()) return webIdbGetMany(keys);
+    const results = new Array(keys.length); let next = 0;
+    await Promise.all(Array.from({ length: Math.min(FETCH_PARALLEL, keys.length) }, async () => {
+        while (next < keys.length) { const index = next++; results[index] = await idbGet(keys[index]); }
+    }));
+    return results;
+}
+async function idbKeys() {
+    if (!nativeAvailable()) return webIdbKeys();
+    const response = await nativeRequest('keys'), native = await response.json();
+    if (!Array.isArray(native) || native.length > 8192 || native.some(key => typeof key !== 'string')) throw new Error('Invalid native database index');
+    const previous = await webIdbKeys().catch(() => []);
+    return [...new Set([...native, ...previous])];
+}
+async function idbPut(key, value) { return nativeAvailable() ? nativePut(key, value) : webIdbPut(key, value); }
+async function idbDelete(test) {
+    if (!nativeAvailable()) return webIdbDelete(test);
+    for (const key of (await idbKeys()).filter(test)) await nativeRequest('entry?key=' + encodeURIComponent(key), { method: 'DELETE' });
+    await webIdbDelete(test).catch(() => {});
+}
+
 let dbP = null;
 function idb() {
     dbP ||= new Promise((resolve, reject) => {
@@ -491,7 +583,7 @@ function idb() {
     return dbP;
 }
 
-async function idbGet(key) {
+async function webIdbGet(key) {
     const db = await idb();
     return new Promise((resolve, reject) => {
         const req = db.transaction(STORE).objectStore(STORE).get(key);
@@ -500,7 +592,7 @@ async function idbGet(key) {
     });
 }
 
-async function idbGetMany(keys) {
+async function webIdbGetMany(keys) {
     const db = await idb();
     return new Promise((resolve, reject) => {
         const store = db.transaction(STORE).objectStore(STORE);
@@ -515,7 +607,7 @@ async function idbGetMany(keys) {
     });
 }
 
-async function idbKeys() {
+async function webIdbKeys() {
     const db = await idb();
     return new Promise((resolve, reject) => {
         const req = db.transaction(STORE).objectStore(STORE).getAllKeys();
@@ -524,7 +616,7 @@ async function idbKeys() {
     });
 }
 
-async function idbPut(key, value) {
+async function webIdbPut(key, value) {
     const db = await idb();
     return new Promise((resolve, reject) => {
         const tx = db.transaction(STORE, 'readwrite');
@@ -535,7 +627,7 @@ async function idbPut(key, value) {
     });
 }
 
-async function idbDelete(test) {
+async function webIdbDelete(test) {
     const db = await idb();
     return new Promise((resolve) => {
         const tx = db.transaction(STORE, 'readwrite');

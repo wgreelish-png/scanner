@@ -49,6 +49,7 @@
   let refreshDatabase = () => {};
   async function install(config) {
     dispose();
+    globalThis.CardShowNativeCache = typeof config.cacheToken === 'string' && config.cacheToken.length >= 32 ? { token: config.cacheToken } : null;
     let pending = null;
     let running = true, stopLoop = null, stream = null, backend = null, overlay = null, starting = false, held = false, awaitingRemoval = false, beginLoop = null;
     const post = message => { if (running) window.webkit?.messageHandlers?.scanResult?.postMessage({ ...message, nonce: config.nonce }); };
@@ -114,7 +115,8 @@
           cachedShards,
           cacheState: ['ok', 'failed', 'unavailable'].includes(packStats?.cache) ? packStats.cache : 'unknown',
           cacheSource: !packStats ? 'unknown' : !packStats.downloaded ? 'cache' : cachedShards ? 'mixed' : 'download',
-          storagePersisted: packStats?.storage?.persisted === true
+          storagePersisted: packStats?.storage?.persisted === true,
+          cacheBackend: packStats?.cacheBackend === 'native' ? 'native' : 'indexeddb'
         };
         diagnostic('pack_ready', { elapsedMS: clock() - began, ...cacheFields });
         const cacheWarning = ['failed', 'unavailable'].includes(cacheFields.cacheState);

@@ -4,9 +4,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const source = fs.readFileSync(path.join(__dirname, '../../CardShowScanner/Resources/PricingRequest.js'), 'utf8');
-const execute = new AsyncFunction('refs', 'fetch', 'AbortController', 'TextDecoder', 'setTimeout', 'clearTimeout', source);
-function run(refs, fetch, timers = { set: setTimeout, clear: clearTimeout }) {
-  return execute(refs, fetch, AbortController, TextDecoder, timers.set, timers.clear);
+const execute = new AsyncFunction('refs', 'fetch', 'AbortController', 'TextDecoder', 'setTimeout', 'clearTimeout', 'location', 'document', source);
+function run(refs, fetch, timers = { set: setTimeout, clear: clearTimeout }, context = {}) {
+  return execute(refs, fetch, AbortController, TextDecoder, timers.set, timers.clear,
+    context.location ?? { origin: 'https://tcgtracking.com', pathname: '/newscanplus/quick', search: '' },
+    context.document ?? { readyState: 'complete' });
 }
 const quoteBody = JSON.stringify({ success: true, items: { 'p:123': { printings: [{
   key: 'Normal', label: 'Normal', quotes: {
@@ -35,7 +37,7 @@ test('pricing uses the real same-origin catalog contract without manufactured id
 });
 test('HTTP failures preserve the actual status and body for native error handling', async () => {
   const result = await run(['p:123'], async () => new Response('{"success":false,"error":"unauthorized"}', { status: 401 }));
-  assert.deepEqual(result, { status: 401, body: '{"success":false,"error":"unauthorized"}' });
+  assert.deepEqual(result, { status: 401, body: '{"success":false,"error":"unauthorized"}', serverReason: 'unauthorized', context: 'public_page', documentState: 'complete' });
 });
 test('untrusted refs are rejected before a network request', async () => {
   for (const refs of [[], null, ['bad'], ['p:1;alert(1)'], ['p:1234567890123'], new Array(6).fill('p:123'), [123]]) {
@@ -94,4 +96,44 @@ test('server text is returned without evaluation or field coercion', async () =>
   const body = '<script>throw new Error("must never execute")</script>';
   const result = await run(['t:123', 'ts:124', 'u:125'], async () => new Response(body, { status: 200 }));
   assert.equal(result.body, body);
+});
+
+test('the catalog request requires a fully initialized genuine public page', async () => {
+  const contexts = [
+    { location: { origin: 'http://127.0.0.1:18764', pathname: '/index.html', search: '' } },
+    { location: { origin: 'https://tcgtracking.com', pathname: '/account', search: '' } },
+    { location: { origin: 'https://tcgtracking.com', pathname: '/newscanplus/quick', search: '?link=secret' } },
+    { document: { readyState: 'loading' } }, { document: { readyState: 'interactive' } }
+  ];
+  for (const context of contexts) {
+    await assert.rejects(run(['p:123'], () => { throw new Error('must not fetch'); }, undefined, context), /Public pricing page is not ready/);
+  }
+});
+test('server access errors produce finite diagnostic reasons without arbitrary content', async () => {
+  for (const [error, expected] of [
+    ['Invalid origin', 'origin_rejected'], ['Referer required', 'referrer_rejected'], ['csrf missing', 'csrf_rejected'],
+    ['token expired', 'token_rejected'], ['public price scope required', 'public_scope_required'], ['authentication required', 'authentication_required'],
+    ['unauthorized', 'unauthorized'], ['customer-secret-session-value', 'unknown_http_error']
+  ]) {
+    const result = await run(['p:123'], async () => new Response(JSON.stringify({ error }), { status: 401 }));
+    assert.equal(result.serverReason, expected);
+    assert.equal(result.context, 'public_page');
+    assert.equal(Object.prototype.hasOwnProperty.call(result, 'message'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(result, 'error'), false);
+  }
+});
+test('HTML and nested JSON error bodies remain unevaluated and safely classified', async () => {
+  const html = await run(['p:123'], async () => new Response('<html>private service message</html>', { status: 401 }));
+  assert.equal(html.serverReason, 'unknown_http_error');
+  const nested = await run(['p:123'], async () => new Response(JSON.stringify({ error: { code: 'invalid_origin', message: 'private' } }), { status: 401 }));
+  assert.equal(nested.serverReason, 'origin_rejected');
+  const rateLimit = await run(['p:123'], async () => new Response('server text', { status: 429 }));
+  assert.equal(rateLimit.serverReason, 'rate_limited');
+});
+
+test('the actual five-candidate Quick Scan batch is sent without narrowing or inventing refs', async () => {
+  const refs = ['p:84922', 'p:86027', 'p:87718', 'p:87727', 'p:89273'];
+  let sent;
+  await run(refs, async (_url, request) => { sent = JSON.parse(request.body).refs; return new Response(quoteBody); });
+  assert.deepEqual(sent, refs);
 });

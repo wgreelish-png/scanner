@@ -66,9 +66,13 @@ struct MarketQuote: Equatable, Sendable {
 protocol MarketPricing: Sendable {
     func prepare() async
     func quote(for card: CardCandidate) async throws -> MarketQuote?
+    func quote(for card: CardCandidate, candidates: [CardCandidate]) async throws -> MarketQuote?
 }
 
-extension MarketPricing { func prepare() async {} }
+extension MarketPricing {
+    func prepare() async {}
+    func quote(for card: CardCandidate, candidates: [CardCandidate]) async throws -> MarketQuote? { try await quote(for: card) }
+}
 
 enum MarketPricingFailure: LocalizedError, Equatable {
     case accessRejected(Int), publicPageUnavailable
@@ -80,11 +84,30 @@ enum MarketPricingFailure: LocalizedError, Equatable {
     }
 }
 
+/// Public-page navigation is intentionally query-free: linked-session URLs can
+/// automatically start the website camera/database, which pricing never needs.
+struct PublicPricingPagePolicy {
+    static let page = URL(string: "https://tcgtracking.com/newscanplus/quick")!
+    static let contentRules = #"[{"trigger":{"url-filter":".*/vendor/opencv[^/]*\\.js.*"},"action":{"type":"block"}}]"#
+    static func allows(_ url: URL?) -> Bool {
+        guard let url else { return false }
+        return url.scheme == "https" && url.host == "tcgtracking.com" && (url.port == nil || url.port == 443) &&
+            url.user == nil && url.password == nil && url.query == nil &&
+            (url.path == page.path || url.path == page.path + "/")
+    }
+    static func safeReason(_ value: String?) -> String {
+        let allowed: Set<String> = ["none", "origin_rejected", "referrer_rejected", "csrf_rejected", "token_rejected",
+            "public_scope_required", "authentication_required", "unauthorized", "rate_limited", "validation_error", "unknown_http_error"]
+        guard let value, allowed.contains(value) else { return "unknown_http_error" }
+        return value
+    }
+}
+
 /// Uses the same real first-party browser context as the public Quick Scan page.
 /// The recognition camera/engine continue to run separately from bundled local assets.
 @MainActor private final class PublicMarketBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     static let shared = PublicMarketBrowser()
-    private static let page = URL(string: "https://tcgtracking.com/newscanplus/quick")!
+    private static let page = PublicPricingPagePolicy.page
     private let webView: WKWebView
     private var ready = false
     private var startup: Task<Void, Error>?
@@ -92,36 +115,50 @@ enum MarketPricingFailure: LocalizedError, Equatable {
     private var pendingLoad: CheckedContinuation<Void, Error>?
     private var navigation: WKNavigation?
     private var watchdog: Task<Void, Never>?
+    private var contentRulesInstalled = false
     override init() {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
-        // Only the bundled native-invoked pricing function executes. The website's
-        // camera/recognition scripts are not needed to establish its document origin.
-        configuration.defaultWebpagePreferences.allowsContentJavaScript = false
+        // Preserve the public site's ordinary initialization and page-world fetch.
+        // Media capture is denied below; no-query navigation never starts its pack.
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.mediaTypesRequiringUserActionForPlayback = .all
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
         webView.navigationDelegate = self; webView.uiDelegate = self
     }
-    private static func permitted(_ url: URL?) -> Bool {
-        guard let url else { return false }
-        return url.scheme == "https" && url.host == "tcgtracking.com" && (url.port == nil || url.port == 443) &&
-            url.user == nil && url.password == nil && (url.path == page.path || url.path == page.path + "/")
+    private static func permitted(_ url: URL?) -> Bool { PublicPricingPagePolicy.allows(url) }
+    private func installContentRules() async throws {
+        guard !contentRulesInstalled else { return }
+        // mobile.js eagerly creates a backend, even though this view never scans.
+        // Block only the redundant vendor runtime; its normal initialization has
+        // a rejected-backend handler and its public catalog request is unaffected.
+        let encoded = PublicPricingPagePolicy.contentRules
+        let list: WKContentRuleList = try await withCheckedThrowingContinuation { continuation in
+            WKContentRuleListStore.default().compileContentRuleList(forIdentifier: "PublicPricing.NoRecognition.v1", encodedContentRuleList: encoded) { list, error in
+                if let error { continuation.resume(throwing: error) }
+                else if let list { continuation.resume(returning: list) }
+                else { continuation.resume(throwing: MarketPricingFailure.publicPageUnavailable) }
+            }
+        }
+        webView.configuration.userContentController.add(list)
+        contentRulesInstalled = true
     }
     func prepare() async throws {
         if ready && Self.permitted(webView.url) { return }
         if let startup { return try await startup.value }
         let id = UUID(); startupID = id
         let task = Task { @MainActor in
+            try await installContentRules()
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 pendingLoad = continuation
                 var request = URLRequest(url: Self.page)
-                request.timeoutInterval = 4
+                request.timeoutInterval = 12
                 navigation = webView.load(request)
                 guard navigation != nil else { finishLoad(MarketPricingFailure.publicPageUnavailable); return }
                 DiagnosticLog.shared.record("pricing.page_loading")
                 watchdog = Task { @MainActor [weak self] in
-                    do { try await Task.sleep(for: .seconds(4)) } catch { return }
+                    do { try await Task.sleep(for: .seconds(12)) } catch { return }
                     guard let self, self.startupID == id, self.pendingLoad != nil else { return }
                     self.finishLoad(URLError(.timedOut)); self.webView.stopLoading()
                 }
@@ -137,17 +174,19 @@ enum MarketPricingFailure: LocalizedError, Equatable {
         pendingLoad = nil; navigation = nil; watchdog?.cancel(); watchdog = nil
         ready = error == nil
         if let error { continuation.resume(throwing: error) }
-        else { DiagnosticLog.shared.record("pricing.page_ready"); continuation.resume() }
+        else { DiagnosticLog.shared.record("pricing.page_ready", ["phase": "page", "reason": "document_complete"]); continuation.resume() }
     }
-    func detail(ref: String) async throws -> (status: Int, data: Data) {
+    func detail(refs: [String]) async throws -> (status: Int, data: Data) {
         try await prepare(); try Task.checkCancellation()
         guard Self.permitted(webView.url),
               let resource = Bundle.main.url(forResource: "PricingRequest", withExtension: "js") else { throw MarketPricingFailure.publicPageUnavailable }
         let script = try String(contentsOf: resource, encoding: .utf8)
-        let result = try await webView.callAsyncJavaScript(script, arguments: ["refs": [ref]], in: nil, contentWorld: .defaultClient)
+        let result = try await webView.callAsyncJavaScript(script, arguments: ["refs": refs], in: nil, contentWorld: .page)
         try Task.checkCancellation()
         guard let reply = result as? [String: Any], let status = reply["status"] as? Int, (100...599).contains(status),
               let body = reply["body"] as? String, let data = body.data(using: .utf8), data.count <= 2_000_000 else { throw URLError(.cannotParseResponse) }
+        let reason = PublicPricingPagePolicy.safeReason(reply["serverReason"] as? String)
+        DiagnosticLog.shared.record("pricing.response_context", ["phase": "page", "reason": reason, "code": String(status), "provider": "public_page"])
         return (status, data)
     }
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
@@ -156,11 +195,6 @@ enum MarketPricingFailure: LocalizedError, Equatable {
             decisionHandler(.cancel); return
         }
         decisionHandler(.allow)
-    }
-    func webView(_ webView: WKWebView, didCommit completed: WKNavigation!) {
-        // A committed public document supplies the genuine origin; ancillary page
-        // resources must not delay or control market lookup readiness.
-        finishLoad(Self.permitted(webView.url) ? nil : MarketPricingFailure.publicPageUnavailable, navigation: completed)
     }
     func webView(_ webView: WKWebView, didFinish completed: WKNavigation!) {
         finishLoad(Self.permitted(webView.url) ? nil : MarketPricingFailure.publicPageUnavailable, navigation: completed)
@@ -186,9 +220,22 @@ struct OnlineMarketPricing: MarketPricing {
         if status == 401 || status == 403 { throw MarketPricingFailure.accessRejected(status) }
         guard status == 200 else { throw URLError(.badServerResponse) }
     }
-    func quote(for card: CardCandidate) async throws -> MarketQuote? {
-        guard card.identity.productID.range(of: #"^(p|t|ts|u):[0-9]{1,12}$"#, options: .regularExpression) != nil else { return nil }
-        let response = try await PublicMarketBrowser.shared.detail(ref: card.identity.productID)
+    static func references(for card: CardCandidate, candidates: [CardCandidate]) -> [String] {
+        func valid(_ ref: String) -> Bool { ref.range(of: #"^(p|t|ts|u):[0-9]{1,12}$"#, options: .regularExpression) != nil }
+        guard valid(card.identity.productID) else { return [] }
+        var seen: Set<String> = []
+        var refs = candidates.map { $0.identity.productID }.filter { valid($0) && seen.insert($0).inserted }
+        if !refs.contains(card.identity.productID) { refs.insert(card.identity.productID, at: 0) }
+        // Preserve the real recognition ordering, while never dropping the selected
+        // card if a caller supplies an oversized candidate list.
+        if let index = refs.firstIndex(of: card.identity.productID), index >= 5 { refs.remove(at: index); refs.insert(card.identity.productID, at: 0) }
+        return Array(refs.prefix(5))
+    }
+    func quote(for card: CardCandidate) async throws -> MarketQuote? { try await quote(for: card, candidates: [card]) }
+    func quote(for card: CardCandidate, candidates: [CardCandidate]) async throws -> MarketQuote? {
+        let refs = Self.references(for: card, candidates: candidates)
+        guard !refs.isEmpty else { return nil }
+        let response = try await PublicMarketBrowser.shared.detail(refs: refs)
         if response.status != 200 {
             await MainActor.run { DiagnosticLog.shared.record("pricing.http_failed", ["code": String(response.status)]) }
         }

@@ -12,7 +12,7 @@ import Observation
     private var lastSamples: [String: Date] = [:]
     private let keys: Set<String> = ["provider", "game", "episode", "same", "accepted", "confidence", "candidates",
         "printing_required", "priced", "merged", "automatic", "quantity", "reason", "stage", "backend", "elapsed_ms",
-        "scan_ms", "capture_ms", "frames", "domain", "code", "records", "phase", "candidate_index", "app_version", "build", "downloaded_bytes", "cached_shards", "cache", "source", "persisted"]
+        "scan_ms", "capture_ms", "frames", "domain", "code", "records", "phase", "candidate_index", "app_version", "build", "downloaded_bytes", "cached_shards", "cache", "source", "persisted", "cache_backend", "revision"]
     private var current: URL { directory.appendingPathComponent("current.jsonl") }
     private var previous: URL { directory.appendingPathComponent("previous.jsonl") }
     var enabled: Bool { defaults.object(forKey: "diagnosticsEnabled") as? Bool ?? true }
@@ -54,6 +54,9 @@ import Observation
         } catch { storageFailed = true }
     }
     func failure(_ event: String, _ error: Error) {
+        if let marketError = error as? MarketPricingFailure, case let .accessRejected(status) = marketError {
+            record(event, ["domain": "market", "code": String(status), "reason": "access_rejected"]); return
+        }
         let ns = error as NSError
         let domains: Set<String> = [NSCocoaErrorDomain, NSURLErrorDomain, "WKErrorDomain", "CardShowScanner.BridgeFailure"]
         record(event, ["domain": domains.contains(ns.domain) ? ns.domain : "other", "code": String(ns.code)])
@@ -70,6 +73,7 @@ import Observation
         let header: [String: Any] = ["schema": 1, "event": "diagnostics.environment", "time": ISO8601DateFormatter().string(from: .now),
             "app_version": bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
             "build": bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
+            "revision": bundle.object(forInfoDictionaryKey: "ScannerWorkflowRevision") as? String ?? "unknown",
             "os": ProcessInfo.processInfo.operatingSystemVersionString,
             "note": "Local app events only; no system console, card/list contents, credentials, images, or raw web responses."]
         var data = try JSONSerialization.data(withJSONObject: header, options: [.sortedKeys]); data.append(10)

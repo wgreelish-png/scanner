@@ -37,9 +37,13 @@ struct SettingsView: View {
                 Text("Finish a batch from its scanner or review screen. Cards and saved estimates are preserved.")
                 Button(clearingCache ? "Clearing…" : "Clear Scanner Cache") {
                     clearingCache = true
-                    Task { await TCGTrackingScannerProvider.clearStoredCache(); clearingCache = false; cacheMessage = true }
+                    Task {
+                        defer { clearingCache = false }
+                        do { try await TCGTrackingScannerProvider.clearStoredCache(); cacheMessage = true }
+                        catch { diagnosticError = "Could not clear the scanner database: " + error.localizedDescription }
+                    }
                 }.disabled(clearingCache)
-                Text("Removes TCGTracking web database and resource caches. Lists, sessions, and sign-in cookies are preserved. Close the scanner first.").font(.caption)
+                Text("Removes the downloaded scanner database from this app and clears its web resource caches. Lists, sessions, and sign-in cookies are preserved. Close the scanner first.").font(.caption)
             }
             Section("Diagnostics") {
                 Toggle("Record diagnostics", isOn: $diagnosticsEnabled)

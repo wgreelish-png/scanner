@@ -43,6 +43,7 @@ function indexedDBStore({ writesFail = false } = {}) {
   } };
 }
 function fixture(version = 1) {
+  const versionManifest = `pokemon/manifest-${version}.json`;
   const bin = new ArrayBuffer(196), view = new DataView(bin);
   new Uint8Array(bin, 0, 4).set(Buffer.from('NSPS'));
   view.setUint32(4, 2, true); view.setUint32(8, 1, true); view.setUint32(16, 321, true);
@@ -51,20 +52,35 @@ function fixture(version = 1) {
   const meta = { k: 321, refs };
   const manifest = { v: 2, shards: [{ group_id: 1, hash: `hash-${version}`, meta: `meta-${version}`, bytes: bin.byteLength, meta_bytes: JSON.stringify(meta).length }] };
   return new Map([
-    [BASE + 'index.json', { games: { [game]: { v2: { manifest: manifestPath } } } }],
-    [BASE + manifestPath, manifest],
+    [BASE + 'index.json', { games: { [game]: { v2: { manifest: versionManifest } } } }],
+    [BASE + versionManifest, manifest],
     [BASE + `pokemon/hash-${version}.bin`, bin],
     [BASE + `pokemon/meta-${version}.json.gz`, meta]
   ]);
 }
-async function page(store, files, { offline = false } = {}) {
-  const calls = [], progress = [];
+async function page(store, files, { offline = false, native = null, nativeWritesFail = false } = {}) {
+  const calls = [], localCalls = [], progress = [];
+  const token = '01234567-89ab-cdef-0123-456789abcdef';
   const context = vm.createContext({
     console, TextDecoder, TextEncoder, Uint8Array, Uint32Array, Int32Array, DataView, ArrayBuffer,
     Blob, Response, DecompressionStream, indexedDB: store,
     navigator: { storage: { persisted: async () => false, persist: async () => false } },
-    setTimeout,
-    async fetch(url) {
+    setTimeout, clearTimeout, AbortController,
+    ...(native ? { location: { origin: 'http://127.0.0.1:18764' }, CardShowNativeCache: { token } } : {}),
+    async fetch(url, options = {}) {
+      if (String(url).startsWith('/scanner-cache/')) {
+        localCalls.push({ url, method: options.method || 'GET' });
+        assert.equal(options.headers['X-Scanner-Cache'], token);
+        const parsed = new URL(url, 'http://127.0.0.1:18764'), key = parsed.searchParams.get('key');
+        if (parsed.pathname.endsWith('/keys')) return new Response(JSON.stringify([...native.keys()]));
+        if (options.method === 'PUT') {
+          if (typeof nativeWritesFail === 'function' ? nativeWritesFail(key) : nativeWritesFail) return new Response('', { status: 507 });
+          native.set(key, new Uint8Array(options.body).slice());
+          return new Response(null, { status: 204 });
+        }
+        if (options.method === 'DELETE') { native.delete(key); return new Response(null, { status: 204 }); }
+        return native.has(key) ? new Response(native.get(key).slice()) : new Response('', { status: 404 });
+      }
       calls.push(url);
       if (offline) throw new TypeError('Offline');
       const file = files.get(url);
@@ -78,7 +94,7 @@ async function page(store, files, { offline = false } = {}) {
     return dependency;
   });
   await module.evaluate();
-  return { calls, progress, load: options => module.namespace.loadPack(game, (loaded, total, stats) => progress.push({ ...stats }), options) };
+  return { calls, localCalls, progress, load: options => module.namespace.loadPack(game, (loaded, total, stats) => progress.push({ ...stats }), options) };
 }
 
 test('a complete saved v2 pack reopens in a new page with zero network requests', async () => {
@@ -155,4 +171,79 @@ test('legacy v1 packs also reopen without network or changing their saved schema
   assert.equal((await reopened.load({ cacheFirst: true })).refs[0][1], 'Legacy card');
   assert.equal(reopened.calls.length, 0);
   assert.equal(reopened.progress.at(-1).cachedHashShards, 1);
+  const native = new Map();
+  const migrated = await page(store, files, { native, offline: true });
+  assert.equal((await migrated.load({ cacheFirst: true })).format, 1);
+  assert.equal(migrated.calls.length, 0);
+  const nativeOnly = await page(unavailableIndexedDB(), files, { native, offline: true });
+  assert.equal((await nativeOnly.load({ cacheFirst: true })).refs[0][1], 'Legacy card');
+  assert.equal(nativeOnly.calls.length, 0);
+});
+
+function unavailableIndexedDB() {
+  return { open() {
+    const request = {};
+    queueMicrotask(() => { request.error = new Error('WebKit storage unavailable'); request.onerror?.(); });
+    return request;
+  } };
+}
+
+test('native app cache survives fresh pages with IndexedDB unavailable and zero remote downloads', async () => {
+  const native = new Map(), files = fixture();
+  const first = await page(unavailableIndexedDB(), files, { native });
+  assert.equal((await first.load({ cacheFirst: true })).n, 1);
+  assert.equal(first.calls.length, 4);
+  assert.equal(first.progress.at(-1).cacheBackend, 'native');
+  assert.equal(first.progress.at(-1).cache, 'ok');
+  assert.equal(first.progress.at(-1).storage.persisted, true);
+  assert.ok(native.has('cur:' + game));
+  const reopened = await page(unavailableIndexedDB(), files, { native, offline: true });
+  assert.equal((await reopened.load({ cacheFirst: true })).refs[0][0], 'p:123');
+  assert.equal(reopened.calls.length, 0);
+  assert.equal(reopened.progress.at(-1).downloaded, 0);
+  assert.equal(reopened.progress.at(-1).cachedHashShards, 1);
+  assert.ok(reopened.localCalls.length > 0, 'reads travel only to app storage');
+});
+
+test('an existing website database migrates to native app storage without redownloading', async () => {
+  const legacy = indexedDBStore(), native = new Map(), files = fixture();
+  await (await page(legacy, files)).load({ cacheFirst: true });
+  const migrated = await page(legacy, files, { native, offline: true });
+  assert.equal((await migrated.load({ cacheFirst: true })).n, 1);
+  assert.equal(migrated.calls.length, 0);
+  assert.ok(native.has('h:pokemon/hash-1'));
+  const reopened = await page(unavailableIndexedDB(), files, { native, offline: true });
+  assert.equal((await reopened.load({ cacheFirst: true })).n, 1);
+  assert.equal(reopened.calls.length, 0);
+});
+
+test('native corrupt data is repaired with the original shard validation', async () => {
+  const native = new Map(), files = fixture();
+  await (await page(unavailableIndexedDB(), files, { native })).load({ cacheFirst: true });
+  native.set('h:pokemon/hash-1', new Uint8Array([1, 0, 0]));
+  const repaired = await page(unavailableIndexedDB(), files, { native });
+  assert.equal((await repaired.load({ cacheFirst: true })).n, 1);
+  assert.ok(repaired.calls.includes(BASE + 'pokemon/hash-1.bin'));
+  assert.ok(repaired.progress.at(-1).downloaded > 0);
+});
+
+test('native write failure preserves scanning but never claims the database was saved', async () => {
+  const native = new Map();
+  const failed = await page(unavailableIndexedDB(), fixture(), { native, nativeWritesFail: true });
+  assert.equal((await failed.load({ cacheFirst: true })).n, 1);
+  assert.equal(failed.progress.at(-1).cache, 'failed');
+  assert.equal(failed.progress.at(-1).storage.persisted, false);
+  assert.equal(native.size, 0);
+});
+
+test('a failed replacement marker preserves the last complete native database', async () => {
+  const native = new Map();
+  await (await page(unavailableIndexedDB(), fixture(1), { native })).load({ cacheFirst: true });
+  const update = await page(unavailableIndexedDB(), fixture(2), { native, nativeWritesFail: key => key === 'cur:' + game });
+  assert.equal((await update.load({ cacheFirst: false })).n, 1);
+  assert.equal(update.progress.at(-1).cache, 'failed');
+  assert.ok(native.has('h:pokemon/hash-1'), 'previous complete pack must not be pruned');
+  const reopened = await page(unavailableIndexedDB(), fixture(2), { native, offline: true });
+  assert.equal((await reopened.load({ cacheFirst: true })).ver, 'pokemon/manifest-1.json');
+  assert.equal(reopened.calls.length, 0);
 });

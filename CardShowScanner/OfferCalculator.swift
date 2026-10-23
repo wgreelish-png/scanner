@@ -32,6 +32,11 @@ struct OfferSnapshot: Identifiable, Codable {
     var totals: OfferTotals
     // Immutable calculation inputs preserve manual prices, quantities and overrides.
     var lines: [SavedOfferLine]
+    // Optional JSON field preserves snapshots saved before negotiated totals existed.
+    // This is the cash amount for the whole list, independent of the rate calculation.
+    var customCashOffer: Decimal? = nil
+    var selectedCashOffer: Decimal { customCashOffer ?? totals.cash }
+    var selectedCashSpread: Decimal { totals.market - selectedCashOffer }
 }
 
 struct SavedOfferLine: Codable {
@@ -78,5 +83,20 @@ enum MoneyInput {
         guard text.range(of: #"^[0-9]+(?:\.[0-9]{1,6})?$"#, options: .regularExpression) != nil,
               let value = Decimal(string: text, locale: Locale(identifier: "en_US_POSIX")), !value.isNaN, value >= 0 else { return nil }
         return value
+    }
+}
+
+/// USD input for a negotiated whole-list amount, never a percentage or unit price.
+enum CustomOfferAmount {
+    static let maximum = Decimal(999_999_999) + Decimal(99) / 100
+    static func isValid(_ value: Decimal) -> Bool {
+        !value.isNaN && value >= 0 && value <= maximum && OfferCalculator.cents(value) == value
+    }
+    static func parse(_ text: String) -> Decimal? {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.count <= 12,
+              value.range(of: #"^[0-9]+(?:\.[0-9]{0,2})?$"#, options: .regularExpression) != nil,
+              let amount = Decimal(string: value, locale: Locale(identifier: "en_US_POSIX")), isValid(amount) else { return nil }
+        return amount
     }
 }

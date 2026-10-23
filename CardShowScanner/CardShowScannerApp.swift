@@ -7,7 +7,8 @@ import SwiftData
     init() {
         DiagnosticLog.shared.record("app.launch", [
             "app_version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
-            "build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+            "build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
+            "revision": Bundle.main.object(forInfoDictionaryKey: "ScannerWorkflowRevision") as? String ?? "unknown"
         ])
         SessionService.prepareDefaults()
         do { container = try AppPersistence.open(); startupError = nil; DiagnosticLog.shared.record("storage.opened") }
