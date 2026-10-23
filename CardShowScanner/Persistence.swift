@@ -98,6 +98,17 @@ import SwiftData
         DiagnosticLog.shared.record("inventory.insert")
     }
 
+    /// Editing never coalesces physical rows, even when their identities become equal.
+    static func edit(_ item: InventoryCard, card: CardCandidate, quantity: Int,
+                     cashOverride: String?, tradeOverride: String?, maximumOverride: String?, context: ModelContext) throws {
+        guard quantity > 0 else { throw BatchFailure.invalidQuantity }
+        do {
+            try item.update(card); item.quantity = quantity
+            item.cashOverrideText = cashOverride; item.tradeOverrideText = tradeOverride; item.maximumOverrideText = maximumOverride
+            try context.save()
+        } catch { context.rollback(); throw error }
+    }
+
     static func duplicate(_ list: CardList, context: ModelContext) throws {
         let copy = CardList(name: list.name + " Copy"); context.insert(copy)
         for card in list.orderedCards {

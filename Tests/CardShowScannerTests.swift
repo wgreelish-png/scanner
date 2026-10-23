@@ -351,7 +351,11 @@ import SwiftData
         let list = try XCTUnwrap(SessionService.list(for: session, context: context))
         var fail = true
         let model = ScannerViewModel(provider: TestScannerProvider(), pricing: TestMarketPricing(), saveCard: { card, session, list, context, ref in
-            if fail { throw NSError(domain: "TestSave", code: 1) }
+            if fail {
+                try CardListService.add(card, to: list, context: context)
+                session.record(card)
+                throw NSError(domain: "TestSave", code: 1)
+            }
             try SessionService.add(card, session: session, list: list, context: context, recognitionRef: ref)
         })
         model.start(game: "Pokémon", list: list, context: context, session: session)
@@ -408,9 +412,82 @@ import SwiftData
         let list = try XCTUnwrap(SessionService.list(for: original, context: context))
         try SessionService.finish(original, context: context)
         let other = try SessionService.start(game: "Magic: The Gathering", context: context)
-        try SessionService.resume(original, context: context)
+        XCTAssertThrowsError(try SessionService.resume(original, context: context))
+        XCTAssertTrue(other.isActive)
+        try SessionService.resume(original, context: context, finishingOtherSession: true)
         XCTAssertTrue(original.isActive); XCTAssertFalse(other.isActive)
         XCTAssertEqual(original.listID, list.id)
+    }
+
+    func testEditingToSameIdentityNeverMergesAndKeepsScanOrder() throws {
+        let container = try store(), context = container.mainContext
+        let list = CardList(name: "Order"); context.insert(list)
+        let cards = MockScannerProvider.samples(game: "Pokémon", index: 0)
+        for card in [cards[0], cards[1], cards[0]] { try CardListService.add(card, to: list, context: context) }
+        try context.save()
+        let ids = list.orderedCards.map(\.id), dates = list.orderedCards.map(\.addedAt)
+        try CardListService.edit(list.orderedCards[1], card: cards[0], quantity: 1,
+                                 cashOverride: nil, tradeOverride: nil, maximumOverride: nil, context: context)
+        XCTAssertEqual(list.orderedCards.map(\.id), ids)
+        XCTAssertEqual(list.orderedCards.map(\.addedAt), dates)
+        XCTAssertEqual(list.orderedCards.map(\.quantity), [1, 1, 1])
+        XCTAssertEqual(list.orderedCards.map { $0.snapshot.identity.productID }, Array(repeating: cards[0].identity.productID, count: 3))
+    }
+    func testContinueStandaloneAndCompletedListPreservesOffersAndLegacyQuantity() throws {
+        let container = try store(), context = container.mainContext
+        let list = CardList(name: "Legacy quantity"); context.insert(list)
+        let card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]
+        let legacy = try InventoryCard(card: card, quantity: 7); context.insert(legacy); list.cards.append(legacy)
+        try context.save()
+        let session = try SessionService.continueList(list, game: "Pokémon", context: context)
+        try SessionService.saveOffer(session, list: list, context: context)
+        let saved = session.savedOffersData, listID = list.id, sessionID = session.id
+        try SessionService.finish(session, context: context)
+        let other = try SessionService.start(game: "Pokémon", context: context)
+        XCTAssertThrowsError(try SessionService.continueList(list, game: "Pokémon", context: context))
+        let resumed = try SessionService.continueList(list, game: "Pokémon", context: context, finishingOtherSession: true)
+        XCTAssertEqual(resumed.id, sessionID); XCTAssertEqual(resumed.listID, listID)
+        XCTAssertEqual(resumed.savedOffersData, saved); XCTAssertFalse(other.isActive)
+        try SessionService.add(card, session: resumed, list: list, context: context)
+        XCTAssertEqual(list.orderedCards.map(\.quantity), [7, 1])
+        XCTAssertEqual(list.orderedCards[0].id, legacy.id)
+    }
+    func testKnownZeroQuoteAndUnavailableConditionDoNotReuseNM() throws {
+        var card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]; card.identity.productID = "p:123"
+        let data = Data(#"{"items":{"p:123":{"printings":[{"label":"Normal","quotes":{"English|Near Mint":{"market_price":10,"sku_id":100},"English|Damaged":{"market_price":0,"sku_id":101}}}]}}}"#.utf8)
+        XCTAssertEqual(try OnlineMarketPricing.parse(data, for: card), MarketQuote(marketPrice: 10, skuID: "100"))
+        card.identity.condition = "Damaged"
+        XCTAssertEqual(try OnlineMarketPricing.parse(data, for: card), MarketQuote(marketPrice: 0, skuID: "101"))
+        card.identity.condition = "Lightly Played"
+        XCTAssertNil(try OnlineMarketPricing.parse(data, for: card))
+    }
+    func testLatePricingResponseCannotOverwriteNewerConditionOrDiscard() async throws {
+        let pricing = ControlledPricing()
+        let model = ScannerViewModel(provider: TestScannerProvider(), pricing: pricing)
+        model.receive(ScanResult(id: UUID(), candidates: MockScannerProvider.samples(game: "Pokémon", index: 0), accepted: true, same: false))
+        try await waitForRequests(1, pricing: pricing)
+        model.changeCondition("Lightly Played")
+        XCTAssertNil(model.selected?.marketPrice); XCTAssertNil(model.selected?.identity.skuID)
+        try await waitForRequests(2, pricing: pricing)
+        await pricing.resolve(1, with: MarketQuote(marketPrice: 2, skuID: "20"))
+        for _ in 0..<100 { if !model.priceLoading { break }; await Task.yield() }
+        XCTAssertEqual(model.selected?.marketPrice, 2); XCTAssertEqual(model.selected?.identity.skuID, "20")
+        await pricing.resolve(0, with: MarketQuote(marketPrice: 10, skuID: "10"))
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(model.selected?.marketPrice, 2); XCTAssertEqual(model.selected?.identity.skuID, "20")
+        model.refreshPrice(); try await waitForRequests(3, pricing: pricing)
+        model.scanNextCard()
+        await pricing.resolve(2, with: MarketQuote(marketPrice: 30, skuID: "30"))
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertNil(model.selected)
+    }
+    private func waitForRequests(_ count: Int, pricing: ControlledPricing) async throws {
+        for _ in 0..<100 {
+            let received = await pricing.count
+            if received >= count { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Pricing request did not start"); throw URLError(.timedOut)
     }
 
 }
@@ -425,5 +502,16 @@ import SwiftData
 private struct TestMarketPricing: MarketPricing {
     func quote(for card: CardCandidate) async throws -> MarketQuote? {
         MarketQuote(marketPrice: card.identity.condition == "Near Mint" ? 5 : 2, skuID: "10")
+    }
+}
+
+private actor ControlledPricing: MarketPricing {
+    private var pending: [CheckedContinuation<MarketQuote?, Error>?] = []
+    var count: Int { pending.count }
+    func quote(for card: CardCandidate) async throws -> MarketQuote? {
+        try await withCheckedThrowingContinuation { pending.append($0) }
+    }
+    func resolve(_ index: Int, with quote: MarketQuote?) {
+        let continuation = pending[index]; pending[index] = nil; continuation?.resume(returning: quote)
     }
 }

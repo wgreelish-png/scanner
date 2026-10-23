@@ -128,7 +128,7 @@ struct CardListView: View {
             .onAppear { continueGame = list.orderedCards.first?.snapshot.identity.game ?? "Pokémon" }
             .confirmationDialog("Continue this list?", isPresented: $confirmContinue) {
                 Button("Continue Scanning") {
-                    do { continuedID = try SessionService.continueList(list, game: continueGame, context: context).id }
+                    do { continuedID = try SessionService.continueList(list, game: continueGame, context: context, finishingOtherSession: true).id }
                     catch { self.error = error.localizedDescription }
                 }
             } message: { Text("New cards append to this list. Any other active session will be finished and kept.") }
@@ -226,6 +226,7 @@ struct CardEditorView: View {
                 .onChange(of: card.identity.printing) { _, _ in price = ""; card.identity.skuID = nil }
                 .onChange(of: card.identity.productID) { _, _ in price = ""; card.identity.skuID = nil }
                 .onChange(of: card.identity.game) { _, _ in price = ""; card.identity.skuID = nil }
+                .onChange(of: card.identity.condition) { _, _ in price = ""; card.identity.skuID = nil }
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                     ToolbarItem(placement: .confirmationAction) { Button("Save") { save() } }
@@ -255,20 +256,9 @@ struct CardEditorView: View {
         } catch { self.error = error.localizedDescription; return }
         card.marketPrice = text.isEmpty ? nil : parsed
         do {
-            if let duplicate = item.list?.cards.first(where: { $0.id != item.id && $0.snapshot.identity == card.identity }) {
-                guard duplicate.cashOverrideText == cashText,
-                      duplicate.tradeOverrideText == tradeText,
-                      duplicate.maximumOverrideText == maximumText else {
-                    error = "An identical card already has different offer overrides. Match those overrides before merging."; return
-                }
-                duplicate.quantity += quantity; try duplicate.update(card); context.delete(item)
-            } else {
-                item.quantity = quantity; try item.update(card)
-                item.cashOverrideText = cashText
-                item.tradeOverrideText = tradeText
-                item.maximumOverrideText = maximumText
-            }
-            try CardListService.save(context); DiagnosticLog.shared.record("inventory.edited"); dismiss()
+            try CardListService.edit(item, card: card, quantity: quantity,
+                cashOverride: cashText, tradeOverride: tradeText, maximumOverride: maximumText, context: context)
+            DiagnosticLog.shared.record("inventory.edited"); dismiss()
         } catch { context.rollback(); self.error = error.localizedDescription }
     }
 }

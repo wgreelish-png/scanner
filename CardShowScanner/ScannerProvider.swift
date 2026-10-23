@@ -57,7 +57,7 @@ import Foundation
     func clearCache() async throws { /* Synthetic results have no disk cache. */ }
 }
 
-struct MarketQuote: Equatable {
+struct MarketQuote: Equatable, Sendable {
     var marketPrice: Decimal?
     var skuID: String?
 }

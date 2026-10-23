@@ -2,7 +2,7 @@
 
 ## Behavior implemented on this branch
 
-Home has **Start New Scan** (game picker, new timestamped list, live camera) and **Open Existing List**. Settings is in the toolbar. Existing lists can be reviewed or continued, including completed sessions and standalone single-game lists. Continuing finishes any other active session without deleting its data. Mock scanning requires an explicit choice under Developer Testing.
+Home has **Start New Scan** (game picker, new timestamped list, live camera) and **Open Existing List**. Settings is in the toolbar. Existing lists can be reviewed or continued, including completed sessions and standalone single-game lists. Continuing requires confirmation before finishing another active session, without deleting its data; the service also enforces this acknowledgment. Mock scanning requires an explicit choice under Developer Testing.
 
 Recognition code, its module graph, and scalar/SIMD OpenCV builds are bundled in `Resources/ScannerRuntime`. A loopback-only server exposes those assets to WebKit on a stable local origin, preserving the selected game's existing IndexedDB pack cache across app launches. The remote quick-scanner page is no longer loaded. `manifest.json` records exact upstream URLs, retrieval date and SHA-256 values. Source comments are retained. One recorded adaptation adds `resolveCandidates=false` to bypass CDN/image-assisted reranking, preserving local hash candidates and the captured thumbnail for manual confirmation. The existing user authorization for this integration remains established.
 
@@ -12,7 +12,7 @@ Each full recognition freezes the confirmation view, with alternatives/reprints,
 
 A successful Confirm & Add appends a distinct quantity-one row and releases the review. Failure keeps the pending selection and permits retry. Double taps and subsequent frames cannot append a second row. After saving, remove the card for the next recognition, or intentionally choose **Scan Next Card** for an identical physical copy. **Discard & Scan Again** abandons an incorrect snapshot. Pending review survives screen/background stop/restart within the current view; an unconfirmed review is not persisted across app termination.
 
-New scan rows use strictly increasing `addedAt` timestamps with an ID tie-breaker for historical ties. Review defaults to Scan Order; CSV, duplication and saved offer lines use the same order. The existing storage schema is unchanged. Historical merged quantities remain intact: the original physical scan order cannot be recovered from already merged data.
+New scan rows use strictly increasing `addedAt` timestamps with an ID tie-breaker for historical ties. Review defaults to Scan Order; CSV, duplication and saved offer lines use the same order. Editing a row never merges it into another matching row. The existing storage schema is unchanged. Historical merged quantities remain intact: the original physical scan order cannot be recovered from already merged data.
 
 ## Validation
 
@@ -37,3 +37,13 @@ Required real-iPhone checks before using with customers:
 5. Close and reopen the app without connectivity after a successful database download. Recognition startup and cached-pack behavior are required to work, but are **not yet device-verified**. Prices should clearly be unavailable. Do not describe offline recognition as production-ready until this passes.
 
 No successful Xcode build or iPhone validation is implied by Linux grammar/JavaScript checks.
+
+## Recovery and verification for this continuation
+
+The prior workspace commits `3a369dc` and `c6538bf` were not present in the available checkout or advertised remote branches. Inspection found the substantial implementation at remote commit `225ac77` on `codex/scan-confirmation-flow`, already associated with PR #1; this work continues that branch rather than recreating its bundled assets.
+
+Further fixes remove the editor's residual merge path, require explicit service-level acknowledgment of switching active lists, clear the editor's price/SKU on a condition change, preserve diagnostics, and test stale pricing, partially mutated failed-save rollback, same-identity edits, legacy quantities, saved offers and list resumption.
+
+Passed: 16 JavaScript tests, including actual packaged scalar/SIMD WASM initialization, synthetic hash/match and blank-frame pipeline rejection; 2 signing-helper tests; 47-asset integrity/dependency checks; Swift grammar and Xcode source/test/resource membership checks. The scalar and SIMD runtimes are isolated in separate Node processes, matching the app's one-build-per-JavaScript-realm design.
+
+There are 33 native tests supplied. `xcodebuild` was attempted and is unavailable on this Linux machine (exit 127), so neither a native build nor native test pass is claimed. Physical-iPhone checks remain unverified. Cached files, Node initialization and mocked camera callbacks are not evidence of offline iPhone scanning. Use the steps above and attach diagnostic/native test results to PR #1 when a Mac/iPhone is available.

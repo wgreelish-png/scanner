@@ -1,6 +1,6 @@
 import Foundation
 
-struct CardIdentity: Codable, Hashable {
+struct CardIdentity: Codable, Hashable, Sendable {
     var game: String
     var productID: String
     var skuID: String?
@@ -9,13 +9,13 @@ struct CardIdentity: Codable, Hashable {
     var condition: String = "Near Mint"
 }
 
-struct CardPrinting: Codable, Hashable {
+struct CardPrinting: Codable, Hashable, Sendable {
     var label: String
     var skuID: String?
     var marketPrice: Decimal?
 }
 
-struct CardCandidate: Identifiable, Codable, Hashable {
+struct CardCandidate: Identifiable, Codable, Hashable, Sendable {
     var id: String { identity.productID + "|" + identity.printing + "|" + (identity.skuID ?? "") }
     var identity: CardIdentity
     var name: String

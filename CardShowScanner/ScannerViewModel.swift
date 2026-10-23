@@ -22,11 +22,11 @@ import AudioToolbox
     private let provider: any ScannerProvider
     private let pricing: any MarketPricing
     // Injection makes a failed transaction/retry testable without corrupting a store.
-    private let saveCard: (CardCandidate, ScanSession, CardList, ModelContext, String?) throws -> Void
+    private let saveCard: @MainActor (CardCandidate, ScanSession, CardList, ModelContext, String?) throws -> Void
     var label: String { provider.label }
     var liveProvider: TCGTrackingScannerProvider? { provider as? TCGTrackingScannerProvider }
     init(provider: (any ScannerProvider)? = nil, pricing: any MarketPricing = OnlineMarketPricing(),
-         saveCard: @escaping (CardCandidate, ScanSession, CardList, ModelContext, String?) throws -> Void = {
+         saveCard: @escaping @MainActor (CardCandidate, ScanSession, CardList, ModelContext, String?) throws -> Void = {
              try SessionService.add($0, session: $1, list: $2, context: $3, recognitionRef: $4)
          }) {
         self.provider = provider ?? TCGTrackingScannerProvider()
@@ -38,6 +38,7 @@ import AudioToolbox
             error = BatchFailure.unavailable.localizedDescription; return
         }
         self.session = session
+        DiagnosticLog.shared.record("scanner.start", ["provider": liveProvider == nil ? "mock" : "live"])
         if selected == nil { waitingForRemoval = false }
         provider.start(game: game)
         let stream = provider.results
@@ -49,7 +50,9 @@ import AudioToolbox
         }
     }
     func receive(_ scan: ScanResult) {
-        guard !paused, !saving, selected == nil else { return }
+        guard !paused, !saving, selected == nil else {
+            DiagnosticLog.shared.record("recognition.held", sampleEvery: 5); return
+        }
         if !scan.visible { waitingForRemoval = false; return }
         guard !waitingForRemoval, !scan.same, let first = scan.candidates.first else { return }
         result = scan
@@ -60,6 +63,7 @@ import AudioToolbox
         DiagnosticLog.shared.record("recognition.result", ["episode": scan.id.uuidString, "candidates": String(scan.candidates.count)])
     }
     func stop() {
+        if consumer != nil { DiagnosticLog.shared.record("scanner.stop") }
         provider.stop(); consumer?.cancel(); consumer = nil
         // Keep the pending review and price selection across navigation/backgrounding.
     }
@@ -69,13 +73,14 @@ import AudioToolbox
     }
     func choose(_ candidate: CardCandidate) {
         let condition = selected?.identity.condition ?? "Near Mint"
+        guard result?.candidates.contains(where: { $0.id == candidate.id }) == true || result == nil else { return }
         selected = candidate; selected?.identity.condition = condition
         confirmed = candidate.requiresPrintingSelection != true
         refreshPrice()
     }
     func confirmPrinting() { selected?.requiresPrintingSelection = false; confirmed = selected != nil }
     func changePrinting(_ printing: String) {
-        guard var card = selected else { return }
+        guard var card = selected, card.printings.contains(printing) || printing == card.identity.printing else { return }
         card.identity.printing = printing
         card.identity.skuID = nil; card.marketPrice = nil; card.requiresPrintingSelection = false
         selected = card; confirmed = true; refreshPrice()
@@ -91,18 +96,22 @@ import AudioToolbox
         // Never retain a quote for a previous printing or condition.
         card.marketPrice = nil; card.identity.skuID = nil; selected = card
         let requestID = priceRequestID
+        let requestCard = card
+        DiagnosticLog.shared.record("pricing.started")
         priceLoading = true; priceMessage = nil
         priceTask = Task { [weak self, pricing] in
             do {
-                let quote = try await pricing.quote(for: card)
-                guard let self, !Task.isCancelled, self.priceRequestID == requestID, self.selected?.identity == card.identity else { return }
+                let quote = try await pricing.quote(for: requestCard)
+                guard let self, !Task.isCancelled, self.priceRequestID == requestID, self.selected?.identity == requestCard.identity else { return }
                 self.selected?.marketPrice = quote?.marketPrice
                 self.selected?.identity.skuID = quote?.skuID
                 self.priceLoading = false
+                DiagnosticLog.shared.record("pricing.finished", ["priced": String(quote?.marketPrice != nil)])
                 self.priceMessage = quote?.marketPrice == nil ? "Market value unavailable for this printing and condition." : nil
             } catch {
                 guard let self, !Task.isCancelled, self.priceRequestID == requestID else { return }
                 self.priceLoading = false
+                DiagnosticLog.shared.failure("pricing.failed", error)
                 self.priceMessage = "Online price lookup failed. Retry, or confirm with market value unavailable."
             }
         }
@@ -133,6 +142,7 @@ import AudioToolbox
         priceTask?.cancel(); priceRequestID = UUID(); priceLoading = false
         result = nil; selected = nil; confirmed = false; waitingForRemoval = false; priceMessage = nil
         liveProvider?.resetRecognition()
+        DiagnosticLog.shared.record("recognition.rearmed")
     }
 }
 

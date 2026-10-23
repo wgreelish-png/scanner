@@ -53,7 +53,7 @@ struct SessionReviewHeader: View {
         Text("Editing cards updates this review. Saved estimates retain their original rates, prices, quantities and overrides.").font(.caption).foregroundStyle(.secondary)
             .confirmationDialog("Continue this list?", isPresented: $confirmResume) {
                 Button("Continue Scanning") {
-                    do { try SessionService.resume(session, context: context); resumed = true }
+                    do { try SessionService.resume(session, context: context, finishingOtherSession: true); resumed = true }
                     catch { self.error = error.localizedDescription }
                 }
             } message: { Text("New cards append to this list. Any other active session will be finished and kept.") }
