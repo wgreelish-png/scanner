@@ -7,7 +7,7 @@ import WebKit
         CardCandidate(identity: CardIdentity(game: "Pokémon", productID: ref, printing: "Normal"),
             name: "Fixture", set: "Fixture", number: "1", marketPrice: nil, imageURL: nil, confidence: 95, printings: ["Normal"])
     }
-    func testOnlyTheActualUnlinkedPublicQuickPageIsAllowed() {
+    func testOnlyTheActualUnlinkedPublicQuickPageIsAllowed() async {
         XCTAssertTrue(PublicPricingPagePolicy.allows(URL(string: "https://tcgtracking.com/newscanplus/quick")))
         XCTAssertTrue(PublicPricingPagePolicy.allows(URL(string: "https://tcgtracking.com:443/newscanplus/quick/")))
         for text in ["http://tcgtracking.com/newscanplus/quick", "https://tcgtracking.com.evil/newscanplus/quick",
@@ -18,19 +18,19 @@ import WebKit
         }
         XCTAssertFalse(PublicPricingPagePolicy.allows(nil))
     }
-    func testUnknownServerTextNeverBecomesADiagnosticReason() {
+    func testUnknownServerTextNeverBecomesADiagnosticReason() async {
         XCTAssertEqual(PublicPricingPagePolicy.safeReason("origin_rejected"), "origin_rejected")
         XCTAssertEqual(PublicPricingPagePolicy.safeReason("none"), "none")
         for text in [nil, "private-token-value", "{\"error\":\"private\"}", "origin_rejected\nprivate"] {
             XCTAssertEqual(PublicPricingPagePolicy.safeReason(text), "unknown_http_error")
         }
     }
-    func testRealQuickScanCandidateBatchPreservesTheSelectedNidoran() {
+    func testRealQuickScanCandidateBatchPreservesTheSelectedNidoran() async {
         let refs = ["p:84922", "p:86027", "p:87718", "p:87727", "p:89273"]
         let cards = refs.map(card)
         XCTAssertEqual(OnlineMarketPricing.references(for: cards[2], candidates: cards), refs)
     }
-    func testBatchDeduplicatesUntrustedRefsAndNeverDropsSelectedCard() {
+    func testBatchDeduplicatesUntrustedRefsAndNeverDropsSelectedCard() async {
         let selected = card("p:7")
         let cards = [card("bad"), card("p:1"), card("p:1")] + (2...8).map { card("p:\($0)") }
         let refs = OnlineMarketPricing.references(for: selected, candidates: cards)

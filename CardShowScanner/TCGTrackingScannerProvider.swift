@@ -133,6 +133,9 @@ struct TCGBridgeNormalizer {
         let proxy = WeakScanMessageHandler(owner: self); messageProxy = proxy
         config.userContentController.add(proxy, name: "scanResult")
         webView.navigationDelegate = self; webView.uiDelegate = self
+        #if DEBUG
+        webView.isInspectable = true
+        #endif
         webView.scrollView.isScrollEnabled = false
     }
     func start(game: String) {

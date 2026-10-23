@@ -50,7 +50,7 @@ Further fixes remove the editor's residual merge path, require explicit service-
 
 Passed: 49 JavaScript tests, including actual packaged scalar/SIMD WASM initialization, synthetic hash/match and blank-frame pipeline rejection; 2 signing-helper tests; 47-asset integrity/dependency checks; Swift grammar and Xcode source/test/resource membership checks. The scalar and SIMD runtimes are isolated in separate Node processes, matching the app's one-build-per-JavaScript-realm design.
 
-There are 58 native tests supplied. `xcodebuild` was attempted and is unavailable on this Linux machine (exit 127), so neither a native build nor native test pass is claimed. Physical-iPhone checks remain unverified. Cached files, Node initialization and mocked camera callbacks are not evidence of offline iPhone scanning. Use the steps above and attach diagnostic/native test results to PR #1 when a Mac/iPhone is available.
+There are 59 native tests supplied. `xcodebuild` is unavailable on this Linux machine (exit 127). macOS CI at b156f29 passed the unsigned Release iPhone build. Crash reporting identified the simulator's missing Swift WebKit library; CI now applies the affected iOS 18.4/18.5 runtime's existing Cryptex fallback path to XCTest. A passing native run remains required. Phone logs show camera/worker initialization and recognition settling; pricing and zero-download reopening still fail. Cached files, Node initialization and mocked camera callbacks are not evidence of offline iPhone scanning. Record native test and device acceptance results with the relevant commit.
 
 ## Full-screen camera UI
 
@@ -74,4 +74,6 @@ Database tests exercise fresh pages with unavailable IndexedDB, migration, v1/v2
 
 Offer review accepts a custom whole-list cash amount, shows its difference from the calculation and updates the selected cash total/spread. Blank returns to calculated cash; $0 is preserved. Values must be valid USD cents and nonnegative. Saving an estimate stores an optional custom amount in its existing JSON; old snapshots and the SwiftData schema remain intact. Five native offer tests cover legacy decoding, zero, validation, snapshot preservation and reopen with unpriced cards.
 
-App orientation is portrait-only, including full-screen iPad compatibility. Six pricing transport tests cover trusted public-page navigation, reason redaction, actual candidate batching and WebKit content-rule compilation. These 58 total native tests require Xcode. Branch pushes now trigger macOS simulator tests and Release compilation; a configured workflow alone is not a passing result.
+App orientation is portrait-only, including full-screen iPad compatibility. Six pricing transport tests cover trusted public-page navigation, reason redaction, actual candidate batching and WebKit content-rule compilation. These 59 total native tests require Xcode. Branch pushes now trigger macOS simulator tests and Release compilation; a configured workflow alone is not a passing result.
+
+Build 3 adds directory-alias cache reopening, a native regression case and accepted/rejected cache inventory counts. Debug web views are inspectable in Mac Safari for comparison with the working public website. The latest phone logs still show HTTP 401 pricing and another download after successful native writes; these remain device acceptance failures until reproduced successfully.

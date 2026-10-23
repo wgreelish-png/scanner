@@ -7,7 +7,7 @@ import SwiftData
         try ModelContainer(for: CardList.self, InventoryCard.self, ScanSession.self,
                            configurations: ModelConfiguration(isStoredInMemoryOnly: true))
     }
-    func testRepeatedFramesNeverAutomaticallyAddTwice() {
+    func testRepeatedFramesNeverAutomaticallyAddTwice() async {
         var gate = RecognitionGate()
         let cards = MockScannerProvider.samples(game: "Pokémon", index: 0)
         var result = ScanResult(id: UUID(), candidates: cards, accepted: true, same: false)
@@ -20,7 +20,7 @@ import SwiftData
         gate.receive(result)
         XCTAssertTrue(gate.consumeAutomatic(result), "A new physical copy is another episode")
     }
-    func testAmbiguousAndLowConfidenceNeverAutomaticallyAdd() {
+    func testAmbiguousAndLowConfidenceNeverAutomaticallyAdd() async {
         var gate = RecognitionGate()
         var cards = MockScannerProvider.samples(game: "Pokémon", index: 0)
         var scan = ScanResult(id: UUID(), candidates: cards, accepted: false, same: false)
@@ -29,7 +29,7 @@ import SwiftData
         scan = ScanResult(id: UUID(), candidates: cards, accepted: true, same: false)
         gate.receive(scan); XCTAssertFalse(gate.consumeAutomatic(scan))
     }
-    func testEveryScanRemainsSeparateIncludingExactVariants() throws {
+    func testEveryScanRemainsSeparateIncludingExactVariants() async throws {
         let container = try store(); let context = container.mainContext
         let list = CardList(name: "Show"); context.insert(list)
         let card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]
@@ -45,7 +45,7 @@ import SwiftData
         XCTAssertEqual(list.cards.count, 5); XCTAssertEqual(list.quantity, 5)
         XCTAssertTrue(list.cards.allSatisfy { $0.quantity == 1 })
     }
-    func testCandidateConfirmationAndPrintingPriceInvalidation() {
+    func testCandidateConfirmationAndPrintingPriceInvalidation() async {
         let model = ScannerViewModel()
         let cards = MockScannerProvider.samples(game: "Pokémon", index: 0)
         XCTAssertFalse(model.confirmed)
@@ -57,7 +57,7 @@ import SwiftData
         XCTAssertNil(model.selected?.marketPrice)
         XCTAssertNil(model.selected?.identity.skuID)
     }
-    func testCSVQuotesAndUnknownPrices() {
+    func testCSVQuotesAndUnknownPrices() async {
         var card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]
         card.name = "Card, \"Rare\"\nEdition"; card.marketPrice = nil
         let csv = CSVExportService.render([ExportRow(card: card, quantity: 2)])
@@ -65,7 +65,7 @@ import SwiftData
         XCTAssertTrue(csv.hasSuffix("\"2\",\"\",\"\"\r\n"))
         XCTAssertEqual(CSVExportService.escape("=1+1"), "\"'=1+1\"")
     }
-    func testMissingPricesRemainUnknownAndCopiesPreserveQuantities() throws {
+    func testMissingPricesRemainUnknownAndCopiesPreserveQuantities() async throws {
         let container = try store(); let context = container.mainContext
         let list = CardList(name: "Show"); context.insert(list)
         var card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]; card.marketPrice = nil
@@ -78,7 +78,7 @@ import SwiftData
         let all = try context.fetch(FetchDescriptor<CardList>())
         XCTAssertEqual(all.count, 2); XCTAssertTrue(all.allSatisfy { $0.quantity == 2 })
     }
-    func testPersistenceAfterClosingStoreAndCascadeDelete() throws {
+    func testPersistenceAfterClosingStoreAndCascadeDelete() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -99,7 +99,7 @@ import SwiftData
         context.delete(lists[0]); try context.save()
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<InventoryCard>()), 0)
     }
-    func testManualAdditionBlocksLaterConfidentUpdateInSameEpisode() {
+    func testManualAdditionBlocksLaterConfidentUpdateInSameEpisode() async {
         var gate = RecognitionGate()
         let cards = MockScannerProvider.samples(game: "Pokémon", index: 0)
         var scan = ScanResult(id: UUID(), candidates: cards, accepted: false, same: false)
@@ -108,7 +108,7 @@ import SwiftData
         gate.receive(scan)
         XCTAssertFalse(gate.consumeAutomatic(scan))
     }
-    func testBridgePartialFramesPreserveIdentityAndHideClearsState() throws {
+    func testBridgePartialFramesPreserveIdentityAndHideClearsState() async throws {
         let candidate = TCGBridgeCandidate(ref: "p:123", name: "Demo", number: "1", set: "Demo", confidence: 62,
             printing: "Normal", skuID: "10", marketPrice: 1.25,
             printings: [CardPrinting(label: "Normal", skuID: "10", marketPrice: 1.25)], requiresPrintingSelection: false)
@@ -126,7 +126,7 @@ import SwiftData
         wire.same = true; wire.candidates = nil
         XCTAssertNil(try normalizer.receive(wire, game: "Pokémon"))
     }
-    func testBridgeRejectsInvalidReferencesAndTooManyCandidates() throws {
+    func testBridgeRejectsInvalidReferencesAndTooManyCandidates() async throws {
         var normalizer = TCGBridgeNormalizer()
         var candidate = TCGBridgeCandidate(ref: "bad", name: "Demo", number: "", set: "", confidence: 95,
             printing: "Normal", printings: [], requiresPrintingSelection: false)
@@ -135,7 +135,7 @@ import SwiftData
         candidate.ref = "p:123"; wire.candidates = Array(repeating: candidate, count: 6)
         XCTAssertThrowsError(try normalizer.receive(wire, game: "Pokémon"))
     }
-    func testPrintingQuotesAndAmbiguityConfirmation() {
+    func testPrintingQuotesAndAmbiguityConfirmation() async {
         let model = ScannerViewModel()
         var card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]
         card.requiresPrintingSelection = true
@@ -158,7 +158,7 @@ import SwiftData
         provider.stop()
     }
 
-    func testDiagnosticRotationExportAndDataExclusion() throws {
+    func testDiagnosticRotationExportAndDataExclusion() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let suite = "CardShowScanner.Tests." + UUID().uuidString
@@ -181,7 +181,7 @@ import SwiftData
         try log.clear()
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("current.jsonl").path))
     }
-    func testDiagnosticsDisabledAndSampledEvents() throws {
+    func testDiagnosticsDisabledAndSampledEvents() async throws {
         let suite = "CardShowScanner.Tests." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -200,7 +200,7 @@ import SwiftData
         XCTAssertTrue(text.contains("-1009")); XCTAssertFalse(text.contains("PRIVATE_URL_TOKEN"))
     }
 
-    func testBatchStartIsExplicitAndPreventsSecondActiveSession() throws {
+    func testBatchStartIsExplicitAndPreventsSecondActiveSession() async throws {
         let container = try store(), context = container.mainContext
         XCTAssertNil(try SessionService.active(context: context))
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<CardList>()), 0)
@@ -211,7 +211,7 @@ import SwiftData
         XCTAssertThrowsError(try SessionService.start(game: "Pokémon", context: context))
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<CardList>()), 1)
     }
-    func testFinishAndReplacementKeepSeparateListsAndQuantities() throws {
+    func testFinishAndReplacementKeepSeparateListsAndQuantities() async throws {
         let container = try store(), context = container.mainContext
         let original = try SessionService.start(game: "Pokémon", context: context)
         let list = try XCTUnwrap(SessionService.list(for: original, context: context))
@@ -227,7 +227,7 @@ import SwiftData
         try SessionService.finish(replacement, context: context)
         XCTAssertNil(try SessionService.active(context: context))
     }
-    func testInvalidGameReplacementRollsBackAndWrongGameDoesNotAdd() throws {
+    func testInvalidGameReplacementRollsBackAndWrongGameDoesNotAdd() async throws {
         let container = try store(), context = container.mainContext
         let session = try SessionService.start(game: "Pokémon", context: context)
         let list = try XCTUnwrap(SessionService.list(for: session, context: context))
@@ -237,7 +237,7 @@ import SwiftData
         XCTAssertThrowsError(try SessionService.add(MockScannerProvider.samples(game: "Yu-Gi-Oh!", index: 0)[0], session: session, list: list, context: context))
         XCTAssertEqual(list.quantity, 0)
     }
-    func testBatchReopensWithSameIdentityGameRatesAndSavedCards() throws {
+    func testBatchReopensWithSameIdentityGameRatesAndSavedCards() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let url = directory.appendingPathComponent("batch.store")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -257,20 +257,20 @@ import SwiftData
         XCTAssertEqual(try SessionService.list(for: restored, context: context)?.quantity, 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<CardList>()), 1)
     }
-    func testOfferPercentagesQuantitiesAndPerCopyOverrides() {
+    func testOfferPercentagesQuantitiesAndPerCopyOverrides() async {
         let lines = [OfferLine(price: 100, quantity: 2), OfferLine(price: 10, quantity: 3, cashOverride: 1, tradeOverride: 2, maximumOverride: 3)]
         let totals = OfferCalculator.calculate(lines, rates: OfferRates())
         XCTAssertEqual(totals.market, 230); XCTAssertEqual(totals.cash, 143)
         XCTAssertEqual(totals.trade, 166); XCTAssertEqual(totals.maximum, 159)
         XCTAssertEqual(totals.quantity, 5); XCTAssertEqual(totals.grossCashSpread, 87)
     }
-    func testUnpricedCopiesExcludedEvenWithOfferOverridesAndZeroIsKnown() {
+    func testUnpricedCopiesExcludedEvenWithOfferOverridesAndZeroIsKnown() async {
         let lines = [OfferLine(price: nil, quantity: 4, cashOverride: 3), OfferLine(price: 0, quantity: 2)]
         let totals = OfferCalculator.calculate(lines, rates: OfferRates())
         XCTAssertEqual(totals.unpricedQuantity, 4); XCTAssertEqual(totals.quantity, 6)
         XCTAssertEqual(totals.market, 0); XCTAssertEqual(totals.cash, 0)
     }
-    func testOfferCurrencyRoundingAndNumericInputValidation() {
+    func testOfferCurrencyRoundingAndNumericInputValidation() async {
         let totals = OfferCalculator.calculate([OfferLine(price: Decimal(string: "0.05"), quantity: 3)], rates: OfferRates())
         XCTAssertEqual(totals.cash, Decimal(string: "0.11"))
         XCTAssertEqual(totals.trade, Decimal(string: "0.12"))
@@ -278,7 +278,7 @@ import SwiftData
         XCTAssertNil(MoneyInput.parse("10abc")); XCTAssertNil(MoneyInput.parse("-2")); XCTAssertNil(MoneyInput.parse("NaN"))
         XCTAssertFalse(OfferRates(cash: 101).isValid)
     }
-    func testGlobalDefaultsDoNotRewriteSessionsOrSavedEstimates() throws {
+    func testGlobalDefaultsDoNotRewriteSessionsOrSavedEstimates() async throws {
         let suite = "BatchTests." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -296,7 +296,7 @@ import SwiftData
         XCTAssertEqual(saved.totals, original.totals); XCTAssertEqual(saved.rates.cash, 65)
         XCTAssertEqual(saved.lines[0].quantity, 1); XCTAssertEqual(batch.rates.cash, 60)
     }
-    func testLegacyUnversionedStoreMigrationPreservesDataWithoutCreatingBatch() throws {
+    func testLegacyUnversionedStoreMigrationPreservesDataWithoutCreatingBatch() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = directory.appendingPathComponent("legacy.store")
@@ -321,7 +321,7 @@ import SwiftData
         XCTAssertNil(try SessionService.active(context: context))
         XCTAssertNil(lists[0].cards[0].cashOverrideText)
     }
-    func testDeletingLinkedListPreservesSessionRecordAndClearsActiveState() throws {
+    func testDeletingLinkedListPreservesSessionRecordAndClearsActiveState() async throws {
         let container = try store(), context = container.mainContext
         let batch = try SessionService.start(game: "Pokémon", context: context)
         let list = try XCTUnwrap(SessionService.list(for: batch, context: context))
@@ -375,7 +375,7 @@ import SwiftData
         XCTAssertNotNil(model.selected, "An intentional next-card action allows an identical copy")
         model.stop()
     }
-    func testOnlinePriceUsesExactPrintingLanguageAndCondition() throws {
+    func testOnlinePriceUsesExactPrintingLanguageAndCondition() async throws {
         var card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]
         card.identity.productID = "p:123"
         let data = Data(#"{"items":{"p:123":{"printings":[{"key":"Normal","label":"Normal","market_price":99,"quotes":{"English|Near Mint":{"market_price":5,"sku_id":10},"English|Lightly Played":{"market_price":2,"sku_id":"11"}}}]}}}"#.utf8)
@@ -387,7 +387,7 @@ import SwiftData
         card.identity.condition = "Near Mint"; card.identity.printing = "Holofoil"
         XCTAssertNil(try OnlineMarketPricing.parse(data, for: card))
     }
-    func testDuplicateScanOrderSurvivesStoreReopenAndCSV() throws {
+    func testDuplicateScanOrderSurvivesStoreReopenAndCSV() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("order.store")
@@ -406,7 +406,7 @@ import SwiftData
         let csv = CSVExportService.render(list.orderedCards.map { ExportRow(card: $0.snapshot, quantity: $0.quantity) })
         XCTAssertEqual(csv.components(separatedBy: "\r\n").filter { !$0.isEmpty }.count, 4)
     }
-    func testCompletedSessionCanContinueWithoutReplacingList() throws {
+    func testCompletedSessionCanContinueWithoutReplacingList() async throws {
         let container = try store(), context = container.mainContext
         let original = try SessionService.start(game: "Pokémon", context: context)
         let list = try XCTUnwrap(SessionService.list(for: original, context: context))
@@ -419,7 +419,7 @@ import SwiftData
         XCTAssertEqual(original.listID, list.id)
     }
 
-    func testEditingToSameIdentityNeverMergesAndKeepsScanOrder() throws {
+    func testEditingToSameIdentityNeverMergesAndKeepsScanOrder() async throws {
         let container = try store(), context = container.mainContext
         let list = CardList(name: "Order"); context.insert(list)
         let cards = MockScannerProvider.samples(game: "Pokémon", index: 0)
@@ -433,7 +433,7 @@ import SwiftData
         XCTAssertEqual(list.orderedCards.map(\.quantity), [1, 1, 1])
         XCTAssertEqual(list.orderedCards.map { $0.snapshot.identity.productID }, Array(repeating: cards[0].identity.productID, count: 3))
     }
-    func testContinueStandaloneAndCompletedListPreservesOffersAndLegacyQuantity() throws {
+    func testContinueStandaloneAndCompletedListPreservesOffersAndLegacyQuantity() async throws {
         let container = try store(), context = container.mainContext
         let list = CardList(name: "Legacy quantity"); context.insert(list)
         let card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]
@@ -452,7 +452,7 @@ import SwiftData
         XCTAssertEqual(list.orderedCards.map(\.quantity), [7, 1])
         XCTAssertEqual(list.orderedCards[0].id, legacy.id)
     }
-    func testKnownZeroQuoteAndUnavailableConditionDoNotReuseNM() throws {
+    func testKnownZeroQuoteAndUnavailableConditionDoNotReuseNM() async throws {
         var card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]; card.identity.productID = "p:123"
         let data = Data(#"{"items":{"p:123":{"printings":[{"label":"Normal","quotes":{"English|Near Mint":{"market_price":10,"sku_id":100},"English|Damaged":{"market_price":0,"sku_id":101}}}]}}}"#.utf8)
         XCTAssertEqual(try OnlineMarketPricing.parse(data, for: card), MarketQuote(marketPrice: 10, skuID: "100"))
@@ -595,7 +595,7 @@ import SwiftData
         let url = try XCTUnwrap(Bundle(for: CardShowScannerTests.self).url(forResource: "quickscan-detail", withExtension: "json", subdirectory: "Fixtures"))
         return try Data(contentsOf: url)
     }
-    func testCapturedQuickScanNidoranUsesExactConditionAndPrintingQuotes() throws {
+    func testCapturedQuickScanNidoranUsesExactConditionAndPrintingQuotes() async throws {
         let data = try quickScanFixture()
         var card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]
         card.identity.productID = "p:87718"; card.identity.printing = "Normal"
@@ -605,7 +605,7 @@ import SwiftData
         card.identity.printing = "Reverse Holofoil"; card.identity.condition = "Near Mint"
         XCTAssertEqual(try OnlineMarketPricing.parse(data, for: card), MarketQuote(marketPrice: Decimal(string: "1.84"), skuID: "1261658"))
     }
-    func testCapturedMissingMarketNeverFallsBackToDirectLiveOrOtherPrices() throws {
+    func testCapturedMissingMarketNeverFallsBackToDirectLiveOrOtherPrices() async throws {
         let data = try quickScanFixture()
         var card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]
         card.identity.productID = "p:86027"; card.identity.printing = "Reverse Holofoil"
