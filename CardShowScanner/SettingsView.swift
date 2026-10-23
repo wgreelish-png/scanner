@@ -15,6 +15,7 @@ struct SettingsView: View {
     @State private var cacheMessage = false
     @State private var clearingCache = false
     @State private var showingConnection = false
+    @State private var returningFromConnection = false
     @AppStorage("tcgTrackingConnectionIntroduced") private var connectionIntroduced = false
     var body: some View {
         Form {
@@ -35,7 +36,11 @@ struct SettingsView: View {
 
             }
             Section("TCGTracking prices") {
-                Button("Connect TCGTracking", systemImage: "person.crop.circle") { showingConnection = true }
+                Button("Connect TCGTracking", systemImage: "person.crop.circle") {
+                    guard !showingConnection, !returningFromConnection else { return }
+                    showingConnection = true
+                    DiagnosticLog.shared.record("connection.opened", ["phase": "settings"])
+                }.disabled(returningFromConnection)
                 Text("Open TCGTracking and sign in if the website asks. Its session is remembered in this app for market prices. You can scan and save cards when prices are unavailable.").font(.caption)
             }
             Section("Scanner") {
@@ -63,10 +68,17 @@ struct SettingsView: View {
             }
             Section("Privacy") { Text("Lists, sessions and diagnostic logs stay on this iPhone unless you export them. Camera frames are processed by the bundled recognition engine on this phone. Game databases download from TCGTracking; card images and market quotes use internet requests. CSV sharing sends the selected list through the iOS share sheet.") }
         }.navigationTitle("Settings")
-            .fullScreenCover(isPresented: $showingConnection) {
+            .fullScreenCover(isPresented: $showingConnection, onDismiss: {
+                returningFromConnection = false
+                DiagnosticLog.shared.record("connection.closed", ["phase": "settings"])
+            }) {
                 TCGTrackingConnectionView {
+                    guard showingConnection, !returningFromConnection else { return }
+                    returningFromConnection = true
                     connectionIntroduced = true
                     OnlineMarketPricing.connectionDidChange()
+                    showingConnection = false
+                    DiagnosticLog.shared.record("connection.continued", ["phase": "settings"])
                 }
             }
             .sheet(isPresented: Binding(get: { diagnosticURL != nil }, set: { if !$0 { cleanupDiagnostics() } })) {

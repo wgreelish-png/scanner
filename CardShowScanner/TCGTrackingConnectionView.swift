@@ -1,8 +1,7 @@
 import SwiftUI
 import WebKit
 
-/// The normal website owns sign-in. No credentials or page contents cross into
-/// the app; only WebKit's persistent first-party website session is shared.
+/// Navigation stays on the normal website; pricing shares its persistent session.
 struct TCGTrackingConnectionPolicy {
     static let startURL = URL(string: "https://tcgtracking.com/")!
 
@@ -27,8 +26,11 @@ struct TCGTrackingConnectionPolicy {
 }
 
 @MainActor struct TCGTrackingConnectionView: View {
-    @Environment(\.dismiss) private var dismiss
     @StateObject private var browser = TCGTrackingConnectionBrowser()
+    @State private var showingSignIn = true
+    @State private var returning = false
+    @FocusState private var focusedField: SignInField?
+    private enum SignInField { case username, password }
     var continueTitle = "Done"
     var onContinue: () -> Void = {}
 
@@ -39,38 +41,65 @@ struct TCGTrackingConnectionPolicy {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                Text("Open TCGTracking. Sign in if the website asks, then return. Prices require internet. You can continue without prices.")
-                    .font(.footnote)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
-                if browser.loading {
-                    ProgressView().frame(maxWidth: .infinity).padding(.bottom, 8)
-                        .accessibilityLabel("Loading TCGTracking")
+            ZStack {
+                VStack(spacing: 8) {
+                    if browser.loading || browser.signingIn { ProgressView(browser.signingIn ? "Signing in…" : "Loading TCGTracking…") }
+                    if let message = browser.message { Text(message).font(.footnote).padding(.horizontal) }
+                    TCGTrackingWebsite(browser: browser)
+                    HStack {
+                        Button { browser.goBack() } label: { Label("Back", systemImage: "chevron.backward") }.disabled(!browser.canGoBack)
+                        Spacer()
+                        Button("Sign In") { showingSignIn = true }
+                        Spacer()
+                        Button { browser.reload() } label: { Label("Reload", systemImage: "arrow.clockwise") }
+                    }.padding(.horizontal).padding(.bottom, 8)
+                }.opacity(showingSignIn ? 0 : 1).allowsHitTesting(!showingSignIn).accessibilityHidden(showingSignIn)
+                if showingSignIn {
+                    Form {
+                        Section {
+                            TextField("Username or email", text: $browser.username)
+                                .textContentType(.username).textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .focused($focusedField, equals: .username).submitLabel(.next)
+                                .onSubmit { focusedField = .password }
+                            SecureField("Password", text: $browser.password)
+                                .textContentType(.password).focused($focusedField, equals: .password).submitLabel(.go)
+                                .onSubmit { signIn() }
+                            Toggle("Remember sign-in on this iPhone", isOn: Binding(get: { browser.rememberSignIn }, set: { browser.setRememberSignIn($0) }))
+                            Button("Sign In") { signIn() }.disabled(!browser.canSignIn)
+                        } header: { Text("TCGTracking account") } footer: {
+                            Text("Remembered details stay in this iPhone's Keychain. They fill TCGTracking's normal sign-in form; verification may still be required.")
+                        }
+                        if let message = browser.message { Section { Text(message).font(.footnote) } }
+                        Section {
+                            Button("Use the Website Instead") { focusedField = nil; showingSignIn = false }
+                            if browser.hasSavedCredentials {
+                                Button("Forget Saved Sign-In", role: .destructive) { browser.forgetSavedSignIn() }
+                            }
+                        } footer: { Text("You can return to the scanner without signing in. Prices require internet.") }
+                    }
                 }
-                if let message = browser.errorMessage {
-                    Text(message).font(.footnote).foregroundStyle(.red)
-                        .frame(maxWidth: .infinity, alignment: .leading).padding()
-                }
-                TCGTrackingWebsite(browser: browser)
             }
-            .navigationTitle("Connect TCGTracking")
+            .navigationTitle("TCGTracking")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(continueTitle) { onContinue(); dismiss() }
-                }
-                ToolbarItemGroup(placement: .bottomBar) {
-                    Button { browser.goBack() } label: { Label("Back", systemImage: "chevron.backward") }
-                        .disabled(!browser.canGoBack)
-                    Spacer()
-                    Button { browser.reload() } label: { Label("Reload", systemImage: "arrow.clockwise") }
-                }
+            .safeAreaInset(edge: .bottom) {
+                Button {
+                    guard !returning else { return }
+                    returning = true; focusedField = nil
+                    browser.webView.endEditing(true); browser.stop()
+                    onContinue()
+                } label: { Text(continueTitle).frame(maxWidth: .infinity, minHeight: 44) }
+                    .buttonStyle(.borderedProminent).controlSize(.large).disabled(returning)
+                    .padding().background(.regularMaterial)
             }
         }
         .interactiveDismissDisabled()
-        .onAppear { browser.startIfNeeded() }
+        .onAppear { browser.startIfNeeded(); if browser.hasSavedCredentials { showingSignIn = false } }
         .onDisappear { browser.stop() }
+    }
+    private func signIn() {
+        guard browser.canSignIn else { return }
+        focusedField = nil; showingSignIn = false
+        browser.signIn()
     }
 }
 
@@ -84,8 +113,22 @@ struct TCGTrackingConnectionPolicy {
     let webView: WKWebView
     @Published private(set) var loading = false
     @Published private(set) var canGoBack = false
-    @Published private(set) var errorMessage: String?
+    @Published private(set) var message: String?
+    @Published var username = ""
+    @Published var password = ""
+    @Published private(set) var rememberSignIn = false
+    @Published private(set) var hasSavedCredentials = false
+    @Published private(set) var signingIn = false
     private var started = false
+    private let credentialsStore = TCGTrackingCredentialStore()
+    private var pendingCredentials: TCGTrackingCredentials?
+    private var followedLoginLink = false
+    private var signInTask: Task<Void, Never>?
+    private var pageID = UUID()
+    var canSignIn: Bool {
+        !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && username.count <= 320 &&
+            !password.isEmpty && password.count <= 4096 && !signingIn
+    }
 
     override init() {
         let configuration = WKWebViewConfiguration()
@@ -102,10 +145,86 @@ struct TCGTrackingConnectionPolicy {
     func startIfNeeded() {
         guard !started else { return }
         started = true
+        do {
+            if let saved = try credentialsStore.load() {
+                username = saved.username; password = saved.password
+                rememberSignIn = true; hasSavedCredentials = true
+                pendingCredentials = saved; signingIn = true
+            }
+        } catch { message = TCGTrackingCredentialStoreFailure.read.localizedDescription }
         openStartPage()
     }
+    func setRememberSignIn(_ remember: Bool) {
+        if !remember && hasSavedCredentials {
+            do { try credentialsStore.delete(); hasSavedCredentials = false }
+            catch { message = TCGTrackingCredentialStoreFailure.delete.localizedDescription; return }
+        }
+        rememberSignIn = remember
+    }
+    func forgetSavedSignIn() {
+        do {
+            try credentialsStore.delete()
+            hasSavedCredentials = false; rememberSignIn = false
+            pendingCredentials = nil; username = ""; password = ""
+            signInTask?.cancel(); signInTask = nil; signingIn = false; pageID = UUID()
+            message = "Saved sign-in removed. The website session remains until you sign out there."
+        } catch { message = TCGTrackingCredentialStoreFailure.delete.localizedDescription }
+    }
+    func signIn() {
+        guard canSignIn else { return }
+        pendingCredentials = TCGTrackingCredentials(username: username.trimmingCharacters(in: .whitespacesAndNewlines), password: password)
+        followedLoginLink = false; signingIn = true; message = nil
+        if !loading { attemptSignIn() }
+    }
+    private func attemptSignIn() {
+        guard let credentials = pendingCredentials, !loading, TCGTrackingConnectionPolicy.allows(webView.url),
+              let resource = Bundle.main.url(forResource: "WebsiteSignIn", withExtension: "js"),
+              let script = try? String(contentsOf: resource, encoding: .utf8) else {
+            if pendingCredentials != nil && !loading {
+                pendingCredentials = nil; signingIn = false
+                message = "Open the website's Sign In page, then try Sign In again."
+            }
+            return
+        }
+        let id = pageID, navigate = !followedLoginLink
+        followedLoginLink = true
+        signInTask?.cancel()
+        signInTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let probe = try await webView.callAsyncJavaScript(script, arguments: ["username": "", "password": "", "submit": false, "navigate": navigate], in: nil, contentWorld: .page)
+                guard !Task.isCancelled, pageID == id else { return }
+                let status = (probe as? [String: Any])?["status"] as? String
+                if status == "navigating" { return }
+                guard status == "ready" || status == "verification_required" else {
+                    pendingCredentials = nil; signingIn = false
+                    message = "Use the website to check your session or open its Sign In page."
+                    return
+                }
+                // Only one submission per explicit/remembered attempt. Navigation
+                // or a failed password must never trigger an automatic retry loop.
+                pendingCredentials = nil
+                var rememberFailed = false
+                if rememberSignIn {
+                    do { try credentialsStore.save(credentials); hasSavedCredentials = true }
+                    catch { rememberFailed = true; message = TCGTrackingCredentialStoreFailure.save.localizedDescription }
+                }
+                let reply = try await webView.callAsyncJavaScript(script, arguments: ["username": credentials.username, "password": credentials.password, "submit": true, "navigate": false], in: nil, contentWorld: .page)
+                guard !Task.isCancelled, pageID == id else { return }
+                signingIn = false
+                let submitted = (reply as? [String: Any])?["status"] as? String
+                if submitted == "verification_required" { message = "Your details are filled. Complete verification and sign in on the website." }
+                else if submitted == "submitted" { message = "Sign-in submitted. Check the website for the result, then return to the scanner." }
+                else { message = "This page needs its normal website sign-in. Your details were not submitted automatically." }
+                if rememberFailed { message = (message ?? "") + " Your details could not be saved on this iPhone." }
+            } catch {
+                guard !Task.isCancelled, pageID == id else { return }
+                pendingCredentials = nil; signingIn = false
+                message = "Check the website to finish signing in, or return without prices."
+            }
+        }
+    }
     private func openStartPage() {
-        errorMessage = nil
         loading = true
         var request = URLRequest(url: TCGTrackingConnectionPolicy.startURL)
         request.timeoutInterval = 25
@@ -113,17 +232,21 @@ struct TCGTrackingConnectionPolicy {
     }
     func goBack() {
         guard webView.canGoBack else { return }
-        errorMessage = nil
+        message = nil
         webView.goBack()
     }
     func reload() {
-        errorMessage = nil
+        message = nil
         if TCGTrackingConnectionPolicy.allows(webView.url) {
             loading = true
             webView.reload()
         } else { openStartPage() }
     }
-    func stop() { webView.stopLoading() }
+    func stop() {
+        pageID = UUID(); pendingCredentials = nil
+        signInTask?.cancel(); signInTask = nil; signingIn = false
+        password = ""; webView.stopLoading()
+    }
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
@@ -133,7 +256,8 @@ struct TCGTrackingConnectionPolicy {
         guard allowed, !action.shouldPerformDownload else {
             if mainWindow {
                 loading = false
-                errorMessage = "This window can open only the TCGTracking website. You can return to the scanner at any time."
+                pendingCredentials = nil; signingIn = false
+                message = "This window can open only the TCGTracking website. You can return to the scanner at any time."
             }
             decisionHandler(.cancel)
             return
@@ -150,26 +274,30 @@ struct TCGTrackingConnectionPolicy {
     }
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         loading = true
-        errorMessage = nil
+        pageID = UUID(); signInTask?.cancel(); signInTask = nil
+        if pendingCredentials == nil { signingIn = false }
         canGoBack = webView.canGoBack
     }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         loading = false
         canGoBack = webView.canGoBack
+        if pendingCredentials != nil { attemptSignIn() }
     }
     private func failed(_ error: Error) {
         guard (error as NSError).code != NSURLErrorCancelled else { return }
         loading = false
+        pendingCredentials = nil; signingIn = false
         canGoBack = webView.canGoBack
         // WebKit errors can contain request URLs. Keep tokens and form values
         // out of app messages and diagnostics, including on failed sign-in.
-        errorMessage = "TCGTracking could not load. Check your connection and reload, or continue without prices."
+        message = "TCGTracking could not load. Check your connection and reload, or continue without prices."
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { failed(error) }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { failed(error) }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         loading = false
-        errorMessage = "The website stopped responding. Reload to try again, or continue without prices."
+        pendingCredentials = nil; signingIn = false
+        message = "The website stopped responding. Reload to try again, or continue without prices."
     }
     func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
                  initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType,

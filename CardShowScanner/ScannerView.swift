@@ -20,6 +20,8 @@ struct ScannerView: View {
     @State private var editingMatch = false
     @State private var showingConnection = false
     @State private var showingReviewConnection = false
+    @State private var returningFromConnection = false
+    @State private var acknowledgedConnectionInView = false
     init(session: ScanSession, list: CardList) {
         self.session = session; self.list = list
         _game = State(initialValue: session.game ?? "Pokémon")
@@ -51,7 +53,7 @@ struct ScannerView: View {
                 .presentationDragIndicator(.visible)
                 .interactiveDismissDisabled()
         }
-        .fullScreenCover(isPresented: $showingConnection, onDismiss: finishConnection) { connectionView }
+        .fullScreenCover(isPresented: $showingConnection, onDismiss: finishConnection) { connectionView(inReview: false) }
         .onAppear { visible = true; startIfReady() }
         .onDisappear { visible = false; model.stop() }
         .onChange(of: scenePhase) { _, phase in
@@ -206,28 +208,42 @@ struct ScannerView: View {
                     }.padding().frame(maxWidth: .infinity).background(.regularMaterial)
                 }
                 .failureAlert($model.error)
-                .fullScreenCover(isPresented: $showingReviewConnection, onDismiss: finishConnection) { connectionView }
+                .fullScreenCover(isPresented: $showingReviewConnection, onDismiss: finishConnection) { connectionView(inReview: true) }
         }
     }
 
-    private var connectionView: some View {
+    private func connectionView(inReview: Bool) -> some View {
         TCGTrackingConnectionView(continueTitle: connectionIntroduced ? "Return to Scanner" : "Continue to Scanner") {
+            guard !returningFromConnection,
+                  inReview ? showingReviewConnection : showingConnection else { return }
+            returningFromConnection = true
             // This records an explicit setup choice, never authentication success.
+            acknowledgedConnectionInView = true
             connectionIntroduced = true
             OnlineMarketPricing.connectionDidChange()
+            // The presenting binding owns dismissal. Updating setup state must
+            // not invalidate a child environment dismiss action mid-tap.
+            if inReview { showingReviewConnection = false } else { showingConnection = false }
+            DiagnosticLog.shared.record("connection.continued", ["phase": inReview ? "review" : "scanner"])
         }
     }
     private func openConnection(inReview: Bool = false) {
-        guard model.suspendForPricingConnection() else { return }
+        guard !returningFromConnection, !showingConnection, !showingReviewConnection,
+              model.suspendForPricingConnection() else { return }
         if inReview { showingReviewConnection = true } else { showingConnection = true }
+        DiagnosticLog.shared.record("connection.opened", ["phase": inReview ? "review" : "scanner"])
     }
     private func finishConnection() {
+        returningFromConnection = false
+        DiagnosticLog.shared.record("connection.closed")
+        guard session.isActive else { return }
         if model.selected != nil { model.refreshPrice() }
         startIfReady()
     }
     private func startIfReady() {
-        guard visible, session.isActive, !model.paused, !showingConnection, !showingReviewConnection else { return }
-        if model.liveProvider != nil && !connectionIntroduced { openConnection(); return }
+        guard visible, session.isActive, !model.paused, !showingConnection, !showingReviewConnection,
+              !returningFromConnection else { return }
+        if model.liveProvider != nil && !connectionIntroduced && !acknowledgedConnectionInView { openConnection(); return }
         model.start(game: session.game ?? game, list: list, context: context, session: session)
     }
 
