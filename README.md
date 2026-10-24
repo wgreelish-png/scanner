@@ -22,6 +22,8 @@ Every new physical confirmation appends its own quantity-one row: A, B, A remain
 
 Open `CardShowScanner.xcodeproj` in Xcode 16+, select **CardShowScanner**, and Run. Set personal signing using the local configuration instructions below. Use a physical iPhone for live camera verification.
 
+For the final personal-use installation, select **CardShowScanner Personal**: Run uses Release without attaching a debugger, with the same bundle ID and your ignored signing configuration. [Final phone test and weekly Personal Team refresh](docs/PersonalIPhone.md) explains how to keep the app/data installed; free signing normally expires after seven days.
+
 ```sh
 node --experimental-vm-modules --test Tests/JavaScript/*.cjs
 python3 -m unittest discover -s scripts -p 'test_*.py'
@@ -31,7 +33,7 @@ python3 scripts/check_scanner_runtime.py
 
 **Passed in this Linux workspace:** 62 JavaScript tests (23 bridge, 11 database-cache, 13 public-pricing request, 13 website sign-in form and 2 real bundled OpenCV/engine smoke tests); 20 Python helper tests (2 signing, 11 native-failure annotation, 7 simulator crash reporting); Swift grammar parsing; app/test source and bundled-resource membership; 47-asset hash/dependency verification. The real-engine tests initialize each WASM build in an isolated Node process, hash and match synthetic input, and reject an empty frame. They do not exercise an iPhone camera or establish real-card recognition accuracy.
 
-**Native validation:** [macOS CI at `61830c3`](https://github.com/wgreelish-png/scanner/actions/runs/40022476375) passed all 73 native cases and the unsigned Release iPhone build, including actual Keychain storage, all trade scenarios/persistence, connection recovery and the existing scan/save/migration regressions. The simulator-only workaround for the [iOS 18.4/18.5 Swift WebKit Cryptex defect](https://github.com/WebKit/WebKit/pull/46146) is working. Xcode is unavailable locally on Linux. Choose an installed iPhone simulator ID from `xcrun simctl list devices available` on a Mac:
+**Native validation:** [macOS CI at `4ab1c5d`](https://github.com/wgreelish-png/scanner/actions/runs/40065283720) passed all 83 native cases and the unsigned Personal-scheme Release iPhone build. Coverage includes permission reuse/coalescing/revocation, negotiated payouts and percentages, historical estimate preservation, actual Keychain storage and existing scan/save/migration regressions. The simulator-only workaround for the [iOS 18.4/18.5 Swift WebKit Cryptex defect](https://github.com/WebKit/WebKit/pull/46146) is working. Xcode is unavailable locally on Linux. Choose an installed iPhone simulator ID from `xcrun simctl list devices available` on a Mac:
 
 ```sh
 xcodebuild test -project CardShowScanner.xcodeproj -scheme CardShowScanner \
@@ -46,7 +48,9 @@ Before relying on this app, complete [the physical-iPhone acceptance checks](doc
 
 Saved lists retain search, sorting, edits, conditions, quantities, renaming, duplication and native CSV sharing. Offer review retains independent cash/trade/maximum rates, per-card overrides and immutable saved estimates. Scanning does not record a purchase. CSV remains app-defined; TCGTracking import compatibility is unverified.
 
-Offer review leads with **My Card Price** and a prominent **Customer Pays You**, **You Pay Customer**, **Even Trade** or **Unused Trade Credit** result. Choose Cash Only, Trade + Cash or Trade Credit Only. It recalculates from already-scanned values without fetching prices. The existing rates, per-card overrides and custom cash offers are retained; transaction inputs/results join the saved estimate's optional JSON without a schema migration. See [trade calculations, examples and allocation assumptions](docs/TradeTransactions.md).
+Offer review leads with **My Card Price** and a prominent **Customer Pays You**, **You Pay Customer**, **Even Trade** or **Unused Trade Credit** result. Choose Cash Only, Trade + Cash or Trade Credit Only. Adjusting **Custom cash offer** updates the selected whole-list cash value and its unused-trade payout immediately; clearing it restores calculated cash. Transaction Math shows configured and applied cash/trade percentages. It recalculates from already-scanned values without fetching prices. Saved estimates preserve their original inputs, cash basis and results in optional JSON without a schema migration. See [trade calculations, examples and allocation assumptions](docs/TradeTransactions.md).
+
+Offer controls have explicit independent tap targets; scanner/saved-estimate routes are registered outside lazy List rows. Reviews opened from the camera return to that same scanner on Continue Scanning. The scanner alone may reuse native camera authorization for its exact active local main frame and video-only capture; other origins, subframes and audio are denied. First-time native requests are coalesced, and denied/revoked access requires the user's Settings change. Pricing and sign-in pages remain unable to capture media.
 
 Settings → Diagnostics can clear/export `CardShowScanner-diagnostics.jsonl`. Logs record startup stages, pricing outcomes, save errors and recognition lifecycle without card/list contents, credentials, raw payloads or images. Upload the exported file with the failed step when reporting device behavior. Unconfirmed review is held in memory across navigation/backgrounding within the current screen; it is not persisted across force-quit.
 
