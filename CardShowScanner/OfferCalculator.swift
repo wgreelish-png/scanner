@@ -35,6 +35,9 @@ struct OfferSnapshot: Identifiable, Codable {
     // Optional JSON field preserves snapshots saved before negotiated totals existed.
     // This is the cash amount for the whole list, independent of the rate calculation.
     var customCashOffer: Decimal? = nil
+    // Optional JSON preserves all older saved offers without a schema migration.
+    // Store inputs and final amounts so later edits never recalculate history.
+    var tradeTransaction: TradeTransactionResult? = nil
     var selectedCashOffer: Decimal { customCashOffer ?? totals.cash }
     var selectedCashSpread: Decimal { totals.market - selectedCashOffer }
 }

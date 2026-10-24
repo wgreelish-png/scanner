@@ -65,7 +65,6 @@ struct HomeView: View {
     @AppStorage("hasChosenBatchGame") private var hasChosenGame = false
     @State private var destination: UUID?
     @State private var error: String?
-    @State private var confirmingNew = false
     private var active: ScanSession? { sessions.first { $0.isActive } }
     var body: some View {
         NavigationStack {
@@ -75,9 +74,9 @@ struct HomeView: View {
                         ForEach(CatalogOptions.games, id: \.self) { Text($0) }
                     }
                     Button("Start New Scan", systemImage: "viewfinder") {
-                        if active != nil { confirmingNew = true } else { start() }
+                        start()
                     }.font(.headline).padding(.vertical, 8)
-                    Text("Creates a new list and opens the live camera scanner.").font(.caption).foregroundStyle(.secondary)
+                    Text("Starts a new session and list. Previous lists and saved offers stay available.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section {
                     NavigationLink { SavedListsView() } label: {
@@ -91,10 +90,6 @@ struct HomeView: View {
                 .navigationDestination(item: $destination) { id in
                     if let session = sessions.first(where: { $0.id == id }) { BatchScannerDestination(session: session) }
                 }
-                .confirmationDialog("Finish the current session and start a new batch?", isPresented: $confirmingNew) {
-                    Button("Finish & Start New Session") { start() }
-                    Button("Cancel", role: .cancel) {}
-                } message: { Text("Its list and saved offers will be kept.") }
                 .failureAlert($error)
         }
     }

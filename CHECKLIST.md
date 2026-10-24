@@ -48,3 +48,11 @@ See docs/ScanConfirmationWorkflow.md. Neither offline iPhone support nor a succe
 - [x] Explicit first-use website connection/sign-in step, persistent WebKit session and frozen-review recovery implemented.
 - [x] CI at ccbb816: 61 native cases including connection navigation/held-card recovery and unsigned Release iPhone build pass.
 - [ ] iPhone: actual website login/session sharing, setup continuation, review recovery and session persistence.
+
+- [x] Build-4 phone log: zero-download native cache reuse, worker/camera scan, HTTP 200 pricing and a priced saved card.
+- [x] Direct Start New Scan keeps old list/offers without a confirmation dialog.
+- [x] Native sign-in, optional device-only Keychain storage/Forget, guarded form submission and one-action Return implemented.
+- [x] Modern trade/cash summary, My Card Price, all five scenarios and immutable saved transactions implemented.
+- [x] 62 JavaScript and 20 Python tests pass locally; target/resource and Swift grammar checks pass.
+- [x] CI at 61830c3 passes all 73 native cases, including actual Keychain and trade regressions, and the unsigned Release iPhone build.
+- [ ] iPhone remembered sign-in, single-tap return, offer layout/keyboard and wide-window acceptance.

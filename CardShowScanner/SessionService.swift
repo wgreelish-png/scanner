@@ -140,7 +140,8 @@ enum BatchFailure: LocalizedError {
             throw error
         }
     }
-    static func saveOffer(_ session: ScanSession, list: CardList, context: ModelContext, customCashOffer: Decimal? = nil) throws {
+    static func saveOffer(_ session: ScanSession, list: CardList, context: ModelContext, customCashOffer: Decimal? = nil,
+                          transactionInput: TradeTransactionInput? = nil) throws {
         guard session.listID == list.id, session.rates.isValid else { throw BatchFailure.invalidRates }
         guard customCashOffer.map(CustomOfferAmount.isValid) ?? true else { throw BatchFailure.invalidOfferAmount }
         let lines = list.orderedCards.map { item in
@@ -150,8 +151,13 @@ enum BatchFailure: LocalizedError {
                 price: input.price, quantity: input.quantity, cashOverride: input.cashOverride,
                 tradeOverride: input.tradeOverride, maximumOverride: input.maximumOverride)
         }
+        let totals = OfferCalculator.calculate(list.cards.map(\.offerLine), rates: session.rates)
+        let transaction = try transactionInput.map {
+            try TradeTransactionCalculator.calculate(totals: totals, input: $0, customCashOffer: customCashOffer)
+        }
         var saved = try session.savedOffers()
-        saved.append(OfferSnapshot(rates: session.rates, totals: OfferCalculator.calculate(list.cards.map(\.offerLine), rates: session.rates), lines: lines, customCashOffer: customCashOffer))
+        saved.append(OfferSnapshot(rates: session.rates, totals: totals, lines: lines, customCashOffer: customCashOffer,
+                                   tradeTransaction: transaction))
         session.savedOffersData = try JSONEncoder().encode(saved)
         try CardListService.save(context)
         DiagnosticLog.shared.record("offer.snapshot_saved")
