@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        62C79FEE709E4526B4520001 /* CameraPermissionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62C79FEE709E4526B4520002; };
         F32586CC414E405F92C90001 /* TradeTransactionCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F32586CC414E405F92C90002; };
         F32586CC414E405F92C90003 /* TradeTransactionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F32586CC414E405F92C90004; };
         8F3B2A904EAD4B17B4880001 /* TCGTrackingCredentials.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F3B2A904EAD4B17B4880002; };
@@ -51,6 +52,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        62C79FEE709E4526B4520002 /* CameraPermissionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPermissionTests.swift; sourceTree = "<group>"; };
         F32586CC414E405F92C90002 /* TradeTransactionCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TradeTransactionCalculator.swift; sourceTree = "<group>"; };
         F32586CC414E405F92C90004 /* TradeTransactionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TradeTransactionTests.swift; sourceTree = "<group>"; };
         8F3B2A904EAD4B17B4880002 /* TCGTrackingCredentials.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TCGTrackingCredentials.swift; sourceTree = "<group>"; };
@@ -117,6 +119,7 @@
 		59830EBC3A4184110566BF1A /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+                62C79FEE709E4526B4520002 /* CameraPermissionTests.swift */,
                 F32586CC414E405F92C90004 /* TradeTransactionTests.swift */,
                 8F3B2A904EAD4B17B4880004 /* TCGTrackingCredentialsTests.swift */,
                 D22ACDAC86B9A04D643B3BD2 /* PricingTransportTests.swift */,
@@ -272,6 +275,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                62C79FEE709E4526B4520001 /* CameraPermissionTests.swift in Sources */,
                 F32586CC414E405F92C90003 /* TradeTransactionTests.swift in Sources */,
                 8F3B2A904EAD4B17B4880003 /* TCGTrackingCredentialsTests.swift in Sources */,
                 E4EBC0007BCBA93C02A7ED7E /* PricingTransportTests.swift in Sources */,
@@ -335,7 +339,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -371,7 +375,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";

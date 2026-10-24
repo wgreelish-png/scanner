@@ -1,6 +1,7 @@
 import Foundation
 import WebKit
 import SwiftUI
+import AVFoundation
 
 /// Versioned app-owned wire format. Raw website payloads never enter persistence.
 struct TCGBridgeEnvelope: Decodable {
@@ -105,6 +106,87 @@ struct TCGBridgeNormalizer {
     }
 }
 
+/// WebKit permission applies only to this active scanner document, never the
+/// account/pricing website, subframes, or requests for audio.
+struct ScannerCameraRequestContext {
+    var active: Bool
+    var scheme: String
+    var host: String
+    var port: Int
+    var mainFrame: Bool
+    var cameraOnly: Bool
+    var documentURL: URL?
+    var expectedPageURL: URL
+
+    var isTrusted: Bool {
+        guard active, mainFrame, cameraOnly,
+              expectedPageURL.scheme == "http", expectedPageURL.host == "127.0.0.1",
+              let expectedPort = expectedPageURL.port,
+              expectedPageURL.path == "/index.html", expectedPageURL.query == nil,
+              expectedPageURL.user == nil, expectedPageURL.password == nil,
+              scheme == "http", host == "127.0.0.1", port == expectedPort,
+              let documentURL else { return false }
+        return documentURL.scheme == "http" && documentURL.host == "127.0.0.1" &&
+            documentURL.port == expectedPort && documentURL.path == "/index.html" &&
+            documentURL.query == nil && documentURL.user == nil && documentURL.password == nil
+    }
+}
+
+enum ScannerCameraPermissionAction: Equatable {
+    case grant, requestNativeAccess, deny
+
+    static func action(for status: AVAuthorizationStatus) -> Self {
+        switch status {
+        case .authorized: return .grant
+        case .notDetermined: return .requestNativeAccess
+        case .denied, .restricted: return .deny
+        @unknown default: return .deny
+        }
+    }
+}
+
+/// Native iOS authorization is the source of truth. Sharing only an in-flight
+/// request prevents two scanner instances from creating separate prompt flows.
+@MainActor final class ScannerCameraAuthorizationCoordinator {
+    static let shared = ScannerCameraAuthorizationCoordinator(
+        readStatus: { AVCaptureDevice.authorizationStatus(for: .video) },
+        requestAccess: {
+            await withCheckedContinuation { continuation in
+                AVCaptureDevice.requestAccess(for: .video) { granted in continuation.resume(returning: granted) }
+            }
+        })
+    private let readStatus: @MainActor () -> AVAuthorizationStatus
+    private let requestAccess: @MainActor () async -> Bool
+    private var inFlight: Task<Bool, Never>?
+    private var requestID = UUID()
+
+    init(readStatus: @escaping @MainActor () -> AVAuthorizationStatus,
+         requestAccess: @escaping @MainActor () async -> Bool) {
+        self.readStatus = readStatus; self.requestAccess = requestAccess
+    }
+    var authorizationStatus: AVAuthorizationStatus { readStatus() }
+
+    func authorize() async -> Bool {
+        switch ScannerCameraPermissionAction.action(for: readStatus()) {
+        case .grant: return true
+        case .deny: return false
+        case .requestNativeAccess:
+            if let inFlight {
+                let granted = await inFlight.value
+                return granted && readStatus() == .authorized
+            }
+            let id = UUID(); requestID = id
+            let request = requestAccess
+            let task = Task { @MainActor in await request() }
+            inFlight = task
+            let granted = await task.value
+            if requestID == id { inFlight = nil }
+            // Recheck in case access was revoked while the request completed.
+            return granted && readStatus() == .authorized
+        }
+    }
+}
+
 /// Experimental module adapter, based on the user's supplied sources and permission.
 /// Does not claim an official TCGTracking API contract.
 @MainActor final class TCGTrackingScannerProvider: NSObject, ObservableObject, ScannerProvider, WKNavigationDelegate, WKUIDelegate {
@@ -120,6 +202,7 @@ struct TCGBridgeNormalizer {
     static let pageURL = LocalScannerServer.pageURL
     static let gameKeys = ["Pokémon": "tcgp:3", "Magic: The Gathering": "tcgp:1", "Yu-Gi-Oh!": "tcgp:2"]
     private var messageProxy: WeakScanMessageHandler?
+    private static let deniedCameraStatus = "Camera access is off. Enable Camera in iPhone Settings → Card Show Scanner, then tap Retry Live Scanner."
 
     override init() {
         let stream = AsyncStream<ScanResult>.makeStream(bufferingPolicy: .bufferingNewest(1))
@@ -228,12 +311,40 @@ struct TCGBridgeNormalizer {
     func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
                  initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType,
                  decisionHandler: @escaping (WKPermissionDecision) -> Void) {
-        guard active, origin.protocol == "http", origin.host == "127.0.0.1", origin.port == Int(LocalScannerServer.port), frame.isMainFrame, type == .camera else {
-            DiagnosticLog.shared.record("camera.permission_request", ["reason": "denied_origin_or_type"])
+        let scheme = origin.protocol, host = origin.host, port = origin.port
+        let mainFrame = frame.isMainFrame, cameraOnly = type == .camera
+        let context = ScannerCameraRequestContext(active: active, scheme: scheme, host: host, port: port,
+            mainFrame: mainFrame, cameraOnly: cameraOnly, documentURL: webView.url, expectedPageURL: Self.pageURL)
+        guard webView === self.webView, context.isTrusted else {
+            DiagnosticLog.shared.record("camera.permission_request", ["reason": "untrusted"])
             decisionHandler(.deny); return
         }
-        DiagnosticLog.shared.record("camera.permission_request", ["reason": "system_prompt"])
-        decisionHandler(.prompt)
+        let authorization = ScannerCameraAuthorizationCoordinator.shared
+        switch ScannerCameraPermissionAction.action(for: authorization.authorizationStatus) {
+        case .grant:
+            DiagnosticLog.shared.record("camera.permission_request", ["reason": "native_authorized"])
+            decisionHandler(.grant)
+        case .deny:
+            status = Self.deniedCameraStatus
+            DiagnosticLog.shared.record("camera.permission_request", ["reason": "native_denied"])
+            decisionHandler(.deny)
+        case .requestNativeAccess:
+            let requestNonce = nonce
+            DiagnosticLog.shared.record("camera.permission_request", ["reason": "native_requested"])
+            Task { @MainActor [weak self, weak webView] in
+                guard let self, let webView, self.active, self.nonce == requestNonce,
+                      webView === self.webView else { decisionHandler(.deny); return }
+                let granted = await authorization.authorize()
+                let current = ScannerCameraRequestContext(active: self.active, scheme: scheme, host: host, port: port,
+                    mainFrame: mainFrame, cameraOnly: cameraOnly, documentURL: webView.url, expectedPageURL: Self.pageURL)
+                guard self.nonce == requestNonce, webView === self.webView, current.isTrusted else {
+                    decisionHandler(.deny); return
+                }
+                if !granted { self.status = Self.deniedCameraStatus }
+                DiagnosticLog.shared.record("camera.permission_result", ["reason": granted ? "native_authorized" : "native_denied"])
+                decisionHandler(granted ? .grant : .deny)
+            }
+        }
     }
     fileprivate func receive(_ message: WKScriptMessage) {
         guard active, message.frameInfo.isMainFrame,
@@ -247,7 +358,12 @@ struct TCGBridgeNormalizer {
             let envelope = try JSONDecoder().decode(TCGBridgeEnvelope.self, from: data)
             guard envelope.nonce == nonce else { return }
             if envelope.kind == "diagnostic" { logDiagnostic(envelope); return }
-            if envelope.kind == "status" { status = String((envelope.message ?? "").prefix(1000)); return }
+            if envelope.kind == "status" {
+                let cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
+                status = cameraStatus == .denied || cameraStatus == .restricted
+                    ? Self.deniedCameraStatus : String((envelope.message ?? "").prefix(1000))
+                return
+            }
             if let result = try normalizer.receive(envelope, game: game) { continuation.yield(result) }
         } catch { DiagnosticLog.shared.failure("bridge.result_rejected", error); status = "Scanner result rejected: \(error.localizedDescription)" }
     }

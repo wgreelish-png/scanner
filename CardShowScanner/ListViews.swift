@@ -67,13 +67,19 @@ struct SavedListsView: View {
 }
 
 struct CardListView: View {
+    private enum ReviewDestination: Hashable {
+        case scanner(UUID)
+        case savedOffers(UUID)
+    }
     @Bindable var list: CardList
     @Environment(\.modelContext) private var context
     var session: ScanSession? = nil
+    var onContinueScanning: (() -> Void)? = nil
     @Query private var sessions: [ScanSession]
     @State private var continueGame = "Pokémon"
     @State private var confirmContinue = false
-    @State private var continuedID: UUID?
+    @State private var reviewDestination: ReviewDestination?
+    @State private var destinationSession: ScanSession?
     @State private var search = ""
     @State private var sort = "Scan Order"
     @State private var rename = false
@@ -96,7 +102,15 @@ struct CardListView: View {
     var body: some View {
         List {
             Section {
-                if let session { SessionReviewHeader(session: session, list: list) }
+                if let session {
+                    // This row contains several independent controls. Automatic
+                    // List button styling can otherwise make the whole offer
+                    // panel trigger its Continue Scanning action.
+                    SessionReviewHeader(session: session, list: list,
+                        onContinue: { continueScanning(session) },
+                        onSavedOffers: { open(.savedOffers(session.id), session: session) })
+                        .buttonStyle(.borderless)
+                }
                 else {
                     LabeledContent("Total quantity", value: String(list.quantity))
                     LabeledContent("Known market subtotal", value: list.knownValue.money)
@@ -104,7 +118,11 @@ struct CardListView: View {
                     Picker("Game for continued scanning", selection: $continueGame) {
                         ForEach(CatalogOptions.games, id: \.self) { Text($0) }
                     }
-                    Button("Continue Scanning") { confirmContinue = true }
+                    Button("Continue Scanning", systemImage: "viewfinder") {
+                        guard !confirmContinue, reviewDestination == nil else { return }
+                        DiagnosticLog.shared.record("navigation.scan_requested", ["phase": "standalone_list"])
+                        confirmContinue = true
+                    }.buttonStyle(.borderless)
                 }
             }
             Picker("Sort", selection: $sort) { ForEach(["Scan Order", "Name", "Value"], id: \.self) { Text($0) } }
@@ -128,12 +146,26 @@ struct CardListView: View {
             .onAppear { continueGame = list.orderedCards.first?.snapshot.identity.game ?? "Pokémon" }
             .confirmationDialog("Continue this list?", isPresented: $confirmContinue) {
                 Button("Continue Scanning") {
-                    do { continuedID = try SessionService.continueList(list, game: continueGame, context: context, finishingOtherSession: true).id }
+                    guard reviewDestination == nil else { return }
+                    do {
+                        let continued = try SessionService.continueList(list, game: continueGame, context: context, finishingOtherSession: true)
+                        continueScanning(continued)
+                        DiagnosticLog.shared.record("navigation.scan_opened", ["phase": "standalone_list"])
+                    }
                     catch { self.error = error.localizedDescription }
                 }
             } message: { Text("New cards append to this list. Any other active session will be finished and kept.") }
-            .navigationDestination(item: $continuedID) { id in
-                if let resumed = sessions.first(where: { $0.id == id }) { ScannerView(session: resumed, list: list) }
+            // Register destinations on the List itself, never on a lazily
+            // created offer row. One route permits only one push at a time.
+            .navigationDestination(item: $reviewDestination) { destination in
+                switch destination {
+                case .scanner(let id):
+                    if let batch = navigationSession(id) { ScannerView(session: batch, list: list) }
+                    else { ContentUnavailableView("Session unavailable", systemImage: "tray") }
+                case .savedOffers(let id):
+                    if let batch = navigationSession(id) { SavedOffersView(session: batch) }
+                    else { ContentUnavailableView("Session unavailable", systemImage: "tray") }
+                }
             }
             .toolbar {
                 Menu {
@@ -155,6 +187,24 @@ struct CardListView: View {
                 if case .failure(let failure) = result { DiagnosticLog.shared.failure("csv.export_failed", failure); error = failure.localizedDescription }
                 else { DiagnosticLog.shared.record("csv.exported") }
             }.failureAlert($error)
+    }
+    private func continueScanning(_ session: ScanSession) {
+        guard reviewDestination == nil else { return }
+        // A review opened from an existing scanner returns to that screen;
+        // saved-list reviews open their scanner through the parent route.
+        if let onContinueScanning { onContinueScanning() }
+        else { open(.scanner(session.id), session: session) }
+    }
+    private func open(_ destination: ReviewDestination, session: ScanSession) {
+        guard reviewDestination == nil else { return }
+        // Retain the returned model until @Query observes a newly resumed list.
+        destinationSession = session
+        reviewDestination = destination
+    }
+    private func navigationSession(_ id: UUID) -> ScanSession? {
+        if let destinationSession, destinationSession.id == id { return destinationSession }
+        if let session, session.id == id { return session }
+        return sessions.first { $0.id == id }
     }
     private var csv: String { CSVExportService.render(list.orderedCards.map { ExportRow(card: $0.snapshot, quantity: $0.quantity) }) }
     private func save() { do { try CardListService.save(context) } catch { self.error = error.localizedDescription } }
