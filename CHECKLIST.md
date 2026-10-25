@@ -56,3 +56,10 @@ See docs/ScanConfirmationWorkflow.md. Neither offline iPhone support nor a succe
 - [x] 62 JavaScript and 20 Python tests pass locally; target/resource and Swift grammar checks pass.
 - [x] CI at 61830c3 passes all 73 native cases, including actual Keychain and trade regressions, and the unsigned Release iPhone build.
 - [ ] iPhone remembered sign-in, single-tap return, offer layout/keyboard and wide-window acceptance.
+
+- [x] Build 6: independent offer tap targets, parent-owned routes and reuse of the existing scanner after review.
+- [x] Negotiated cash updates mixed payouts; Transaction Math shows configured/applied percentages and preserves historical bases.
+- [x] Native camera grants reused for trusted video-only scanner requests; coalesced first consent, denial/revocation checks and tests supplied.
+- [x] Personal Release scheme and final phone/weekly free-team refresh guide supplied.
+- [x] CI at 4ab1c5d: all 83 native tests and the unsigned Personal-scheme Release iPhone build pass.
+- [ ] User's final iPhone tap, permission, cash-adjustment and unplugged launch pass.

@@ -24,6 +24,7 @@ struct SavedListsView: View {
     @State private var newName = ""
     @State private var error: String?
     @State private var deleting: CardList?
+    @State private var showingDeleteConfirmation = false
     @Query private var sessions: [ScanSession]
     var body: some View {
         List {
@@ -45,7 +46,10 @@ struct SavedListsView: View {
                         }
                     }
                     .swipeActions {
-                        Button("Delete", role: .destructive) { deleting = list }
+                        Button("Delete", role: .destructive) {
+                            deleting = list; showingDeleteConfirmation = true
+                            DiagnosticLog.shared.record("list.delete_requested", ["quantity": String(list.quantity)])
+                        }
                         Button("Duplicate") {
                             do { try CardListService.duplicate(list, context: context) }
                             catch { context.rollback(); self.error = error.localizedDescription }
@@ -54,11 +58,18 @@ struct SavedListsView: View {
                 }
             }
         }.navigationTitle("My Lists").failureAlert($error)
-            .confirmationDialog("Delete this list and its cards?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
-                Button("Delete List", role: .destructive) { if let deleting {
-                    do { try SessionService.deleteList(deleting, context: context) }
+            .confirmationDialog("Delete this list and its cards?", isPresented: $showingDeleteConfirmation, presenting: deleting) { list in
+                // The dialog can dismiss before invoking its action. Capture its
+                // presented list instead of clearing/reading the same optional
+                // through the presentation binding, which can lose the target.
+                Button("Delete List", role: .destructive) {
+                    do { try SessionService.deleteList(list, context: context) }
                     catch { self.error = error.localizedDescription }
-                }; deleting = nil }
+                    deleting = nil
+                }
+                Button("Cancel", role: .cancel) { deleting = nil }
+            } message: { list in
+                Text("\(list.name) will be deleted. Its saved offer estimates and session history will be kept in All Sessions.")
             }
     }
     private func save() {
@@ -67,13 +78,19 @@ struct SavedListsView: View {
 }
 
 struct CardListView: View {
+    private enum ReviewDestination: Hashable {
+        case scanner(UUID)
+        case savedOffers(UUID)
+    }
     @Bindable var list: CardList
     @Environment(\.modelContext) private var context
     var session: ScanSession? = nil
+    var onContinueScanning: (() -> Void)? = nil
     @Query private var sessions: [ScanSession]
     @State private var continueGame = "Pokémon"
     @State private var confirmContinue = false
-    @State private var continuedID: UUID?
+    @State private var reviewDestination: ReviewDestination?
+    @State private var destinationSession: ScanSession?
     @State private var search = ""
     @State private var sort = "Scan Order"
     @State private var rename = false
@@ -96,7 +113,15 @@ struct CardListView: View {
     var body: some View {
         List {
             Section {
-                if let session { SessionReviewHeader(session: session, list: list) }
+                if let session {
+                    // This row contains several independent controls. Automatic
+                    // List button styling can otherwise make the whole offer
+                    // panel trigger its Continue Scanning action.
+                    SessionReviewHeader(session: session, list: list,
+                        onContinue: { continueScanning(session) },
+                        onSavedOffers: { open(.savedOffers(session.id), session: session) })
+                        .buttonStyle(.borderless)
+                }
                 else {
                     LabeledContent("Total quantity", value: String(list.quantity))
                     LabeledContent("Known market subtotal", value: list.knownValue.money)
@@ -104,7 +129,11 @@ struct CardListView: View {
                     Picker("Game for continued scanning", selection: $continueGame) {
                         ForEach(CatalogOptions.games, id: \.self) { Text($0) }
                     }
-                    Button("Continue Scanning") { confirmContinue = true }
+                    Button("Continue Scanning", systemImage: "viewfinder") {
+                        guard !confirmContinue, reviewDestination == nil else { return }
+                        DiagnosticLog.shared.record("navigation.scan_requested", ["phase": "standalone_list"])
+                        confirmContinue = true
+                    }.buttonStyle(.borderless)
                 }
             }
             Picker("Sort", selection: $sort) { ForEach(["Scan Order", "Name", "Value"], id: \.self) { Text($0) } }
@@ -128,12 +157,26 @@ struct CardListView: View {
             .onAppear { continueGame = list.orderedCards.first?.snapshot.identity.game ?? "Pokémon" }
             .confirmationDialog("Continue this list?", isPresented: $confirmContinue) {
                 Button("Continue Scanning") {
-                    do { continuedID = try SessionService.continueList(list, game: continueGame, context: context, finishingOtherSession: true).id }
+                    guard reviewDestination == nil else { return }
+                    do {
+                        let continued = try SessionService.continueList(list, game: continueGame, context: context, finishingOtherSession: true)
+                        continueScanning(continued)
+                        DiagnosticLog.shared.record("navigation.scan_opened", ["phase": "standalone_list"])
+                    }
                     catch { self.error = error.localizedDescription }
                 }
             } message: { Text("New cards append to this list. Any other active session will be finished and kept.") }
-            .navigationDestination(item: $continuedID) { id in
-                if let resumed = sessions.first(where: { $0.id == id }) { ScannerView(session: resumed, list: list) }
+            // Register destinations on the List itself, never on a lazily
+            // created offer row. One route permits only one push at a time.
+            .navigationDestination(item: $reviewDestination) { destination in
+                switch destination {
+                case .scanner(let id):
+                    if let batch = navigationSession(id) { ScannerView(session: batch, list: list) }
+                    else { ContentUnavailableView("Session unavailable", systemImage: "tray") }
+                case .savedOffers(let id):
+                    if let batch = navigationSession(id) { SavedOffersView(session: batch) }
+                    else { ContentUnavailableView("Session unavailable", systemImage: "tray") }
+                }
             }
             .toolbar {
                 Menu {
@@ -155,6 +198,24 @@ struct CardListView: View {
                 if case .failure(let failure) = result { DiagnosticLog.shared.failure("csv.export_failed", failure); error = failure.localizedDescription }
                 else { DiagnosticLog.shared.record("csv.exported") }
             }.failureAlert($error)
+    }
+    private func continueScanning(_ session: ScanSession) {
+        guard reviewDestination == nil else { return }
+        // A review opened from an existing scanner returns to that screen;
+        // saved-list reviews open their scanner through the parent route.
+        if let onContinueScanning { onContinueScanning() }
+        else { open(.scanner(session.id), session: session) }
+    }
+    private func open(_ destination: ReviewDestination, session: ScanSession) {
+        guard reviewDestination == nil else { return }
+        // Retain the returned model until @Query observes a newly resumed list.
+        destinationSession = session
+        reviewDestination = destination
+    }
+    private func navigationSession(_ id: UUID) -> ScanSession? {
+        if let destinationSession, destinationSession.id == id { return destinationSession }
+        if let session, session.id == id { return session }
+        return sessions.first { $0.id == id }
     }
     private var csv: String { CSVExportService.render(list.orderedCards.map { ExportRow(card: $0.snapshot, quantity: $0.quantity) }) }
     private func save() { do { try CardListService.save(context) } catch { self.error = error.localizedDescription } }
@@ -180,17 +241,16 @@ struct CardEditorView: View {
     let item: InventoryCard
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
-    @State private var card: CardCandidate
+    @State private var pricing: CardEditorPricingModel
     @State private var quantity: Int
-    @State private var price: String
     @State private var error: String?
     @State private var cashOverride: String
     @State private var tradeOverride: String
     @State private var maximumOverride: String
+    @State private var showingConnection = false
     init(item: InventoryCard) {
         self.item = item
-        _card = State(initialValue: item.snapshot); _quantity = State(initialValue: item.quantity)
-        _price = State(initialValue: CSVExportService.number(item.snapshot.marketPrice))
+        _pricing = State(initialValue: CardEditorPricingModel(card: item.snapshot)); _quantity = State(initialValue: item.quantity)
         _cashOverride = State(initialValue: item.cashOverrideText ?? "")
         _tradeOverride = State(initialValue: item.tradeOverrideText ?? "")
         _maximumOverride = State(initialValue: item.maximumOverrideText ?? "")
@@ -199,21 +259,32 @@ struct CardEditorView: View {
         NavigationStack {
             Form {
                 Section("Card identity — edit to correct a match") {
-                    TextField("Name", text: $card.name)
-                    Picker("Game", selection: $card.identity.game) { ForEach(CatalogOptions.games, id: \.self) { Text($0) } }
-                    TextField("Set", text: $card.set)
-                    TextField("Number", text: $card.number)
-                    TextField("Product ID", text: $card.identity.productID).textInputAutocapitalization(.never)
-                    TextField("SKU ID (optional)", text: Binding(get: { card.identity.skuID ?? "" }, set: { card.identity.skuID = $0.isEmpty ? nil : $0 }))
-                    TextField("Printing", text: $card.identity.printing)
-                    TextField("Language", text: $card.identity.language)
-                    TextField("Image URL (optional)", text: Binding(get: { card.imageURL?.absoluteString ?? "" }, set: { card.imageURL = URL(string: $0) })).keyboardType(.URL).textInputAutocapitalization(.never)
+                    TextField("Name", text: $pricing.card.name)
+                    Picker("Game", selection: identityBinding(\.game)) { ForEach(CatalogOptions.games, id: \.self) { Text($0) } }
+                    TextField("Set", text: $pricing.card.set)
+                    TextField("Number", text: $pricing.card.number)
+                    TextField("Product ID", text: identityBinding(\.productID)).textInputAutocapitalization(.never)
+                    TextField("SKU ID (optional)", text: Binding(get: { pricing.card.identity.skuID ?? "" }, set: { pricing.setSKU($0) }))
+                    Picker("Type / printing", selection: identityBinding(\.printing)) {
+                        ForEach(Array(Set(pricing.card.printings + [pricing.card.identity.printing])).sorted(), id: \.self) { Text($0) }
+                    }.pickerStyle(.menu)
+                    TextField("Language", text: identityBinding(\.language))
+                    TextField("Image URL (optional)", text: Binding(get: { pricing.card.imageURL?.absoluteString ?? "" }, set: { pricing.card.imageURL = URL(string: $0) })).keyboardType(.URL).textInputAutocapitalization(.never)
                 }
                 Section("Inventory") {
-                    Picker("Condition", selection: $card.identity.condition) { ForEach(CatalogOptions.conditions, id: \.self) { Text($0) } }
+                    Picker("Condition", selection: identityBinding(\.condition)) { ForEach(CatalogOptions.conditions, id: \.self) { Text($0) } }
                     Stepper("Quantity: \(quantity)", value: $quantity, in: 1...100000)
-                    TextField("Market price USD — blank means unknown", text: $price).keyboardType(.decimalPad)
-                    Text("When changing identity or finish, verify the market price and SKU too.").font(.caption)
+                    TextField("Market price USD — blank means unknown", text: Binding(get: { pricing.price }, set: { pricing.setPrice($0) })).keyboardType(.decimalPad)
+                    if pricing.priceLoading { ProgressView("Checking market value…") }
+                    if let message = pricing.priceMessage { Text(message).font(.caption).foregroundStyle(.secondary) }
+                    if pricing.priceConnectionRequired {
+                        Button("Connect TCGTracking", systemImage: "person.crop.circle") {
+                            pricing.cancelLookup(); showingConnection = true
+                        }
+                    }
+                    Button("Refresh Market Price & Types", systemImage: "arrow.clockwise") { pricing.refreshPrice() }
+                        .disabled(pricing.priceLoading)
+                    Text("Condition and type use the exact catalog quote. You can enter a market price manually if a quote is unavailable.").font(.caption)
                     Text("Added \(item.addedAt.formatted())").font(.caption)
                 }
                 Section("Offer overrides • USD per copy") {
@@ -223,23 +294,34 @@ struct CardEditorView: View {
                     Text("Overrides apply to each copy of this exact variant/condition. Unpriced cards remain excluded until a market price is supplied. No automatic bulk classification is performed.").font(.caption)
                 }
             }.navigationTitle("Edit Card")
-                .onChange(of: card.identity.printing) { _, _ in price = ""; card.identity.skuID = nil }
-                .onChange(of: card.identity.productID) { _, _ in price = ""; card.identity.skuID = nil }
-                .onChange(of: card.identity.game) { _, _ in price = ""; card.identity.skuID = nil }
-                .onChange(of: card.identity.condition) { _, _ in price = ""; card.identity.skuID = nil }
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                    ToolbarItem(placement: .confirmationAction) { Button("Save") { save() } }
-                }.failureAlert($error)
+                    ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.disabled(pricing.priceLoading) }
+                }
+                .task { pricing.loadPrintingOptions() }
+                .onDisappear { pricing.cancelLookup() }
+                .fullScreenCover(isPresented: $showingConnection, onDismiss: { pricing.refreshPrice() }) {
+                    TCGTrackingConnectionView(continueTitle: "Return to Card") {
+                        guard showingConnection else { return }
+                        OnlineMarketPricing.connectionDidChange(); showingConnection = false
+                    }
+                }
+                .failureAlert($error)
         }
     }
+    private func identityBinding(_ keyPath: WritableKeyPath<CardIdentity, String>) -> Binding<String> {
+        Binding(get: { pricing.card.identity[keyPath: keyPath] }, set: { value in
+            pricing.changeIdentity { $0[keyPath: keyPath] = value }
+        })
+    }
     private func save() {
-        guard !card.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !card.identity.productID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !card.identity.language.isEmpty, !card.identity.printing.isEmpty else {
+        guard !pricing.priceLoading else { return }
+        guard !pricing.card.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !pricing.card.identity.productID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !pricing.card.identity.language.isEmpty, !pricing.card.identity.printing.isEmpty else {
             error = "Name, product ID, language, and printing are required."; return
         }
-        let text = price.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = pricing.price.trimmingCharacters(in: .whitespacesAndNewlines)
         let parsed = Decimal(string: text, locale: Locale(identifier: "en_US_POSIX"))
         guard text.isEmpty || (text.range(of: #"^[0-9]+(?:\.[0-9]{1,6})?$"#, options: .regularExpression) != nil && parsed != nil && parsed! >= 0) else { error = "Enter a nonnegative USD price or leave it blank."; return }
         guard [cashOverride, tradeOverride, maximumOverride].allSatisfy({ $0.isEmpty || MoneyInput.parse($0) != nil }) else {
@@ -250,13 +332,13 @@ struct CardEditorView: View {
         let maximumText = maximumOverride.isEmpty ? nil : CSVExportService.number(MoneyInput.parse(maximumOverride))
         do {
             let batches = try context.fetch(FetchDescriptor<ScanSession>())
-            if let batch = batches.first(where: { $0.listID != nil && $0.listID == item.list?.id }), card.identity.game != batch.game {
+            if let batch = batches.first(where: { $0.listID != nil && $0.listID == item.list?.id }), pricing.card.identity.game != batch.game {
                 error = "The card game must match this batch. Start a new session for a different game."; return
             }
         } catch { self.error = error.localizedDescription; return }
-        card.marketPrice = text.isEmpty ? nil : parsed
+        pricing.card.marketPrice = text.isEmpty ? nil : parsed
         do {
-            try CardListService.edit(item, card: card, quantity: quantity,
+            try CardListService.edit(item, card: pricing.card, quantity: quantity,
                 cashOverride: cashText, tradeOverride: tradeText, maximumOverride: maximumText, context: context)
             DiagnosticLog.shared.record("inventory.edited"); dismiss()
         } catch { context.rollback(); self.error = error.localizedDescription }

@@ -49,7 +49,48 @@ import SwiftData
         XCTAssertEqual(free.finalAmount, 0)
         let mixed = try TradeTransactionCalculator.calculate(totals: standard,
             input: TradeTransactionInput(mode: .tradeAndCash, myCardPrice: 10), customCashOffer: 25)
-        XCTAssertEqual(mixed.finalAmount, amount("5.63"), "A negotiated full-list cash amount does not replace the normal residual cash valuation")
+        XCTAssertEqual(mixed.finalAmount, amount("9.38"), "The negotiated full-list cash value also determines the remaining payout")
+        XCTAssertEqual(mixed.cashValuation, 25)
+    }
+
+    func testNegotiatedCashUpdatesTheRemainingPayoutAndClearingRestoresCalculatedCash() async throws {
+        let input = TradeTransactionInput(mode: .tradeAndCash, myCardPrice: 10)
+        let negotiated = try TradeTransactionCalculator.calculate(totals: standard, input: input, customCashOffer: 16)
+        XCTAssertEqual(negotiated.tradeApplied, 10); XCTAssertEqual(negotiated.remainingTradeCredit, 6)
+        XCTAssertEqual(negotiated.remainingMarketValue, amount("7.50"))
+        XCTAssertEqual(negotiated.cashPayout, 6); XCTAssertEqual(negotiated.finalAmount, 6)
+        XCTAssertEqual(negotiated.cashValuation, 16)
+
+        let zero = try TradeTransactionCalculator.calculate(totals: standard, input: input, customCashOffer: 0)
+        XCTAssertEqual(zero.cashValuation, 0); XCTAssertEqual(zero.cashPayout, 0)
+        XCTAssertEqual(zero.tradeApplied, 10); XCTAssertEqual(zero.remainingTradeCredit, 6)
+
+        let reset = try TradeTransactionCalculator.calculate(totals: standard, input: input, customCashOffer: nil)
+        XCTAssertEqual(reset.cashValuation, 15)
+        XCTAssertEqual(reset.cashPayout, amount("5.63")); XCTAssertEqual(reset.finalAmount, amount("5.63"))
+
+        let creditOnly = try TradeTransactionCalculator.calculate(totals: standard,
+            input: TradeTransactionInput(mode: .tradeCreditOnly, myCardPrice: 10), customCashOffer: 25)
+        XCTAssertEqual(creditOnly.cashValuation, 25)
+        XCTAssertEqual(creditOnly.cashPayout, 0); XCTAssertEqual(creditOnly.finalAmount, 6)
+        let customerOwes = try TradeTransactionCalculator.calculate(totals: standard,
+            input: TradeTransactionInput(mode: .tradeAndCash, myCardPrice: 20), customCashOffer: 25)
+        XCTAssertEqual(customerOwes.customerPays, 4); XCTAssertEqual(customerOwes.cashPayout, 0)
+    }
+
+    func testEffectivePercentagesUseSelectedValuesAndRequireCompletePositiveMarket() async {
+        XCTAssertEqual(TradeTransactionCalculator.effectivePercentage(valuation: standard.trade, market: standard.market), 80)
+        XCTAssertEqual(TradeTransactionCalculator.effectivePercentage(valuation: standard.cash, market: standard.market), 75)
+        XCTAssertEqual(TradeTransactionCalculator.effectivePercentage(valuation: 16, market: 20), 80)
+        XCTAssertEqual(TradeTransactionCalculator.effectivePercentage(valuation: 25, market: 20), 125)
+        XCTAssertEqual(TradeTransactionCalculator.effectivePercentage(valuation: 0, market: 20), 0)
+        XCTAssertEqual(TradeTransactionCalculator.effectivePercentage(valuation: 1, market: 3), amount("33.33"))
+        XCTAssertNil(TradeTransactionCalculator.effectivePercentage(valuation: 10, market: 0))
+        XCTAssertNil(TradeTransactionCalculator.effectivePercentage(valuation: 10, market: -1))
+        XCTAssertNil(TradeTransactionCalculator.effectivePercentage(valuation: -1, market: 20))
+        XCTAssertNil(TradeTransactionCalculator.effectivePercentage(valuation: .nan, market: 20))
+        XCTAssertNil(TradeTransactionCalculator.effectivePercentage(valuation: 10, market: .nan))
+        XCTAssertNil(TradeTransactionCalculator.effectivePercentage(valuation: 16, market: 20, unpricedQuantity: 1))
     }
 
     func testTradeCreditOnlyShowsUnusedCreditWithoutPayingOrStoringIt() async throws {
@@ -81,6 +122,11 @@ import SwiftData
         XCTAssertEqual(overridden.cash, 12); XCTAssertEqual(overridden.trade, 15)
         XCTAssertEqual(allocation.remainingTradeCredit, 10)
         XCTAssertEqual(allocation.remainingMarketValue, amount("13.33")); XCTAssertEqual(allocation.cashPayout, 8)
+        XCTAssertEqual(TradeTransactionCalculator.effectivePercentage(valuation: overridden.cash, market: overridden.market), 60)
+        XCTAssertEqual(TradeTransactionCalculator.effectivePercentage(valuation: overridden.trade, market: overridden.market), 75)
+        let negotiated = try TradeTransactionCalculator.calculate(totals: overridden,
+            input: TradeTransactionInput(mode: .tradeAndCash, myCardPrice: 5), customCashOffer: 9)
+        XCTAssertEqual(negotiated.remainingTradeCredit, 10); XCTAssertEqual(negotiated.cashPayout, 6)
     }
 
     func testZeroRatesZeroPricesAndUnpricedCardsRemainDistinct() async throws {
@@ -129,11 +175,45 @@ import SwiftData
         let legacy = try JSONDecoder().decode(OfferSnapshot.self, from: JSONSerialization.data(withJSONObject: json))
         XCTAssertNil(legacy.tradeTransaction)
         let result = try TradeTransactionCalculator.calculate(totals: standard,
-            input: TradeTransactionInput(mode: .tradeAndCash, myCardPrice: 10))
+            input: TradeTransactionInput(mode: .tradeAndCash, myCardPrice: 10), customCashOffer: 25)
         let snapshot = OfferSnapshot(rates: OfferRates(cash: 75, trade: 80, maximum: 75), totals: standard,
             lines: [], customCashOffer: 25, tradeTransaction: result)
         let reopened = try JSONDecoder().decode(OfferSnapshot.self, from: JSONEncoder().encode(snapshot))
         XCTAssertEqual(reopened.tradeTransaction, result); XCTAssertEqual(reopened.customCashOffer, 25)
+    }
+
+    func testLegacyMixedEstimateKeepsItsOriginalPayoutAndCashPercentage() async throws {
+        // This is the old calculation, when a custom cash-only amount did not
+        // change the mixed payout. No cashValuation field existed in that JSON.
+        let historicalJSON = Data("""
+        {"input":{"mode":"tradeAndCash","myCardPrice":10},"tradeApplied":10,
+         "remainingTradeCredit":6,"remainingMarketValue":7.5,"cashPayout":5.63,
+         "customerPays":0,"outcome":"payCustomer","finalAmount":5.63,"isPartial":false}
+        """.utf8)
+        let historical = try JSONDecoder().decode(TradeTransactionResult.self, from: historicalJSON)
+        XCTAssertNil(historical.cashValuation)
+        let snapshot = OfferSnapshot(rates: OfferRates(cash: 75, trade: 80, maximum: 75), totals: standard,
+            lines: [], customCashOffer: 25, tradeTransaction: historical)
+        let reopened = try JSONDecoder().decode(OfferSnapshot.self, from: JSONEncoder().encode(snapshot))
+        let savedResult = try XCTUnwrap(reopened.tradeTransaction)
+        XCTAssertEqual(savedResult.cashPayout, amount("5.63"))
+        XCTAssertEqual(savedResult.finalAmount, amount("5.63"))
+        let originalCash = savedResult.resolvedCashValuation(totals: reopened.totals, customCashOffer: reopened.customCashOffer)
+        XCTAssertEqual(originalCash, 15)
+        XCTAssertEqual(TradeTransactionCalculator.effectivePercentage(valuation: originalCash, market: reopened.totals.market), 75)
+
+        let current = try TradeTransactionCalculator.calculate(totals: standard,
+            input: historical.input, customCashOffer: 25)
+        XCTAssertEqual(current.cashValuation, 25); XCTAssertEqual(current.cashPayout, amount("9.38"))
+        XCTAssertEqual(current.resolvedCashValuation(totals: standard, customCashOffer: 25), 25)
+        XCTAssertEqual(savedResult.finalAmount, amount("5.63"), "Recalculating a new estimate must not mutate history")
+
+        let legacyCashOnly = try JSONDecoder().decode(TradeTransactionResult.self, from: Data("""
+        {"input":{"mode":"cashOnly"},"tradeApplied":0,"remainingTradeCredit":0,
+         "remainingMarketValue":20,"cashPayout":25,"customerPays":0,
+         "outcome":"cashOffer","finalAmount":25,"isPartial":false}
+        """.utf8))
+        XCTAssertEqual(legacyCashOnly.resolvedCashValuation(totals: standard, customCashOffer: 25), 25)
     }
 
     func testSavedTransactionSurvivesDiskReopeningAndLaterPriceRateEdits() async throws {
@@ -164,7 +244,8 @@ import SwiftData
         XCTAssertEqual(saved.totals.market, 20); XCTAssertEqual(saved.rates.cash, 75)
         XCTAssertEqual(saved.tradeTransaction?.input.myCardPrice, 10)
         XCTAssertEqual(saved.tradeTransaction?.outcome, .payCustomer)
-        XCTAssertEqual(saved.tradeTransaction?.finalAmount, amount("5.63"))
+        XCTAssertEqual(saved.tradeTransaction?.finalAmount, amount("9.38"))
+        XCTAssertEqual(saved.tradeTransaction?.cashValuation, 25)
         XCTAssertEqual(saved.lines.first?.price, 20); XCTAssertEqual(saved.customCashOffer, 25)
         XCTAssertEqual(session.rates.cash, 10)
     }

@@ -22,6 +22,7 @@ struct ScannerView: View {
     @State private var showingReviewConnection = false
     @State private var returningFromConnection = false
     @State private var acknowledgedConnectionInView = false
+    @State private var showingListReview = false
     init(session: ScanSession, list: CardList) {
         self.session = session; self.list = list
         _game = State(initialValue: session.game ?? "Pokémon")
@@ -54,8 +55,15 @@ struct ScannerView: View {
                 .interactiveDismissDisabled()
         }
         .fullScreenCover(isPresented: $showingConnection, onDismiss: finishConnection) { connectionView(inReview: false) }
-        .onAppear { visible = true; startIfReady() }
-        .onDisappear { visible = false; model.stop() }
+        .onAppear {
+            visible = true
+            DiagnosticLog.shared.record("navigation.scanner_appeared")
+            startIfReady()
+        }
+        .onDisappear {
+            visible = false; model.stop()
+            DiagnosticLog.shared.record("navigation.scanner_disappeared")
+        }
         .onChange(of: scenePhase) { _, phase in
             DiagnosticLog.shared.record("app.scene", ["phase": phase == .active ? "active" : (phase == .background ? "background" : "inactive")])
             if phase == .active { startIfReady() }
@@ -78,6 +86,15 @@ struct ScannerView: View {
         } message: { Text("The current list and estimates will be kept. Changing games creates a separate batch.") }
         .navigationDestination(item: $nextSessionID) { id in
             if let next = sessions.first(where: { $0.id == id }) { BatchScannerDestination(session: next) }
+        }
+        .navigationDestination(isPresented: $showingListReview) {
+            SessionReviewView(session: session, list: list, onContinueScanning: {
+                model.paused = false
+                showingListReview = false
+            }).toolbar(.visible, for: .navigationBar)
+        }
+        .onChange(of: showingListReview) { _, showing in
+            if !showing { startIfReady() }
         }
         .onChange(of: model.result?.id) { _, _ in editingMatch = false }
         .onChange(of: mode) { _, _ in restart() }
@@ -136,6 +153,10 @@ struct ScannerView: View {
             } else {
                 Text(model.paused ? "Resume when you're ready" : "Hold a card steady inside the camera")
                     .font(.subheadline)
+                if !model.paused {
+                    Text("Tilt slightly to reduce glare. Use a light, plain background for dark borders.")
+                        .font(.caption).multilineTextAlignment(.center)
+                }
             }
             let totals = OfferCalculator.calculate(list.cards.map(\.offerLine), rates: session.rates)
             Text("\(totals.quantity) cards • \(totals.market.money) market").font(.subheadline.bold())
@@ -143,9 +164,15 @@ struct ScannerView: View {
                 Text("\(totals.unpricedQuantity) unpriced • partial total").font(.caption).foregroundStyle(.orange)
             }
             HStack {
-                NavigationLink { SessionReviewView(session: session, list: list).toolbar(.visible, for: .navigationBar) } label: {
+                Button {
+                    guard !showingListReview else { return }
+                    // Stop before navigation begins, and keep scene callbacks
+                    // from restarting this scanner beneath the review screen.
+                    model.stop(); showingListReview = true
+                    DiagnosticLog.shared.record("navigation.review_opened", ["phase": "scanner"])
+                } label: {
                     Label("View List", systemImage: "list.bullet").frame(minHeight: 44)
-                }
+                }.buttonStyle(.borderless)
                 Spacer()
                 if session.isActive { FinishSessionButton(session: session) { model.stop(); dismiss() } }
             }.font(.subheadline)
@@ -189,9 +216,9 @@ struct ScannerView: View {
                             Picker("Condition", selection: Binding(get: { card.identity.condition }, set: { model.changeCondition($0) })) {
                                 ForEach(CatalogOptions.conditions, id: \.self) { Text($0) }
                             }
-                            Picker("Printing for \(card.name)", selection: Binding(get: { card.identity.printing }, set: { model.changePrinting($0) })) {
-                                ForEach(card.printings.isEmpty ? [card.identity.printing] : card.printings, id: \.self) { Text($0) }
-                            }
+                            Picker("Type / printing", selection: Binding(get: { card.identity.printing }, set: { model.changePrinting($0) })) {
+                                ForEach(Array(Set(card.printings + [card.identity.printing])).sorted(), id: \.self) { Text($0) }
+                            }.pickerStyle(.menu)
                             Text("Touch and hold a match to review its printing. Other matches use their displayed printing. Every new card starts at Near Mint.").font(.caption).foregroundStyle(.secondary)
                         }.disabled(model.selectionInProgress)
                         if model.priceLoading && !model.selectionInProgress { ProgressView("Checking market value…") }
@@ -241,7 +268,7 @@ struct ScannerView: View {
         startIfReady()
     }
     private func startIfReady() {
-        guard visible, session.isActive, !model.paused, !showingConnection, !showingReviewConnection,
+        guard visible, session.isActive, !model.paused, !showingConnection, !showingReviewConnection, !showingListReview,
               !returningFromConnection else { return }
         if model.liveProvider != nil && !connectionIntroduced && !acknowledgedConnectionInView { openConnection(); return }
         model.start(game: session.game ?? game, list: list, context: context, session: session)

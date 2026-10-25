@@ -32,8 +32,18 @@ struct TradeTransactionResult: Codable, Equatable {
     var outcome: TradeTransactionOutcome
     var finalAmount: Decimal
     var isPartial: Bool
+    // The whole-list cash value used by this estimate, before allocating the
+    // unused trade fraction. Nil preserves the calculation rules of old JSON.
+    var cashValuation: Decimal? = nil
     var mode: TradeTransactionMode { input.mode }
     var myCardPrice: Decimal? { input.myCardPrice }
+
+    func resolvedCashValuation(totals: OfferTotals, customCashOffer: Decimal?) -> Decimal {
+        if let cashValuation { return cashValuation }
+        // Before cashValuation was stored, negotiated totals applied only to
+        // cash-only offers. Never reinterpret a saved mixed transaction.
+        return mode == .cashOnly ? (customCashOffer ?? totals.cash) : totals.cash
+    }
 }
 
 enum TradeTransactionFailure: LocalizedError, Equatable {
@@ -51,9 +61,8 @@ enum TradeTransactionFailure: LocalizedError, Equatable {
 enum TradeTransactionCalculator {
     /// Existing totals include quantities, configured percentages and per-card
     /// overrides. Allocate unused credit proportionally across those totals:
-    /// (unused trade / total trade) × calculated cash. For uniform rates this is
-    /// exactly (unused trade / trade rate) × cash rate, before final rounding.
-    /// A negotiated whole-list cash amount applies only to a cash-only purchase.
+    /// (unused trade / total trade) × selected whole-list cash value. A negotiated
+    /// cash amount updates both a cash-only offer and the remaining cash payout.
     static func calculate(totals: OfferTotals, input: TradeTransactionInput,
                           customCashOffer: Decimal? = nil) throws -> TradeTransactionResult {
         guard totals.quantity >= 0, totals.unpricedQuantity >= 0,
@@ -64,11 +73,12 @@ enum TradeTransactionCalculator {
         if let price = input.myCardPrice, !CustomOfferAmount.isValid(price) { throw TradeTransactionFailure.invalidPrice }
         if let cash = customCashOffer, !CustomOfferAmount.isValid(cash) { throw TradeTransactionFailure.invalidCustomCash }
         let partial = totals.unpricedQuantity > 0
+        let cashValuation = customCashOffer ?? totals.cash
         if input.mode == .cashOnly {
-            let cash = OfferCalculator.cents(customCashOffer ?? totals.cash)
+            let cash = OfferCalculator.cents(cashValuation)
             return TradeTransactionResult(input: input, tradeApplied: 0, remainingTradeCredit: 0,
                 remainingMarketValue: OfferCalculator.cents(totals.market), cashPayout: cash, customerPays: 0,
-                outcome: .cashOffer, finalAmount: cash, isPartial: partial)
+                outcome: .cashOffer, finalAmount: cash, isPartial: partial, cashValuation: cashValuation)
         }
         if input.mode == .tradeAndCash && input.myCardPrice == nil { throw TradeTransactionFailure.missingPrice }
         let price = input.myCardPrice ?? 0
@@ -79,7 +89,7 @@ enum TradeTransactionCalculator {
         // case no credit is applied and the customer pays the full selling price.
         let unusedFraction = totals.trade > 0 ? remainingTrade / totals.trade : 0
         let marketRemainder = totals.market * unusedFraction
-        let payout = input.mode == .tradeAndCash ? totals.cash * unusedFraction : 0
+        let payout = input.mode == .tradeAndCash ? cashValuation * unusedFraction : 0
         guard [unusedFraction, marketRemainder, payout].allSatisfy({ !$0.isNaN && $0 >= 0 }) else {
             throw TradeTransactionFailure.invalidTotals
         }
@@ -92,6 +102,16 @@ enum TradeTransactionCalculator {
         return TradeTransactionResult(input: input, tradeApplied: OfferCalculator.cents(tradeApplied),
             remainingTradeCredit: OfferCalculator.cents(remainingTrade), remainingMarketValue: OfferCalculator.cents(marketRemainder),
             cashPayout: OfferCalculator.cents(payout), customerPays: OfferCalculator.cents(customerPays),
-            outcome: outcome, finalAmount: OfferCalculator.cents(amount), isPartial: partial)
+            outcome: outcome, finalAmount: OfferCalculator.cents(amount), isPartial: partial, cashValuation: cashValuation)
+    }
+
+    /// Display the actual aggregate valuation relative to known market value.
+    /// Missing prices cannot establish a whole-list effective percentage.
+    static func effectivePercentage(valuation: Decimal, market: Decimal, unpricedQuantity: Int = 0) -> Decimal? {
+        guard unpricedQuantity == 0, !valuation.isNaN, valuation >= 0,
+              !market.isNaN, market > 0 else { return nil }
+        let percentage = valuation / market * 100
+        guard !percentage.isNaN, percentage >= 0 else { return nil }
+        return OfferCalculator.cents(percentage)
     }
 }

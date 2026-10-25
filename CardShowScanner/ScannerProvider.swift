@@ -63,15 +63,27 @@ struct MarketQuote: Equatable, Sendable {
     var skuID: String?
 }
 
+struct MarketDetails: Sendable {
+    var quote: MarketQuote?
+    var printings: [String] = []
+}
+
 protocol MarketPricing: Sendable {
     func prepare() async
     func quote(for card: CardCandidate) async throws -> MarketQuote?
     func quote(for card: CardCandidate, candidates: [CardCandidate]) async throws -> MarketQuote?
+    func details(for card: CardCandidate, candidates: [CardCandidate], forceRefresh: Bool) async throws -> MarketDetails
 }
 
 extension MarketPricing {
     func prepare() async {}
     func quote(for card: CardCandidate, candidates: [CardCandidate]) async throws -> MarketQuote? { try await quote(for: card) }
+    func details(for card: CardCandidate, candidates: [CardCandidate], forceRefresh: Bool) async throws -> MarketDetails {
+        MarketDetails(quote: try await quote(for: card, candidates: candidates))
+    }
+    func details(for card: CardCandidate, candidates: [CardCandidate]) async throws -> MarketDetails {
+        try await details(for: card, candidates: candidates, forceRefresh: false)
+    }
 }
 
 enum MarketPricingFailure: LocalizedError, Equatable {
@@ -243,7 +255,13 @@ struct PublicPricingPagePolicy {
 
 /// Online catalog details expose quotes by exact language and condition.
 struct OnlineMarketPricing: MarketPricing {
+    typealias DetailLoader = @Sendable ([String]) async throws -> (status: Int, data: Data)
     static let endpoint = URL(string: "https://tcgtracking.com/newscanplus/api/detail.php")!
+    private let cache = MarketDetailCache()
+    private let load: DetailLoader
+    init(load: @escaping DetailLoader = { try await PublicMarketBrowser.shared.detail(refs: $0) }) {
+        self.load = load
+    }
     @MainActor static func connectionDidChange() { PublicMarketBrowser.shared.connectionDidChange() }
     func prepare() async {
         do { try await PublicMarketBrowser.shared.prepare() }
@@ -266,23 +284,42 @@ struct OnlineMarketPricing: MarketPricing {
     }
     func quote(for card: CardCandidate) async throws -> MarketQuote? { try await quote(for: card, candidates: [card]) }
     func quote(for card: CardCandidate, candidates: [CardCandidate]) async throws -> MarketQuote? {
+        try await details(for: card, candidates: candidates).quote
+    }
+    func details(for card: CardCandidate, candidates: [CardCandidate], forceRefresh: Bool) async throws -> MarketDetails {
         let refs = Self.references(for: card, candidates: candidates)
-        guard !refs.isEmpty else { return nil }
-        let response = try await PublicMarketBrowser.shared.detail(refs: refs)
+        guard !refs.isEmpty else { return MarketDetails(quote: nil) }
+        if !forceRefresh, let data = await cache.data(for: refs) {
+            return try Self.parseDetails(data, for: card)
+        }
+        if forceRefresh { await cache.remove(for: refs) }
+        let response = try await load(refs)
         if response.status != 200 {
             await MainActor.run { DiagnosticLog.shared.record("pricing.http_failed", ["code": String(response.status)]) }
         }
         try Self.validate(status: response.status)
-        return try Self.parse(response.data, for: card)
+        let details = try Self.parseDetails(response.data, for: card)
+        try Task.checkCancellation()
+        await cache.store(response.data, for: refs)
+        return details
     }
     static func parse(_ data: Data, for card: CardCandidate) throws -> MarketQuote? {
+        try parseDetails(data, for: card).quote
+    }
+    static func parseDetails(_ data: Data, for card: CardCandidate) throws -> MarketDetails {
         let reply = try JSONDecoder().decode(DetailReply.self, from: data)
-        guard let item = reply.items[card.identity.productID],
+        guard let item = reply.items[card.identity.productID] else { return MarketDetails(quote: nil) }
+        var seen: Set<String> = []
+        let printings = item.printings.compactMap { $0.key ?? $0.label }
+            .filter { !$0.isEmpty && $0.count <= 1000 && seen.insert($0).inserted }
+        guard
               let printing = item.printings.first(where: { $0.label == card.identity.printing || $0.key == card.identity.printing }),
-              let quote = printing.quotes?[card.identity.language + "|" + card.identity.condition] else { return nil }
+              let quote = printing.quotes?[card.identity.language + "|" + card.identity.condition] else {
+            return MarketDetails(quote: nil, printings: printings)
+        }
         let value = quote.market_price
-        guard value.map({ !$0.isNaN && $0 >= 0 }) ?? true else { return nil }
-        return MarketQuote(marketPrice: value, skuID: quote.sku_id?.value)
+        guard value.map({ !$0.isNaN && $0 >= 0 }) ?? true else { return MarketDetails(quote: nil, printings: printings) }
+        return MarketDetails(quote: MarketQuote(marketPrice: value, skuID: quote.sku_id?.value), printings: printings)
     }
     private struct DetailReply: Decodable { var items: [String: Detail] }
     private struct Detail: Decodable { var printings: [Printing] }
@@ -300,5 +337,22 @@ struct OnlineMarketPricing: MarketPricing {
                 throw DecodingError.dataCorruptedError(in: c, debugDescription: "Invalid SKU")
             }
         }
+    }
+}
+
+/// A brief in-memory reuse of a successful catalog response, including all its
+/// condition quotes. No prices are written to disk or estimated from Near Mint.
+private actor MarketDetailCache {
+    private struct Entry { var data: Data; var expires: Date }
+    private var entries: [[String]: Entry] = [:]
+    func remove(for refs: [String]) { entries[refs] = nil }
+    func data(for refs: [String]) -> Data? {
+        guard let entry = entries[refs], entry.expires > .now else { entries[refs] = nil; return nil }
+        return entry.data
+    }
+    func store(_ data: Data, for refs: [String]) {
+        entries = entries.filter { $0.value.expires > .now }
+        if entries.count >= 4, let oldest = entries.min(by: { $0.value.expires < $1.value.expires })?.key { entries[oldest] = nil }
+        entries[refs] = Entry(data: data, expires: .now.addingTimeInterval(60))
     }
 }

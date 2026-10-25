@@ -50,7 +50,7 @@ Further fixes remove the editor's residual merge path, require explicit service-
 
 Passed locally: 62 JavaScript tests, including guarded website sign-in, actual packaged scalar/SIMD WASM initialization, synthetic hash/match and blank-frame pipeline rejection; 20 Python helper tests; 47-asset integrity/dependency checks; Swift grammar and Xcode source/test/resource membership checks. The scalar and SIMD runtimes are isolated in separate Node processes, matching the app's one-build-per-JavaScript-realm design.
 
-`xcodebuild` is unavailable on this Linux machine. macOS CI at 61830c3 passes all 73 native tests and the unsigned Release iPhone build, including actual Keychain access and transaction cases. The build-4 phone log confirms camera/worker initialization, real recognition, zero-download native-cache reopening, HTTP 200 pricing and a priced saved card. Cached files, Node initialization and mocked camera callbacks are not evidence of offline iPhone scanning. Record native test and device acceptance results with the relevant commit.
+`xcodebuild` is unavailable on this Linux machine. macOS CI at 4ab1c5d passes all 83 native tests and the unsigned Personal-scheme Release iPhone build, including camera authorization policy, actual Keychain access, negotiated cash and transaction cases. The build-5 phone log confirms repeated zero-download cache loads, real recognition and four priced saves. New offer taps, permission dialogs and scanner reuse still need the [final phone check](PersonalIPhone.md). Cached files, Node initialization and mocked camera callbacks are not evidence of offline iPhone scanning.
 
 ## Full-screen camera UI
 

@@ -328,10 +328,68 @@ import SwiftData
         let container = try store(), context = container.mainContext
         let batch = try SessionService.start(game: "Pokémon", context: context)
         let list = try XCTUnwrap(SessionService.list(for: batch, context: context))
+        let card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]
+        try SessionService.add(card, session: batch, list: list, context: context)
+        try SessionService.add(card, session: batch, list: list, context: context)
+        try SessionService.saveOffer(batch, list: list, context: context, customCashOffer: 5)
+        let savedOffers = batch.savedOffersData
         try SessionService.deleteList(list, context: context)
         XCTAssertNil(batch.listID); XCTAssertFalse(batch.isActive)
+        XCTAssertEqual(batch.addedQuantity, 2); XCTAssertNotNil(batch.completedAt)
+        XCTAssertEqual(batch.savedOffersData, savedOffers)
+        XCTAssertEqual(try batch.savedOffers().first?.lines.count, 2)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<CardList>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<InventoryCard>()), 0)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<ScanSession>()), 1)
         XCTAssertNil(try SessionService.active(context: context))
+    }
+    func testDeletingSavedListStaysDeletedAfterReopeningWithoutChangingOtherListOrOffers() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("delete.store")
+        func write() throws -> (listID: UUID, batchID: UUID, offers: Data, otherListID: UUID, otherBatchID: UUID) {
+            let container = try AppPersistence.open(url: url), context = container.mainContext
+            let batch = try SessionService.start(game: "Pokémon", context: context)
+            let list = try XCTUnwrap(SessionService.list(for: batch, context: context))
+            list.name = "Delete this list"
+            var card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]; card.marketPrice = 20
+            try SessionService.add(card, session: batch, list: list, context: context)
+            try SessionService.add(card, session: batch, list: list, context: context)
+            try SessionService.saveOffer(batch, list: list, context: context, customCashOffer: 25)
+            let offers = try XCTUnwrap(batch.savedOffersData)
+            try SessionService.finish(batch, context: context)
+            let other = try SessionService.start(game: "Pokémon", context: context)
+            let otherList = try XCTUnwrap(SessionService.list(for: other, context: context))
+            otherList.name = "Keep this list"
+            try SessionService.add(card, session: other, list: otherList, context: context)
+            return (list.id, batch.id, offers, otherList.id, other.id)
+        }
+        let expected = try write()
+        func delete() throws {
+            let container = try AppPersistence.open(url: url), context = container.mainContext
+            let list = try XCTUnwrap(context.fetch(FetchDescriptor<CardList>()).first { $0.id == expected.listID })
+            XCTAssertEqual(list.quantity, 2)
+            try SessionService.deleteList(list, context: context)
+            XCTAssertEqual(try context.fetchCount(FetchDescriptor<CardList>()), 1)
+            XCTAssertEqual(try context.fetchCount(FetchDescriptor<InventoryCard>()), 1)
+        }
+        try delete()
+        let reopened = try AppPersistence.open(url: url), context = reopened.mainContext
+        let lists = try context.fetch(FetchDescriptor<CardList>())
+        XCTAssertEqual(lists.count, 1); XCTAssertEqual(lists.first?.id, expected.otherListID)
+        XCTAssertEqual(lists.first?.name, "Keep this list"); XCTAssertEqual(lists.first?.quantity, 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<InventoryCard>()), 1)
+        let history = try context.fetch(FetchDescriptor<ScanSession>())
+        XCTAssertEqual(history.count, 2)
+        let deleted = try XCTUnwrap(history.first { $0.id == expected.batchID })
+        XCTAssertNil(deleted.listID); XCTAssertFalse(deleted.isActive)
+        XCTAssertEqual(deleted.listName, "Delete this list"); XCTAssertEqual(deleted.addedQuantity, 2)
+        XCTAssertEqual(deleted.knownValue, 40); XCTAssertEqual(deleted.savedOffersData, expected.offers)
+        let saved = try XCTUnwrap(deleted.savedOffers().first)
+        XCTAssertEqual(saved.lines.count, 2); XCTAssertEqual(saved.totals.market, 40)
+        XCTAssertEqual(saved.customCashOffer, 25)
+        XCTAssertEqual(try SessionService.active(context: context)?.id, expected.otherBatchID)
     }
 
     func testReviewIgnoresNewFramesAndKeepsCondition() async throws {

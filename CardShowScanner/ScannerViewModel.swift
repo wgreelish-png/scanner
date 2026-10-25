@@ -66,7 +66,7 @@ import AudioToolbox
         var card = first; card.identity.condition = "Near Mint"
         selected = card
         confirmed = !card.requiresPrintingSelection.orFalse
-        refreshPrice()
+        refreshPrice(forceRefresh: false)
         DiagnosticLog.shared.record("recognition.result", ["episode": scan.id.uuidString, "candidates": String(scan.candidates.count), "accepted": String(scan.accepted), "confidence": String(Int(first.confidence))])
     }
     func stop() {
@@ -84,7 +84,7 @@ import AudioToolbox
         guard result?.candidates.contains(where: { $0.id == candidate.id }) == true || result == nil else { return }
         selected = candidate; selected?.identity.condition = condition
         confirmed = candidate.requiresPrintingSelection != true
-        refreshPrice()
+        refreshPrice(forceRefresh: false)
     }
     func selectAndAdd(_ candidate: CardCandidate, list: CardList, context: ModelContext) {
         guard !selectionInProgress, !saving, session?.isActive == true,
@@ -106,7 +106,7 @@ import AudioToolbox
         }
         if alreadyQuoted { finishPendingConfirmation() }
         else {
-            refreshPrice()
+            refreshPrice(forceRefresh: false)
             let timeout = confirmationTimeout
             confirmationDeadline = Task { [weak self] in
                 do { try await Task.sleep(for: timeout) } catch { return }
@@ -130,14 +130,14 @@ import AudioToolbox
         guard !selectionInProgress, var card = selected, card.printings.contains(printing) || printing == card.identity.printing else { return }
         card.identity.printing = printing
         card.identity.skuID = nil; card.marketPrice = nil; card.requiresPrintingSelection = false
-        selected = card; confirmed = true; refreshPrice()
+        selected = card; confirmed = true; refreshPrice(forceRefresh: false)
     }
     func changeCondition(_ condition: String) {
         guard !selectionInProgress, CatalogOptions.conditions.contains(condition) else { return }
         selected?.identity.condition = condition
-        refreshPrice()
+        refreshPrice(forceRefresh: false)
     }
-    func refreshPrice() {
+    func refreshPrice(forceRefresh: Bool = true) {
         priceTask?.cancel(); priceRequestID = UUID()
         priceConnectionRequired = false
         guard var card = selected else { return }
@@ -150,8 +150,10 @@ import AudioToolbox
         priceLoading = true; priceMessage = nil
         priceTask = Task { [weak self, pricing] in
             do {
-                let quote = try await pricing.quote(for: requestCard, candidates: frozenCandidates)
+                let details = try await pricing.details(for: requestCard, candidates: frozenCandidates, forceRefresh: forceRefresh)
                 guard let self, !Task.isCancelled, self.priceRequestID == requestID, self.selected?.identity == requestCard.identity else { return }
+                let quote = details.quote
+                if !details.printings.isEmpty { self.selected?.printings = details.printings }
                 self.selected?.marketPrice = quote?.marketPrice
                 self.selected?.identity.skuID = quote?.skuID
                 self.priceLoading = false
