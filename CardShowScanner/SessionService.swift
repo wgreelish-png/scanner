@@ -164,12 +164,20 @@ enum BatchFailure: LocalizedError {
     }
     static func deleteList(_ list: CardList, context: ModelContext) throws {
         let id = list.id
+        let quantity = list.quantity
         let sessions = try context.fetch(FetchDescriptor<ScanSession>())
         for session in sessions where session.listID == id {
             session.listName = list.name
             session.listID = nil
             if session.isActive || session.statusRaw == "active" { session.statusRaw = "completed"; session.completedAt = .now }
         }
-        context.delete(list); try CardListService.save(context)
+        context.delete(list)
+        do {
+            try CardListService.save(context)
+            DiagnosticLog.shared.record("list.deleted", ["quantity": String(quantity)])
+        } catch {
+            DiagnosticLog.shared.failure("list.delete_failed", error)
+            throw error
+        }
     }
 }

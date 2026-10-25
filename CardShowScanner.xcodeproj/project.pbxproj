@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        B6C8ECF19A6244D1BD290003 /* CardEditorPricingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6C8ECF19A6244D1BD290004; };
+        B6C8ECF19A6244D1BD290001 /* CardEditorPricingModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6C8ECF19A6244D1BD290002; };
         62C79FEE709E4526B4520001 /* CameraPermissionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62C79FEE709E4526B4520002; };
         F32586CC414E405F92C90001 /* TradeTransactionCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F32586CC414E405F92C90002; };
         F32586CC414E405F92C90003 /* TradeTransactionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F32586CC414E405F92C90004; };
@@ -52,6 +54,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        B6C8ECF19A6244D1BD290004 /* CardEditorPricingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardEditorPricingTests.swift; sourceTree = "<group>"; };
+        B6C8ECF19A6244D1BD290002 /* CardEditorPricingModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardEditorPricingModel.swift; sourceTree = "<group>"; };
         62C79FEE709E4526B4520002 /* CameraPermissionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPermissionTests.swift; sourceTree = "<group>"; };
         F32586CC414E405F92C90002 /* TradeTransactionCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TradeTransactionCalculator.swift; sourceTree = "<group>"; };
         F32586CC414E405F92C90004 /* TradeTransactionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TradeTransactionTests.swift; sourceTree = "<group>"; };
@@ -120,6 +124,7 @@
 			isa = PBXGroup;
 			children = (
                 62C79FEE709E4526B4520002 /* CameraPermissionTests.swift */,
+                B6C8ECF19A6244D1BD290004 /* CardEditorPricingTests.swift */,
                 F32586CC414E405F92C90004 /* TradeTransactionTests.swift */,
                 8F3B2A904EAD4B17B4880004 /* TCGTrackingCredentialsTests.swift */,
                 D22ACDAC86B9A04D643B3BD2 /* PricingTransportTests.swift */,
@@ -152,6 +157,7 @@
 				6A2BBE55072A61FDFEE2901D /* ListViews.swift */,
 				DBF54F815C07C1419836C419 /* Persistence.swift */,
 				7E6F05226FE238B92339C1C6 /* ScannerProvider.swift */,
+                B6C8ECF19A6244D1BD290002 /* CardEditorPricingModel.swift */,
 				48343958C05F45FA811D31E9 /* ScannerView.swift */,
 				F10648A598784D485AB25B47 /* ScannerViewModel.swift */,
 				A8BE7E97BDD1700DC90EBB5D /* SettingsView.swift */,
@@ -276,6 +282,7 @@
 			buildActionMask = 2147483647;
 			files = (
                 62C79FEE709E4526B4520001 /* CameraPermissionTests.swift in Sources */,
+                B6C8ECF19A6244D1BD290003 /* CardEditorPricingTests.swift in Sources */,
                 F32586CC414E405F92C90003 /* TradeTransactionTests.swift in Sources */,
                 8F3B2A904EAD4B17B4880003 /* TCGTrackingCredentialsTests.swift in Sources */,
                 E4EBC0007BCBA93C02A7ED7E /* PricingTransportTests.swift in Sources */,
@@ -302,6 +309,7 @@
 				848281457DDA127EBAF99D6A /* ListViews.swift in Sources */,
 				2C9F0C9F7DCDBA2F41BE8C58 /* Persistence.swift in Sources */,
 				52B0DD50C8023322CBF93C90 /* ScannerProvider.swift in Sources */,
+                B6C8ECF19A6244D1BD290001 /* CardEditorPricingModel.swift in Sources */,
 				6BBBC0C3CA1284CA7BD51BD6 /* ScannerView.swift in Sources */,
 				EE52074FB9C528FAA58E77CE /* ScannerViewModel.swift in Sources */,
 				5E591D6D1666D4DE5CC4A31C /* SettingsView.swift in Sources */,
@@ -339,7 +347,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -375,7 +383,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";

@@ -153,6 +153,10 @@ struct ScannerView: View {
             } else {
                 Text(model.paused ? "Resume when you're ready" : "Hold a card steady inside the camera")
                     .font(.subheadline)
+                if !model.paused {
+                    Text("Tilt slightly to reduce glare. Use a light, plain background for dark borders.")
+                        .font(.caption).multilineTextAlignment(.center)
+                }
             }
             let totals = OfferCalculator.calculate(list.cards.map(\.offerLine), rates: session.rates)
             Text("\(totals.quantity) cards • \(totals.market.money) market").font(.subheadline.bold())
@@ -212,9 +216,9 @@ struct ScannerView: View {
                             Picker("Condition", selection: Binding(get: { card.identity.condition }, set: { model.changeCondition($0) })) {
                                 ForEach(CatalogOptions.conditions, id: \.self) { Text($0) }
                             }
-                            Picker("Printing for \(card.name)", selection: Binding(get: { card.identity.printing }, set: { model.changePrinting($0) })) {
-                                ForEach(card.printings.isEmpty ? [card.identity.printing] : card.printings, id: \.self) { Text($0) }
-                            }
+                            Picker("Type / printing", selection: Binding(get: { card.identity.printing }, set: { model.changePrinting($0) })) {
+                                ForEach(Array(Set(card.printings + [card.identity.printing])).sorted(), id: \.self) { Text($0) }
+                            }.pickerStyle(.menu)
                             Text("Touch and hold a match to review its printing. Other matches use their displayed printing. Every new card starts at Near Mint.").font(.caption).foregroundStyle(.secondary)
                         }.disabled(model.selectionInProgress)
                         if model.priceLoading && !model.selectionInProgress { ProgressView("Checking market value…") }
