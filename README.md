@@ -33,7 +33,7 @@ python3 scripts/check_scanner_runtime.py
 
 **Passed in this Linux workspace:** 62 JavaScript tests (23 bridge, 11 database-cache, 13 public-pricing request, 13 website sign-in form and 2 real bundled OpenCV/engine smoke tests); 20 Python helper tests (2 signing, 11 native-failure annotation, 7 simulator crash reporting); Swift grammar parsing; app/test source and bundled-resource membership; 47-asset hash/dependency verification. The real-engine tests initialize each WASM build in an isolated Node process, hash and match synthetic input, and reject an empty frame. They do not exercise an iPhone camera or establish real-card recognition accuracy.
 
-**Native validation:** [macOS CI at `4ab1c5d`](https://github.com/wgreelish-png/scanner/actions/runs/40065283720) passed all 83 native cases and the unsigned Personal-scheme Release iPhone build. Coverage includes permission reuse/coalescing/revocation, negotiated payouts and percentages, historical estimate preservation, actual Keychain storage and existing scan/save/migration regressions. The simulator-only workaround for the [iOS 18.4/18.5 Swift WebKit Cryptex defect](https://github.com/WebKit/WebKit/pull/46146) is working. Xcode is unavailable locally on Linux. Choose an installed iPhone simulator ID from `xcrun simctl list devices available` on a Mac:
+**Native validation:** [macOS CI at `7c4ac73`](https://github.com/wgreelish-png/scanner/actions/runs/40149104115) passed all 102 native cases and the unsigned Personal-scheme Release iPhone build. Coverage includes exact editor/scanner condition prices and catalog printing choices, stale/manual quote protection, persisted list deletion, permission reuse/coalescing/revocation, negotiated payouts and percentages, historical estimate preservation, actual Keychain storage and existing scan/save/migration regressions. The simulator-only workaround for the [iOS 18.4/18.5 Swift WebKit Cryptex defect](https://github.com/WebKit/WebKit/pull/46146) is working. Xcode is unavailable locally on Linux. Choose an installed iPhone simulator ID from `xcrun simctl list devices available` on a Mac:
 
 ```sh
 xcodebuild test -project CardShowScanner.xcodeproj -scheme CardShowScanner \
@@ -43,6 +43,8 @@ xcodebuild test -project CardShowScanner.xcodeproj -scheme CardShowScanner \
 Keep normal simulator signing enabled for Keychain tests. CI generates temporary simulator-only application/keychain entitlements and ad-hoc signs its test host without an Apple account; the Release iPhone compile remains unsigned. Personal signing configuration is unchanged.
 
 Before relying on this app, complete [the physical-iPhone acceptance checks](docs/ScanConfirmationWorkflow.md). **Bundling/caching is not verified offline support.** The October 23 build-4 phone log confirms worker/camera startup, 426 cached shards with zero downloaded bytes, HTTP 200 pricing and a priced card saved. Repeated pricing, exact condition changes, offline relaunch, native remembered sign-in and single-tap return still require device checks. Keep existing data installed to test migration; export valuable lists before development upgrades.
+
+Build 7 fixes condition-price refreshes in Edit Card, reuses exact catalog condition quotes in both review screens, populates Type / printing dropdowns and repairs the list-delete confirmation target. See [the changes and short phone check](docs/ConditionPricingFixes.md). Recognition code and camera settings are unchanged.
 
 ## Review, offers and diagnostics
 

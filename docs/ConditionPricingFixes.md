@@ -12,7 +12,7 @@ Recognition code, camera settings, thresholds and bundled engine files are uncha
 
 ## Validation
 
-Local checks: 62 JavaScript tests, 20 Python helper tests, all 28 Swift files parsed, correct app/test/resource membership, 47 pinned recognition assets, scheme/plist parsing and diff checks passed. The 102 native XCTest cases and Personal Release build are checked by the branch's macOS workflow; see its result before installing. Physical iPhone behavior still requires the checks below.
+Local checks: 62 JavaScript tests, 20 Python helper tests, all 28 Swift files parsed, correct app/test/resource membership, 47 pinned recognition assets, scheme/plist parsing and diff checks passed. [macOS CI at `7c4ac73`](https://github.com/wgreelish-png/scanner/actions/runs/40149104115) passed all 102 native XCTest cases and the unsigned Personal Release iPhone build. Physical iPhone behavior still requires the checks below.
 
 ## Short iPhone check before the show
 
