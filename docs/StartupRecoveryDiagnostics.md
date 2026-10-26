@@ -23,3 +23,7 @@ Whole-frame brightness is not the detector's card-interior contrast measurement.
 4. Export diagnostics from Settings, or use the existing `[CardShowScanner]` console filter in a Debug build attached to Xcode. A screenshot of an incorrect outline is still useful: scalar diagnostics cannot reconstruct the image.
 
 Install over the current app with the existing personal signing configuration. Physical-iPhone acceptance is deferred until this test; automated checks establish compilation, lifecycle behavior and diagnostics invariants, not real-world top-loader accuracy.
+
+## Automated validation
+
+[macOS CI at `890f7e2`](https://github.com/wgreelish-png/scanner/actions/runs/40340215446) passed all 124 native tests and the unsigned CardShowScanner Personal Release iPhone build. The 22 added native tests cover listener lifecycle/restart/retry policy and diagnostic validation/export. All 69 JavaScript tests and 20 Python helper tests passed; source/resource membership, all 31 Swift files, scheme/plist parsing and 47 pinned runtime assets were checked. Both OpenCV builds retain the pre-diagnostics synthetic hash and bright-card/tracking/removal decision fingerprint. These automated results do not establish physical iPhone recovery or real top-loader recognition accuracy.
