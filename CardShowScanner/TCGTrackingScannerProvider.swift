@@ -387,15 +387,17 @@ struct ScannerPageRecoveryPolicy {
     func markScanIssue(_ issue: ScannerIssueKind) {
         guard active, Self.allowed(webView.url) else { return }
         let requestNonce = nonce
-        webView.callAsyncJavaScript("return window.CardShowBridge?.markScanIssue(reason) === true;",
-            arguments: ["reason": issue.rawValue], in: nil, contentWorld: .page) { [weak self] result in
+        Task { [weak self] in
             guard let self, self.active, self.nonce == requestNonce else { return }
-            switch result {
-            case .success(let marked):
+            do {
+                let marked = try await self.webView.callAsyncJavaScript("return window.CardShowBridge?.markScanIssue(reason) === true;",
+                    arguments: ["reason": issue.rawValue], in: nil, contentWorld: .page)
+                guard self.active, self.nonce == requestNonce else { return }
                 self.status = marked as? Bool == true
                     ? "Scan issue marked. Keep this card steady for a few seconds."
                     : "Scanner is not ready to mark an issue yet."
-            case .failure(let error):
+            } catch {
+                guard self.active, self.nonce == requestNonce else { return }
                 DiagnosticLog.shared.failure("scanner.issue_marker_failed", error)
                 self.status = "Could not mark this issue. Scanning can continue."
             }
