@@ -18,6 +18,32 @@ struct ListDeletionRequest: Identifiable, Equatable, Sendable {
 }
 
 @MainActor @Observable final class ListDeletionModel {
+    private struct RollbackState {
+        let list: CardList?
+        let cards: [InventoryCard]
+        let sessions: [(session: ScanSession, listID: UUID?, name: String, status: String, completedAt: Date?)]
+
+        init(id: UUID, context: ModelContext) throws {
+            list = try context.fetch(FetchDescriptor<CardList>(predicate: #Predicate { $0.id == id })).first
+            cards = list?.cards ?? []
+            sessions = try context.fetch(FetchDescriptor<ScanSession>()).filter { $0.listID == id }.map {
+                ($0, $0.listID, $0.listName, $0.statusRaw, $0.completedAt)
+            }
+        }
+        func restore(context: ModelContext) {
+            context.rollback()
+            // SwiftData rollback can retain changed values in live models and
+            // relationship arrays. Restore this operation's cached state too.
+            if let list { list.cards = cards }
+            for snapshot in sessions {
+                snapshot.session.listID = snapshot.listID
+                snapshot.session.listName = snapshot.name
+                snapshot.session.statusRaw = snapshot.status
+                snapshot.session.completedAt = snapshot.completedAt
+            }
+            context.processPendingChanges()
+        }
+    }
     let request: ListDeletionRequest
     private(set) var isDeleting = false
     private(set) var didDelete = false
@@ -41,14 +67,17 @@ struct ListDeletionRequest: Identifiable, Equatable, Sendable {
         isDeleting = true; error = nil
         defer { isDeleting = false }
         log.record("list.delete_confirmed", ["quantity": String(request.quantity)])
+        var previous: RollbackState?
         do {
+            previous = try RollbackState(id: request.id, context: context)
             try delete(request.id, context)
             didDelete = true
             return true
         } catch {
             // The production save already rolls back. This also protects the
             // draft when an injected or future deletion operation throws early.
-            context.rollback()
+            if let previous { previous.restore(context: context) }
+            else { context.rollback() }
             log.failure("list.delete_attempt_failed", error)
             self.error = "The list could not be deleted. It has been kept. Tap Retry Delete to try again."
             return false

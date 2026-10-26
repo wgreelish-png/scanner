@@ -117,6 +117,8 @@ import SwiftData
         try SessionService.saveOffer(otherSession, list: other, context: context)
         let request = ListDeletionRequest(list: target), otherID = other.id, otherSessionID = otherSession.id
         let targetSessionID = targetSession.id, otherOffers = otherSession.savedOffersData
+        let targetOrder = target.orderedCards.map(\.id), targetStatus = targetSession.statusRaw
+        let targetCompletedAt = targetSession.completedAt, targetName = targetSession.listName
         let otherOrder = other.orderedCards.map(\.id), otherAddedDates = other.orderedCards.map(\.addedAt)
         var invocations = 0
         let model = ListDeletionModel(request: request, delete: { id, context in
@@ -136,6 +138,9 @@ import SwiftData
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<CardList>()), 2)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<InventoryCard>()), 5)
         XCTAssertEqual(targetSession.listID, request.id); XCTAssertEqual(targetSession.savedOffersData, targetOffers)
+        XCTAssertEqual(target.orderedCards.map(\.id), targetOrder); XCTAssertEqual(target.quantity, 3)
+        XCTAssertEqual(targetSession.statusRaw, targetStatus); XCTAssertEqual(targetSession.completedAt, targetCompletedAt)
+        XCTAssertEqual(targetSession.listName, targetName)
         XCTAssertTrue(model.confirm(context: context)); XCTAssertTrue(model.didDelete)
         XCTAssertNil(model.error); XCTAssertEqual(invocations, 2)
         let reopened = try AppPersistence.open(url: url), stored = reopened.mainContext
