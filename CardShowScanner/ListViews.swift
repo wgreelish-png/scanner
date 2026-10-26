@@ -130,9 +130,11 @@ struct CardListView: View {
     @State private var name = ""
     @State private var error: String?
     @State private var editing: InventoryCard?
+    @State private var showingCatalogSearch = false
     @State private var exportText = ""
     @State private var exporting = false
     @State private var shareURL: URL?
+    private var reviewSession: ScanSession? { session ?? sessions.first { $0.listID == list.id } }
     var filtered: [InventoryCard] {
         list.orderedCards.filter { search.isEmpty || [$0.snapshot.name, $0.snapshot.set, $0.snapshot.number, $0.snapshot.identity.productID].contains { $0.localizedCaseInsensitiveContains(search) } }
             .sorted {
@@ -146,7 +148,7 @@ struct CardListView: View {
     var body: some View {
         List {
             Section {
-                if let session {
+                if let session = reviewSession {
                     // This row contains several independent controls. Automatic
                     // List button styling can otherwise make the whole offer
                     // panel trigger its Continue Scanning action.
@@ -169,6 +171,10 @@ struct CardListView: View {
                     }.buttonStyle(.borderless)
                 }
             }
+            Section {
+                Button("Search & Add Card", systemImage: "magnifyingglass") { showingCatalogSearch = true }
+                    .buttonStyle(.borderless).frame(minHeight: 44).accessibilityIdentifier("list.searchAndAdd")
+            }
             Picker("Sort", selection: $sort) { ForEach(["Scan Order", "Name", "Value"], id: \.self) { Text($0) } }
             if list.cards.isEmpty { ContentUnavailableView("No cards yet", systemImage: "rectangle.stack", description: Text("Open the scanner to add cards.")) }
             ForEach(filtered) { item in
@@ -186,7 +192,7 @@ struct CardListView: View {
                     Button("Remove", role: .destructive) { context.delete(item); save() }
                 }
             }
-        }.navigationTitle(session == nil ? list.name : "Review & Offer").searchable(text: $search)
+        }.navigationTitle(reviewSession == nil ? list.name : "Review & Offer").searchable(text: $search)
             .onAppear { continueGame = list.orderedCards.first?.snapshot.identity.game ?? "Pokémon" }
             .confirmationDialog("Continue this list?", isPresented: $confirmContinue) {
                 Button("Continue Scanning") {
@@ -224,6 +230,10 @@ struct CardListView: View {
                 Button("Cancel", role: .cancel) {}
             }
             .sheet(item: $editing) { item in CardEditorView(item: item) }
+            .sheet(isPresented: $showingCatalogSearch) {
+                ManualCardSearchView(list: list, game: reviewSession?.game ?? list.orderedCards.first?.snapshot.identity.game ?? continueGame,
+                    allowsGameChange: reviewSession == nil && list.cards.isEmpty)
+            }
             .sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { cleanupShare() } })) {
                 if let shareURL { ShareSheet(url: shareURL) }
             }
