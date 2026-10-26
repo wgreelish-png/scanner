@@ -8,7 +8,7 @@ function harness({ denyCamera = false, cacheState = 'ok' } = {}) {
   const messages = [], elements = [], events = new Map(), windowEvents = new Map(), trackEvents = new Map(), draws = [];
   let overlayDestroyed = 0;
   const packOptions = [];
-  let captureOptions, scannerOptions, stopped = 0, disposed = 0, now = 0;
+  let captureOptions, scannerOptions, scannerStarts = 0, stopped = 0, disposed = 0, now = 0;
   const element = tag => {
     const e = { tag, style: {}, children: [], append(...items) { this.children.push(...items); }, setAttribute() {},
       remove() { this.removed = true; }, async play() {} };
@@ -27,7 +27,7 @@ function harness({ denyCamera = false, cacheState = 'ok' } = {}) {
     } },
     'app/scan-backends.js': { createBackend: async () => backend },
     'core/overlay.js': { createOverlay: () => ({ draw(options) { draws.push(options); }, clear() {}, setSource() {}, destroy() { overlayDestroyed++; } }) },
-    'app/quickscan.js': { startQuickScan(options) { scannerOptions = options; return () => { stopped++; }; } },
+    'app/quickscan.js': { startQuickScan(options) { scannerStarts++; scannerOptions = options; return () => { stopped++; }; } },
     'app/shared.js': { useScope(scope) { assert.equal(scope, 'price'); }, catalogDetail() {} }
   };
   const sandbox = { URL, console, document, performance: { now: () => now },
@@ -43,7 +43,7 @@ function harness({ denyCamera = false, cacheState = 'ok' } = {}) {
   } });
   script.runInContext(context);
   return { bridge: sandbox.CardShowBridge, messages, elements, events, windowEvents, trackEvents, draws, document, get overlayDestroyed() { return overlayDestroyed; }, advance(ms) { now += ms; },
-    packOptions, get scannerOptions() { return scannerOptions; }, get captureOptions() { return captureOptions; }, get stopped() { return stopped; }, get disposed() { return disposed; } };
+    packOptions, get scannerOptions() { return scannerOptions; }, get scannerStarts() { return scannerStarts; }, get captureOptions() { return captureOptions; }, get stopped() { return stopped; }, get disposed() { return disposed; } };
 }
 const tuple = (id = 123, variants = [{ id: 10, label: 'Normal', nm: 1.25, primary: true }, { id: 11, label: 'Holofoil', nm: 2.5 }]) =>
   [`p:${id}`, `Sample ${id}`, '1/10', 'DEMO', 'Demo Set', '', 'https://cdn.tcgtracking.com/test.jpg', variants];
@@ -362,4 +362,98 @@ test('issue markers reject unknown reasons and cannot start an absent or stopped
   assert.equal(h.bridge.markScanIssue('top_loader'), true);
   h.bridge.stop(); count = h.messages.length;
   assert.equal(h.bridge.markScanIssue('top_loader'), false); assert.equal(h.messages.length, count);
+});
+
+const manualSuggestions = h => h.messages.filter(m => m.kind === 'manualSearchSuggested');
+async function observeSolidCard(h, milliseconds = 500) {
+  h.advance(milliseconds); h.scannerOptions.onStats(borderStats()); await Promise.resolve();
+}
+async function waitOnCard(h) {
+  h.scannerOptions.onStats(borderStats());
+  for (let i = 0; i < 8; i++) await observeSolidCard(h);
+}
+test('manual search is offered after four seconds of observed card presence, never empty camera time', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  h.advance(20000);
+  h.scannerOptions.onStats({ diagnostics: { solid: false } }); await Promise.resolve();
+  assert.equal(manualSuggestions(h).length, 0);
+  h.scannerOptions.onStats(borderStats());
+  for (let i = 0; i < 7; i++) await observeSolidCard(h);
+  assert.equal(manualSuggestions(h).length, 0);
+  await observeSolidCard(h, 499); assert.equal(manualSuggestions(h).length, 0);
+  await observeSolidCard(h, 1);
+  assert.deepEqual(manualSuggestions(h), [{ kind: 'manualSearchSuggested', nonce: 'n' }]);
+  for (let i = 0; i < 10; i++) await observeSolidCard(h);
+  assert.equal(manualSuggestions(h).length, 1, 'one offer for the same unresolved card');
+});
+test('brief movement retains the four-second attempt but sustained absence starts another', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  const outline = { quad: [[0, 0], [70, 0], [70, 100], [0, 100]], state: 'searching' };
+  h.scannerOptions.overlay.draw(outline);
+  for (let i = 0; i < 4; i++) await observeSolidCard(h);
+  h.scannerOptions.onHide(); h.advance(800); h.scannerOptions.overlay.draw(outline);
+  await observeSolidCard(h, 700); await observeSolidCard(h, 500);
+  assert.equal(manualSuggestions(h).length, 1, 'short tracking loss does not restart the clock');
+  h.bridge.resumeAfterManualSearchPrompt();
+  h.scannerOptions.onHide(); h.advance(1200);
+  h.scannerOptions.overlay.draw(outline);
+  for (let i = 0; i < 7; i++) await observeSolidCard(h);
+  assert.equal(manualSuggestions(h).length, 1);
+  await observeSolidCard(h);
+  assert.equal(manualSuggestions(h).length, 2, 'a later physical attempt can offer search');
+});
+test('a pending manual prompt blocks scan/hide delivery and Keep Scanning does not nag for the same attempt', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  await waitOnCard(h);
+  const count = h.messages.length;
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
+  h.scannerOptions.onHide();
+  assert.equal(h.messages.length, count, 'the popup cannot race a new confirmation sheet');
+  h.bridge.resumeAfterManualSearchPrompt();
+  assert.equal(h.scannerStarts, 2, 'Keep Scanning rearms full candidate payloads after suppressed same:true results');
+  assert.equal(h.messages.filter(m => m.event === 'camera_acquired').length, 1, 'resuming uses the existing camera stream');
+  for (let i = 0; i < 8; i++) await observeSolidCard(h);
+  assert.equal(manualSuggestions(h).length, 1);
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
+  assert.equal(h.messages.at(-1).kind, 'scan', 'recognition resumes after the explicit choice');
+});
+test('a settled recognition wins over a timeout queued by the same scan callback', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  h.scannerOptions.onStats(borderStats());
+  for (let i = 0; i < 6; i++) await observeSolidCard(h);
+  h.advance(200); h.scannerOptions.onShow({ ref: tuple(), accepted: true, confidence: 96 });
+  h.advance(400); h.scannerOptions.onShow({ same: true, accepted: true, confidence: 96 });
+  h.advance(400); h.scannerOptions.onStats(borderStats());
+  h.scannerOptions.onShow({ same: true, accepted: true, confidence: 96 });
+  await Promise.resolve();
+  assert.equal(manualSuggestions(h).length, 0);
+  assert.equal(h.messages.at(-1).kind, 'scan');
+});
+test('held confirmation and saved-card removal wait never trigger manual search', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  h.scannerOptions.onStats(borderStats());
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
+  for (let i = 0; i < 12; i++) await observeSolidCard(h);
+  assert.equal(manualSuggestions(h).length, 0);
+  h.bridge.releaseReview();
+  for (let i = 0; i < 12; i++) await observeSolidCard(h);
+  assert.equal(manualSuggestions(h).length, 0);
+  h.scannerOptions.onHide(); await waitOnCard(h);
+  assert.equal(manualSuggestions(h).length, 1);
+});
+test('reset, background and stop cancel queued timeout work and clear prior prompt state', async () => {
+  for (const action of ['reset', 'background', 'stop']) {
+    const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+    h.scannerOptions.onStats(borderStats());
+    for (let i = 0; i < 7; i++) await observeSolidCard(h);
+    h.advance(500); h.scannerOptions.onStats(borderStats());
+    if (action === 'reset') h.bridge.resetRecognition();
+    else if (action === 'background') { h.document.hidden = true; h.events.get('visibilitychange')(); }
+    else h.bridge.stop();
+    await Promise.resolve();
+    assert.equal(manualSuggestions(h).length, 0, action);
+    if (action === 'reset') {
+      await waitOnCard(h); assert.equal(manualSuggestions(h).length, 1, 'explicit Scan Next starts a fresh attempt');
+    }
+  }
 });

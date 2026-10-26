@@ -633,6 +633,101 @@ import SwiftData
         XCTAssertEqual(list.orderedCards[0].snapshot.identity.condition, "Lightly Played")
         model.stop()
     }
+    func testAlternativePrintingDropdownKeepsConditionAndOnlyConfirmationSavesExactCapturedQuote() async throws {
+        let container = try store(), context = container.mainContext
+        let session = try SessionService.start(game: "Pokémon", context: context)
+        let list = try XCTUnwrap(SessionService.list(for: session, context: context))
+        let model = ScannerViewModel(provider: TestScannerProvider(), pricing: CapturedMarketPricing(data: try quickScanFixture()))
+        model.start(game: "Pokémon", list: list, context: context, session: session)
+        var cards = Array(MockScannerProvider.samples(game: "Pokémon", index: 0).prefix(2))
+        cards[0].identity.productID = "p:87727"; cards[0].name = "Nidoran M"
+        cards[1].identity.productID = "p:87718"; cards[1].name = "Nidoran F"
+        cards[1].set = "Mysterious Treasures"; cards[1].number = "91/123"
+        cards[1].printings = ["Normal"]
+        model.receive(ScanResult(id: UUID(), candidates: cards, accepted: false, same: false))
+        await waitForIdle(model)
+        model.changeCondition("Lightly Played")
+        await waitForIdle(model)
+        model.changePrinting("Reverse Holofoil", for: cards[1])
+        XCTAssertNil(model.selected?.marketPrice); XCTAssertNil(model.selected?.identity.skuID)
+        XCTAssertEqual(list.quantity, 0, "Dropdown edits are a draft, never confirmation")
+        await waitForIdle(model)
+        XCTAssertEqual(model.selected?.identity.productID, "p:87718")
+        XCTAssertEqual(model.selected?.identity.condition, "Lightly Played")
+        XCTAssertEqual(model.selected?.identity.printing, "Reverse Holofoil")
+        XCTAssertEqual(model.selected?.marketPrice, Decimal(string: "1.74"))
+        XCTAssertEqual(model.selected?.identity.skuID, "1261659")
+        XCTAssertEqual(list.quantity, 0)
+
+        model.selectAndAdd(cards[1], list: list, context: context)
+        await waitForIdle(model)
+        XCTAssertEqual(list.quantity, 1)
+        let saved = try XCTUnwrap(list.orderedCards.first).snapshot
+        XCTAssertEqual(saved.identity.productID, "p:87718")
+        XCTAssertEqual(saved.identity.condition, "Lightly Played")
+        XCTAssertEqual(saved.identity.printing, "Reverse Holofoil")
+        XCTAssertEqual(saved.marketPrice, Decimal(string: "1.74"))
+        XCTAssertEqual(saved.identity.skuID, "1261659")
+        XCTAssertNil(model.selected)
+        model.stop()
+    }
+    func testFirstCatalogLookupPopulatesAlternativePrintingMenuWithoutChangingFrozenCandidates() async throws {
+        let data = try quickScanFixture()
+        let pricing = OnlineMarketPricing(load: { _ in (status: 200, data: data) })
+        let model = ScannerViewModel(provider: TestScannerProvider(), pricing: pricing)
+        var cards = Array(MockScannerProvider.samples(game: "Pokémon", index: 0).prefix(2))
+        cards[0].identity.productID = "p:87727"; cards[0].name = "Nidoran M"
+        cards[1].identity.productID = "p:87718"; cards[1].name = "Nidoran F"
+        cards[1].printings = ["Normal"]
+        let scan = ScanResult(id: UUID(), candidates: cards, accepted: false, same: false)
+        model.receive(scan)
+        await waitForIdle(model)
+
+        XCTAssertEqual(Set(model.printings(for: cards[1])), Set(["Normal", "Reverse Holofoil"]),
+            "The first batch response supplies every candidate's printing options")
+        XCTAssertEqual(model.selected?.identity.productID, cards[0].identity.productID,
+            "Loading an alternative's options must not choose or confirm it")
+        XCTAssertEqual(model.selected?.identity.printing, "Normal")
+        XCTAssertEqual(model.result?.id, scan.id)
+        XCTAssertEqual(model.result?.candidates, cards, "The recognized candidate snapshot and order stay frozen")
+        XCTAssertFalse(model.selectionInProgress)
+        XCTAssertFalse(model.saving)
+        XCTAssertNotNil(model.selected)
+        model.scanNextCard()
+    }
+    func testAlternativePrintingDropdownRequestsOneQuoteAndIgnoresInvalidChoices() async throws {
+        let pricing = ControlledPricing()
+        let model = ScannerViewModel(provider: TestScannerProvider(), pricing: pricing)
+        let cards = MockScannerProvider.samples(game: "Pokémon", index: 0)
+        model.receive(ScanResult(id: UUID(), candidates: cards, accepted: false, same: false))
+        try await waitForRequests(1, pricing: pricing)
+        await pricing.resolve(0, with: MarketQuote(marketPrice: 10, skuID: "10"))
+        await waitForIdle(model)
+        model.changeCondition("Lightly Played")
+        try await waitForRequests(2, pricing: pricing)
+        await pricing.resolve(1, with: MarketQuote(marketPrice: 2, skuID: "20"))
+        await waitForIdle(model)
+
+        model.changePrinting("Reverse Holofoil", for: cards[1])
+        XCTAssertNil(model.selected?.marketPrice); XCTAssertNil(model.selected?.identity.skuID)
+        XCTAssertEqual(model.selected?.identity.condition, "Lightly Played")
+        try await waitForRequests(3, pricing: pricing)
+        let draft = try XCTUnwrap(model.selected)
+        model.changePrinting("Unsupported Finish", for: cards[1])
+        var foreign = cards[1]; foreign.identity.productID = "p:999999999"
+        model.changePrinting("Normal", for: foreign)
+        XCTAssertEqual(model.selected, draft, "Invalid menu choices cannot replace the frozen candidate draft")
+        await pricing.resolve(2, with: MarketQuote(marketPrice: 0, skuID: "30"))
+        await waitForIdle(model)
+        let requests = await pricing.count
+        XCTAssertEqual(requests, 3, "Changing the alternative printing requests its quote once")
+        XCTAssertEqual(model.selected?.identity.productID, cards[1].identity.productID)
+        XCTAssertEqual(model.selected?.identity.printing, "Reverse Holofoil")
+        XCTAssertEqual(model.selected?.identity.condition, "Lightly Played")
+        XCTAssertEqual(model.selected?.marketPrice, 0)
+        XCTAssertEqual(model.selected?.identity.skuID, "30")
+        model.scanNextCard()
+    }
     func testPricingFailureDoesNotBlockExplicitCandidateSave() async throws {
         let container = try store(), context = container.mainContext
         let session = try SessionService.start(game: "Pokémon", context: context)
@@ -822,6 +917,9 @@ private struct FailingMarketPricing: MarketPricing {
 private struct CapturedMarketPricing: MarketPricing {
     let data: Data
     func quote(for card: CardCandidate) async throws -> MarketQuote? { try OnlineMarketPricing.parse(data, for: card) }
+    func details(for card: CardCandidate, candidates: [CardCandidate], forceRefresh: Bool) async throws -> MarketDetails {
+        try OnlineMarketPricing.parseDetails(data, for: card)
+    }
 }
 private struct RejectedPublicPricing: MarketPricing {
     func quote(for card: CardCandidate) async throws -> MarketQuote? { throw MarketPricingFailure.accessRejected(401) }

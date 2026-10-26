@@ -17,12 +17,13 @@ struct ScannerView: View {
     @State private var nextSessionID: UUID?
     @State private var model = ScannerViewModel()
     @State private var mode = "Live"
-    @State private var editingMatch = false
     @State private var showingConnection = false
     @State private var showingReviewConnection = false
     @State private var returningFromConnection = false
     @State private var acknowledgedConnectionInView = false
     @State private var showingListReview = false
+    @State private var showingManualSearchPrompt = false
+    @State private var showingManualSearch = false
     init(session: ScanSession, list: CardList) {
         self.session = session; self.list = list
         _game = State(initialValue: session.game ?? "Pokémon")
@@ -33,6 +34,20 @@ struct ScannerView: View {
             Color.black.ignoresSafeArea()
             if let live = model.liveProvider {
                 TCGScannerWebView(provider: live).ignoresSafeArea()
+                    .onReceive(live.$manualSearchSuggested) { suggested in
+                        guard suggested else { return }
+                        // Published sends before its stored value changes. Check
+                        // current screen/provider state after that update commits.
+                        Task { @MainActor in
+                            guard live.manualSearchSuggested else { return }
+                            guard visible, session.isActive, !model.paused, model.selected == nil,
+                                  !showingListReview, !showingConnection, !showingReviewConnection,
+                                  !returningFromConnection, !showingManualSearch else {
+                                live.resumeAfterManualSearchPrompt(); return
+                            }
+                            showingManualSearchPrompt = true
+                        }
+                    }
             } else {
                 VStack(spacing: 16) {
                     Image(systemName: "viewfinder").font(.system(size: 72))
@@ -44,6 +59,15 @@ struct ScannerView: View {
                 cameraHeader
                 Spacer(minLength: 0)
                 cameraFooter
+                    .alert("Search for this card manually?", isPresented: $showingManualSearchPrompt) {
+                        Button("Search Manually") { openManualSearch() }
+                        Button("Keep Scanning", role: .cancel) {
+                            model.liveProvider?.resumeAfterManualSearchPrompt()
+                            DiagnosticLog.shared.record("scanner.manual_search_declined")
+                        }
+                    } message: {
+                        Text("No stable match after four seconds. Search the saved catalog to add this card to the same list, or keep scanning.")
+                    }
             }.padding(.horizontal, 16).padding(.vertical, 8)
         }
         .toolbar(.hidden, for: .navigationBar)
@@ -55,19 +79,22 @@ struct ScannerView: View {
                 .interactiveDismissDisabled()
         }
         .fullScreenCover(isPresented: $showingConnection, onDismiss: finishConnection) { connectionView(inReview: false) }
+        .sheet(isPresented: $showingManualSearch, onDismiss: { startIfReady() }) {
+            ManualCardSearchView(list: list, game: session.game ?? game, allowsGameChange: false)
+        }
         .onAppear {
             visible = true
             DiagnosticLog.shared.record("navigation.scanner_appeared")
             startIfReady()
         }
         .onDisappear {
-            visible = false; model.stop()
+            visible = false; showingManualSearchPrompt = false; model.stop()
             DiagnosticLog.shared.record("navigation.scanner_disappeared")
         }
         .onChange(of: scenePhase) { _, phase in
             DiagnosticLog.shared.record("app.scene", ["phase": phase == .active ? "active" : (phase == .background ? "background" : "inactive")])
             if phase == .active { startIfReady() }
-            else if phase == .background { model.stop() }
+            else if phase == .background { showingManualSearchPrompt = false; model.stop() }
         }
         .onChange(of: game) { _, newGame in
             guard newGame != session.game else { return }
@@ -96,7 +123,6 @@ struct ScannerView: View {
         .onChange(of: showingListReview) { _, showing in
             if !showing { startIfReady() }
         }
-        .onChange(of: model.result?.id) { _, _ in editingMatch = false }
         .onChange(of: mode) { _, _ in restart() }
         .failureAlert(Binding(get: { model.selected == nil ? model.error : nil }, set: { model.error = $0 }))
     }
@@ -166,6 +192,9 @@ struct ScannerView: View {
                 if !model.paused {
                     Text("Tilt slightly to reduce glare. Use a light, plain background for dark borders.")
                         .font(.caption).multilineTextAlignment(.center)
+                    Button("Search Manually", systemImage: "magnifyingglass") { openManualSearch() }
+                        .buttonStyle(.borderless).frame(minHeight: 44)
+                        .accessibilityIdentifier("scanner.manualSearch")
                 }
             }
             let totals = OfferCalculator.calculate(list.cards.map(\.offerLine), rates: session.rates)
@@ -201,6 +230,11 @@ struct ScannerView: View {
                         }
                         Text("Tap the correct match to add it, then scan the next card.")
                             .font(.subheadline).foregroundStyle(.secondary)
+                        ScanReviewDropdown(title: "Condition", value: card.identity.condition, options: CatalogOptions.conditions,
+                            accessibilityID: "scanReview.condition", onChange: { model.changeCondition($0) })
+                            .disabled(model.selectionInProgress || model.saving || !session.isActive)
+                        Text("Condition applies to the card you add. Every new scan starts at Near Mint.")
+                            .font(.caption).foregroundStyle(.secondary)
                         if let message = model.priceMessage {
                             Text(message).font(.caption).foregroundStyle(.secondary)
                             if model.priceConnectionRequired && model.liveProvider != nil {
@@ -212,25 +246,21 @@ struct ScannerView: View {
                         }
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: dynamicTypeSize.isAccessibilitySize ? 1 : 2), alignment: .leading, spacing: 16) {
                             ForEach(Array((model.result?.candidates ?? []).prefix(5))) { candidate in
-                                Button { model.selectAndAdd(candidate, list: list, context: context) } label: {
-                                    CandidateMatchTile(candidate: candidate, selected: card, priceLoading: model.priceLoading)
-                                }.buttonStyle(.plain).disabled(model.selectionInProgress || !session.isActive)
-                                    .contextMenu {
-                                        Button("Review printing & condition") { model.choose(candidate); editingMatch = true }
-                                    }
-                                    .accessibilityElement(children: .combine)
-                                    .accessibilityHint("Adds this match to your list. Touch and hold to review its printing and condition.")
+                                let draft = card.identity.productID == candidate.identity.productID ? card : candidate
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Button { model.selectAndAdd(candidate, list: list, context: context) } label: {
+                                        CandidateMatchTile(candidate: candidate, selected: card, priceLoading: model.priceLoading)
+                                    }.buttonStyle(.plain)
+                                        .accessibilityElement(children: .combine)
+                                        .accessibilityHint("Adds this match using its displayed printing and condition. Use the dropdowns to change them first.")
+                                    ScanReviewDropdown(title: "Type / printing", value: draft.identity.printing,
+                                        options: model.printings(for: candidate),
+                                        accessibilityID: "scanReview.printing." + candidate.identity.productID,
+                                        accessibilityContext: candidate.name,
+                                        onChange: { model.changePrinting($0, for: candidate) })
+                                }.disabled(model.selectionInProgress || model.saving || !session.isActive)
                             }
                         }
-                        DisclosureGroup("Condition & printing", isExpanded: $editingMatch) {
-                            Picker("Condition", selection: Binding(get: { card.identity.condition }, set: { model.changeCondition($0) })) {
-                                ForEach(CatalogOptions.conditions, id: \.self) { Text($0) }
-                            }
-                            Picker("Type / printing", selection: Binding(get: { card.identity.printing }, set: { model.changePrinting($0) })) {
-                                ForEach(Array(Set(card.printings + [card.identity.printing])).sorted(), id: \.self) { Text($0) }
-                            }.pickerStyle(.menu)
-                            Text("Touch and hold a match to review its printing. Other matches use their displayed printing. Every new card starts at Near Mint.").font(.caption).foregroundStyle(.secondary)
-                        }.disabled(model.selectionInProgress)
                         if model.priceLoading && !model.selectionInProgress { ProgressView("Checking market value…") }
 
 
@@ -280,9 +310,17 @@ struct ScannerView: View {
         if model.selected != nil { model.refreshPrice() }
         startIfReady()
     }
+    private func openManualSearch() {
+        guard session.isActive, model.selected == nil, !model.selectionInProgress, !model.saving,
+              !showingManualSearch else { return }
+        showingManualSearchPrompt = false
+        // Stop before presenting so camera results cannot interrupt catalog entry.
+        showingManualSearch = true; model.stop()
+        DiagnosticLog.shared.record("scanner.manual_search_opened")
+    }
     private func startIfReady() {
         guard visible, session.isActive, !model.paused, !showingConnection, !showingReviewConnection, !showingListReview,
-              !returningFromConnection else { return }
+              !returningFromConnection, !showingManualSearchPrompt, !showingManualSearch else { return }
         if model.liveProvider != nil && !connectionIntroduced && !acknowledgedConnectionInView { openConnection(); return }
         model.start(game: session.game ?? game, list: list, context: context, session: session)
     }
@@ -293,6 +331,36 @@ struct ScannerView: View {
         if mode == "Live" { provider = TCGTrackingScannerProvider() } else { provider = MockScannerProvider() }
         model = ScannerViewModel(provider: provider)
         startIfReady()
+    }
+}
+
+/// A separate menu button keeps opening an option from confirming the card.
+private struct ScanReviewDropdown: View {
+    let title: String
+    let value: String
+    let options: [String]
+    let accessibilityID: String
+    var accessibilityContext: String? = nil
+    let onChange: (String) -> Void
+    var body: some View {
+        Menu {
+            Picker(title, selection: Binding(get: { value }, set: onChange)) {
+                ForEach(options, id: \.self) { Text($0) }
+            }.pickerStyle(.inline)
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(title).font(.caption).foregroundStyle(.secondary)
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.down").font(.caption.bold())
+                }
+                Text(value).font(.subheadline.bold()).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+            }.padding(12).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+                .contentShape(RoundedRectangle(cornerRadius: 10))
+        }.buttonStyle(.borderless)
+            .accessibilityLabel(accessibilityContext.map { title + " for " + $0 } ?? title)
+            .accessibilityValue(value).accessibilityIdentifier(accessibilityID)
     }
 }
 
