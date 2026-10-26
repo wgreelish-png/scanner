@@ -154,6 +154,18 @@ import SwiftData
         XCTAssertEqual(session.savedOffersData, offers); XCTAssertEqual(list.quantity, 2)
         XCTAssertEqual(list.orderedCards.map { $0.snapshot.identity.productID }, ["p:1", "p:99"])
     }
+    func testUnavailableOnlineQuoteCanOnlyBeSavedAsExplicitlyUnpriced() async throws {
+        let container = try store(), context = container.mainContext, list = CardList(name: "Offline")
+        context.insert(list); try context.save()
+        var candidate = card(99); candidate.marketPrice = 999; candidate.identity.skuID = "999"
+        let model = ManualCardAddModel(card: candidate, pricing: UnavailableManualPricing())
+        model.pricing.refreshPrice(); await priceIdle(model.pricing)
+        XCTAssertNil(model.pricing.card.marketPrice); XCTAssertNil(model.pricing.card.identity.skuID)
+        XCTAssertTrue(model.pricing.priceMessage?.contains("without a market value") == true)
+        XCTAssertEqual(list.quantity, 0)
+        XCTAssertTrue(model.add(to: list, context: context)); XCTAssertEqual(list.quantity, 1)
+        XCTAssertNil(list.orderedCards[0].snapshot.marketPrice); XCTAssertEqual(list.unpricedQuantity, 1)
+    }
     func testManualAddFailureRetainsSelectionsAndRetryAddsOnlyOneRow() async throws {
         let container = try store(), context = container.mainContext, list = CardList(name: "Retry")
         context.insert(list); try context.save()
@@ -211,4 +223,7 @@ private struct ExactManualPricing: MarketPricing {
     func quote(for card: CardCandidate) async throws -> MarketQuote? {
         MarketQuote(marketPrice: card.identity.condition == "Near Mint" ? 10 : 0, skuID: card.identity.condition == "Near Mint" ? "111" : "222")
     }
+}
+private struct UnavailableManualPricing: MarketPricing {
+    func quote(for card: CardCandidate) async throws -> MarketQuote? { throw URLError(.notConnectedToInternet) }
 }

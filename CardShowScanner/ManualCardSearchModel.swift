@@ -60,7 +60,7 @@ import SwiftData
              try SessionService.add($0, session: $1, list: $2, context: $3)
          }) {
         var draft = card; draft.identity.condition = "Near Mint"; draft.marketPrice = nil; draft.identity.skuID = nil
-        self.pricing = CardEditorPricingModel(card: draft, pricing: pricing); self.saveCard = saveCard
+        self.pricing = CardEditorPricingModel(card: draft, pricing: pricing, manualPriceAllowed: false); self.saveCard = saveCard
     }
     @discardableResult func add(to list: CardList, context: ModelContext, finishingOtherSession: Bool = false) -> Bool {
         guard !isSaving, !isSaved, !pricing.priceLoading else { return false }

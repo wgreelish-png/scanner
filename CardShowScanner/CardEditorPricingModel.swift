@@ -9,13 +9,15 @@ import Observation
     private(set) var priceMessage: String?
     private(set) var priceConnectionRequired = false
     private let pricing: any MarketPricing
+    private let manualPriceAllowed: Bool
     private var lookup: Task<Void, Never>?
     private var requestID = UUID()
 
-    init(card: CardCandidate, pricing: any MarketPricing = OnlineMarketPricing()) {
+    init(card: CardCandidate, pricing: any MarketPricing = OnlineMarketPricing(), manualPriceAllowed: Bool = true) {
         self.card = card
         self.price = CSVExportService.number(card.marketPrice)
         self.pricing = pricing
+        self.manualPriceAllowed = manualPriceAllowed
     }
 
     func changeIdentity(_ change: (inout CardIdentity) -> Void) {
@@ -50,7 +52,9 @@ import Observation
                 guard let self, !Task.isCancelled, self.requestID == request,
                       Self.priceIdentity(self.card.identity) == Self.priceIdentity(requestedCard.identity) else { return }
                 self.priceLoading = false
-                self.priceMessage = (error as? MarketPricingFailure)?.errorDescription ?? "Price unavailable. Retry Market Price or enter a price manually."
+                self.priceMessage = (error as? MarketPricingFailure)?.errorDescription ?? (self.manualPriceAllowed
+                    ? "Price unavailable. Retry Market Price or enter a price manually."
+                    : "Price unavailable. Retry Market Price, or add this card without a market value.")
                 var fields = ["phase": "editor", "reason": "lookup_failed"]
                 if let failure = error as? MarketPricingFailure, case .accessRejected(let status) = failure {
                     self.priceConnectionRequired = true
