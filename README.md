@@ -52,7 +52,7 @@ Build 8 repairs local-server startup recovery and adds sampled border/lighting d
 
 Build 10 adds the manual catalog search above and includes the swipe-delete repair: normal and full swipes keep their gestures, confirmation uses a stable list ID, and failed deletion restores the live relationships for retry. See [swipe deletion validation](docs/SwipeListDeletion.md). No upstream recognition-engine refresh or top-loader detection change is included.
 
-Build 11 makes condition and per-match printing menus visible directly on scan confirmation. On the phone, select a condition and an alternate match's printing, check its updated market value, then tap that card and verify the list retains both choices. Try another scan to confirm Near Mint resets, and cancel a selection to verify no row was added. Recognition and camera settings are unchanged.
+Build 11 makes condition and per-match printing menus visible directly on scan confirmation. The existing batch detail response populates printing choices for every frozen match, including alternatives whose downloaded metadata initially lists only Normal. After four seconds of an observed card without a settled result, the scanner offers **Search Manually** or **Keep Scanning**. Search opens the existing catalog for the same list and stops camera capture until you close it. Keep Scanning resumes without reopening the camera or repeatedly prompting for that attempt. A Search Manually button is also available when no border can be detected. See [the short phone check](docs/ScanConfirmationWorkflow.md#build-11-phone-check). Recognition thresholds and camera settings are unchanged.
 
 ## Review, offers and diagnostics
 

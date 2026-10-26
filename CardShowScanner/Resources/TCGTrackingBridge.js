@@ -76,17 +76,40 @@
   let dispose = () => {};
   let resetRecognition = () => {};
   let releaseReview = () => {};
+  let resumeAfterManualSearchPrompt = () => {};
   let refreshDatabase = () => {};
   let markScanIssue = () => false;
   async function install(config) {
     dispose();
     globalThis.CardShowNativeCache = typeof config.cacheToken === 'string' && config.cacheToken.length >= 32 ? { token: config.cacheToken } : null;
     let pending = null;
+    let manualAttempt = null, manualPromptPending = false;
     let latestScan = null, heldScan = null;
     let running = true, stopLoop = null, stream = null, backend = null, overlay = null, starting = false, held = false, awaitingRemoval = false, beginLoop = null;
     const post = message => { if (running) window.webkit?.messageHandlers?.scanResult?.postMessage({ ...message, nonce: config.nonce }); };
     const diagnostic = (event, fields = {}) => post({ kind: 'diagnostic', event, ...fields });
     const clock = () => globalThis.performance?.now?.() ?? Date.now();
+    // Follow a continuously observed card, not camera-open time. Brief tracking
+    // gaps retain the attempt; a longer absence begins another physical attempt.
+    const clearManualAttempt = () => { manualAttempt = null; manualPromptPending = false; };
+    const observeCard = () => {
+      if (!running || !stream || held || awaitingRemoval || document.hidden) return;
+      const now = clock();
+      if (!manualAttempt || now - manualAttempt.last > 1000) manualAttempt = { since: now, last: now, offered: false, queued: false };
+      manualAttempt.last = now;
+      if (manualPromptPending || manualAttempt.offered || manualAttempt.queued || now - manualAttempt.since < 4000) return;
+      const attempt = manualAttempt;
+      attempt.queued = true;
+      // Stats precede onShow in a scan callback. Let a settled recognition from
+      // that same callback take priority over showing the manual-search prompt.
+      Promise.resolve().then(() => {
+        if (manualAttempt !== attempt) return;
+        attempt.queued = false;
+        if (!running || !stream || held || awaitingRemoval || manualPromptPending || document.hidden || clock() - attempt.last > 1000) return;
+        attempt.offered = true; manualPromptPending = true; pending = null;
+        post({ kind: 'manualSearchSuggested' });
+      });
+    };
     const issueFields = () => {
       const snapshot = held ? heldScan : latestScan;
       if (!snapshot) return {};
@@ -123,7 +146,7 @@
     const canvas = document.createElement('canvas'); canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none';
     frame.append(video, canvas); root.append(frame, button, hint); document.body.append(root);
     const report = value => { hint.hidden = !!stream; hint.textContent = text(value); post({ kind: 'status', message: text(value) }); };
-    const stopCamera = () => { stopLoop?.(); stopLoop = null; stream?.getTracks().forEach(t => t.stop()); stream = null; video.srcObject = null; overlay?.destroy?.(); overlay = null; latestScan = null; heldScan = null; };
+    const stopCamera = () => { clearManualAttempt(); stopLoop?.(); stopLoop = null; stream?.getTracks().forEach(t => t.stop()); stream = null; video.srcObject = null; overlay?.destroy?.(); overlay = null; latestScan = null; heldScan = null; };
     const visibility = () => { if (document.hidden) { diagnostic('camera_backgrounded'); pending = null; stopCamera(); post({ kind: 'hide' }); button.disabled = false; button.hidden = false; button.textContent = 'Resume Camera'; } };
     document.addEventListener('visibilitychange', visibility);
     dispose = () => { diagnostic('bridge_stopped'); running = false; pending = null; stopCamera(); backend?.dispose(); backend = null; root.remove(); document.removeEventListener('visibilitychange', visibility); window.removeEventListener?.('error', onError); window.removeEventListener?.('unhandledrejection', onRejection); };
@@ -191,11 +214,11 @@
         const scanOverlay = {
           setSource: (...args) => overlay?.setSource(...args),
           clear: () => overlay?.clear(),
-          draw: options => overlay?.draw({ ...options, label: null })
+          draw: options => { if (options?.quad) observeCard(); overlay?.draw({ ...options, label: null }); }
         };
         beginLoop = () => quick.startQuickScan({ video, overlay: scanOverlay, backend, pack, fetchDetails: null, resolveCandidates: false,
           onShow: view => {
-            if (held || awaitingRemoval) return;
+            if (held || awaitingRemoval || manualPromptPending) return;
             const update = normalizeView(view);
             if (!update.same && !update.candidates?.length) return;
             const now = clock();
@@ -226,11 +249,12 @@
             diagnostic('recognition_snapshot', issueFields());
             post(pending.result);
             pending = null;
-          }, onHide: () => { if (!held) { pending = null; awaitingRemoval = false; post({ kind: 'hide' }); } },
+          }, onHide: () => { if (!held) { pending = null; awaitingRemoval = false; if (!manualPromptPending) post({ kind: 'hide' }); } },
           onHint: report, onStats: stats => {
             if (!running) return;
             const now = clock();
             const fields = scanStats(stats);
+            if (fields.solid === true) observeCard();
             if (!Object.keys(fields).length) return;
             latestScan = { at: now, fields };
             if (now - lastStats < 5000) return;
@@ -247,10 +271,18 @@
             diagnostic('scan_stats', { ...fields, ...quality });
           } });
         resetRecognition = () => {
-          pending = null; held = false; heldScan = null; latestScan = null; awaitingRemoval = false; stopLoop?.(); backend.reset?.();
+          clearManualAttempt(); pending = null; held = false; heldScan = null; latestScan = null; awaitingRemoval = false; stopLoop?.(); backend.reset?.();
           if (running && stream) stopLoop = beginLoop();
         };
-        releaseReview = () => { pending = null; held = false; heldScan = null; awaitingRemoval = true; };
+        releaseReview = () => { clearManualAttempt(); pending = null; held = false; heldScan = null; awaitingRemoval = true; };
+        resumeAfterManualSearchPrompt = () => {
+          manualPromptPending = false; pending = null;
+          // A match reached while the popup was open may now emit only partial
+          // same:true updates. Re-arm the loop for a full payload, retaining this
+          // attempt's offered flag and the already-authorized camera stream.
+          stopLoop?.(); backend.reset?.();
+          if (running && stream) stopLoop = beginLoop();
+        };
         stopLoop = beginLoop();
         diagnostic('scanner_ready');
         button.hidden = true; report(cacheWarning ? 'Camera ready. Database could not be saved; it may download again next time.' : 'Live camera ready — hold a card steady.'); hint.hidden = true;
@@ -268,5 +300,5 @@
     };
     if (config.autoStart) await button.onclick();
   }
-  globalThis.CardShowBridge = { install, stop: () => dispose(), resetRecognition: () => resetRecognition(), releaseReview: () => releaseReview(), refreshDatabase: () => refreshDatabase(), markScanIssue: reason => markScanIssue(reason), normalizeView };
+  globalThis.CardShowBridge = { install, stop: () => dispose(), resetRecognition: () => resetRecognition(), releaseReview: () => releaseReview(), resumeAfterManualSearchPrompt: () => resumeAfterManualSearchPrompt(), refreshDatabase: () => refreshDatabase(), markScanIssue: reason => markScanIssue(reason), normalizeView };
 })();

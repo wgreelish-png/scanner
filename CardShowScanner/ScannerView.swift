@@ -22,6 +22,8 @@ struct ScannerView: View {
     @State private var returningFromConnection = false
     @State private var acknowledgedConnectionInView = false
     @State private var showingListReview = false
+    @State private var showingManualSearchPrompt = false
+    @State private var showingManualSearch = false
     init(session: ScanSession, list: CardList) {
         self.session = session; self.list = list
         _game = State(initialValue: session.game ?? "Pokémon")
@@ -32,6 +34,15 @@ struct ScannerView: View {
             Color.black.ignoresSafeArea()
             if let live = model.liveProvider {
                 TCGScannerWebView(provider: live).ignoresSafeArea()
+                    .onReceive(live.$manualSearchSuggested) { suggested in
+                        guard suggested else { return }
+                        guard visible, session.isActive, !model.paused, model.selected == nil,
+                              !showingListReview, !showingConnection, !showingReviewConnection,
+                              !returningFromConnection, !showingManualSearch else {
+                            live.resumeAfterManualSearchPrompt(); return
+                        }
+                        showingManualSearchPrompt = true
+                    }
             } else {
                 VStack(spacing: 16) {
                     Image(systemName: "viewfinder").font(.system(size: 72))
@@ -43,6 +54,15 @@ struct ScannerView: View {
                 cameraHeader
                 Spacer(minLength: 0)
                 cameraFooter
+                    .alert("Search for this card manually?", isPresented: $showingManualSearchPrompt) {
+                        Button("Search Manually") { openManualSearch() }
+                        Button("Keep Scanning", role: .cancel) {
+                            model.liveProvider?.resumeAfterManualSearchPrompt()
+                            DiagnosticLog.shared.record("scanner.manual_search_declined")
+                        }
+                    } message: {
+                        Text("No stable match after four seconds. Search the saved catalog to add this card to the same list, or keep scanning.")
+                    }
             }.padding(.horizontal, 16).padding(.vertical, 8)
         }
         .toolbar(.hidden, for: .navigationBar)
@@ -54,19 +74,22 @@ struct ScannerView: View {
                 .interactiveDismissDisabled()
         }
         .fullScreenCover(isPresented: $showingConnection, onDismiss: finishConnection) { connectionView(inReview: false) }
+        .sheet(isPresented: $showingManualSearch, onDismiss: { startIfReady() }) {
+            ManualCardSearchView(list: list, game: session.game ?? game, allowsGameChange: false)
+        }
         .onAppear {
             visible = true
             DiagnosticLog.shared.record("navigation.scanner_appeared")
             startIfReady()
         }
         .onDisappear {
-            visible = false; model.stop()
+            visible = false; showingManualSearchPrompt = false; model.stop()
             DiagnosticLog.shared.record("navigation.scanner_disappeared")
         }
         .onChange(of: scenePhase) { _, phase in
             DiagnosticLog.shared.record("app.scene", ["phase": phase == .active ? "active" : (phase == .background ? "background" : "inactive")])
             if phase == .active { startIfReady() }
-            else if phase == .background { model.stop() }
+            else if phase == .background { showingManualSearchPrompt = false; model.stop() }
         }
         .onChange(of: game) { _, newGame in
             guard newGame != session.game else { return }
@@ -164,6 +187,9 @@ struct ScannerView: View {
                 if !model.paused {
                     Text("Tilt slightly to reduce glare. Use a light, plain background for dark borders.")
                         .font(.caption).multilineTextAlignment(.center)
+                    Button("Search Manually", systemImage: "magnifyingglass") { openManualSearch() }
+                        .buttonStyle(.borderless).frame(minHeight: 44)
+                        .accessibilityIdentifier("scanner.manualSearch")
                 }
             }
             let totals = OfferCalculator.calculate(list.cards.map(\.offerLine), rates: session.rates)
@@ -223,7 +249,7 @@ struct ScannerView: View {
                                         .accessibilityElement(children: .combine)
                                         .accessibilityHint("Adds this match using its displayed printing and condition. Use the dropdowns to change them first.")
                                     ScanReviewDropdown(title: "Type / printing", value: draft.identity.printing,
-                                        options: Array(Set(draft.printings + [draft.identity.printing])).sorted(),
+                                        options: model.printings(for: candidate),
                                         accessibilityID: "scanReview.printing." + candidate.identity.productID,
                                         accessibilityContext: candidate.name,
                                         onChange: { model.changePrinting($0, for: candidate) })
@@ -279,9 +305,17 @@ struct ScannerView: View {
         if model.selected != nil { model.refreshPrice() }
         startIfReady()
     }
+    private func openManualSearch() {
+        guard session.isActive, model.selected == nil, !model.selectionInProgress, !model.saving,
+              !showingManualSearch else { return }
+        showingManualSearchPrompt = false
+        // Stop before presenting so camera results cannot interrupt catalog entry.
+        showingManualSearch = true; model.stop()
+        DiagnosticLog.shared.record("scanner.manual_search_opened")
+    }
     private func startIfReady() {
         guard visible, session.isActive, !model.paused, !showingConnection, !showingReviewConnection, !showingListReview,
-              !returningFromConnection else { return }
+              !returningFromConnection, !showingManualSearchPrompt, !showingManualSearch else { return }
         if model.liveProvider != nil && !connectionIntroduced && !acknowledgedConnectionInView { openConnection(); return }
         model.start(game: session.game ?? game, list: list, context: context, session: session)
     }

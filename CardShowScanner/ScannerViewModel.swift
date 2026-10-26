@@ -19,6 +19,7 @@ import AudioToolbox
     var priceLoading = false
     var priceMessage: String?
     var priceConnectionRequired = false
+    private var candidatePrintings: [String: [String]] = [:]
     private var consumer: Task<Void, Never>?
     private var priceTask: Task<Void, Never>?
     private var confirmationDeadline: Task<Void, Never>?
@@ -62,7 +63,7 @@ import AudioToolbox
         }
         if !scan.visible { waitingForRemoval = false; return }
         guard !waitingForRemoval, !scan.same, let first = scan.candidates.first else { return }
-        result = scan
+        result = scan; candidatePrintings = [:]
         var card = first; card.identity.condition = "Near Mint"
         selected = card
         confirmed = !card.requiresPrintingSelection.orFalse
@@ -130,12 +131,18 @@ import AudioToolbox
         guard let selected else { return }
         changePrinting(printing, for: selected)
     }
+    func printings(for candidate: CardCandidate) -> [String] {
+        let card = selected.flatMap { $0.identity.productID == candidate.identity.productID ? $0 : nil } ?? candidate
+        let catalog = candidatePrintings[candidate.identity.productID] ?? []
+        return Array(Set((catalog.isEmpty ? card.printings : catalog) + [card.identity.printing])).sorted()
+    }
     /// A visible match menu edits that candidate without confirming or saving it.
     /// Printing labels belong to a product; never carry a finish to another match.
     func changePrinting(_ printing: String, for candidate: CardCandidate) {
         guard !selectionInProgress, !saving,
               result == nil || result?.candidates.contains(where: { $0.identity.productID == candidate.identity.productID }) == true else { return }
         var card = selected.flatMap { $0.identity.productID == candidate.identity.productID ? $0 : nil } ?? candidate
+        card.printings = printings(for: candidate)
         guard card.printings.contains(printing) || printing == card.identity.printing else { return }
         card.identity.condition = selected?.identity.condition ?? "Near Mint"
         card.identity.printing = printing
@@ -163,6 +170,10 @@ import AudioToolbox
                 let details = try await pricing.details(for: requestCard, candidates: frozenCandidates, forceRefresh: forceRefresh)
                 guard let self, !Task.isCancelled, self.priceRequestID == requestID, self.selected?.identity == requestCard.identity else { return }
                 let quote = details.quote
+                let frozenRefs = Set(self.result?.candidates.map { $0.identity.productID } ?? [])
+                for (ref, printings) in details.printingsByProduct where frozenRefs.contains(ref) && !printings.isEmpty {
+                    self.candidatePrintings[ref] = printings
+                }
                 if !details.printings.isEmpty { self.selected?.printings = details.printings }
                 self.selected?.marketPrice = quote?.marketPrice
                 self.selected?.identity.skuID = quote?.skuID
@@ -200,7 +211,7 @@ import AudioToolbox
             }
             // Only a committed transaction releases the review snapshot.
             priceTask?.cancel(); priceRequestID = UUID()
-            result = nil; self.selected = nil; confirmed = false; priceMessage = nil; priceConnectionRequired = false
+            result = nil; candidatePrintings = [:]; self.selected = nil; confirmed = false; priceMessage = nil; priceConnectionRequired = false
             waitingForRemoval = true; error = nil
             liveProvider?.releaseReview()
             DiagnosticLog.shared.record("add.saved", ["priced": String(selected.marketPrice != nil)])
@@ -218,7 +229,7 @@ import AudioToolbox
         pendingConfirmation = nil; selectionInProgress = false
         // Intentional re-arm allows a second identical physical copy without identity merging.
         priceTask?.cancel(); priceRequestID = UUID(); priceLoading = false
-        result = nil; selected = nil; confirmed = false; waitingForRemoval = false; priceMessage = nil; priceConnectionRequired = false; error = nil
+        result = nil; candidatePrintings = [:]; selected = nil; confirmed = false; waitingForRemoval = false; priceMessage = nil; priceConnectionRequired = false; error = nil
         liveProvider?.resetRecognition()
         DiagnosticLog.shared.record("recognition.rearmed")
     }

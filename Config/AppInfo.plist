@@ -8,7 +8,7 @@
 		<true/>
 	</dict>
 	<key>ScannerWorkflowRevision</key>
-	<string>confirmation-dropdowns</string>
+	<string>confirmation-manual-fallback</string>
 	<key>UIRequiresFullScreen</key>
 	<true/>
 	<key>UISupportedInterfaceOrientations</key>

@@ -66,6 +66,7 @@ struct MarketQuote: Equatable, Sendable {
 struct MarketDetails: Sendable {
     var quote: MarketQuote?
     var printings: [String] = []
+    var printingsByProduct: [String: [String]] = [:]
 }
 
 protocol MarketPricing: Sendable {
@@ -308,18 +309,21 @@ struct OnlineMarketPricing: MarketPricing {
     }
     static func parseDetails(_ data: Data, for card: CardCandidate) throws -> MarketDetails {
         let reply = try JSONDecoder().decode(DetailReply.self, from: data)
-        guard let item = reply.items[card.identity.productID] else { return MarketDetails(quote: nil) }
-        var seen: Set<String> = []
-        let printings = item.printings.compactMap { $0.key ?? $0.label }
-            .filter { !$0.isEmpty && $0.count <= 1000 && seen.insert($0).inserted }
+        let choices = reply.items.mapValues { item in
+            var seen: Set<String> = []
+            return item.printings.compactMap { $0.key ?? $0.label }
+                .filter { !$0.isEmpty && $0.count <= 1000 && seen.insert($0).inserted }
+        }
+        guard let item = reply.items[card.identity.productID] else { return MarketDetails(quote: nil, printingsByProduct: choices) }
+        let printings = choices[card.identity.productID] ?? []
         guard
               let printing = item.printings.first(where: { $0.label == card.identity.printing || $0.key == card.identity.printing }),
               let quote = printing.quotes?[card.identity.language + "|" + card.identity.condition] else {
-            return MarketDetails(quote: nil, printings: printings)
+            return MarketDetails(quote: nil, printings: printings, printingsByProduct: choices)
         }
         let value = quote.market_price
-        guard value.map({ !$0.isNaN && $0 >= 0 }) ?? true else { return MarketDetails(quote: nil, printings: printings) }
-        return MarketDetails(quote: MarketQuote(marketPrice: value, skuID: quote.sku_id?.value), printings: printings)
+        guard value.map({ !$0.isNaN && $0 >= 0 }) ?? true else { return MarketDetails(quote: nil, printings: printings, printingsByProduct: choices) }
+        return MarketDetails(quote: MarketQuote(marketPrice: value, skuID: quote.sku_id?.value), printings: printings, printingsByProduct: choices)
     }
     private struct DetailReply: Decodable { var items: [String: Detail] }
     private struct Detail: Decodable { var printings: [Printing] }

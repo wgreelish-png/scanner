@@ -643,7 +643,7 @@ import SwiftData
         cards[0].identity.productID = "p:87727"; cards[0].name = "Nidoran M"
         cards[1].identity.productID = "p:87718"; cards[1].name = "Nidoran F"
         cards[1].set = "Mysterious Treasures"; cards[1].number = "91/123"
-        cards[1].printings = ["Normal", "Reverse Holofoil"]
+        cards[1].printings = ["Normal"]
         model.receive(ScanResult(id: UUID(), candidates: cards, accepted: false, same: false))
         await waitForIdle(model)
         model.changeCondition("Lightly Played")
@@ -670,6 +670,30 @@ import SwiftData
         XCTAssertEqual(saved.identity.skuID, "1261659")
         XCTAssertNil(model.selected)
         model.stop()
+    }
+    func testFirstCatalogLookupPopulatesAlternativePrintingMenuWithoutChangingFrozenCandidates() async throws {
+        let data = try quickScanFixture()
+        let pricing = OnlineMarketPricing(load: { _ in (status: 200, data: data) })
+        let model = ScannerViewModel(provider: TestScannerProvider(), pricing: pricing)
+        var cards = Array(MockScannerProvider.samples(game: "Pokémon", index: 0).prefix(2))
+        cards[0].identity.productID = "p:87727"; cards[0].name = "Nidoran M"
+        cards[1].identity.productID = "p:87718"; cards[1].name = "Nidoran F"
+        cards[1].printings = ["Normal"]
+        let scan = ScanResult(id: UUID(), candidates: cards, accepted: false, same: false)
+        model.receive(scan)
+        await waitForIdle(model)
+
+        XCTAssertEqual(Set(model.printings(for: cards[1])), Set(["Normal", "Reverse Holofoil"]),
+            "The first batch response supplies every candidate's printing options")
+        XCTAssertEqual(model.selected?.identity.productID, cards[0].identity.productID,
+            "Loading an alternative's options must not choose or confirm it")
+        XCTAssertEqual(model.selected?.identity.printing, "Normal")
+        XCTAssertEqual(model.result?.id, scan.id)
+        XCTAssertEqual(model.result?.candidates, cards, "The recognized candidate snapshot and order stay frozen")
+        XCTAssertFalse(model.selectionInProgress)
+        XCTAssertFalse(model.saving)
+        XCTAssertNotNil(model.selected)
+        model.scanNextCard()
     }
     func testAlternativePrintingDropdownRequestsOneQuoteAndIgnoresInvalidChoices() async throws {
         let pricing = ControlledPricing()
@@ -893,6 +917,9 @@ private struct FailingMarketPricing: MarketPricing {
 private struct CapturedMarketPricing: MarketPricing {
     let data: Data
     func quote(for card: CardCandidate) async throws -> MarketQuote? { try OnlineMarketPricing.parse(data, for: card) }
+    func details(for card: CardCandidate, candidates: [CardCandidate], forceRefresh: Bool) async throws -> MarketDetails {
+        try OnlineMarketPricing.parseDetails(data, for: card)
+    }
 }
 private struct RejectedPublicPricing: MarketPricing {
     func quote(for card: CardCandidate) async throws -> MarketQuote? { throw MarketPricingFailure.accessRejected(401) }

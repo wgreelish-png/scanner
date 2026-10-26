@@ -287,6 +287,7 @@ struct ScannerPageRecoveryPolicy {
     private var continuation: AsyncStream<ScanResult>.Continuation
     let webView: WKWebView
     @Published private(set) var status = "Preparing TCGTracking…"
+    @Published private(set) var manualSearchSuggested = false
     private var active = false
     private var game = "Pokémon"
     private var nonce = UUID().uuidString
@@ -346,7 +347,7 @@ struct ScannerPageRecoveryPolicy {
     }
     func stop() {
         if active { DiagnosticLog.shared.record("web.stopped") }
-        active = false; nonce = UUID().uuidString
+        active = false; nonce = UUID().uuidString; manualSearchSuggested = false
         pageTask?.cancel(); pageTask = nil; pageNavigation = nil
         continuation.finish()
         webView.evaluateJavaScript("window.CardShowBridge?.stop()", completionHandler: nil)
@@ -373,14 +374,23 @@ struct ScannerPageRecoveryPolicy {
             url.path == "/index.html" && url.query == nil && url.user == nil && url.password == nil
     }
     func releaseReview() {
+        manualSearchSuggested = false
         webView.evaluateJavaScript("window.CardShowBridge?.releaseReview()", completionHandler: nil)
+    }
+    func resumeAfterManualSearchPrompt() {
+        guard active, manualSearchSuggested else { return }
+        manualSearchSuggested = false
+        DiagnosticLog.shared.record("scanner.manual_search_resumed")
+        webView.evaluateJavaScript("window.CardShowBridge?.resumeAfterManualSearchPrompt()", completionHandler: nil)
     }
     func refreshDatabase() {
         guard active else { return }
+        manualSearchSuggested = false
         status = "Checking for database updates…"
         webView.evaluateJavaScript("window.CardShowBridge?.refreshDatabase(); null;", completionHandler: nil)
     }
     func resetRecognition() {
+        manualSearchSuggested = false
         normalizer = TCGBridgeNormalizer()
         webView.evaluateJavaScript("window.CardShowBridge?.resetRecognition()", completionHandler: nil)
     }
@@ -453,7 +463,7 @@ struct ScannerPageRecoveryPolicy {
     }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         guard active, webView === self.webView else { return }
-        pageTask?.cancel(); pageTask = nil; pageNavigation = nil
+        pageTask?.cancel(); pageTask = nil; pageNavigation = nil; manualSearchSuggested = false
         DiagnosticLog.shared.record("web.process_terminated")
         status = "Scanner process stopped. Tap Retry Live Scanner."
         continuation.yield(ScanResult(id: UUID(), candidates: [], accepted: false, same: true, visible: false))
@@ -508,12 +518,21 @@ struct ScannerPageRecoveryPolicy {
             let envelope = try JSONDecoder().decode(TCGBridgeEnvelope.self, from: data)
             guard envelope.nonce == nonce else { return }
             if envelope.kind == "diagnostic" { logDiagnostic(envelope); return }
+            if envelope.kind == "manualSearchSuggested" {
+                guard !manualSearchSuggested else { return }
+                manualSearchSuggested = true
+                DiagnosticLog.shared.record("scanner.manual_search_suggested")
+                return
+            }
             if envelope.kind == "status" {
                 let cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
                 status = cameraStatus == .denied || cameraStatus == .restricted
                     ? Self.deniedCameraStatus : String((envelope.message ?? "").prefix(1000))
                 return
             }
+            // The popup owns this unresolved attempt. A late recognition/hide
+            // message must not present another screen while the user decides.
+            if manualSearchSuggested && (envelope.kind == "scan" || envelope.kind == "hide") { return }
             if let result = try normalizer.receive(envelope, game: game) { continuation.yield(result) }
         } catch { DiagnosticLog.shared.failure("bridge.result_rejected", error); status = "Scanner result rejected: \(error.localizedDescription)" }
     }
