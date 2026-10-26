@@ -127,7 +127,17 @@ import AudioToolbox
     }
     func confirmPrinting() { selected?.requiresPrintingSelection = false; confirmed = selected != nil }
     func changePrinting(_ printing: String) {
-        guard !selectionInProgress, var card = selected, card.printings.contains(printing) || printing == card.identity.printing else { return }
+        guard let selected else { return }
+        changePrinting(printing, for: selected)
+    }
+    /// A visible match menu edits that candidate without confirming or saving it.
+    /// Printing labels belong to a product; never carry a finish to another match.
+    func changePrinting(_ printing: String, for candidate: CardCandidate) {
+        guard !selectionInProgress, !saving,
+              result == nil || result?.candidates.contains(where: { $0.identity.productID == candidate.identity.productID }) == true else { return }
+        var card = selected.flatMap { $0.identity.productID == candidate.identity.productID ? $0 : nil } ?? candidate
+        guard card.printings.contains(printing) || printing == card.identity.printing else { return }
+        card.identity.condition = selected?.identity.condition ?? "Near Mint"
         card.identity.printing = printing
         card.identity.skuID = nil; card.marketPrice = nil; card.requiresPrintingSelection = false
         selected = card; confirmed = true; refreshPrice(forceRefresh: false)

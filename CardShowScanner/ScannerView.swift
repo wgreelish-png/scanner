@@ -17,7 +17,6 @@ struct ScannerView: View {
     @State private var nextSessionID: UUID?
     @State private var model = ScannerViewModel()
     @State private var mode = "Live"
-    @State private var editingMatch = false
     @State private var showingConnection = false
     @State private var showingReviewConnection = false
     @State private var returningFromConnection = false
@@ -96,7 +95,6 @@ struct ScannerView: View {
         .onChange(of: showingListReview) { _, showing in
             if !showing { startIfReady() }
         }
-        .onChange(of: model.result?.id) { _, _ in editingMatch = false }
         .onChange(of: mode) { _, _ in restart() }
         .failureAlert(Binding(get: { model.selected == nil ? model.error : nil }, set: { model.error = $0 }))
     }
@@ -201,6 +199,11 @@ struct ScannerView: View {
                         }
                         Text("Tap the correct match to add it, then scan the next card.")
                             .font(.subheadline).foregroundStyle(.secondary)
+                        ScanReviewDropdown(title: "Condition", value: card.identity.condition, options: CatalogOptions.conditions,
+                            accessibilityID: "scanReview.condition", onChange: { model.changeCondition($0) })
+                            .disabled(model.selectionInProgress || model.saving || !session.isActive)
+                        Text("Condition applies to the card you add. Every new scan starts at Near Mint.")
+                            .font(.caption).foregroundStyle(.secondary)
                         if let message = model.priceMessage {
                             Text(message).font(.caption).foregroundStyle(.secondary)
                             if model.priceConnectionRequired && model.liveProvider != nil {
@@ -212,25 +215,21 @@ struct ScannerView: View {
                         }
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: dynamicTypeSize.isAccessibilitySize ? 1 : 2), alignment: .leading, spacing: 16) {
                             ForEach(Array((model.result?.candidates ?? []).prefix(5))) { candidate in
-                                Button { model.selectAndAdd(candidate, list: list, context: context) } label: {
-                                    CandidateMatchTile(candidate: candidate, selected: card, priceLoading: model.priceLoading)
-                                }.buttonStyle(.plain).disabled(model.selectionInProgress || !session.isActive)
-                                    .contextMenu {
-                                        Button("Review printing & condition") { model.choose(candidate); editingMatch = true }
-                                    }
-                                    .accessibilityElement(children: .combine)
-                                    .accessibilityHint("Adds this match to your list. Touch and hold to review its printing and condition.")
+                                let draft = card.identity.productID == candidate.identity.productID ? card : candidate
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Button { model.selectAndAdd(candidate, list: list, context: context) } label: {
+                                        CandidateMatchTile(candidate: candidate, selected: card, priceLoading: model.priceLoading)
+                                    }.buttonStyle(.plain)
+                                        .accessibilityElement(children: .combine)
+                                        .accessibilityHint("Adds this match using its displayed printing and condition. Use the dropdowns to change them first.")
+                                    ScanReviewDropdown(title: "Type / printing", value: draft.identity.printing,
+                                        options: Array(Set(draft.printings + [draft.identity.printing])).sorted(),
+                                        accessibilityID: "scanReview.printing." + candidate.identity.productID,
+                                        accessibilityContext: candidate.name,
+                                        onChange: { model.changePrinting($0, for: candidate) })
+                                }.disabled(model.selectionInProgress || model.saving || !session.isActive)
                             }
                         }
-                        DisclosureGroup("Condition & printing", isExpanded: $editingMatch) {
-                            Picker("Condition", selection: Binding(get: { card.identity.condition }, set: { model.changeCondition($0) })) {
-                                ForEach(CatalogOptions.conditions, id: \.self) { Text($0) }
-                            }
-                            Picker("Type / printing", selection: Binding(get: { card.identity.printing }, set: { model.changePrinting($0) })) {
-                                ForEach(Array(Set(card.printings + [card.identity.printing])).sorted(), id: \.self) { Text($0) }
-                            }.pickerStyle(.menu)
-                            Text("Touch and hold a match to review its printing. Other matches use their displayed printing. Every new card starts at Near Mint.").font(.caption).foregroundStyle(.secondary)
-                        }.disabled(model.selectionInProgress)
                         if model.priceLoading && !model.selectionInProgress { ProgressView("Checking market value…") }
 
 
@@ -293,6 +292,36 @@ struct ScannerView: View {
         if mode == "Live" { provider = TCGTrackingScannerProvider() } else { provider = MockScannerProvider() }
         model = ScannerViewModel(provider: provider)
         startIfReady()
+    }
+}
+
+/// A separate menu button keeps opening an option from confirming the card.
+private struct ScanReviewDropdown: View {
+    let title: String
+    let value: String
+    let options: [String]
+    let accessibilityID: String
+    var accessibilityContext: String? = nil
+    let onChange: (String) -> Void
+    var body: some View {
+        Menu {
+            Picker(title, selection: Binding(get: { value }, set: onChange)) {
+                ForEach(options, id: \.self) { Text($0) }
+            }.pickerStyle(.inline)
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(title).font(.caption).foregroundStyle(.secondary)
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.down").font(.caption.bold())
+                }
+                Text(value).font(.subheadline.bold()).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+            }.padding(12).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+                .contentShape(RoundedRectangle(cornerRadius: 10))
+        }.buttonStyle(.borderless)
+            .accessibilityLabel(accessibilityContext.map { title + " for " + $0 } ?? title)
+            .accessibilityValue(value).accessibilityIdentifier(accessibilityID)
     }
 }
 
