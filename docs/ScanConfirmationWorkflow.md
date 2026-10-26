@@ -22,6 +22,8 @@ The green outline is the upstream engine's current accepted match on a tracked q
 
 ## Build 11 phone check
 
+[macOS CI at `48d50a3`](https://github.com/wgreelish-png/scanner/actions/runs/40404140351) passed 146 native cases, the swipe-delete simulator UI test and the unsigned Personal Release iPhone build. All 75 JavaScript tests (including six new timeout/prompt regressions), 20 Python tests, 38 Swift grammar checks, source/resource membership and 47 pinned runtime assets passed. This proves automated logic and compilation, not actual iPhone popup timing, camera transitions or top-loader recognition accuracy.
+
 1. Scan a card, select a condition above the matches and an alternate match's printing below its artwork. Check the market quote, tap the card, then verify its stored condition, printing and SKU. Start another card and verify Near Mint resets.
 2. Leave a difficult card in view for four seconds after its outline is detected. Check the manual-search prompt. Choose Keep Scanning and verify capture resumes without a new camera prompt or repeated popup for the continuously observed card.
 3. Remove the card for over a second, then try again. Choose Search Manually; search, confirm and add the correct card to the same list. Verify prior rows/offers remain and a new quantity-one row is appended. Close search and check scanner return.
