@@ -91,10 +91,12 @@ import SwiftData
     func testMalformedRowsAreSkippedAndUnsafeImagesDoNotBecomePreviewURLs() async throws {
         let (cache, directory) = try cache(); defer { try? FileManager.default.removeItem(at: directory) }
         var unsafe = row(3, "Darkrai"); unsafe[6] = "javascript:alert(1)"
-        try await install([["bad", "Darkrai"], row(2, ""), unsafe], in: cache)
+        var thumbnail = row(4, "Darkrai"); thumbnail[6] = "https://cdn.tcgtracking.com/product/4_200w.jpg"
+        try await install([["bad", "Darkrai"], row(2, ""), unsafe, thumbnail], in: cache)
         let cards = try await CachedCardCatalog(cache: cache).search("darkrai", game: "Pokémon", limit: 5)
-        XCTAssertEqual(cards.count, 1); XCTAssertEqual(cards[0].imageURL?.scheme, "https")
+        XCTAssertEqual(cards.count, 2); XCTAssertEqual(cards[0].imageURL?.scheme, "https")
         XCTAssertEqual(cards[0].imageURL?.host, "cdn.tcgtracking.com")
+        XCTAssertEqual(cards.first { $0.identity.productID == "p:4" }?.imageURL?.lastPathComponent, "4_400w.jpg")
     }
     func testLatestTypedQueryWinsWhenOlderSearchFinishesLater() async throws {
         let catalog = ControlledCardCatalog(), model = ManualCardSearchModel(game: "Pokémon", catalog: catalog, debounce: .zero)

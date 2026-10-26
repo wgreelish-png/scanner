@@ -148,6 +148,12 @@ actor CachedCardCatalog: CardCatalogSearching {
                 var image = URL(string: text(6))
                 if image?.scheme != "https" || image?.host == nil || image?.user != nil || image?.password != nil { image = nil }
                 if image == nil, ref.hasPrefix("p:") { image = URL(string: "https://cdn.tcgtracking.com/product/" + String(ref.dropFirst(2)) + "_400w.jpg") }
+                if let current = image, current.host == "cdn.tcgtracking.com", current.query == nil,
+                   current.path.range(of: #"^/product/[0-9]+_200w\.jpg$"#, options: .regularExpression) != nil,
+                   var components = URLComponents(url: current, resolvingAgainstBaseURL: false) {
+                    components.path = current.path.replacingOccurrences(of: "_200w.jpg", with: "_400w.jpg")
+                    image = components.url
+                }
                 if var old = cards[ref] {
                     old.card.printings = Array(Set(old.card.printings + printings)).sorted()
                     cards[ref] = old

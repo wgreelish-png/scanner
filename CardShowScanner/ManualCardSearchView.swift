@@ -139,7 +139,7 @@ private struct ManualCardConfirmationView: View {
                 if let error = model.error { Section { Text(error).foregroundStyle(.red) } }
                 Section {
                     Button("Add to List", systemImage: "plus.circle.fill") { add() }
-                        .disabled(model.isSaving || model.isSaved || model.pricing.priceLoading || !validPrinting)
+                        .disabled(!hasRequestedPrice || model.isSaving || model.isSaved || model.pricing.priceLoading || !validPrinting)
                         .accessibilityIdentifier("catalog.confirmAdd")
                     Text("Adds one physical card as a new row at the end of this list.").font(.caption).foregroundStyle(.secondary)
                 }
