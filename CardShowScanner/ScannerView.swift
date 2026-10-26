@@ -36,12 +36,17 @@ struct ScannerView: View {
                 TCGScannerWebView(provider: live).ignoresSafeArea()
                     .onReceive(live.$manualSearchSuggested) { suggested in
                         guard suggested else { return }
-                        guard visible, session.isActive, !model.paused, model.selected == nil,
-                              !showingListReview, !showingConnection, !showingReviewConnection,
-                              !returningFromConnection, !showingManualSearch else {
-                            live.resumeAfterManualSearchPrompt(); return
+                        // Published sends before its stored value changes. Check
+                        // current screen/provider state after that update commits.
+                        Task { @MainActor in
+                            guard live.manualSearchSuggested else { return }
+                            guard visible, session.isActive, !model.paused, model.selected == nil,
+                                  !showingListReview, !showingConnection, !showingReviewConnection,
+                                  !returningFromConnection, !showingManualSearch else {
+                                live.resumeAfterManualSearchPrompt(); return
+                            }
+                            showingManualSearchPrompt = true
                         }
-                        showingManualSearchPrompt = true
                     }
             } else {
                 VStack(spacing: 16) {
