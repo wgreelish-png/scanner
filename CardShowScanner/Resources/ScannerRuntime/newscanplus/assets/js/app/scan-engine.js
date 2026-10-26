@@ -41,7 +41,7 @@ import { detectCandidates, fastQuad, trackCandidates } from '../core/detect.js';
 import { warpCard, warpCardPair } from '../core/warp.js';
 import { bh1 } from '../core/hash.js';
 import { glareScore } from '../core/quality.js';
-import { cornerDrift } from '../core/geom.js';
+import { cornerDrift, polyArea, quadAspect } from '../core/geom.js';
 import { GAP_MIN, queryFromHex, matchFrames } from '../core/localmatch.js';
 
 const now = () => performance.now();
@@ -200,6 +200,32 @@ export function createScanEngine({ maxFuse = 3, maxCands = 8, stillDrift = 0.04,
         if (fresh) reset();
         const ms = { detect: 0, lsd: 0, warp: 0, hash: 0, match: 0, total: 0 };
         const out = { result: null, quad: null, solid: false, w: mat.cols, h: mat.rows, frames: 0, tracked: false, stage: '', ms };
+        let selectedSupport = null;
+        let selectedBase = null;
+        // App adaptation: describe existing detections without changing candidate
+        // generation, pixels, gates, hashes, ordering or acceptance decisions.
+        const finish = () => {
+            const q = out.quad || det?.quads?.[0];
+            const diagnostics = {
+                solid: out.solid, tracked: out.tracked, scanStage: out.stage || 'none',
+                rawQuads: det?.raw || 0, rejectedQuads: det?.rejected || 0,
+                candidateQuads: det?.quads?.length || 0,
+                quadSource: out.quad ? 'selected' : q ? 'detected' : 'none',
+            };
+            if (selectedBase !== null) diagnostics.selectedBase = selectedBase;
+            if (q) {
+                diagnostics.quadAspect = quadAspect(q);
+                diagnostics.quadArea = polyArea(q) / (mat.cols * mat.rows);
+                const support = out.quad ? selectedSupport : det?.support?.[0];
+                if (Number.isFinite(support)) diagnostics.quadSupport = support;
+            }
+            if (out.result) {
+                diagnostics.matchDistance = out.result.best.d;
+                diagnostics.matchGap = out.result.gap;
+            }
+            out.diagnostics = diagnostics;
+            return out;
+        };
         const seen = new Map();
         const accepted = (r) => !!(r && r.res.accepted);
         const detect = (fn) => {
@@ -227,7 +253,7 @@ export function createScanEngine({ maxFuse = 3, maxCands = 8, stillDrift = 0.04,
         if (!det.present || !pack) {
             reset();
             ms.total = now() - t0;
-            return out;
+            return finish();
         }
         out.solid = true;
         out.tracked = !!det.tracked;
@@ -235,7 +261,7 @@ export function createScanEngine({ maxFuse = 3, maxCands = 8, stillDrift = 0.04,
         if (!run) {
             reset();
             ms.total = now() - t0;
-            return out;
+            return finish();
         }
         const { res, cur, used, frames, stage, moved, glare } = run;
         if (moved) history = [];
@@ -246,6 +272,8 @@ export function createScanEngine({ maxFuse = 3, maxCands = 8, stillDrift = 0.04,
         seeds = null;
         if (res.best) {
             const cand = used.cands[res.best.cand];
+            selectedBase = cand.base;
+            selectedSupport = cand.support;
             anchor = used.quads[cand.base];
             if (res.accepted && used === cur) seeds = [cand.quad];
             out.quad = cand.quad;
@@ -266,7 +294,7 @@ export function createScanEngine({ maxFuse = 3, maxCands = 8, stillDrift = 0.04,
         out.frames = frames;
         out.stage = stage;
         ms.total = now() - t0;
-        return out;
+        return finish();
     }
 
     return {

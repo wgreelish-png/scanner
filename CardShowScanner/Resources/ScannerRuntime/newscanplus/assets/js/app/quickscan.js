@@ -54,6 +54,24 @@ const SCAN_FRESH_MS = 1500;
 const GATE = { stableMs: 160, lowDiff: 4, highDiff: 9 };
 const HINTS = { tilt: 'Tilt the card - glare', retry: 'Hold steady' };
 
+// App diagnostic only: sample the already-read small frame on demand. This is
+// whole-frame luma, not the detector's card-interior contrast. No pixels change.
+function frameQuality(image) {
+    const { data, width, height } = image || {};
+    if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || !data || data.length < width * height * 4) return {};
+    const sx = Math.max(1, Math.floor(width / 32)), sy = Math.max(1, Math.floor(height / 32));
+    let sum = 0, square = 0, count = 0;
+    for (let y = 0; y < height; y += sy) {
+        for (let x = 0; x < width; x += sx) {
+            const i = (y * width + x) * 4;
+            const luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+            sum += luma; square += luma * luma; count++;
+        }
+    }
+    const meanLuma = sum / count;
+    return { meanLuma, lumaStd: Math.sqrt(Math.max(0, square / count - meanLuma * meanLuma)) };
+}
+
 function defaultFrame(video, fn) {
     if (typeof video.requestVideoFrameCallback === 'function') {
         const id = video.requestVideoFrameCallback(fn);
@@ -108,7 +126,7 @@ export function startQuickScan({
         if (scanView) tracker.update(scanView.quad, t, scanView.w, scanView.h);
         if (!inFlight) {
             if (m.state === 'stable' || (m.state === 'settling' && !dirty && scanView)) {
-                if (t >= nextScanAt) requestScan();
+                if (t >= nextScanAt) requestScan(small);
                 else if (!scanView && t - lastOutlineAt >= backend.quadEveryMs) requestOutline(small, t);
             } else if (t - lastOutlineAt >= backend.quadEveryMs) {
                 requestOutline(small, t);
@@ -130,7 +148,7 @@ export function startQuickScan({
         }
     }
 
-    async function requestScan() {
+    async function requestScan(small) {
         inFlight = true;
         const reset = dirty;
         dirty = false;
@@ -146,7 +164,8 @@ export function startQuickScan({
             nextScanAt = t + NO_CARD_MS;
             return;
         }
-        onStats?.({ kind: backend.kind, tickMs, scanMs: s.ms.total, captureMs: s.ms.capture || 0, frames: s.frames, stage: s.stage || '', tracked: !!s.tracked, ms: s.ms });
+        onStats?.({ kind: backend.kind, tickMs, scanMs: s.ms.total, captureMs: s.ms.capture || 0, frames: s.frames, stage: s.stage || '', tracked: !!s.tracked, ms: s.ms,
+            diagnostics: s.diagnostics, frameQuality: () => frameQuality(small) });
         if (dirty) return;
         if (!s.result || s.solid === false || !s.quad) {
             scanView = null;

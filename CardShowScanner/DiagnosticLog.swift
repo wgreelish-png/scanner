@@ -2,6 +2,22 @@ import Foundation
 import Observation
 import OSLog
 
+/// A second check at storage keeps the newly allowlisted scan fields numeric or
+/// enum-only even if another caller accidentally supplies arbitrary text.
+enum DiagnosticScanFields {
+    static func accepts(_ key: String, _ value: String) -> Bool {
+        if key == "solid" || key == "tracked" { return value == "true" || value == "false" }
+        if key == "scan_stage" { return ["none", "one", "quick", "full"].contains(value) }
+        if key == "quad_source" { return ["none", "detected", "selected"].contains(value) }
+        let integers: Set<String> = ["raw_quads", "rejected_quads", "candidate_quads", "selected_base", "sample_age_ms"]
+        let maxima: [String: Double] = ["quad_aspect": 1, "quad_area": 1, "quad_support": 1,
+            "mean_luma": 255, "luma_std": 128, "match_distance": 100, "match_gap": 100, "sample_age_ms": 600_000]
+        guard integers.contains(key) || maxima[key] != nil else { return true }
+        guard let number = Double(value), number.isFinite, (0...(maxima[key] ?? 1_000_000)).contains(number) else { return false }
+        return !integers.contains(key) || number.rounded(.towardZero) == number
+    }
+}
+
 /// Local, bounded JSON-lines diagnostics. Callers supply event codes, never user content.
 @MainActor @Observable final class DiagnosticLog {
     static let shared = DiagnosticLog()
@@ -16,7 +32,9 @@ import OSLog
     private var lastSamples: [String: Date] = [:]
     private let keys: Set<String> = ["provider", "game", "episode", "same", "accepted", "confidence", "candidates",
         "printing_required", "priced", "merged", "automatic", "quantity", "reason", "stage", "backend", "elapsed_ms",
-        "scan_ms", "capture_ms", "frames", "domain", "code", "records", "rejected_records", "phase", "candidate_index", "app_version", "build", "downloaded_bytes", "cached_shards", "cache", "source", "persisted", "cache_backend", "revision"]
+        "scan_ms", "capture_ms", "frames", "domain", "code", "records", "rejected_records", "phase", "candidate_index", "app_version", "build", "downloaded_bytes", "cached_shards", "cache", "source", "persisted", "cache_backend", "revision",
+        "solid", "tracked", "scan_stage", "raw_quads", "rejected_quads", "candidate_quads", "selected_base", "quad_source",
+        "quad_aspect", "quad_area", "quad_support", "mean_luma", "luma_std", "match_distance", "match_gap", "sample_age_ms"]
     private var current: URL { directory.appendingPathComponent("current.jsonl") }
     private var previous: URL { directory.appendingPathComponent("previous.jsonl") }
     var enabled: Bool { defaults.object(forKey: "diagnosticsEnabled") as? Bool ?? true }
@@ -36,7 +54,7 @@ import OSLog
         // Unknown fields and free-form values are dropped at the storage boundary.
         let safe = fields.filter { key, value in
             keys.contains(key) && value.count <= 80 &&
-                value.range(of: #"^[A-Za-z0-9_.-]{1,80}$"#, options: .regularExpression) != nil
+                value.range(of: #"^[A-Za-z0-9_.-]{1,80}$"#, options: .regularExpression) != nil && DiagnosticScanFields.accepts(key, value)
         }
         let entry: [String: Any] = ["schema": 1, "time": ISO8601DateFormatter().string(from: now),
             "run": run, "event": event, "fields": safe]

@@ -27,6 +27,77 @@ struct TCGBridgeEnvelope: Decodable {
     var cacheState: String?
     var cacheSource: String?
     var storagePersisted: Bool?
+    var solid: Bool?
+    var tracked: Bool?
+    var scanStage: String?
+    var rawQuads: Double?
+    var rejectedQuads: Double?
+    var candidateQuads: Double?
+    var selectedBase: Double?
+    var quadSource: String?
+    var quadAspect: Double?
+    var quadArea: Double?
+    var quadSupport: Double?
+    var meanLuma: Double?
+    var lumaStd: Double?
+    var matchDistance: Double?
+    var matchGap: Double?
+    var issueReason: String?
+    var sampleAgeMS: Double?
+}
+
+/// Diagnostics have their own strict scalar schema. Neither recognition payloads
+/// nor arbitrary webpage strings become diagnostic fields.
+struct ScannerDiagnosticRecord {
+    var event: String
+    var fields: [String: String]
+    var sampleEvery: TimeInterval
+
+    static func validated(_ message: TCGBridgeEnvelope) -> Self? {
+        let allowed: Set<String> = ["bridge_ready", "bridge_stopped", "startup_started", "modules_ready", "index_ready", "pack_ready", "pack_cache_warning",
+            "backend_ready", "camera_requested", "camera_acquired", "video_playing", "scanner_ready", "startup_failed",
+            "scan_stats", "recognition_snapshot", "scan_issue", "recognition_settled", "camera_interrupted", "camera_backgrounded", "javascript_error", "javascript_rejection"]
+        guard message.kind == "diagnostic", let event = message.event, allowed.contains(event) else { return nil }
+        var fields: [String: String] = [:]
+        if let stage = message.stage, ["modules", "index", "pack", "backend", "camera", "video", "scan"].contains(stage) { fields["stage"] = stage }
+        if let backend = message.backend, ["worker", "main"].contains(backend) { fields["backend"] = backend }
+        if let kind = message.errorKind, ["NotAllowedError", "NotFoundError", "NotReadableError", "AbortError", "SecurityError", "TypeError", "RangeError", "Error"].contains(kind) { fields["reason"] = kind }
+        for (key, value) in [("elapsed_ms", message.elapsedMS), ("scan_ms", message.scanMS), ("capture_ms", message.captureMS)] {
+            if let value, value.isFinite, (0...86400000).contains(value) { fields[key] = String(Int(value)) }
+        }
+        if let bytes = message.downloadedBytes, bytes.isFinite, (0...10_000_000_000).contains(bytes) { fields["downloaded_bytes"] = String(Int64(bytes)) }
+        if let shards = message.cachedShards, (0...1_000_000).contains(shards) { fields["cached_shards"] = String(shards) }
+        if let backend = message.cacheBackend, ["native", "indexeddb", "unknown"].contains(backend) { fields["cache_backend"] = backend }
+        if let state = message.cacheState, ["ok", "failed", "unavailable", "unknown"].contains(state) { fields["cache"] = state }
+        if let source = message.cacheSource, ["cache", "download", "mixed", "unknown"].contains(source) { fields["source"] = source }
+        if let persisted = message.storagePersisted { fields["persisted"] = String(persisted) }
+        if let frames = message.frames, (0...1000000).contains(frames) { fields["frames"] = String(frames) }
+        if event == "scan_issue" {
+            if let reason = message.issueReason, ["top_loader", "dark_card", "wrong_border"].contains(reason) { fields["reason"] = reason }
+        }
+        if event == "scan_issue" || event == "recognition_snapshot" {
+            if let age = message.sampleAgeMS, age.isFinite, (0...600_000).contains(age), age.rounded(.towardZero) == age { fields["sample_age_ms"] = String(Int(age)) }
+        }
+        let freshIssueSnapshot = message.sampleAgeMS.map { $0.isFinite && (0...15_000).contains($0) && $0.rounded(.towardZero) == $0 } ?? false
+        if event == "scan_stats" || event == "recognition_snapshot" || (event == "scan_issue" && freshIssueSnapshot) {
+            if let solid = message.solid { fields["solid"] = String(solid) }
+            if let tracked = message.tracked { fields["tracked"] = String(tracked) }
+            if let stage = message.scanStage, ["none", "one", "quick", "full"].contains(stage) { fields["scan_stage"] = stage }
+            if let source = message.quadSource, ["none", "detected", "selected"].contains(source) { fields["quad_source"] = source }
+            for (key, value) in [("raw_quads", message.rawQuads), ("rejected_quads", message.rejectedQuads),
+                                 ("candidate_quads", message.candidateQuads), ("selected_base", message.selectedBase)] {
+                if let value, value.isFinite, (0...1_000_000).contains(value), value.rounded(.towardZero) == value { fields[key] = String(Int(value)) }
+            }
+            for (key, value, maximum) in [("quad_aspect", message.quadAspect, 1.0), ("quad_area", message.quadArea, 1.0),
+                ("quad_support", message.quadSupport, 1.0), ("mean_luma", message.meanLuma, 255.0), ("luma_std", message.lumaStd, 128.0),
+                ("match_distance", message.matchDistance, 100.0), ("match_gap", message.matchGap, 100.0)] {
+                if let value, value.isFinite, (0...maximum).contains(value) {
+                    fields[key] = String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), value)
+                }
+            }
+        }
+        return Self(event: "web." + event, fields: fields, sampleEvery: event == "scan_stats" ? 5 : 0)
+    }
 }
 
 struct TCGBridgeCandidate: Decodable {
@@ -189,6 +260,27 @@ enum ScannerCameraPermissionAction: Equatable {
 
 /// Experimental module adapter, based on the user's supplied sources and permission.
 /// Does not claim an official TCGTracking API contract.
+enum ScannerIssueKind: String, CaseIterable {
+    case topLoader = "top_loader"
+    case darkCard = "dark_card"
+    case wrongBorder = "wrong_border"
+    var label: String {
+        switch self {
+        case .topLoader: return "Top Loader Not Recognized"
+        case .darkCard: return "Dark Card Not Recognized"
+        case .wrongBorder: return "Wrong Border or Match"
+        }
+    }
+}
+
+struct ScannerPageRecoveryPolicy {
+    static func allowsRetry(error: Error, attempts: Int) -> Bool {
+        let failure = error as NSError
+        return attempts == 0 && failure.domain == NSURLErrorDomain &&
+            [URLError.cannotConnectToHost.rawValue, URLError.networkConnectionLost.rawValue, URLError.timedOut.rawValue].contains(failure.code)
+    }
+}
+
 @MainActor final class TCGTrackingScannerProvider: NSObject, ObservableObject, ScannerProvider, WKNavigationDelegate, WKUIDelegate {
     let label = "LIVE CAMERA • On-device recognition"
     private(set) var results: AsyncStream<ScanResult>
@@ -199,6 +291,9 @@ enum ScannerCameraPermissionAction: Equatable {
     private var game = "Pokémon"
     private var nonce = UUID().uuidString
     private var normalizer = TCGBridgeNormalizer()
+    private var pageTask: Task<Void, Never>?
+    private var pageNavigation: WKNavigation?
+    private var recoveryAttempts = 0
     static let pageURL = LocalScannerServer.pageURL
     static let gameKeys = ["Pokémon": "tcgp:3", "Magic: The Gathering": "tcgp:1", "Yu-Gi-Oh!": "tcgp:2"]
     private var messageProxy: WeakScanMessageHandler?
@@ -227,19 +322,32 @@ enum ScannerCameraPermissionAction: Equatable {
         results = stream.stream; continuation = stream.continuation
         DiagnosticLog.shared.record("web.load_started", ["game": Self.gameKeys[game] == "tcgp:3" ? "pokemon" : (Self.gameKeys[game] == "tcgp:1" ? "magic" : "yugioh")])
         self.game = game; active = true; nonce = UUID().uuidString; normalizer = TCGBridgeNormalizer()
+        recoveryAttempts = 0
         status = "Starting bundled scanner…"
+        loadBundledPage(restartingServer: false)
+    }
+    private func loadBundledPage(restartingServer: Bool) {
+        pageTask?.cancel()
         let startupNonce = nonce
-        Task {
+        pageTask = Task { [weak self] in
             do {
-                try await LocalScannerServer.shared.start()
-                guard active, nonce == startupNonce else { return }
-                webView.load(URLRequest(url: Self.pageURL))
-            } catch { status = "Local scanner could not start: " + error.localizedDescription }
+                try Task.checkCancellation()
+                if restartingServer { try await LocalScannerServer.shared.restart() }
+                else { try await LocalScannerServer.shared.start() }
+                guard let self, self.active, self.nonce == startupNonce, !Task.isCancelled else { return }
+                self.pageNavigation = self.webView.load(URLRequest(url: Self.pageURL))
+                if self.pageNavigation == nil { self.status = "Scanner could not open. Tap Retry Live Scanner." }
+            } catch {
+                guard let self, self.active, self.nonce == startupNonce, !Task.isCancelled else { return }
+                DiagnosticLog.shared.failure("scanner.local_start_failed", error)
+                self.status = "Local scanner could not start. Tap Retry Live Scanner."
+            }
         }
     }
     func stop() {
         if active { DiagnosticLog.shared.record("web.stopped") }
         active = false; nonce = UUID().uuidString
+        pageTask?.cancel(); pageTask = nil; pageNavigation = nil
         continuation.finish()
         webView.evaluateJavaScript("window.CardShowBridge?.stop()", completionHandler: nil)
         webView.stopLoading()
@@ -276,6 +384,25 @@ enum ScannerCameraPermissionAction: Equatable {
         normalizer = TCGBridgeNormalizer()
         webView.evaluateJavaScript("window.CardShowBridge?.resetRecognition()", completionHandler: nil)
     }
+    func markScanIssue(_ issue: ScannerIssueKind) {
+        guard active, Self.allowed(webView.url) else { return }
+        let requestNonce = nonce
+        Task { [weak self] in
+            guard let self, self.active, self.nonce == requestNonce else { return }
+            do {
+                let marked = try await self.webView.callAsyncJavaScript("return window.CardShowBridge?.markScanIssue(reason) === true;",
+                    arguments: ["reason": issue.rawValue], in: nil, contentWorld: .page)
+                guard self.active, self.nonce == requestNonce else { return }
+                self.status = marked as? Bool == true
+                    ? "Scan issue marked. Keep this card steady for a few seconds."
+                    : "Scanner is not ready to mark an issue yet."
+            } catch {
+                guard self.active, self.nonce == requestNonce else { return }
+                DiagnosticLog.shared.failure("scanner.issue_marker_failed", error)
+                self.status = "Could not mark this issue. Scanning can continue."
+            }
+        }
+    }
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         let permitted = active && action.targetFrame?.isMainFrame == true && Self.allowed(action.request.url)
@@ -283,7 +410,10 @@ enum ScannerCameraPermissionAction: Equatable {
         decisionHandler(permitted ? .allow : .cancel)
     }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        guard active, Self.allowed(webView.url) else { return }
+        guard active, webView === self.webView, let navigation, navigation === pageNavigation, Self.allowed(webView.url) else { return }
+        pageNavigation = nil
+        let requestNonce = nonce
+        if recoveryAttempts > 0 { DiagnosticLog.shared.record("scanner.local_recovered", ["quantity": String(recoveryAttempts)]) }
         DiagnosticLog.shared.record("web.page_loaded")
         guard let url = Bundle.main.url(forResource: "TCGTrackingBridge", withExtension: "js"),
               let source = try? String(contentsOf: url, encoding: .utf8),
@@ -294,16 +424,36 @@ enum ScannerCameraPermissionAction: Equatable {
             status = "Scanner adapter resource or game configuration is missing."; return
         }
         webView.evaluateJavaScript(source + "\nwindow.CardShowBridge.install(" + config + "); null;") { [weak self] _, error in
-            if let error { DiagnosticLog.shared.failure("web.injection_failed", error); self?.status = "Could not initialize bundled scanner modules. Retry Live Scanner." }
+            guard let self, self.active, self.nonce == requestNonce else { return }
+            if let error { DiagnosticLog.shared.failure("web.injection_failed", error); self.status = "Could not initialize bundled scanner modules. Retry Live Scanner." }
         }
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        if active { DiagnosticLog.shared.failure("web.load_failed", error); status = "Bundled scanner could not load: \(error.localizedDescription)" }
+        pageFailed(webView, navigation: navigation, error: error, event: "web.load_failed")
     }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        if active { DiagnosticLog.shared.failure("web.navigation_failed", error); status = "Bundled scanner navigation failed: \(error.localizedDescription)" }
+        pageFailed(webView, navigation: navigation, error: error, event: "web.navigation_failed")
+    }
+    private func pageFailed(_ webView: WKWebView, navigation: WKNavigation?, error: Error, event: String) {
+        guard active, webView === self.webView, let navigation, navigation === pageNavigation else { return }
+        pageNavigation = nil
+        let failure = error as NSError
+        if failure.domain == NSURLErrorDomain && failure.code == URLError.cancelled.rawValue { return }
+        DiagnosticLog.shared.failure(event, error)
+        if ScannerPageRecoveryPolicy.allowsRetry(error: error, attempts: recoveryAttempts) {
+            recoveryAttempts += 1
+            DiagnosticLog.shared.record("scanner.local_retry", ["code": String(failure.code), "quantity": String(recoveryAttempts)])
+            status = "Reconnecting scanner…"
+            loadBundledPage(restartingServer: true)
+        } else {
+            DiagnosticLog.shared.record("scanner.local_load_failed", ["quantity": String(recoveryAttempts),
+                "reason": recoveryAttempts > 0 ? "retry_exhausted" : "not_retryable"])
+            status = "Scanner could not reconnect. Tap Retry Live Scanner."
+        }
     }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        guard active, webView === self.webView else { return }
+        pageTask?.cancel(); pageTask = nil; pageNavigation = nil
         DiagnosticLog.shared.record("web.process_terminated")
         status = "Scanner process stopped. Tap Retry Live Scanner."
         continuation.yield(ScanResult(id: UUID(), candidates: [], accepted: false, same: true, visible: false))
@@ -368,25 +518,8 @@ enum ScannerCameraPermissionAction: Equatable {
         } catch { DiagnosticLog.shared.failure("bridge.result_rejected", error); status = "Scanner result rejected: \(error.localizedDescription)" }
     }
     private func logDiagnostic(_ message: TCGBridgeEnvelope) {
-        let allowed: Set<String> = ["bridge_ready", "bridge_stopped", "startup_started", "modules_ready", "index_ready", "pack_ready", "pack_cache_warning",
-            "backend_ready", "camera_requested", "camera_acquired", "video_playing", "scanner_ready", "startup_failed",
-            "scan_stats", "recognition_settled", "camera_interrupted", "camera_backgrounded", "javascript_error", "javascript_rejection"]
-        guard let event = message.event, allowed.contains(event) else { return }
-        var fields: [String: String] = [:]
-        if let stage = message.stage, ["modules", "index", "pack", "backend", "camera", "video", "scan"].contains(stage) { fields["stage"] = stage }
-        if let backend = message.backend, ["worker", "main"].contains(backend) { fields["backend"] = backend }
-        if let kind = message.errorKind, ["NotAllowedError", "NotFoundError", "NotReadableError", "AbortError", "SecurityError", "TypeError", "RangeError", "Error"].contains(kind) { fields["reason"] = kind }
-        for (key, value) in [("elapsed_ms", message.elapsedMS), ("scan_ms", message.scanMS), ("capture_ms", message.captureMS)] {
-            if let value, value.isFinite, (0...86400000).contains(value) { fields[key] = String(Int(value)) }
-        }
-        if let bytes = message.downloadedBytes, bytes.isFinite, (0...10_000_000_000).contains(bytes) { fields["downloaded_bytes"] = String(Int64(bytes)) }
-        if let shards = message.cachedShards, (0...1_000_000).contains(shards) { fields["cached_shards"] = String(shards) }
-        if let backend = message.cacheBackend, ["native", "indexeddb", "unknown"].contains(backend) { fields["cache_backend"] = backend }
-        if let state = message.cacheState, ["ok", "failed", "unavailable", "unknown"].contains(state) { fields["cache"] = state }
-        if let source = message.cacheSource, ["cache", "download", "mixed", "unknown"].contains(source) { fields["source"] = source }
-        if let persisted = message.storagePersisted { fields["persisted"] = String(persisted) }
-        if let frames = message.frames, (0...1000000).contains(frames) { fields["frames"] = String(frames) }
-        DiagnosticLog.shared.record("web." + event, fields, sampleEvery: event == "scan_stats" ? 5 : 0)
+        guard let record = ScannerDiagnosticRecord.validated(message) else { return }
+        DiagnosticLog.shared.record(record.event, record.fields, sampleEvery: record.sampleEvery)
     }
 
 }

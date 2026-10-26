@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        C0C2D1F0A3AD4B7CB6500005 /* ScannerPageRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0C2D1F0A3AD4B7CB6500006; };
+        C0C2D1F0A3AD4B7CB6500003 /* ScannerDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0C2D1F0A3AD4B7CB6500004; };
+        C0C2D1F0A3AD4B7CB6500001 /* LocalScannerServerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0C2D1F0A3AD4B7CB6500002; };
         B6C8ECF19A6244D1BD290003 /* CardEditorPricingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6C8ECF19A6244D1BD290004; };
         B6C8ECF19A6244D1BD290001 /* CardEditorPricingModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6C8ECF19A6244D1BD290002; };
         62C79FEE709E4526B4520001 /* CameraPermissionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62C79FEE709E4526B4520002; };
@@ -54,6 +57,9 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        C0C2D1F0A3AD4B7CB6500006 /* ScannerPageRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerPageRecoveryTests.swift; sourceTree = "<group>"; };
+        C0C2D1F0A3AD4B7CB6500004 /* ScannerDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerDiagnosticsTests.swift; sourceTree = "<group>"; };
+        C0C2D1F0A3AD4B7CB6500002 /* LocalScannerServerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalScannerServerTests.swift; sourceTree = "<group>"; };
         B6C8ECF19A6244D1BD290004 /* CardEditorPricingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardEditorPricingTests.swift; sourceTree = "<group>"; };
         B6C8ECF19A6244D1BD290002 /* CardEditorPricingModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardEditorPricingModel.swift; sourceTree = "<group>"; };
         62C79FEE709E4526B4520002 /* CameraPermissionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPermissionTests.swift; sourceTree = "<group>"; };
@@ -124,6 +130,9 @@
 			isa = PBXGroup;
 			children = (
                 62C79FEE709E4526B4520002 /* CameraPermissionTests.swift */,
+                C0C2D1F0A3AD4B7CB6500006 /* ScannerPageRecoveryTests.swift */,
+                C0C2D1F0A3AD4B7CB6500004 /* ScannerDiagnosticsTests.swift */,
+                C0C2D1F0A3AD4B7CB6500002 /* LocalScannerServerTests.swift */,
                 B6C8ECF19A6244D1BD290004 /* CardEditorPricingTests.swift */,
                 F32586CC414E405F92C90004 /* TradeTransactionTests.swift */,
                 8F3B2A904EAD4B17B4880004 /* TCGTrackingCredentialsTests.swift */,
@@ -282,6 +291,9 @@
 			buildActionMask = 2147483647;
 			files = (
                 62C79FEE709E4526B4520001 /* CameraPermissionTests.swift in Sources */,
+                C0C2D1F0A3AD4B7CB6500005 /* ScannerPageRecoveryTests.swift in Sources */,
+                C0C2D1F0A3AD4B7CB6500003 /* ScannerDiagnosticsTests.swift in Sources */,
+                C0C2D1F0A3AD4B7CB6500001 /* LocalScannerServerTests.swift in Sources */,
                 B6C8ECF19A6244D1BD290003 /* CardEditorPricingTests.swift in Sources */,
                 F32586CC414E405F92C90003 /* TradeTransactionTests.swift in Sources */,
                 8F3B2A904EAD4B17B4880003 /* TCGTrackingCredentialsTests.swift in Sources */,
@@ -347,7 +359,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -383,7 +395,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
