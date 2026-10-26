@@ -18,6 +18,8 @@ A settled recognition freezes its image and alternative candidates/reprints. Lat
 
 Every new physical confirmation appends its own quantity-one row: A, B, A remains three rows. Review and CSV default to persisted scan order. Editing never merges rows. Legacy merged quantities are retained as historical rows; the original order of their individual copies is unknown. Existing sessions, list identity, offer snapshots, export, diagnostics, and the unchanged storage migration path are retained. Continuing a different list explains and confirms finishing the other active session.
 
+From list review, **Search & Add Card** searches the downloaded game catalog as you type. Up to five matches appear with large artwork previews; add a number or set to narrow them (`Darkrai` → `Darkrai 99` → `Darkrai 99 Triumphant`). Select a preview, choose printing and condition, then explicitly **Add to List**. This appends one physical copy without opening the camera. Text lookup uses saved metadata; artwork and exact market quotes may need internet. See [manual catalog search and the later phone check](docs/ManualCardSearch.md).
+
 ## Build and tests
 
 Open `CardShowScanner.xcodeproj` in Xcode 16+, select **CardShowScanner**, and Run. Set personal signing using the local configuration instructions below. Use a physical iPhone for live camera verification.
@@ -33,7 +35,7 @@ python3 scripts/check_scanner_runtime.py
 
 **Passed in this Linux workspace:** 69 JavaScript tests (29 bridge, 11 database-cache, 13 public-pricing request, 13 website sign-in form, 2 real bundled OpenCV/engine smoke tests and 1 quick-scan diagnostic test); 20 Python helper tests (2 signing, 11 native-failure annotation, 7 simulator crash reporting); Swift grammar parsing; app/test source and bundled-resource membership; 47-asset hash/dependency verification. The real-engine tests initialize each WASM build in an isolated Node process, hash and match synthetic input, and reject an empty frame. They do not exercise an iPhone camera or establish real-card recognition accuracy.
 
-**Native validation:** [macOS CI at `890f7e2`](https://github.com/wgreelish-png/scanner/actions/runs/40340215446) passed all 124 native cases and the unsigned Personal-scheme Release iPhone build. Coverage includes local-server failure/restart/timeout/coalescing and a real loopback restart, bounded diagnostic validation, exact editor/scanner condition prices and catalog printing choices, stale/manual quote protection, persisted list deletion, permission reuse/coalescing/revocation, negotiated payouts and percentages, historical estimate preservation, actual Keychain storage and existing scan/save/migration regressions. The simulator-only workaround for the [iOS 18.4/18.5 Swift WebKit Cryptex defect](https://github.com/WebKit/WebKit/pull/46146) is working. Xcode is unavailable locally on Linux. Choose an installed iPhone simulator ID from `xcrun simctl list devices available` on a Mac:
+**Native validation:** [macOS CI at `a7eacb7`](https://github.com/wgreelish-png/scanner/actions/runs/40395881288) passed all 143 native cases, the end-to-end swipe-delete simulator UI test and the unsigned Personal-scheme Release iPhone build. Coverage includes native catalog decoding/search refinement, stale search replies, exact condition/SKU manual adds, separate duplicate rows, failed-add retry, session/offer preservation, failed-deletion rollback and persisted full-swipe deletion. Existing local-server, pricing, camera-permission, Keychain, offers, scan/save and migration regressions also pass. The simulator-only workaround for the [iOS 18.4/18.5 Swift WebKit Cryptex defect](https://github.com/WebKit/WebKit/pull/46146) is working. Xcode is unavailable locally on Linux. Choose an installed iPhone simulator ID from `xcrun simctl list devices available` on a Mac:
 
 ```sh
 xcodebuild test -project CardShowScanner.xcodeproj -scheme CardShowScanner \
@@ -47,6 +49,8 @@ Before relying on this app, complete [the physical-iPhone acceptance checks](doc
 Build 7 fixes condition-price refreshes in Edit Card, reuses exact catalog condition quotes in both review screens, populates Type / printing dropdowns and repairs the list-delete confirmation target. See [the changes and short phone check](docs/ConditionPricingFixes.md). Recognition code and camera settings are unchanged.
 
 Build 8 repairs local-server startup recovery and adds sampled border/lighting diagnostics plus **Mark Scan Issue** actions. Recognition thresholds, matching, camera settings and confirmation behavior are unchanged. See [the later phone test and logging guide](docs/StartupRecoveryDiagnostics.md).
+
+Build 10 adds the manual catalog search above and includes the swipe-delete repair: normal and full swipes keep their gestures, confirmation uses a stable list ID, and failed deletion restores the live relationships for retry. See [swipe deletion validation](docs/SwipeListDeletion.md). No upstream recognition-engine refresh or top-loader detection change is included.
 
 ## Review, offers and diagnostics
 

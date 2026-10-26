@@ -23,6 +23,8 @@ This feature changes no recognition algorithms, confidence gates or camera setti
 
 ## Validation and later phone check
 
+[macOS CI at `a7eacb7`](https://github.com/wgreelish-png/scanner/actions/runs/40395881288) passed all 143 native tests, the swipe-delete simulator UI test and the unsigned Personal Release iPhone build. All 69 JavaScript tests, 20 Python helper tests, source/resource membership and 47 pinned assets passed. Grammar checks cover all 38 Swift source/test files. These results do not establish real catalog coverage, artwork availability or search speed on the user's iPhone.
+
 Native fixtures exercise real native v1/v2 cache encodings, top-five/deduplication, name/number/set refinement (including Darkrai & Cresselia LEGEND Top 99/102), prefixed card numbers, game isolation, database version changes, clear/incomplete cache behavior and unsafe metadata. Further tests cover stale search replies, default condition, exact zero-price/SKU persistence, session resumption/switch confirmation, duplicate rows and failed-add retry. Actual cached-card coverage, previews and interaction speed require the user's iPhone test.
 
 On the phone, try the Darkrai queries above, confirm the correct set/number/artwork, switch condition/printing and add it. Add the same card again and verify two separate rows. Leave/reopen the list and verify order and saved estimates. Cancel another selection and verify no row was added. Search should not open the camera or redownload the database.
