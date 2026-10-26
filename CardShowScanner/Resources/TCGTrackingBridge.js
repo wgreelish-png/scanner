@@ -43,18 +43,62 @@
     for (const tuple of view?.siblings || []) add(tuple, 0, 'ambiguous');
     return { kind: 'scan', same: false, accepted: view?.accepted === true, confidence: confidence(view?.confidence), candidates: rows };
   }
+  // Diagnostic metadata is a separate scalar-only channel. Never forward an
+  // arbitrary backend object, image, card tuple or free-form error text.
+  function scanMetadata(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    const fields = {};
+    for (const key of ['solid', 'tracked']) if (typeof value[key] === 'boolean') fields[key] = value[key];
+    for (const [key, allowed] of [['scanStage', ['none', 'one', 'quick', 'full']], ['quadSource', ['none', 'detected', 'selected']]]) {
+      if (allowed.includes(value[key])) fields[key] = value[key];
+    }
+    for (const key of ['rawQuads', 'rejectedQuads', 'candidateQuads', 'selectedBase']) {
+      if (Number.isInteger(value[key]) && value[key] >= 0 && value[key] <= 1_000_000) fields[key] = value[key];
+    }
+    for (const [key, maximum] of [['quadAspect', 1], ['quadArea', 1], ['quadSupport', 1], ['meanLuma', 255], ['lumaStd', 128], ['matchDistance', 100], ['matchGap', 100]]) {
+      const n = value[key];
+      if (typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= maximum) fields[key] = Math.round(n * 1000) / 1000;
+    }
+    return fields;
+  }
+  function scanStats(stats) {
+    if (!stats || typeof stats !== 'object' || Array.isArray(stats)) return {};
+    const fields = scanMetadata(stats.diagnostics);
+    if (['worker', 'main'].includes(stats.kind)) fields.backend = stats.kind;
+    if (['', 'one', 'quick', 'full'].includes(stats.stage)) fields.scanStage = stats.stage || 'none';
+    if (typeof stats.tracked === 'boolean') fields.tracked = stats.tracked;
+    for (const [key, input, maximum] of [['scanMS', 'scanMs', 86400000], ['captureMS', 'captureMs', 86400000], ['frames', 'frames', 1_000_000]]) {
+      const n = stats[input];
+      if (typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= maximum && (key !== 'frames' || Number.isInteger(n))) fields[key] = n;
+    }
+    return fields;
+  }
   let dispose = () => {};
   let resetRecognition = () => {};
   let releaseReview = () => {};
   let refreshDatabase = () => {};
+  let markScanIssue = () => false;
   async function install(config) {
     dispose();
     globalThis.CardShowNativeCache = typeof config.cacheToken === 'string' && config.cacheToken.length >= 32 ? { token: config.cacheToken } : null;
     let pending = null;
+    let latestScan = null, heldScan = null;
     let running = true, stopLoop = null, stream = null, backend = null, overlay = null, starting = false, held = false, awaitingRemoval = false, beginLoop = null;
     const post = message => { if (running) window.webkit?.messageHandlers?.scanResult?.postMessage({ ...message, nonce: config.nonce }); };
     const diagnostic = (event, fields = {}) => post({ kind: 'diagnostic', event, ...fields });
     const clock = () => globalThis.performance?.now?.() ?? Date.now();
+    const issueFields = () => {
+      const snapshot = held ? heldScan : latestScan;
+      if (!snapshot) return {};
+      const age = clock() - snapshot.at;
+      if (!Number.isFinite(age) || age < 0) return {};
+      return { ...(age <= 15000 ? snapshot.fields : {}), sampleAgeMS: Math.min(600000, Math.floor(age)) };
+    };
+    markScanIssue = reason => {
+      if (!running || !stream || !backend || !beginLoop || !['top_loader', 'dark_card', 'wrong_border'].includes(reason)) return false;
+      diagnostic('scan_issue', { issueReason: reason, ...issueFields() });
+      return true;
+    };
     const errorKind = error => ['NotAllowedError', 'NotFoundError', 'NotReadableError', 'AbortError', 'SecurityError', 'TypeError', 'RangeError'].includes(error?.name) ? error.name : 'Error';
     const recover = () => {
       if (!running || !stream) return;
@@ -79,7 +123,7 @@
     const canvas = document.createElement('canvas'); canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none';
     frame.append(video, canvas); root.append(frame, button, hint); document.body.append(root);
     const report = value => { hint.hidden = !!stream; hint.textContent = text(value); post({ kind: 'status', message: text(value) }); };
-    const stopCamera = () => { stopLoop?.(); stopLoop = null; stream?.getTracks().forEach(t => t.stop()); stream = null; video.srcObject = null; overlay?.destroy?.(); overlay = null; };
+    const stopCamera = () => { stopLoop?.(); stopLoop = null; stream?.getTracks().forEach(t => t.stop()); stream = null; video.srcObject = null; overlay?.destroy?.(); overlay = null; latestScan = null; heldScan = null; };
     const visibility = () => { if (document.hidden) { diagnostic('camera_backgrounded'); pending = null; stopCamera(); post({ kind: 'hide' }); button.disabled = false; button.hidden = false; button.textContent = 'Resume Camera'; } };
     document.addEventListener('visibilitychange', visibility);
     dispose = () => { diagnostic('bridge_stopped'); running = false; pending = null; stopCamera(); backend?.dispose(); backend = null; root.remove(); document.removeEventListener('visibilitychange', visibility); window.removeEventListener?.('error', onError); window.removeEventListener?.('unhandledrejection', onRejection); };
@@ -177,21 +221,36 @@
             const settled = pending.observations >= 3 && now - pending.since >= (update.accepted ? 600 : 1500);
             if (!settled || update.confidence < 50) return;
             held = true;
+            heldScan = latestScan ? { at: latestScan.at, fields: { ...latestScan.fields } } : null;
             diagnostic('recognition_settled', { elapsedMS: now - pending.since, frames: pending.observations });
+            diagnostic('recognition_snapshot', issueFields());
             post(pending.result);
             pending = null;
           }, onHide: () => { if (!held) { pending = null; awaitingRemoval = false; post({ kind: 'hide' }); } },
           onHint: report, onStats: stats => {
+            if (!running) return;
             const now = clock();
+            const fields = scanStats(stats);
+            if (!Object.keys(fields).length) return;
+            latestScan = { at: now, fields };
             if (now - lastStats < 5000) return;
             lastStats = now;
-            diagnostic('scan_stats', { backend: stats.kind, scanMS: stats.scanMs, captureMS: stats.captureMs, frames: stats.frames });
+            // Whole-frame quality is sampled only for this five-second event.
+            // The callback reads the existing small frame without retaining it.
+            let quality = {};
+            if (typeof stats.frameQuality === 'function') {
+              try {
+                const sampled = scanMetadata(stats.frameQuality());
+                for (const key of ['meanLuma', 'lumaStd']) if (key in sampled) quality[key] = sampled[key];
+              } catch (_) { /* diagnostics must not interrupt recognition */ }
+            }
+            diagnostic('scan_stats', { ...fields, ...quality });
           } });
         resetRecognition = () => {
-          pending = null; held = false; awaitingRemoval = false; stopLoop?.(); backend.reset?.();
+          pending = null; held = false; heldScan = null; latestScan = null; awaitingRemoval = false; stopLoop?.(); backend.reset?.();
           if (running && stream) stopLoop = beginLoop();
         };
-        releaseReview = () => { pending = null; held = false; awaitingRemoval = true; };
+        releaseReview = () => { pending = null; held = false; heldScan = null; awaitingRemoval = true; };
         stopLoop = beginLoop();
         diagnostic('scanner_ready');
         button.hidden = true; report(cacheWarning ? 'Camera ready. Database could not be saved; it may download again next time.' : 'Live camera ready — hold a card steady.'); hint.hidden = true;
@@ -209,5 +268,5 @@
     };
     if (config.autoStart) await button.onclick();
   }
-  globalThis.CardShowBridge = { install, stop: () => dispose(), resetRecognition: () => resetRecognition(), releaseReview: () => releaseReview(), refreshDatabase: () => refreshDatabase(), normalizeView };
+  globalThis.CardShowBridge = { install, stop: () => dispose(), resetRecognition: () => resetRecognition(), releaseReview: () => releaseReview(), refreshDatabase: () => refreshDatabase(), markScanIssue: reason => markScanIssue(reason), normalizeView };
 })();

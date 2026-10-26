@@ -129,6 +129,7 @@ struct ScannerView: View {
                     Button("Check Database Updates", systemImage: "arrow.down.circle") {
                         model.liveProvider?.refreshDatabase()
                     }.disabled(model.liveProvider == nil || model.paused || model.selected != nil)
+                    scanIssueMenu
                     Menu("Developer Testing") {
                         Picker("Scanner source", selection: $mode) {
                             Text("Live Camera").tag("Live")
@@ -142,6 +143,15 @@ struct ScannerView: View {
             else if let live = model.liveProvider { CameraStatusView(provider: live) }
         }.foregroundStyle(.white).padding(8)
             .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 18))
+    }
+
+    private var scanIssueMenu: some View {
+        Menu {
+            ForEach(ScannerIssueKind.allCases, id: \.rawValue) { issue in
+                Button(issue.label) { model.liveProvider?.markScanIssue(issue) }
+            }
+        } label: { Label("Mark Scan Issue", systemImage: "flag") }
+            .disabled(model.liveProvider == nil || model.paused || model.selectionInProgress || model.saving)
     }
 
     private var cameraFooter: some View {
@@ -228,6 +238,9 @@ struct ScannerView: View {
                 }.padding().padding(.top, 8)
             }.navigationTitle("Choose the Card").navigationBarTitleDisplayMode(.inline)
                 .toolbar(.visible, for: .navigationBar)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) { scanIssueMenu }
+                }
                 .safeAreaInset(edge: .bottom) {
                     VStack(spacing: 8) {
                         if model.selectionInProgress { ProgressView("Adding your card…") }

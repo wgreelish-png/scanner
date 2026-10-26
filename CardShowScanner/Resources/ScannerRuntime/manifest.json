@@ -181,10 +181,10 @@
     {
       "path": "/newscanplus/assets/js/app/quickscan.js",
       "url": "https://tcgtracking.com/newscanplus/assets/js/app/quickscan.js?v=1792447586",
-      "sha256": "b6b0bae298408d2f237f48f2b30ba84a99f842f9fd6004da679c29a4fd115c4e",
-      "bytes": 13719,
+      "sha256": "44108e69ce15ed0bd4788bdc3d6a82180bd70a12a71d18f8d8d8a2b94de965f1",
+      "bytes": 14756,
       "upstream_sha256": "2ced8f09522bb1d22949ad4b420191f56b12a0ef8bec6433fc9a338713f52cc6",
-      "adaptation": "Optional resolveCandidates=false skips online image-assisted reranking; preserves captured thumbnail and local pack candidates."
+      "adaptation": "Optional resolveCandidates=false skips online image-assisted reranking; preserves captured thumbnail and local pack candidates. App diagnostic adaptation: forwards existing scalar scan metadata and a lazy sampled whole-frame luma summary; no pixel, detection, matching, confidence or settling changes."
     },
     {
       "path": "/newscanplus/assets/js/app/reprint-rerank.js",
@@ -201,8 +201,10 @@
     {
       "path": "/newscanplus/assets/js/app/scan-engine.js",
       "url": "https://tcgtracking.com/newscanplus/assets/js/app/scan-engine.js?v=1792238053",
-      "sha256": "78e54cb99a218467c6be80faedfea8ca7580110d89bb42380c906768832b6515",
-      "bytes": 13263
+      "sha256": "69de8dcf1ab257b48e37abba968488f9ce16a9b186f566491bb52b2a43f11cc8",
+      "bytes": 14691,
+      "upstream_sha256": "78e54cb99a218467c6be80faedfea8ca7580110d89bb42380c906768832b6515",
+      "adaptation": "App diagnostic adaptation: adds scalar counts/geometry of existing candidate and selected quads plus match distance/gap; no candidate ordering, gates, hashes, matching or decision changes."
     },
     {
       "path": "/newscanplus/assets/js/app/shared.js",

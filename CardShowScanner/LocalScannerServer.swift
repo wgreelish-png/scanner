@@ -1,6 +1,64 @@
 import Foundation
 import Network
 
+enum LocalScannerListenerState: Sendable {
+    case ready, waiting, failed(NWError), cancelled
+}
+
+@MainActor protocol LocalScannerListening: AnyObject {
+    func start(onState: @escaping @MainActor (LocalScannerListenerState) -> Void,
+               onConnection: @escaping @MainActor (NWConnection) -> Void)
+    /// Waits for cancellation, with a bounded fallback if no terminal callback arrives.
+    func cancel() async
+}
+
+@MainActor private final class NetworkScannerListener: LocalScannerListening {
+    private let listener: NWListener
+    private var terminal = false
+    private var cancellationWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+    init() throws {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: LocalScannerServer.port)!)
+        listener = try NWListener(using: parameters)
+    }
+    func start(onState: @escaping @MainActor (LocalScannerListenerState) -> Void,
+               onConnection: @escaping @MainActor (NWConnection) -> Void) {
+        listener.stateUpdateHandler = { [weak self] state in
+            Task { @MainActor in
+                guard let self else { return }
+                switch state {
+                case .ready: onState(.ready)
+                case .waiting: onState(.waiting)
+                case .failed(let error): self.finishCancellation(); onState(.failed(error))
+                case .cancelled: self.finishCancellation(); onState(.cancelled)
+                default: break
+                }
+            }
+        }
+        listener.newConnectionHandler = { connection in Task { @MainActor in onConnection(connection) } }
+        listener.start(queue: .main)
+    }
+    func cancel() async {
+        listener.cancel()
+        guard !terminal else { return }
+        let id = UUID()
+        await withCheckedContinuation { continuation in
+            cancellationWaiters[id] = continuation
+            // Cancellation is normally immediate. Do not strand future starts
+            // if the networking subsystem never delivers its terminal callback.
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(1))
+                self?.cancellationWaiters.removeValue(forKey: id)?.resume()
+            }
+        }
+    }
+    private func finishCancellation() {
+        terminal = true
+        let waiters = Array(cancellationWaiters.values); cancellationWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+    }
+}
+
 /// A loopback HTTP origin gives WebKit a trustworthy local camera/worker context.
 /// Serves bundled assets and authenticated game-cache records; never a general file or network proxy.
 @MainActor final class LocalScannerServer {
@@ -9,53 +67,123 @@ import Network
     static let origin = "http://127.0.0.1:\(port)"
     static let pageURL = URL(string: origin + "/index.html")!
     let cacheToken = UUID().uuidString
-    private var connections = 0
-    private var listener: NWListener?
-    private var startup: Task<Void, Error>?
-    private init() {}
+    private var connections: [UUID: (connection: NWConnection, buffer: RequestBuffer)] = [:]
+    private var listener: (any LocalScannerListening)?
+    private var generation = UUID()
+    private var ready = false
+    private var starting = false
+    private var restarting = false
+    private var waiters: [UUID: CheckedContinuation<Void, Error>] = [:]
+    private var launchTask: Task<Void, Never>?
+    private var closingTask: Task<Void, Never>?
+    private var timeoutTask: Task<Void, Never>?
+    private let listenerFactory: @MainActor () throws -> any LocalScannerListening
+    private let resourcesAvailable: @MainActor () -> Bool
+    private let startupTimeout: Duration
+
+    init(listenerFactory: (@MainActor () throws -> any LocalScannerListening)? = nil,
+         startupTimeout: Duration = .seconds(5), resourcesAvailable: (@MainActor () -> Bool)? = nil) {
+        self.listenerFactory = listenerFactory ?? { try NetworkScannerListener() }
+        self.resourcesAvailable = resourcesAvailable ?? { Bundle.main.url(forResource: "ScannerRuntime", withExtension: nil) != nil }
+        self.startupTimeout = startupTimeout
+    }
 
     func start() async throws {
-        if let startup { return try await startup.value }
-        let task = Task { @MainActor in
-            guard Bundle.main.url(forResource: "ScannerRuntime", withExtension: nil) != nil else {
-                throw LocalScannerFailure.missingResources
-            }
-            let parameters = NWParameters.tcp
-            parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: Self.port)!)
-            let listener = try NWListener(using: parameters)
-            self.listener = listener
+        try Task.checkCancellation()
+        if ready, listener != nil { return }
+        let id = UUID()
+        try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                var completed = false
-                listener.stateUpdateHandler = { state in
-                    Task { @MainActor in
-                        guard !completed else { return }
-                        switch state {
-                        case .ready: completed = true; continuation.resume()
-                        case .failed(let error): completed = true; continuation.resume(throwing: error)
-                        case .cancelled: completed = true; continuation.resume(throwing: CancellationError())
-                        default: break
-                        }
-                    }
-                }
-                listener.newConnectionHandler = { connection in
-                    Task { @MainActor in self.serve(connection) }
-                }
-                listener.start(queue: .main)
+                guard !Task.isCancelled else { continuation.resume(throwing: CancellationError()); return }
+                waiters[id] = continuation
+                if !starting { beginStart() }
             }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.waiters.removeValue(forKey: id)?.resume(throwing: CancellationError()) }
         }
-        startup = task
-        do { try await task.value }
-        catch { listener?.cancel(); listener = nil; startup = nil; throw error }
+        try Task.checkCancellation()
+    }
+    /// Overlapping recovery requests share one replacement listener.
+    func restart() async throws {
+        try Task.checkCancellation()
+        if !restarting {
+            DiagnosticLog.shared.record("local_server.restarting", ["phase": "recovery"])
+            invalidate(CancellationError()); restarting = true
+        }
+        try await start()
+    }
+    func stop() {
+        DiagnosticLog.shared.record("local_server.stopped", ["phase": "lifecycle"])
+        invalidate(CancellationError())
+    }
+    private func beginStart() {
+        starting = true; ready = false
+        let id = UUID(); generation = id
+        DiagnosticLog.shared.record("local_server.starting", ["phase": "startup"])
+        guard resourcesAvailable() else { fail(LocalScannerFailure.missingResources, reason: "resources"); return }
+        let timeout = startupTimeout
+        timeoutTask = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: timeout) } catch { return }
+            guard let self, self.generation == id, self.starting else { return }
+            self.fail(LocalScannerFailure.startupTimedOut, reason: "timeout")
+        }
+        let closing = closingTask
+        launchTask = Task { @MainActor [weak self] in
+            await closing?.value
+            guard let self, self.generation == id, self.starting, !Task.isCancelled else { return }
+            do {
+                let listener = try self.listenerFactory()
+                self.listener = listener
+                listener.start(onState: { [weak self] state in self?.receive(state, generation: id) }, onConnection: { [weak self] connection in
+                    guard let self, self.generation == id, self.ready else { connection.cancel(); return }
+                    self.serve(connection)
+                })
+            } catch { self.fail(error, reason: "creation") }
+        }
+    }
+    private func receive(_ state: LocalScannerListenerState, generation id: UUID) {
+        guard generation == id, listener != nil else { return }
+        switch state {
+        case .ready:
+            guard starting else { return }
+            ready = true; starting = false; restarting = false
+            timeoutTask?.cancel(); timeoutTask = nil; launchTask = nil
+            DiagnosticLog.shared.record("local_server.ready", ["phase": "startup"])
+            let pending = Array(waiters.values); waiters.removeAll()
+            for waiter in pending { waiter.resume() }
+        case .waiting:
+            DiagnosticLog.shared.record("local_server.waiting", ["phase": ready ? "ready" : "startup"])
+            if ready { fail(LocalScannerFailure.listenerUnavailable, reason: "waiting") }
+        case .failed(let error): fail(error, reason: "listener")
+        case .cancelled: fail(CancellationError(), reason: "cancelled")
+        }
+    }
+    private func fail(_ error: Error, reason: String) {
+        DiagnosticLog.shared.record("local_server.failed", ["phase": ready ? "ready" : "startup", "reason": reason, "code": String((error as NSError).code)])
+        invalidate(error)
+    }
+    private func invalidate(_ error: Error) {
+        generation = UUID(); ready = false; starting = false; restarting = false
+        launchTask?.cancel(); launchTask = nil; timeoutTask?.cancel(); timeoutTask = nil
+        let previous = listener; listener = nil
+        if let previous {
+            let closing = closingTask
+            closingTask = Task { @MainActor in await closing?.value; await previous.cancel() }
+        }
+        for entry in Array(connections.values) { close(entry.connection, buffer: entry.buffer) }
+        let pending = Array(waiters.values); waiters.removeAll()
+        for waiter in pending { waiter.resume(throwing: error) }
     }
     private final class RequestBuffer {
+        let id = UUID()
         var data = Data()
         var closed = false
         var deadline: Task<Void, Never>?
     }
     private func serve(_ connection: NWConnection) {
-        guard connections < 24 else { connection.cancel(); return }
-        connections += 1
+        guard connections.count < 24 else { connection.cancel(); return }
         let buffer = RequestBuffer()
+        connections[buffer.id] = (connection, buffer)
         buffer.deadline = Task { @MainActor in
             do { try await Task.sleep(for: .seconds(15)) } catch { return }
             self.close(connection, buffer: buffer)
@@ -66,7 +194,7 @@ import Network
     private func close(_ connection: NWConnection, buffer: RequestBuffer) {
         guard !buffer.closed else { return }
         buffer.closed = true; buffer.deadline?.cancel(); buffer.deadline = nil
-        connections -= 1; connection.cancel()
+        connections[buffer.id] = nil; connection.cancel()
     }
     private func receive(_ connection: NWConnection, buffer: RequestBuffer) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, complete, error in
@@ -171,13 +299,20 @@ import Network
         send(connection, buffer: buffer, status: "200 OK", data: data, mime: mime)
     }
     private func send(_ connection: NWConnection, buffer: RequestBuffer, status: String, data: Data, mime: String = "application/octet-stream") {
+        guard !buffer.closed else { return }
         let header = "HTTP/1.1 \(status)\r\nContent-Type: \(mime)\r\nContent-Length: \(data.count)\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n"
         var body = Data(header.utf8); body.append(data)
         connection.send(content: body, completion: .contentProcessed { _ in Task { @MainActor in self.close(connection, buffer: buffer) } })
     }
 }
 
-enum LocalScannerFailure: LocalizedError {
-    case missingResources
-    var errorDescription: String? { "Bundled scanner resources are missing. Rebuild the app with ScannerRuntime in Copy Bundle Resources." }
+enum LocalScannerFailure: LocalizedError, Equatable {
+    case missingResources, startupTimedOut, listenerUnavailable
+    var errorDescription: String? {
+        switch self {
+        case .missingResources: return "Bundled scanner resources are missing. Rebuild the app with ScannerRuntime in Copy Bundle Resources."
+        case .startupTimedOut: return "The local scanner took too long to start. Tap Retry Live Scanner."
+        case .listenerUnavailable: return "The local scanner connection was interrupted. Tap Retry Live Scanner."
+        }
+    }
 }

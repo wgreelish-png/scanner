@@ -265,3 +265,101 @@ test('cache failures are visible and explicit updates cannot discard a held revi
   await h.bridge.refreshDatabase();
   assert.equal(h.packOptions.length, 1);
 });
+
+const borderStats = (overrides = {}) => ({
+  kind: 'worker', scanMs: 42, captureMs: 1, frames: 1, stage: 'one', tracked: false,
+  diagnostics: { solid: true, tracked: false, scanStage: 'one', rawQuads: 7, rejectedQuads: 2,
+    candidateQuads: 3, selectedBase: 1, quadSource: 'selected', quadAspect: 0.716,
+    quadArea: 0.4, quadSupport: 0.97, matchDistance: 4.125, matchGap: 3.25 },
+  ...overrides
+});
+test('border diagnostics forward only bounded scalars and sample frame quality every five seconds', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  let qualityReads = 0;
+  const stats = borderStats({ frameQuality() { qualityReads++; return { meanLuma: 31.12345, lumaStd: 12.5, solid: false, image: 'private-image' }; } });
+  for (let i = 0; i < 10; i++) h.scannerOptions.onStats(stats);
+  assert.equal(qualityReads, 1);
+  const first = h.messages.filter(m => m.event === 'scan_stats');
+  assert.equal(first.length, 1);
+  assert.equal(first[0].solid, true, 'quality sampling cannot replace detection metadata');
+  assert.equal(first[0].quadSource, 'selected'); assert.equal(first[0].quadAspect, 0.716);
+  assert.equal(first[0].candidateQuads, 3); assert.equal(first[0].selectedBase, 1);
+  assert.equal(first[0].meanLuma, 31.123); assert.equal(first[0].lumaStd, 12.5);
+  assert.equal(JSON.stringify(first).includes('private-image'), false);
+  h.advance(5000); h.scannerOptions.onStats(stats);
+  assert.equal(qualityReads, 2);
+  assert.equal(h.messages.filter(m => m.event === 'scan_stats').length, 2);
+});
+test('malformed oversized and nonfinite diagnostic values never cross the bridge', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  h.scannerOptions.onStats({ kind: 'private-kind', scanMs: Infinity, captureMs: -1, frames: 1.5, stage: 'private-stage', tracked: 'true', diagnostics: {
+    solid: 'true', tracked: 1, scanStage: 'private-stage', quadSource: 'private-source',
+    rawQuads: 1000001, rejectedQuads: -1, candidateQuads: 1.5, selectedBase: '1',
+    quadAspect: 1.01, quadArea: -0.1, quadSupport: Infinity, meanLuma: 256, lumaStd: 129,
+    matchDistance: NaN, matchGap: 101, ref: 'p:123', image: 'private-image', token: 'private-token'
+  } });
+  assert.equal(h.messages.filter(m => m.event === 'scan_stats').length, 0);
+  h.scannerOptions.onStats(null); h.scannerOptions.onStats([]);
+  h.scannerOptions.onStats(borderStats({ frameQuality() { throw new Error('private failure'); } }));
+  assert.equal(h.messages.filter(m => m.event === 'scan_stats').length, 1);
+  assert.equal(JSON.stringify(h.messages.filter(m => m.kind === 'diagnostic')).includes('private'), false);
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
+  assert.equal(h.messages.at(-1).kind, 'scan', 'diagnostic failures cannot interrupt recognition');
+});
+test('issue marker uses the newest stats even when their sampled log was suppressed', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  h.scannerOptions.onStats(borderStats());
+  h.advance(1000);
+  h.scannerOptions.onStats(borderStats({ diagnostics: { solid: false, scanStage: 'none', rawQuads: 0, rejectedQuads: 0, candidateQuads: 0, quadSource: 'none' }, stage: '', frames: 0 }));
+  h.advance(25);
+  const stopped = h.stopped, disposed = h.disposed;
+  assert.equal(h.bridge.markScanIssue('top_loader'), true);
+  const marker = h.messages.at(-1);
+  assert.equal(marker.event, 'scan_issue'); assert.equal(marker.issueReason, 'top_loader');
+  assert.equal(marker.sampleAgeMS, 25); assert.equal(marker.solid, false);
+  assert.equal(marker.quadSource, 'none'); assert.equal(marker.candidateQuads, 0);
+  assert.equal(h.messages.filter(m => m.event === 'scan_stats').length, 1);
+  assert.equal(h.stopped, stopped); assert.equal(h.disposed, disposed);
+  assert.equal(h.messages.filter(m => m.kind === 'scan').length, 0);
+});
+test('recognition snapshot and issue markers retain frozen review geometry', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  h.scannerOptions.onStats(borderStats());
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
+  const frozen = h.messages.at(-1);
+  const snapshot = h.messages.find(m => m.event === 'recognition_snapshot');
+  assert.equal(snapshot.quadArea, 0.4); assert.equal(snapshot.selectedBase, 1); assert.equal(snapshot.sampleAgeMS, 800);
+  h.advance(1000);
+  h.scannerOptions.onStats(borderStats({ diagnostics: { solid: true, quadSource: 'selected', quadArea: 0.8, selectedBase: 0 }, stage: 'full' }));
+  assert.equal(h.bridge.markScanIssue('wrong_border'), true);
+  const marker = h.messages.at(-1);
+  assert.equal(marker.quadArea, 0.4); assert.equal(marker.selectedBase, 1); assert.equal(marker.sampleAgeMS, 1800);
+  assert.equal(marker.scanStage, 'one');
+  settle(h, { ref: tuple(124), accepted: true, confidence: 99 });
+  assert.equal(h.messages.filter(m => m.kind === 'scan').length, 1);
+  assert.deepEqual(h.messages.find(m => m.kind === 'scan'), frozen, 'marking an issue neither changes nor releases a held review');
+});
+test('issue marker reports missing or stale metadata without inventing current geometry', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  assert.equal(h.bridge.markScanIssue('dark_card'), true);
+  assert.deepEqual(h.messages.at(-1), { kind: 'diagnostic', event: 'scan_issue', issueReason: 'dark_card', nonce: 'n' });
+  h.scannerOptions.onStats(borderStats()); h.advance(15001);
+  assert.equal(h.bridge.markScanIssue('top_loader'), true);
+  assert.deepEqual(h.messages.at(-1), { kind: 'diagnostic', event: 'scan_issue', issueReason: 'top_loader', sampleAgeMS: 15001, nonce: 'n' });
+  h.advance(900000); assert.equal(h.bridge.markScanIssue('wrong_border'), true);
+  assert.equal(h.messages.at(-1).sampleAgeMS, 600000);
+  assert.equal('quadArea' in h.messages.at(-1), false);
+});
+test('issue markers reject unknown reasons and cannot start an absent or stopped camera', async () => {
+  const h = harness();
+  assert.equal(h.bridge.markScanIssue('top_loader'), false);
+  await h.bridge.install({ nonce: 'n', game: 'tcgp:3' });
+  assert.equal(h.bridge.markScanIssue('top_loader'), false);
+  await h.elements.find(e => e.tag === 'button').onclick();
+  let count = h.messages.length;
+  for (const reason of ['private-reason', 'top_loader\nprivate', '', null, 1, {}, ['top_loader']]) assert.equal(h.bridge.markScanIssue(reason), false);
+  assert.equal(h.messages.length, count);
+  assert.equal(h.bridge.markScanIssue('top_loader'), true);
+  h.bridge.stop(); count = h.messages.length;
+  assert.equal(h.bridge.markScanIssue('top_loader'), false); assert.equal(h.messages.length, count);
+});
