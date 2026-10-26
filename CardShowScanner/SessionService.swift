@@ -163,21 +163,38 @@ enum BatchFailure: LocalizedError {
         DiagnosticLog.shared.record("offer.snapshot_saved")
     }
     static func deleteList(_ list: CardList, context: ModelContext) throws {
-        let id = list.id
-        let quantity = list.quantity
-        let sessions = try context.fetch(FetchDescriptor<ScanSession>())
-        for session in sessions where session.listID == id {
-            session.listName = list.name
-            session.listID = nil
-            if session.isActive || session.statusRaw == "active" { session.statusRaw = "completed"; session.completedAt = .now }
-        }
-        context.delete(list)
         do {
+            let id = list.id
+            let quantity = list.quantity
+            let sessions = try context.fetch(FetchDescriptor<ScanSession>())
+            for session in sessions where session.listID == id {
+                session.listName = list.name
+                session.listID = nil
+                if session.isActive || session.statusRaw == "active" { session.statusRaw = "completed"; session.completedAt = .now }
+            }
+            context.delete(list)
             try CardListService.save(context)
             DiagnosticLog.shared.record("list.deleted", ["quantity": String(quantity)])
         } catch {
             DiagnosticLog.shared.failure("list.delete_failed", error)
             throw error
         }
+    }
+    /// Resolve the target at confirmation time instead of holding a live model
+    /// through query updates or the confirmation's presentation lifecycle.
+    static func deleteList(id: UUID, context: ModelContext) throws {
+        var descriptor = FetchDescriptor<CardList>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        let list: CardList?
+        do { list = try context.fetch(descriptor).first }
+        catch {
+            DiagnosticLog.shared.failure("list.delete_failed", error)
+            throw error
+        }
+        guard let list else {
+            DiagnosticLog.shared.record("list.delete_absent")
+            return
+        }
+        try deleteList(list, context: context)
     }
 }

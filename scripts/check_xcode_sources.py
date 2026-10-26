@@ -47,6 +47,20 @@ def check(project):
         included = test_sources.count(filename) == 1 and filename not in sources
         print(f'{filename}: in test target only={included}')
         failures += not included
+    ui_targets = [o for o in objects.values() if o.get('isa') == 'PBXNativeTarget' and o.get('name') == 'CardShowScannerUITests']
+    if len(ui_targets) != 1:
+        raise ValueError('Expected one UI regression test target.')
+    ui_sources = []
+    for phase_id in ui_targets[0].get('buildPhases', []):
+        phase = objects[phase_id]
+        if phase.get('isa') == 'PBXSourcesBuildPhase':
+            for build_id in phase.get('files', []):
+                ref = objects.get(objects.get(build_id, {}).get('fileRef'), {})
+                ui_sources.append(Path(ref.get('path', '')).name)
+    for file in sorted((ROOT / 'UITests').glob('*.swift')):
+        included = ui_sources.count(file.name) == 1 and file.name not in sources and file.name not in test_sources
+        print(f'{file.name}: in UI test target only={included}')
+        failures += not included
     for filename in ['TCGTrackingBridge.js', 'PricingRequest.js', 'WebsiteSignIn.js', 'ScannerRuntime', 'PrivacyInfo.xcprivacy']:
         included = resources.count(filename) == 1
         print(f'{filename}: in application Copy Bundle Resources={included}')
