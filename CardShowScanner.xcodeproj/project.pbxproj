@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        C4D311E710AB4F79A8B0000D /* ListDeletionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4D311E710AB4F79A8B0000C; };
+        C4D311E710AB4F79A8B0000F /* ListDeletionModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4D311E710AB4F79A8B0000E; };
+        C4D311E710AB4F79A8B00011 /* ListDeletionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4D311E710AB4F79A8B00010; };
         C0C2D1F0A3AD4B7CB6500005 /* ScannerPageRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0C2D1F0A3AD4B7CB6500006; };
         C0C2D1F0A3AD4B7CB6500003 /* ScannerDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0C2D1F0A3AD4B7CB6500004; };
         C0C2D1F0A3AD4B7CB6500001 /* LocalScannerServerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0C2D1F0A3AD4B7CB6500002; };
@@ -47,6 +50,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+        C4D311E710AB4F79A8B00008 /* PBXContainerItemProxy */ = {
+            isa = PBXContainerItemProxy;
+            containerPortal = 244210E48437B6556980A702 /* Project object */;
+            proxyType = 1;
+            remoteGlobalIDString = AC44A5EE06496B21A17CA082;
+            remoteInfo = CardShowScanner;
+        };
 		1241936D4DD3AAD68FE7BFBD /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 244210E48437B6556980A702 /* Project object */;
@@ -57,6 +67,10 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        C4D311E710AB4F79A8B00002 /* CardShowScannerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = CardShowScannerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+        C4D311E710AB4F79A8B0000C /* ListDeletionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListDeletionUITests.swift; sourceTree = "<group>"; };
+        C4D311E710AB4F79A8B0000E /* ListDeletionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListDeletionModel.swift; sourceTree = "<group>"; };
+        C4D311E710AB4F79A8B00010 /* ListDeletionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListDeletionTests.swift; sourceTree = "<group>"; };
         C0C2D1F0A3AD4B7CB6500006 /* ScannerPageRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerPageRecoveryTests.swift; sourceTree = "<group>"; };
         C0C2D1F0A3AD4B7CB6500004 /* ScannerDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerDiagnosticsTests.swift; sourceTree = "<group>"; };
         C0C2D1F0A3AD4B7CB6500002 /* LocalScannerServerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalScannerServerTests.swift; sourceTree = "<group>"; };
@@ -100,6 +114,12 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+        C4D311E710AB4F79A8B00005 /* Frameworks */ = {
+            isa = PBXFrameworksBuildPhase;
+            buildActionMask = 2147483647;
+            files = ();
+            runOnlyForDeploymentPostprocessing = 0;
+        };
 		28557525D9B40FEE6754FB60 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -117,11 +137,18 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+        C4D311E710AB4F79A8B00003 /* UITests */ = {
+            isa = PBXGroup;
+            children = (C4D311E710AB4F79A8B0000C /* ListDeletionUITests.swift */,);
+            path = UITests;
+            sourceTree = "<group>";
+        };
 		0A3E27B8CA818264D75C8D81 /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				763D774377779C412BB71F6F /* CardShowScanner.app */,
 				00444E2C37DD529B70E931A2 /* CardShowScannerTests.xctest */,
+                C4D311E710AB4F79A8B00002 /* CardShowScannerUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -129,6 +156,7 @@
 		59830EBC3A4184110566BF1A /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+                C4D311E710AB4F79A8B00010 /* ListDeletionTests.swift */,
                 62C79FEE709E4526B4520002 /* CameraPermissionTests.swift */,
                 C0C2D1F0A3AD4B7CB6500006 /* ScannerPageRecoveryTests.swift */,
                 C0C2D1F0A3AD4B7CB6500004 /* ScannerDiagnosticsTests.swift */,
@@ -148,6 +176,7 @@
 		878A52FC5FF6A57D50B7B870 /* CardShowScanner */ = {
 			isa = PBXGroup;
 			children = (
+                C4D311E710AB4F79A8B0000E /* ListDeletionModel.swift */,
                 F32586CC414E405F92C90002 /* TradeTransactionCalculator.swift */,
                 8F3B2A904EAD4B17B4880002 /* TCGTrackingCredentials.swift */,
                 8F3B2A904EAD4B17B4880006 /* WebsiteSignIn.js */,
@@ -183,6 +212,7 @@
 				F0C011A95C6B44F68A001701 /* Signing.xcconfig */,
 				878A52FC5FF6A57D50B7B870 /* CardShowScanner */,
 				59830EBC3A4184110566BF1A /* Tests */,
+                C4D311E710AB4F79A8B00003 /* UITests */,
 				0A3E27B8CA818264D75C8D81 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -190,6 +220,21 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+        C4D311E710AB4F79A8B00001 /* CardShowScannerUITests */ = {
+            isa = PBXNativeTarget;
+            buildConfigurationList = C4D311E710AB4F79A8B00009 /* Build configuration list for PBXNativeTarget "CardShowScannerUITests" */;
+            buildPhases = (
+                C4D311E710AB4F79A8B00004 /* Sources */,
+                C4D311E710AB4F79A8B00005 /* Frameworks */,
+                C4D311E710AB4F79A8B00006 /* Resources */,
+            );
+            buildRules = ();
+            dependencies = (C4D311E710AB4F79A8B00007 /* PBXTargetDependency */,);
+            name = CardShowScannerUITests;
+            productName = CardShowScannerUITests;
+            productReference = C4D311E710AB4F79A8B00002 /* CardShowScannerUITests.xctest */;
+            productType = "com.apple.product-type.bundle.ui-testing";
+        };
 		3A0C9CEF9D8F3BC090274361 /* CardShowScannerTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = EC086E470C1C75430B442AB0 /* Build configuration list for PBXNativeTarget "CardShowScannerTests" */;
@@ -234,6 +279,10 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
+                    C4D311E710AB4F79A8B00001 = {
+                        CreatedOnToolsVersion = 16.0;
+                        TestTargetID = AC44A5EE06496B21A17CA082;
+                    };
 					3A0C9CEF9D8F3BC090274361 = {
 						CreatedOnToolsVersion = 16.0;
 						TestTargetID = AC44A5EE06496B21A17CA082;
@@ -258,11 +307,18 @@
 			targets = (
 				AC44A5EE06496B21A17CA082 /* CardShowScanner */,
 				3A0C9CEF9D8F3BC090274361 /* CardShowScannerTests */,
+                C4D311E710AB4F79A8B00001 /* CardShowScannerUITests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+        C4D311E710AB4F79A8B00006 /* Resources */ = {
+            isa = PBXResourcesBuildPhase;
+            buildActionMask = 2147483647;
+            files = ();
+            runOnlyForDeploymentPostprocessing = 0;
+        };
 		3F6BC17F79ADBDD97FB52430 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -286,10 +342,17 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+        C4D311E710AB4F79A8B00004 /* Sources */ = {
+            isa = PBXSourcesBuildPhase;
+            buildActionMask = 2147483647;
+            files = (C4D311E710AB4F79A8B0000D /* ListDeletionUITests.swift in Sources */,);
+            runOnlyForDeploymentPostprocessing = 0;
+        };
 		B2298129A58493C45A5D7D9A /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                C4D311E710AB4F79A8B00011 /* ListDeletionTests.swift in Sources */,
                 62C79FEE709E4526B4520001 /* CameraPermissionTests.swift in Sources */,
                 C0C2D1F0A3AD4B7CB6500005 /* ScannerPageRecoveryTests.swift in Sources */,
                 C0C2D1F0A3AD4B7CB6500003 /* ScannerDiagnosticsTests.swift in Sources */,
@@ -308,6 +371,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                C4D311E710AB4F79A8B0000F /* ListDeletionModel.swift in Sources */,
                 F32586CC414E405F92C90001 /* TradeTransactionCalculator.swift in Sources */,
                 2D4112386E9A02AA267C9F0E /* ScannerDatabaseCache.swift in Sources */,
                 A1B2C3D40000000000000001 /* LocalScannerServer.swift in Sources */,
@@ -334,6 +398,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+        C4D311E710AB4F79A8B00007 /* PBXTargetDependency */ = {
+            isa = PBXTargetDependency;
+            target = AC44A5EE06496B21A17CA082 /* CardShowScanner */;
+            targetProxy = C4D311E710AB4F79A8B00008 /* PBXContainerItemProxy */;
+        };
 		F26350DAFE3F19AABFD69AC4 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = AC44A5EE06496B21A17CA082 /* CardShowScanner */;
@@ -342,6 +411,34 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+        C4D311E710AB4F79A8B0000A /* Debug */ = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                CODE_SIGN_STYLE = Automatic;
+                GENERATE_INFOPLIST_FILE = YES;
+                IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+                LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks";
+                PRODUCT_BUNDLE_IDENTIFIER = com.cardshow.CardShowScannerUITests;
+                PRODUCT_NAME = "$(TARGET_NAME)";
+                TARGETED_DEVICE_FAMILY = 1;
+                TEST_TARGET_NAME = CardShowScanner;
+            };
+            name = Debug;
+        };
+        C4D311E710AB4F79A8B0000B /* Release */ = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                CODE_SIGN_STYLE = Automatic;
+                GENERATE_INFOPLIST_FILE = YES;
+                IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+                LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks";
+                PRODUCT_BUNDLE_IDENTIFIER = com.cardshow.CardShowScannerUITests;
+                PRODUCT_NAME = "$(TARGET_NAME)";
+                TARGETED_DEVICE_FAMILY = 1;
+                TEST_TARGET_NAME = CardShowScanner;
+            };
+            name = Release;
+        };
 		0B0C687DF8B6B8DC790B519C /* Release */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = F0C011A95C6B44F68A001701 /* Signing.xcconfig */;
@@ -359,7 +456,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 8;
+				CURRENT_PROJECT_VERSION = 9;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -395,7 +492,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 8;
+				CURRENT_PROJECT_VERSION = 9;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -445,6 +542,12 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+        C4D311E710AB4F79A8B00009 /* Build configuration list for PBXNativeTarget "CardShowScannerUITests" */ = {
+            isa = XCConfigurationList;
+            buildConfigurations = (C4D311E710AB4F79A8B0000A /* Debug */, C4D311E710AB4F79A8B0000B /* Release */,);
+            defaultConfigurationIsVisible = 0;
+            defaultConfigurationName = Release;
+        };
 		4AA05EC3301949773ED0AC0A /* Build configuration list for PBXProject "CardShowScanner" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

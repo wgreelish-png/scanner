@@ -81,7 +81,7 @@ struct HomeView: View {
                 Section {
                     NavigationLink { SavedListsView() } label: {
                         Label("Open Existing List", systemImage: "list.bullet.rectangle")
-                    }.font(.headline).padding(.vertical, 8)
+                    }.font(.headline).padding(.vertical, 8).accessibilityIdentifier("home.openExistingLists")
                 }
             }.navigationTitle("Card Show Scanner")
                 .toolbar {

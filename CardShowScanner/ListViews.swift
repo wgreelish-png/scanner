@@ -23,17 +23,17 @@ struct SavedListsView: View {
     @Query(sort: \CardList.createdAt, order: .reverse) private var lists: [CardList]
     @State private var newName = ""
     @State private var error: String?
-    @State private var deleting: CardList?
-    @State private var showingDeleteConfirmation = false
+    @State private var pendingDeletion: ListDeletionRequest?
     @Query private var sessions: [ScanSession]
     var body: some View {
         List {
             Section("New list") {
-                TextField("List name", text: $newName)
+                TextField("List name", text: $newName).accessibilityIdentifier("savedLists.newName")
                 Button("Create") {
                     context.insert(CardList(name: newName.trimmingCharacters(in: .whitespacesAndNewlines)))
                     save(); newName = ""
                 }.disabled(newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityIdentifier("savedLists.create")
             }
             Section("Saved lists") {
                 ForEach(lists) { list in
@@ -45,11 +45,15 @@ struct SavedListsView: View {
                             Text("\(list.quantity) cards • \(list.knownValue.money) known subtotal").font(.caption)
                         }
                     }
-                    .swipeActions {
-                        Button("Delete", role: .destructive) {
-                            deleting = list; showingDeleteConfirmation = true
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        // A destructive swipe role removes the row visually
+                        // before confirmation. Keep the gesture, and delete
+                        // only from the independently presented sheet.
+                        Button("Delete") {
+                            guard pendingDeletion == nil else { return }
+                            pendingDeletion = ListDeletionRequest(list: list)
                             DiagnosticLog.shared.record("list.delete_requested", ["quantity": String(list.quantity)])
-                        }
+                        }.tint(.red).accessibilityIdentifier("savedList.requestDelete")
                         Button("Duplicate") {
                             do { try CardListService.duplicate(list, context: context) }
                             catch { context.rollback(); self.error = error.localizedDescription }
@@ -57,23 +61,52 @@ struct SavedListsView: View {
                     }
                 }
             }
-        }.navigationTitle("My Lists").failureAlert($error)
-            .confirmationDialog("Delete this list and its cards?", isPresented: $showingDeleteConfirmation, presenting: deleting) { list in
-                // The dialog can dismiss before invoking its action. Capture its
-                // presented list instead of clearing/reading the same optional
-                // through the presentation binding, which can lose the target.
-                Button("Delete List", role: .destructive) {
-                    do { try SessionService.deleteList(list, context: context) }
-                    catch { self.error = error.localizedDescription }
-                    deleting = nil
-                }
-                Button("Cancel", role: .cancel) { deleting = nil }
-            } message: { list in
-                Text("\(list.name) will be deleted. Its saved offer estimates and session history will be kept in All Sessions.")
-            }
+        }.navigationTitle("My Lists")
+            .sheet(item: $pendingDeletion) { request in ListDeletionConfirmationView(request: request) }
+            .failureAlert($error)
     }
     private func save() {
         do { try CardListService.save(context) } catch { self.error = error.localizedDescription }
+    }
+}
+
+struct ListDeletionConfirmationView: View {
+    @Environment(\.modelContext) private var context
+    @Environment(\.dismiss) private var dismiss
+    @State private var model: ListDeletionModel
+    init(request: ListDeletionRequest) { _model = State(initialValue: ListDeletionModel(request: request)) }
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text(model.request.name).font(.headline)
+                    Text("This list and its \(model.request.quantity) cards will be deleted.")
+                    Text("Saved offer estimates and session history will stay in All Sessions.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+                if let error = model.error {
+                    Section {
+                        Text(error).foregroundStyle(.red).accessibilityIdentifier("listDeletion.error")
+                    }
+                }
+                Section {
+                    Button(model.error == nil ? "Delete List" : "Retry Delete", role: .destructive) {
+                        if model.confirm(context: context) { dismiss() }
+                    }.disabled(model.isDeleting || model.didDelete)
+                        .accessibilityIdentifier("listDeletion.confirm")
+                    if model.isDeleting { ProgressView("Deleting list…") }
+                }
+            }.navigationTitle("Delete List?").navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { model.cancel(); dismiss() }
+                            .disabled(model.isDeleting).accessibilityIdentifier("listDeletion.cancel")
+                    }
+                }
+        }.presentationDetents([.medium, .large])
+            .interactiveDismissDisabled(model.isDeleting)
+            .onAppear { model.presented() }
+            .onDisappear { model.dismissed() }
     }
 }
 
