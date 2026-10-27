@@ -12,7 +12,9 @@ import XCTest
         // Mock recognition is still selected explicitly through the normal UI.
         app.launchArguments = ["-tcgTrackingConnectionIntroduced", "YES", "-defaultGame", "Pokémon"]
         addUIInterruptionMonitor(withDescription: "Camera permission") { alert in
-            for title in ["Allow", "OK", "Allow While Using App"] where alert.buttons[title].exists {
+            let text = ([alert.label] + alert.staticTexts.allElementsBoundByIndex.map(\.label)).joined(separator: " ").lowercased()
+            guard text.contains("camera") else { return false }
+            for title in ["Allow", "OK"] where alert.buttons[title].exists {
                 alert.buttons[title].tap(); return true
             }
             return false
@@ -76,13 +78,47 @@ import XCTest
         item.tap()
     }
     private func tapFixedControl(_ element: XCUIElement, in app: XCUIApplication) {
-        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == true AND hittable == true"), object: element)
-        let hittable = XCTWaiter.wait(for: [ready], timeout: 10) == .completed
-        XCTAssertTrue(hittable, "Fixed control did not become hittable: \(element.identifier)\n" + String(app.debugDescription.prefix(4000)))
+        let exists = element.waitForExistence(timeout: 10)
+        XCTAssertTrue(exists, "Fixed control is missing: \(element.identifier). " + failureContext(in: app))
+        guard exists else { return }
+        // The first live camera can present native consent after its overlay
+        // already exists. Waiting alone never triggers an interruption monitor.
+        // Check both owners of the real permission alert while it arrives.
+        var hittable = false
+        for _ in 0..<5 {
+            dismissCameraPermission(in: app)
+            let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == true AND hittable == true"), object: element)
+            if XCTWaiter.wait(for: [ready], timeout: 2) == .completed { hittable = true; break }
+        }
+        XCTAssertTrue(hittable, "Fixed control did not become hittable: \(element.identifier). " + failureContext(in: app))
         guard hittable else { return }
         // XCTest's element.tap() attempts AXScrollToVisible even for a fixed
         // camera overlay. Its validated center is already on screen.
         element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+    }
+    private func dismissCameraPermission(in app: XCUIApplication) {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        for owner in [springboard, app] {
+            for alert in owner.alerts.allElementsBoundByIndex where alert.exists {
+                let text = ([alert.label] + alert.staticTexts.allElementsBoundByIndex.map(\.label)).joined(separator: " ").lowercased()
+                guard text.contains("camera") else { continue }
+                for title in ["Allow", "OK"] {
+                    let button = alert.buttons[title]
+                    guard button.exists, button.isHittable else { continue }
+                    button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                    return
+                }
+            }
+        }
+    }
+    private func failureContext(in app: XCUIApplication) -> String {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let alerts = springboard.alerts.allElementsBoundByIndex.filter(\.exists).map { alert in
+            ([alert.label] + alert.staticTexts.allElementsBoundByIndex.map(\.label)).joined(separator: " ")
+        }.joined(separator: " | ")
+        let tree = app.debugDescription.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        let system = alerts.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        return "SpringBoard alerts: " + String(system.prefix(800)) + ". App UI: " + String(tree.prefix(2000))
     }
     private func waitForValue(_ expected: String, of element: XCUIElement) -> Bool {
         let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", expected), object: element)
