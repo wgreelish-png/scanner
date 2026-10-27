@@ -83,7 +83,7 @@ import XCTest
         // page. Wait on SpringBoard before taking app/WebKit AX snapshots; those
         // snapshots can finish only after consent and otherwise miss its arrival.
         let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
-        guard alert.waitForExistence(timeout: 20) else { return } // Already authorized is valid too.
+        guard alert.waitForExistence(timeout: 45) else { return } // Already authorized is valid too.
         let text = ([alert.label] + alert.staticTexts.allElementsBoundByIndex.map(\.label)).joined(separator: " ").lowercased()
         guard text.contains("camera") else { return }
         let allow = alert.buttons["Allow"]
