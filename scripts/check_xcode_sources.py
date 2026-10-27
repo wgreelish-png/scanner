@@ -61,7 +61,7 @@ def check(project):
         included = ui_sources.count(file.name) == 1 and file.name not in sources and file.name not in test_sources
         print(f'{file.name}: in UI test target only={included}')
         failures += not included
-    for filename in ['TCGTrackingBridge.js', 'PricingRequest.js', 'WebsiteSignIn.js', 'ScannerRuntime', 'PrivacyInfo.xcprivacy']:
+    for filename in ['TCGTrackingBridge.js', 'DatabaseUpdater.js', 'PricingRequest.js', 'WebsiteSignIn.js', 'ScannerRuntime', 'PrivacyInfo.xcprivacy']:
         included = resources.count(filename) == 1
         print(f'{filename}: in application Copy Bundle Resources={included}')
         failures += not included

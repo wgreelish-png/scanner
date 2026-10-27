@@ -319,6 +319,7 @@ struct ScannerReviewReleaseQueue {
     private var pageNavigation: WKNavigation?
     private var recoveryAttempts = 0
     private var reviewRelease = ScannerReviewReleaseQueue()
+    private var databaseLease: UUID?
     static let pageURL = LocalScannerServer.pageURL
     static let gameKeys = ["Pokémon": "tcgp:3", "Magic: The Gathering": "tcgp:1", "Yu-Gi-Oh!": "tcgp:2"]
     private var messageProxy: WeakScanMessageHandler?
@@ -343,6 +344,7 @@ struct ScannerReviewReleaseQueue {
     }
     func start(game: String) {
         stop()
+        databaseLease = ScannerDatabaseUpdater.shared.beginScannerUse()
         let stream = AsyncStream<ScanResult>.makeStream(bufferingPolicy: .bufferingNewest(1))
         results = stream.stream; continuation = stream.continuation
         DiagnosticLog.shared.record("web.load_started", ["game": Self.gameKeys[game] == "tcgp:3" ? "pokemon" : (Self.gameKeys[game] == "tcgp:1" ? "magic" : "yugioh")])
@@ -379,6 +381,10 @@ struct ScannerReviewReleaseQueue {
         webView.evaluateJavaScript("window.CardShowBridge?.stop()", completionHandler: nil)
         webView.stopLoading()
         normalizer = TCGBridgeNormalizer()
+        if let databaseLease {
+            ScannerDatabaseUpdater.shared.endScannerUse(databaseLease)
+            self.databaseLease = nil
+        }
     }
     func clearCache() async throws {
         stop()

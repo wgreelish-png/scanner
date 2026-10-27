@@ -260,7 +260,14 @@ enum LocalScannerListenerState: Sendable {
                     try await ScannerDatabaseCache.shared.write(key, data: body)
                     send(connection, buffer: buffer, status: "204 No Content", data: Data())
                 case "DELETE" where body.isEmpty:
-                    try await ScannerDatabaseCache.shared.remove(key)
+                    if headers["x-scanner-prune"] == "1" {
+                        // A retired scanner document can have cleanup requests
+                        // in flight. Never prune the database now selected by a
+                        // completed automatic update.
+                        _ = try await ScannerDatabaseCache.shared.removeIfUnreferenced(key)
+                    } else {
+                        try await ScannerDatabaseCache.shared.remove(key)
+                    }
                     send(connection, buffer: buffer, status: "204 No Content", data: Data())
                 default: send(connection, buffer: buffer, status: "405 Method Not Allowed", data: Data())
                 }

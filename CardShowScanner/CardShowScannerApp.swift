@@ -60,9 +60,12 @@ extension View {
 
 struct HomeView: View {
     @Environment(\.modelContext) private var context
+    @Environment(\.scenePhase) private var scenePhase
     @Query(sort: \ScanSession.startedAt, order: .reverse) private var sessions: [ScanSession]
     @AppStorage("defaultGame") private var game = "Pokémon"
     @AppStorage("hasChosenBatchGame") private var hasChosenGame = false
+    @AppStorage("autoDatabaseUpdates") private var autoDatabaseUpdates = true
+    @State private var homeVisible = false
     @State private var destination: UUID?
     @State private var error: String?
     private var active: ScanSession? { sessions.first { $0.isActive } }
@@ -91,15 +94,40 @@ struct HomeView: View {
                     if let session = sessions.first(where: { $0.id == id }) { BatchScannerDestination(session: session) }
                 }
                 .failureAlert($error)
+                .onAppear {
+                    homeVisible = true
+                    ScannerDatabaseUpdater.shared.setEnabled(autoDatabaseUpdates)
+                    ScannerDatabaseUpdater.shared.setForeground(scenePhase == .active)
+                    ScannerDatabaseUpdater.shared.setHomeVisible(true, game: game)
+                }
+                .onDisappear {
+                    homeVisible = false
+                    ScannerDatabaseUpdater.shared.setHomeVisible(false, game: game)
+                }
+                .onChange(of: game) { _, game in
+                    ScannerDatabaseUpdater.shared.setHomeVisible(homeVisible, game: game)
+                }
+                .onChange(of: autoDatabaseUpdates) { _, enabled in
+                    ScannerDatabaseUpdater.shared.setEnabled(enabled)
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    ScannerDatabaseUpdater.shared.setForeground(phase == .active)
+                }
         }
     }
     private func start() {
+        // Stop optional maintenance before routing into live scanning. The
+        // provider also takes a lease for list-resumption and recovery routes.
+        ScannerDatabaseUpdater.shared.setHomeVisible(false, game: game)
         do {
             let batch: ScanSession
             if let active { batch = try SessionService.replace(active, game: game, context: context) }
             else { batch = try SessionService.start(game: game, context: context) }
             hasChosenGame = true; destination = batch.id
-        } catch { self.error = error.localizedDescription }
+        } catch {
+            self.error = error.localizedDescription
+            ScannerDatabaseUpdater.shared.setHomeVisible(homeVisible, game: game)
+        }
     }
 }
 

@@ -98,13 +98,13 @@ async function remember(key, value) {
     }
 }
 
-export async function loadPackIndex() {
+export async function loadPackIndex({ requireNetwork = false, cacheResult = true } = {}) {
     const primary = packBase() + 'index.json';
     try {
         const res = await fetch(primary, { cache: 'no-store' });
         if (!res.ok) throw new Error(`pack index ${res.status}`);
         const index = await res.json();
-        await idbPut('index', index).catch(() => {});
+        if (cacheResult) await idbPut('index', index).catch(() => {});
         return index;
     } catch (err) {
         // The static host can be unreachable while Cloudways is fine (content
@@ -116,10 +116,11 @@ export async function loadPackIndex() {
                 const res = await fetch(sameOrigin, { cache: 'no-store' });
                 if (!res.ok) throw new Error(`pack index ${res.status}`);
                 const index = await res.json();
-                await idbPut('index', index).catch(() => {});
+                if (cacheResult) await idbPut('index', index).catch(() => {});
                 return index;
             } catch { /* fall through to the cached index */ }
         }
+        if (requireNetwork) throw err;
         const cached = await idbGet('index').catch(() => null);
         if (!cached) throw err;
         return { ...cached, offline: true };
@@ -171,6 +172,64 @@ export function parsePack(game, buf, refs) {
     return parseV1(game, buf, refs);
 }
 
+// App-only maintenance stages an already downloaded V2 game's replacement.
+// It does not change the active marker/index or prune anything. Native code
+// publishes the verified marker only while its idle/camera gate permits it.
+// Ordinary camera/manual loads retain their existing behavior and fallbacks.
+export async function prepareCachedPackUpdate(gameKey) {
+    if (!['tcgp:1', 'tcgp:2', 'tcgp:3'].includes(gameKey) || !nativeAvailable()) throw new Error('Automatic update unavailable');
+    const current = await readNativeValue(`cur:${gameKey}`);
+    if (current == null) return { status: 'skipped', downloadedBytes: 0, cachedShards: 0 };
+    validateManifestPath(current);
+    await verifyNativePack(current);
+    const index = await loadPackIndex({ requireNetwork: true, cacheResult: false });
+    const proposed = index?.games?.[gameKey]?.v2?.manifest;
+    validateManifestPath(proposed);
+    let finalStats = null;
+    await loadV2(gameKey, proposed, (_loaded, _total, stats) => { finalStats = { ...stats }; }, null,
+        { prepareOnly: true });
+    if (!finalStats || finalStats.cache !== 'ok' || finalStats.cacheBackend !== 'native') throw new Error('Automatic update was not saved');
+    // sessionCache can make an ordinary camera load usable after failed writes.
+    // Maintenance must instead read every required value from durable storage.
+    await verifyNativePack(proposed);
+    const downloadedBytes = finalStats.downloaded;
+    const cachedShards = finalStats.cachedHashShards + finalStats.cachedMetaShards;
+    return { status: proposed !== current || downloadedBytes > 0 ? 'updated' : 'upToDate',
+        downloadedBytes, cachedShards, proposedManifestPath: proposed, previousManifestPath: current };
+}
+
+function validateManifestPath(path) {
+    if (typeof path !== 'string' || path.length > 512 || !/^[A-Za-z0-9][A-Za-z0-9_./-]*$/.test(path) ||
+        path.split('/').some(part => !part || part === '.' || part === '..')) throw new Error('Invalid pack manifest path');
+}
+
+function validateUpdateManifest(manifest) {
+    if (manifest?.v !== 2 || !Array.isArray(manifest.shards) || !manifest.shards.length || manifest.shards.length > 4094 ||
+        manifest.shards.some(shard => !shard || !['hash', 'meta'].every(key =>
+            typeof shard[key] === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,199}$/.test(shard[key])))) {
+        throw new Error('Invalid pack manifest');
+    }
+}
+
+async function readNativeValue(key) {
+    const response = await nativeRequest('entry?key=' + encodeURIComponent(key));
+    return response.status === 404 ? null : decodeNative(await response.arrayBuffer());
+}
+
+async function verifyNativePack(path) {
+    const manifest = await readNativeValue(`M:${path}`);
+    validateUpdateManifest(manifest);
+    const dir = path.slice(0, path.lastIndexOf('/') + 1);
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(FETCH_PARALLEL / 2, manifest.shards.length) }, async () => {
+        while (next < manifest.shards.length) {
+            const shard = manifest.shards[next++];
+            const [bin, meta] = await Promise.all([readNativeValue(`h:${dir}${shard.hash}`), readNativeValue(`m:${dir}${shard.meta}`)]);
+            if (!validShardPair(bin, meta)) throw new Error('Incomplete saved pack');
+        }
+    }));
+}
+
 // ---------------------------------------------------------------- v2
 
 async function getManifest(path, cacheOnly, cacheFailed) {
@@ -185,10 +244,11 @@ async function getManifest(path, cacheOnly, cacheFailed) {
     return manifest;
 }
 
-async function loadV2(gameKey, manifestPath, onProgress, groups, { cacheOnly = false } = {}) {
+async function loadV2(gameKey, manifestPath, onProgress, groups, { cacheOnly = false, prepareOnly = false } = {}) {
     const persistP = requestPersistence();
     const stats = emptyStats();
     const manifest = await getManifest(manifestPath, cacheOnly, () => { stats.cache = 'failed'; });
+    if (prepareOnly) validateUpdateManifest(manifest);
     const dir = manifestPath.slice(0, manifestPath.lastIndexOf('/') + 1);
     const want = groups ? new Set(groups.map(Number)) : null;
     const shards = manifest.shards.filter((s) => !want || want.has(Number(s.group_id)));
@@ -238,8 +298,10 @@ async function loadV2(gameKey, manifestPath, onProgress, groups, { cacheOnly = f
         }
         parts.push({ bin, refs: meta.refs, group: Number(s.group_id) });
     }
-    const pack = assemble(gameKey, manifestPath, parts);
-    if (!want) {
+    // Maintenance validates the same shard pairs but does not need the extra
+    // full-game recognition arrays while running in its headless page.
+    const pack = prepareOnly ? null : assemble(gameKey, manifestPath, parts);
+    if (!want && !prepareOnly) {
         // Wait for the complete-pack marker before the camera may navigate away.
         const committed = await idbPut(`cur:${gameKey}`, manifestPath).then(() => true, () => { stats.cache = 'failed'; return false; });
         // Never prune the previous complete pack when its replacement marker failed.
@@ -491,12 +553,13 @@ function nativeAvailable() {
     return globalThis.location?.origin === 'http://127.0.0.1:18764' &&
         typeof globalThis.CardShowNativeCache?.token === 'string' && globalThis.CardShowNativeCache.token.length >= 32;
 }
-async function nativeRequest(path, { method = 'GET', body } = {}) {
+async function nativeRequest(path, { method = 'GET', body, prune = false } = {}) {
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 10000);
     try {
         const result = await fetch('/scanner-cache/' + path, {
             method, body, cache: 'no-store', credentials: 'same-origin', signal: controller.signal,
-            headers: { 'X-Scanner-Cache': globalThis.CardShowNativeCache.token, ...(body ? { 'Content-Type': 'application/octet-stream' } : {}) }
+            headers: { 'X-Scanner-Cache': globalThis.CardShowNativeCache.token,
+                ...(prune ? { 'X-Scanner-Prune': '1' } : {}), ...(body ? { 'Content-Type': 'application/octet-stream' } : {}) }
         });
         if (!result.ok && result.status !== 404) throw new Error('Native database cache unavailable');
         const length = Number(result.headers.get('Content-Length'));
@@ -566,9 +629,9 @@ async function idbKeys() {
     return [...new Set([...native, ...previous])];
 }
 async function idbPut(key, value) { return nativeAvailable() ? nativePut(key, value) : webIdbPut(key, value); }
-async function idbDelete(test) {
+async function idbDelete(test, { prune = false } = {}) {
     if (!nativeAvailable()) return webIdbDelete(test);
-    for (const key of (await idbKeys()).filter(test)) await nativeRequest('entry?key=' + encodeURIComponent(key), { method: 'DELETE' });
+    for (const key of (await idbKeys()).filter(test)) await nativeRequest('entry?key=' + encodeURIComponent(key), { method: 'DELETE', prune });
     await webIdbDelete(test).catch(() => {});
 }
 
@@ -650,5 +713,7 @@ function idbPruneV2(dir, manifestPath, manifest, gameKey) {
         keep.add(`m:${dir}${s.meta}`);
     }
     const prefixes = ['h:', 'm:', 'M:'].map((p) => p + dir);
-    return idbDelete((k) => (prefixes.some((p) => k.startsWith(p)) && !keep.has(k)) || k.startsWith(gameKey + '@'));
+    // A cancelled scanner's asynchronous cleanup can outlive its page. Native
+    // pruning rechecks every current marker before deleting an unreferenced key.
+    return idbDelete((k) => (prefixes.some((p) => k.startsWith(p)) && !keep.has(k)) || k.startsWith(gameKey + '@'), { prune: true });
 }

@@ -2,6 +2,7 @@ import SwiftUI
 import SwiftData
 
 struct SettingsView: View {
+    @ObservedObject private var databaseUpdater = ScannerDatabaseUpdater.shared
     @AppStorage("defaultGame") private var game = "Pokémon"
     @AppStorage("sound") private var sound = false
     @AppStorage("haptics") private var haptics = true
@@ -9,6 +10,7 @@ struct SettingsView: View {
     @AppStorage("tradePercentage") private var tradePercentage = 80.0
     @AppStorage("maximumBuyPercentage") private var maximumBuyPercentage = 75.0
     @AppStorage("diagnosticsEnabled") private var diagnosticsEnabled = true
+    @AppStorage("autoDatabaseUpdates") private var autoDatabaseUpdates = true
     @State private var diagnosticURL: URL?
     @State private var diagnosticError: String?
     @State private var confirmClear = false
@@ -52,7 +54,17 @@ struct SettingsView: View {
                 Text("Enter your sign-in details or use the website. Remember sign-in stores your details in this iPhone's Keychain; remove them with Forget Saved Sign-In. The website session is shared with market pricing. You can scan and save cards without prices.").font(.caption)
             }
             Section("Scanner") {
-                Text("Live camera scanning opens by default. Download the selected game database once before scanning. Later camera openings load the saved database. Use Scanner options → Check Database Updates when you want to update it. Market values use an online lookup. Mock scanning is under Developer Testing.")
+                Toggle("Automatic Database Updates", isOn: $autoDatabaseUpdates)
+                    .accessibilityIdentifier("settings.autoDatabaseUpdates")
+                    .onChange(of: autoDatabaseUpdates) { _, enabled in ScannerDatabaseUpdater.shared.setEnabled(enabled) }
+                Text("Checks the selected game's saved database once a day while the Home screen is open. Only changed files download. Opening the scanner cancels a check and uses the saved database immediately. The first download still happens when you start scanning. Recognition-engine changes come through app updates.").font(.caption)
+                if let date = databaseUpdater.lastSuccessfulCheck(for: game) {
+                    LabeledContent("Last automatic check", value: date.formatted(date: .abbreviated, time: .shortened))
+                        .accessibilityIdentifier("settings.lastDatabaseCheck")
+                } else {
+                    Text("No automatic check has completed for this game yet.").font(.caption).foregroundStyle(.secondary)
+                }
+                Text("Live camera scanning opens by default. Download the selected game database once before scanning. Later camera openings load the saved database. Scanner options → Check Database Updates remains available for a manual check. Market values use an online lookup. Mock scanning is under Developer Testing.")
                 Text("Finish a batch from its scanner or review screen. Cards and saved estimates are preserved.")
                 Button(clearingCache ? "Clearing…" : "Clear Scanner Cache") {
                     clearingCache = true

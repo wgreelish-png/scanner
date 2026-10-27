@@ -58,7 +58,7 @@ function fixture(version = 1) {
     [BASE + `pokemon/meta-${version}.json.gz`, meta]
   ]);
 }
-async function page(store, files, { offline = false, native = null, nativeWritesFail = false } = {}) {
+async function page(store, files, { offline = false, native = null, nativeWritesFail = false, nativeReadsFail = false, nativeWritesDrop = false } = {}) {
   const calls = [], localCalls = [], progress = [];
   const token = '01234567-89ab-cdef-0123-456789abcdef';
   const context = vm.createContext({
@@ -69,16 +69,17 @@ async function page(store, files, { offline = false, native = null, nativeWrites
     ...(native ? { location: { origin: 'http://127.0.0.1:18764' }, CardShowNativeCache: { token } } : {}),
     async fetch(url, options = {}) {
       if (String(url).startsWith('/scanner-cache/')) {
-        localCalls.push({ url, method: options.method || 'GET' });
+        localCalls.push({ url, method: options.method || 'GET', prune: options.headers['X-Scanner-Prune'] });
         assert.equal(options.headers['X-Scanner-Cache'], token);
         const parsed = new URL(url, 'http://127.0.0.1:18764'), key = parsed.searchParams.get('key');
         if (parsed.pathname.endsWith('/keys')) return new Response(JSON.stringify([...native.keys()]));
         if (options.method === 'PUT') {
           if (typeof nativeWritesFail === 'function' ? nativeWritesFail(key) : nativeWritesFail) return new Response('', { status: 507 });
-          native.set(key, new Uint8Array(options.body).slice());
+          if (!(typeof nativeWritesDrop === 'function' ? nativeWritesDrop(key) : nativeWritesDrop)) native.set(key, new Uint8Array(options.body).slice());
           return new Response(null, { status: 204 });
         }
         if (options.method === 'DELETE') { native.delete(key); return new Response(null, { status: 204 }); }
+        if (typeof nativeReadsFail === 'function' ? nativeReadsFail(key, native.has(key)) : nativeReadsFail) return new Response('', { status: 500 });
         return native.has(key) ? new Response(native.get(key).slice()) : new Response('', { status: 404 });
       }
       calls.push(url);
@@ -94,7 +95,9 @@ async function page(store, files, { offline = false, native = null, nativeWrites
     return dependency;
   });
   await module.evaluate();
-  return { calls, localCalls, progress, load: options => module.namespace.loadPack(game, (loaded, total, stats) => progress.push({ ...stats }), options) };
+  return { calls, localCalls, progress,
+    prepare: () => module.namespace.prepareCachedPackUpdate(game),
+    load: options => module.namespace.loadPack(game, (loaded, total, stats) => progress.push({ ...stats }), options) };
 }
 
 test('a complete saved v2 pack reopens in a new page with zero network requests', async () => {
@@ -178,6 +181,8 @@ test('legacy v1 packs also reopen without network or changing their saved schema
   const nativeOnly = await page(unavailableIndexedDB(), files, { native, offline: true });
   assert.equal((await nativeOnly.load({ cacheFirst: true })).refs[0][1], 'Legacy card');
   assert.equal(nativeOnly.calls.length, 0);
+  assert.equal((await nativeOnly.prepare()).status, 'skipped', 'automatic V2 maintenance must preserve legacy formats');
+  assert.equal(nativeOnly.calls.length, 0, 'a legacy database does not trigger an automatic migration download');
 });
 
 function unavailableIndexedDB() {
@@ -246,4 +251,137 @@ test('a failed replacement marker preserves the last complete native database', 
   const reopened = await page(unavailableIndexedDB(), fixture(2), { native, offline: true });
   assert.equal((await reopened.load({ cacheFirst: true })).ver, 'pokemon/manifest-1.json');
   assert.equal(reopened.calls.length, 0);
+});
+
+test('automatic maintenance skips an uninitialized native cache without remote requests', async () => {
+  const native = new Map(), update = await page(unavailableIndexedDB(), fixture(), { native });
+  const result = await update.prepare();
+  assert.equal(result.status, 'skipped');
+  assert.equal(update.calls.length, 0);
+  assert.equal(native.size, 0);
+});
+
+test('automatic maintenance checks fresh index without rewriting active index or complete marker', async () => {
+  const native = new Map(), files = fixture();
+  await (await page(unavailableIndexedDB(), files, { native })).load({ cacheFirst: true });
+  const before = new Map([...native].map(([key, value]) => [key, value.slice()]));
+  const update = await page(unavailableIndexedDB(), files, { native });
+  const result = await update.prepare();
+  assert.equal(result.status, 'upToDate');
+  assert.equal(result.downloadedBytes, 0); assert.equal(result.cachedShards, 2);
+  assert.equal(result.proposedManifestPath, manifestPath); assert.equal(result.previousManifestPath, manifestPath);
+  assert.deepEqual(update.calls, [BASE + 'index.json']);
+  assert.deepEqual(native, before, 'check must not mutate active cache metadata or records');
+  assert.equal(update.localCalls.filter(call => call.method !== 'GET').length, 0);
+});
+
+test('automatic maintenance stages changed sets only and never publishes or prunes', async () => {
+  function files(version) {
+    const files = fixture(version), old = fixture(1);
+    files.get(BASE + `pokemon/manifest-${version}.json`).shards.push({
+      group_id: 2, hash: 'hash-shared', meta: 'meta-shared', bytes: 196, meta_bytes: 100
+    });
+    files.set(BASE + 'pokemon/hash-shared.bin', old.get(BASE + 'pokemon/hash-1.bin'));
+    files.set(BASE + 'pokemon/meta-shared.json.gz', old.get(BASE + 'pokemon/meta-1.json.gz'));
+    return files;
+  }
+  const native = new Map();
+  await (await page(unavailableIndexedDB(), files(1), { native })).load({ cacheFirst: true });
+  const oldIndex = native.get('index').slice(), oldMarker = native.get('cur:' + game).slice();
+  const update = await page(unavailableIndexedDB(), files(2), { native });
+  const result = await update.prepare();
+  assert.equal(result.status, 'updated'); assert.ok(result.downloadedBytes > 0);
+  assert.equal(result.cachedShards, 2);
+  assert.equal(result.previousManifestPath, manifestPath); assert.equal(result.proposedManifestPath, 'pokemon/manifest-2.json');
+  assert.deepEqual(update.calls, [BASE + 'index.json', BASE + 'pokemon/manifest-2.json',
+    BASE + 'pokemon/hash-2.bin', BASE + 'pokemon/meta-2.json.gz']);
+  assert.deepEqual(native.get('index'), oldIndex); assert.deepEqual(native.get('cur:' + game), oldMarker);
+  assert.ok(native.has('M:pokemon/manifest-1.json')); assert.ok(native.has('h:pokemon/hash-1'));
+  assert.equal(update.localCalls.filter(call => call.method === 'DELETE').length, 0);
+  assert.ok(!update.localCalls.some(call => call.method === 'PUT' && /key=(?:cur|index)/.test(call.url)));
+  const reopened = await page(unavailableIndexedDB(), files(2), { native, offline: true });
+  assert.equal((await reopened.load({ cacheFirst: true })).ver, manifestPath, 'only native publication can activate staged data');
+  assert.equal(reopened.calls.length, 0);
+});
+
+test('automatic maintenance rejects offline cached-index fallback and preserves active records', async () => {
+  const native = new Map();
+  await (await page(unavailableIndexedDB(), fixture(), { native })).load({ cacheFirst: true });
+  const before = new Map([...native].map(([key, value]) => [key, value.slice()]));
+  const update = await page(unavailableIndexedDB(), fixture(2), { native, offline: true });
+  await assert.rejects(update.prepare(), /Offline/);
+  assert.deepEqual(native, before);
+});
+
+test('automatic partial downloads keep the previous complete database and global index', async () => {
+  const native = new Map();
+  await (await page(unavailableIndexedDB(), fixture(), { native })).load({ cacheFirst: true });
+  const marker = native.get('cur:' + game).slice(), index = native.get('index').slice();
+  const files = fixture(2); files.delete(BASE + 'pokemon/meta-2.json.gz');
+  const update = await page(unavailableIndexedDB(), files, { native });
+  await assert.rejects(update.prepare(), /404/);
+  assert.deepEqual(native.get('cur:' + game), marker); assert.deepEqual(native.get('index'), index);
+  assert.ok(native.has('h:pokemon/hash-1')); assert.ok(native.has('m:pokemon/meta-1'));
+  assert.equal(update.localCalls.filter(call => call.method === 'DELETE').length, 0);
+});
+
+test('automatic updates require durable native writes rather than a usable session-only pack', async () => {
+  for (const mode of ['rejected', 'discarded']) {
+    const native = new Map();
+    await (await page(unavailableIndexedDB(), fixture(), { native })).load({ cacheFirst: true });
+    const marker = native.get('cur:' + game).slice();
+    const update = await page(unavailableIndexedDB(), fixture(2), { native,
+      nativeWritesFail: mode === 'rejected' && (key => key === 'h:pokemon/hash-2'),
+      nativeWritesDrop: mode === 'discarded' && (key => key === 'h:pokemon/hash-2') });
+    await assert.rejects(update.prepare());
+    assert.deepEqual(native.get('cur:' + game), marker, mode);
+    assert.ok(native.has('h:pokemon/hash-1'));
+    assert.equal(update.localCalls.filter(call => call.method === 'DELETE').length, 0);
+  }
+});
+
+test('automatic updates fail closed on native read failure and do not trust unreadable staged manifests', async () => {
+  for (const phase of ['existing', 'staged']) {
+    const native = new Map();
+    await (await page(unavailableIndexedDB(), fixture(), { native })).load({ cacheFirst: true });
+    const marker = native.get('cur:' + game).slice();
+    const update = await page(unavailableIndexedDB(), fixture(2), { native,
+      nativeReadsFail: (key, present) => phase === 'existing' ? key === 'h:pokemon/hash-1' : key === 'M:pokemon/manifest-2.json' && present });
+    await assert.rejects(update.prepare());
+    assert.deepEqual(native.get('cur:' + game), marker, phase);
+    if (phase === 'existing') assert.equal(update.calls.length, 0);
+  }
+});
+
+test('automatic maintenance rejects an invalid new manifest path without changing active metadata', async () => {
+  const native = new Map();
+  await (await page(unavailableIndexedDB(), fixture(), { native })).load({ cacheFirst: true });
+  const before = new Map([...native].map(([key, value]) => [key, value.slice()]));
+  const files = fixture(2);
+  files.get(BASE + 'index.json').games[game].v2.manifest = '../other/manifest.json';
+  const update = await page(unavailableIndexedDB(), files, { native });
+  await assert.rejects(update.prepare(), /Invalid pack manifest path/);
+  assert.deepEqual(update.calls, [BASE + 'index.json']);
+  assert.deepEqual(native, before);
+});
+
+test('native V2 pruning is explicitly guarded while ordinary corrupt-manifest repair is not pruning', async () => {
+  const native = new Map();
+  await (await page(unavailableIndexedDB(), fixture(1), { native })).load({ cacheFirst: true });
+  const update = await page(unavailableIndexedDB(), fixture(2), { native });
+  await update.load({ cacheFirst: false });
+  const pruned = update.localCalls.filter(call => call.method === 'DELETE');
+  assert.ok(pruned.length > 0);
+  assert.ok(pruned.every(call => call.prune === '1'), 'only guarded removal may clean obsolete native V2 data');
+  assert.ok(update.localCalls.filter(call => call.method !== 'DELETE').every(call => call.prune === undefined));
+
+  // A corrupt same-key manifest is an explicit repair operation; it must not
+  // masquerade as obsolete-data cleanup and be protected as a live reference.
+  native.set('M:pokemon/manifest-2.json', new Uint8Array([0, ...Buffer.from('{"v":0}')]));
+  const repaired = await page(unavailableIndexedDB(), fixture(2), { native });
+  await repaired.load({ cacheFirst: false });
+  const repair = repaired.localCalls.find(call => call.method === 'DELETE' &&
+    new URL(call.url, 'http://127.0.0.1:18764').searchParams.get('key') === 'M:pokemon/manifest-2.json');
+  assert.ok(repair, 'invalid current manifest must be removed before refetch');
+  assert.equal(repair.prune, undefined);
 });
