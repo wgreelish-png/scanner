@@ -58,6 +58,8 @@ Build 12 adds **Steady Card Border**, a 650ms geometry retry after a real accept
 
 Build 13 adds **Undo Last Add** and **Add Another Copy** directly to the scanner. Copies preserve the confirmed printing, condition and exact quote as separate quantity-one rows. Undo reopens a recognized card's frozen matches for correction; undoing a copy stays camera-ready. Verified card removal now resets stale same-art state automatically, and different tentative cards use the ordinary settling rule after a save. There is no required Scan Next button. See [quick actions and the phone check](docs/ScannerQuickActions.md).
 
+Build 14 adds a saved **List outcome**. **Record Transaction** offers Purchase, Trade + Purchase and Trade, then shows the selected operation on the button. **Nothing Happened** records a separate explicit outcome; leaving the list unmarked keeps **No status**. Outcomes and dates survive app relaunch and appear in saved-list rows. List options → Clear List Outcome resets the label. Existing lists upgrade to schema V3 without an inferred transaction. See [outcomes, migration and the phone check](docs/ListOutcomes.md).
+
 ## Review, offers and diagnostics
 
 Saved lists retain search, sorting, edits, conditions, quantities, renaming, duplication and native CSV sharing. Offer review retains independent cash/trade/maximum rates, per-card overrides and immutable saved estimates. Scanning does not record a purchase. CSV remains app-defined; TCGTracking import compatibility is unverified.

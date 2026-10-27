@@ -65,8 +65,7 @@ import XCTest
 
         // Clearing the outcome retains the saved list and restores the original
         // unmarked state, which is distinct from explicit Nothing Happened.
-        let options = app.buttons["list.options"]
-        XCTAssertTrue(options.waitForExistence(timeout: 5)); options.tap()
+        tapListOptions(in: app)
         let identifiedClear = app.buttons["list.clearOutcome"]
         let clear = identifiedClear.waitForExistence(timeout: 1)
             ? identifiedClear : app.buttons["Clear List Outcome"].firstMatch
@@ -129,6 +128,28 @@ import XCTest
         // forwarding their SwiftUI identifier. The chosen title differs from
         // the underlying current-outcome button in each step of this test.
         return app.buttons[title].firstMatch
+    }
+
+    private func tapListOptions(in app: XCUIApplication) {
+        let options = app.navigationBars.buttons["list.options"]
+        XCTAssertTrue(options.waitForExistence(timeout: 5))
+        let ready = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND hittable == true AND enabled == true"), object: options)
+        let hittable = XCTWaiter.wait(for: [ready], timeout: 5) == .completed
+        XCTAssertTrue(hittable, "List options must become hittable after navigation completes")
+        guard hittable else { return }
+        XCTAssertEqual(app.state, .runningForeground)
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        XCTAssertFalse(XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch.exists)
+        let bounds = options.frame, window = app.windows.firstMatch.frame
+        let onScreen = bounds.width > 0 && bounds.height > 0 && window.contains(bounds)
+        XCTAssertTrue(onScreen, "List options must be entirely on screen: \(bounds), window: \(window)")
+        guard onScreen else { return }
+        // XCTest attempted AXScrollToVisible on this fixed navigation-bar
+        // button and failed even with its visible frame. Use the identified,
+        // hittable control's validated center; the caller then requires the
+        // actual Clear List Outcome menu action to appear before continuing.
+        options.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
     }
 
     private func relaunchToLists(in app: XCUIApplication) {
