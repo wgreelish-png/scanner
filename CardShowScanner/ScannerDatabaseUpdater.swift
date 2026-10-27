@@ -334,11 +334,11 @@ extension ScannerDatabaseCache {
             if let error { self.finish(.failure(error)); return }
             webView.callAsyncJavaScript("return await globalThis.CardShowDatabaseUpdater.run(config);",
                 arguments: ["config": ["game": self.gameKey, "cacheToken": LocalScannerServer.shared.cacheToken]],
-                in: nil, contentWorld: .page) { [weak self, weak webView] result in
+                in: nil, in: .page, completionHandler: { [weak self, weak webView] result in
                     guard let self, let webView, self.generation == id, self.webView === webView else { return }
                     do { self.finish(.success(try ScannerDatabaseUpdateResult.decode(result.get()))) }
                     catch { self.finish(.failure(error)) }
-                }
+                })
         }
     }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
