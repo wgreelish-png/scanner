@@ -603,13 +603,7 @@ struct ScannerReviewReleaseQueue {
 
 struct TCGScannerWebView: UIViewRepresentable {
     let provider: TCGTrackingScannerProvider
-    func makeUIView(context: Context) -> WKWebView {
-        // This surface renders the preview/outline only. Scanner actions and
-        // status are exposed by the native overlay. WebKit's focused video AX
-        // subtree otherwise competes with those controls for accessibility.
-        provider.webView.accessibilityElementsHidden = true
-        return provider.webView
-    }
+    func makeUIView(context: Context) -> WKWebView { provider.webView }
     func updateUIView(_ uiView: WKWebView, context: Context) {}
 }
 

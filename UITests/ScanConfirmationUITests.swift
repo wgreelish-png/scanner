@@ -33,7 +33,7 @@ import XCTest
             tapFixedControl(connectionReturn, in: app)
         }
         let options = app.buttons["scanner.options"]
-        tapFixedControl(options, in: app)
+        tapCameraOptions(options, in: app)
         tapMenuItem("Developer Testing", in: app)
         let mock = menuItem("Mock — sample cards", in: app)
         if !mock.waitForExistence(timeout: 2) { tapMenuItem("Scanner source", in: app) }
@@ -91,6 +91,22 @@ import XCTest
         allow.tap()
         let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: alert)
         XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 5), .completed, "Camera consent must close before testing scanner controls")
+    }
+    private func tapCameraOptions(_ element: XCUIElement, in app: XCUIApplication) {
+        XCTAssertTrue(element.waitForExistence(timeout: 10))
+        XCTAssertEqual(app.state, .runningForeground)
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        XCTAssertFalse(springboard.alerts.firstMatch.exists, "System consent must close before opening Options")
+        XCTAssertFalse(app.alerts.firstMatch.exists, "An app alert must not cover Options")
+        XCTAssertTrue(element.isEnabled)
+        let bounds = element.frame, window = app.windows.firstMatch.frame
+        let onScreen = bounds.width >= 44 && bounds.height >= 44 && window.contains(bounds)
+        XCTAssertTrue(onScreen, "Camera Options must be entirely on screen: \(bounds), window: \(window)")
+        guard onScreen else { return }
+        // WebKit's active video yields unreliable AX hit-testing for this fixed
+        // overlay. Tap its verified screen position; the following Developer
+        // Testing assertion requires the actual menu to open before proceeding.
+        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
     }
     private func tapFixedControl(_ element: XCUIElement, in app: XCUIApplication) {
         let exists = element.waitForExistence(timeout: 10)
