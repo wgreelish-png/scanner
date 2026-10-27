@@ -158,12 +158,19 @@ import Network
         defer { server.stop() }
         let token = server.cacheToken
         try await server.start()
+        // This checks real loopback delivery across a listener restart, not a
+        // three-second performance target on a shared simulator runner. Keep its
+        // connection/cache state independent of other URLSession-based tests.
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForResource = 15
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
         var request = URLRequest(url: LocalScannerServer.pageURL)
-        request.timeoutInterval = 3; request.cachePolicy = .reloadIgnoringLocalCacheData
-        let (before, firstResponse) = try await URLSession.shared.data(for: request)
+        request.timeoutInterval = 10; request.cachePolicy = .reloadIgnoringLocalCacheData
+        let (before, firstResponse) = try await session.data(for: request)
         XCTAssertEqual((firstResponse as? HTTPURLResponse)?.statusCode, 200); XCTAssertFalse(before.isEmpty)
         try await server.restart()
-        let (after, nextResponse) = try await URLSession.shared.data(for: request)
+        let (after, nextResponse) = try await session.data(for: request)
         XCTAssertEqual((nextResponse as? HTTPURLResponse)?.statusCode, 200); XCTAssertEqual(after, before)
         XCTAssertEqual(server.cacheToken, token)
         XCTAssertEqual(LocalScannerServer.pageURL.absoluteString, "http://127.0.0.1:18764/index.html")
