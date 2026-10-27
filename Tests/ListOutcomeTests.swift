@@ -36,7 +36,7 @@ import SwiftData
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<ScanSession>()), 0)
     }
 
-    func testOutcomeLabelsAreExplicitAndStable() {
+    func testOutcomeLabelsAreExplicitAndStable() async {
         XCTAssertEqual(ListOutcomeKind.allCases.map(\.title), ["Purchase", "Trade + Purchase", "Trade", "Nothing Happened"])
         XCTAssertEqual(Set(ListOutcomeKind.allCases.map(\.id)).count, 4)
     }
