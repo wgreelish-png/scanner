@@ -236,18 +236,23 @@ struct CardListView: View {
                 }
             }
             .toolbar {
-                Menu {
-                    Button("Rename") { name = list.name; rename = true }
-                    Button("Export CSV to Files") { exportCSV() }
-                        .disabled(list.cards.isEmpty || exporting || shareURL != nil)
-                    Button("Share CSV") { share() }
-                        .disabled(list.cards.isEmpty || exporting || shareURL != nil)
-                    Button("Clear List Outcome", systemImage: "arrow.uturn.backward") { recordOutcome(nil) }
-                        .disabled(list.transactionOutcomeData == nil || savingOutcome)
-                        .accessibilityIdentifier("list.clearOutcome")
-                } label: { Image(systemName: "ellipsis.circle") }
-                    .accessibilityLabel("List options")
-                    .accessibilityIdentifier("list.options")
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button("Rename") { name = list.name; rename = true }
+                        Button("Export CSV to Files") { exportCSV() }
+                            .disabled(list.cards.isEmpty || exporting || shareURL != nil)
+                        Button("Share CSV") { share() }
+                            .disabled(list.cards.isEmpty || exporting || shareURL != nil)
+                        Button("Clear List Outcome", systemImage: "arrow.uturn.backward") { recordOutcome(nil) }
+                            .disabled(list.transactionOutcomeData == nil || savingOutcome)
+                            .accessibilityIdentifier("list.clearOutcome")
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .frame(width: 44, height: 44).contentShape(Rectangle())
+                    }
+                        .accessibilityLabel("List options")
+                        .accessibilityIdentifier("list.options")
+                }
             }
             .alert("Rename List", isPresented: $rename) {
                 TextField("Name", text: $name)
