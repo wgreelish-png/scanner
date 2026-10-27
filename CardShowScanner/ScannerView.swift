@@ -151,6 +151,9 @@ struct ScannerView: View {
                         model.stop(); model.paused = false
                         startIfReady()
                     }.disabled(model.liveProvider == nil)
+                    Button("Reset Card Recognition", systemImage: "arrow.clockwise") { model.scanNextCard() }
+                        .disabled(model.selectionInProgress || model.saving)
+                        .accessibilityIdentifier("scanner.resetRecognition")
                     Button("Connect TCGTracking", systemImage: "person.crop.circle") {
                         openConnection()
                     }.disabled(model.liveProvider == nil || model.selectionInProgress || model.saving)
@@ -188,21 +191,34 @@ struct ScannerView: View {
 
     private var cameraFooter: some View {
         VStack(spacing: 10) {
+            if let last = model.lastAddedCard {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Last added: \(last.name)").font(.subheadline.bold()).lineLimit(2)
+                        .accessibilityIdentifier("scanner.lastAdded")
+                    Text("\(last.identity.printing) • \(last.identity.condition) • \(last.marketPrice?.money ?? "Price unavailable")")
+                        .font(.caption)
+                    scannerQuickActions
+                    Text("Another copy uses this printing, condition and market quote.")
+                        .font(.caption).foregroundStyle(.white.opacity(0.8))
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
             if model.waitingForRemoval {
-                Text("Saved. Remove this card, then present the next one.").font(.subheadline)
-                Button("Scan Next Card", systemImage: "viewfinder") { model.scanNextCard() }
-                    .buttonStyle(.borderedProminent).controlSize(.large).tint(.blue)
-                    .accessibilityIdentifier("scanner.scanNext")
+                Text(model.paused ? "Camera paused" : "Saved. Ready for the next card.").font(.subheadline)
+                    .accessibilityIdentifier("scanner.nextCardReady")
+                Text("Move the saved card out of view, then show the next. For an identical copy, use Add Another Copy.")
+                    .font(.caption).multilineTextAlignment(.center)
             } else {
                 Text(model.paused ? "Resume when you're ready" : "Hold a card steady inside the camera")
                     .font(.subheadline)
                 if !model.paused {
                     Text("Tilt slightly to reduce glare. Use a light, plain background for dark borders.")
                         .font(.caption).multilineTextAlignment(.center)
-                    Button("Search Manually", systemImage: "magnifyingglass") { openManualSearch() }
-                        .buttonStyle(.borderless).frame(minHeight: 44)
-                        .accessibilityIdentifier("scanner.manualSearch")
                 }
+            }
+            if !model.paused {
+                Button("Search Manually", systemImage: "magnifyingglass") { openManualSearch() }
+                    .buttonStyle(.borderless).frame(minHeight: 44)
+                    .accessibilityIdentifier("scanner.manualSearch")
             }
             let totals = OfferCalculator.calculate(list.cards.map(\.offerLine), rates: session.rates)
             Text("\(totals.quantity) cards • \(totals.market.money) market").font(.subheadline.bold())
@@ -224,6 +240,24 @@ struct ScannerView: View {
             }.font(.subheadline)
         }.foregroundStyle(.white).tint(.white).padding(16)
             .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 18))
+    }
+
+    private var scannerQuickActions: some View {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(alignment: .top, spacing: 10))
+        return layout {
+            Button("Undo Last Add", systemImage: "arrow.uturn.backward") {
+                model.undoLastAdd(list: list, context: context)
+            }.buttonStyle(.bordered).frame(minHeight: 44)
+                .disabled(!model.canUndoLastAdd)
+                .accessibilityIdentifier("scanner.undoLastAdd")
+            Button("Add Another Copy", systemImage: "plus.square.on.square") {
+                model.addAnotherCopy(list: list, context: context)
+            }.buttonStyle(.borderedProminent).tint(.blue).frame(minHeight: 44)
+                .disabled(!model.canAddAnotherCopy)
+                .accessibilityIdentifier("scanner.addAnotherCopy")
+        }.font(.subheadline)
     }
 
     private var confirmationReview: some View {
@@ -261,7 +295,7 @@ struct ScannerView: View {
                                         .accessibilityIdentifier("scanReview.add." + candidate.identity.productID)
                                         .accessibilityElement(children: .combine)
                                         .accessibilityHint("Adds this match using its displayed printing and condition. Use the dropdowns to change them first.")
-                                }.disabled(model.selectionInProgress || model.saving || !session.isActive)
+                                }.disabled(model.selectionInProgress || model.saving || model.quickActionCoolingDown || !session.isActive)
                             }
                         }
                         if model.priceLoading && !model.selectionInProgress { ProgressView("Checking market value…") }
@@ -279,7 +313,7 @@ struct ScannerView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             ScanReviewDropdown(title: "Condition", value: card.identity.condition, options: CatalogOptions.conditions,
                                 accessibilityID: "scanReview.condition", onChange: { model.changeCondition($0) })
-                                .disabled(model.selectionInProgress || model.saving || !session.isActive)
+                                .disabled(model.selectionInProgress || model.saving || model.quickActionCoolingDown || !session.isActive)
                             Text("Applies to the card you add. Each new scan starts at Near Mint.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }.padding(.horizontal).padding(.vertical, 8).frame(maxWidth: .infinity)

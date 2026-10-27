@@ -15,13 +15,13 @@ function result({ quad = inner, accepted = true, index = 0, solid = true, w = 32
     ms: { total: 1 }, result: solid ? { accepted, confidence: 96, gap: 5, best: { i: index, d: 1, siblings: [], confidence: 96 } } : null };
 }
 
-async function flow({ enabled = true } = {}) {
+async function flow({ enabled = true, sameArt = false } = {}) {
   let clock = 0, motion = 'stable', scheduled, nextScan = result(), lastPaint = null;
   let nextOutline = { quad: clone(holder), w: 320, h: 448 };
   const scans = [], draws = [], shows = [], clears = [];
   const video = { videoWidth: 1280, videoHeight: 1792 };
   const context = vm.createContext({ console, performance: { now: () => clock } });
-  const pack = { cl: new Int32Array([-1, -1]), refs: [0, 1].map(i => [`p:${i + 1}`, `Card ${i}`, '1/2', 'T', 'Test', '', '', [{ primary: true, nm: 1 }]]) };
+  const pack = { cl: new Int32Array(sameArt ? [7, 7] : [-1, -1]), refs: [0, 1].map(i => [`p:${i + 1}`, `Card ${i}`, '1/2', 'T', 'Test', '', '', [{ primary: true, nm: 1 }]]) };
   const stubs = {
     '/core/motion.js': { createMotionGate: () => ({ update: () => ({ state: motion }) }), thumbFromImageData: image => image },
     '/core/overlay.js': { STATES: { SEARCHING: 'searching', MATCHED: 'matched', LOW: 'low', RETRY: 'retry' } },
@@ -45,7 +45,7 @@ async function flow({ enabled = true } = {}) {
     return module;
   }
   const module = await load(path.join(runtime, 'app/quickscan.js')); await module.evaluate();
-  const stop = module.namespace.startQuickScan({
+  const options = {
     video, pack, retainAcceptedBorder: enabled, resolveCandidates: false,
     overlay: { setSource() {}, clear() { clears.push(clock); lastPaint = null; }, draw(value) { lastPaint = clone(value); draws.push(lastPaint); } },
     backend: { kind: 'worker', quadEveryMs: 80, reset() {},
@@ -55,12 +55,36 @@ async function flow({ enabled = true } = {}) {
     reader: { read: () => ({ data: new Uint8ClampedArray(16), width: 2, height: 2 }) },
     frame(_video, callback) { scheduled = callback; return () => {}; }, now: () => clock,
     onShow: value => shows.push(clone(value))
-  });
-  return { scans, draws, shows, clears, video, stop,
+  };
+  let stop = module.namespace.startQuickScan(options);
+  return { scans, draws, shows, clears, video, stop: () => stop(),
+    restart() { stop(); stop = module.namespace.startQuickScan(options); },
     set scan(value) { nextScan = value; }, set outline(value) { nextOutline = value; },
     async step(t, state = motion) { clock = t; motion = state; scheduled(); for (let i = 0; i < 5; i++) await Promise.resolve(); },
     get draw() { return lastPaint; }
   };
+}
+
+for (const [label, nextIndex] of [['duplicate', 0], ['same-art reprint', 1]]) {
+  test(`rearming after absence restores a full payload for a ${label} before the old art hold expires`, async () => {
+    const h = await flow({ sameArt: true });
+    try {
+      const camera = h.video;
+      await h.step(0);
+      assert.equal(h.shows[0].same, false);
+      h.scan = result({ solid: false });
+      await h.step(400); await h.step(900);
+      h.scan = result({ index: nextIndex });
+      await h.step(1400);
+      assert.equal(h.shows.at(-1).same, true, 'the old accepted-art hold otherwise emits an unusable partial update');
+      const before = h.shows.length;
+      h.restart(); await h.step(1401);
+      assert.equal(h.video, camera);
+      assert.equal(h.shows.length, before + 1);
+      assert.equal(h.shows.at(-1).same, false);
+      assert.equal(h.shows.at(-1).ref[0], `p:${nextIndex + 1}`);
+    } finally { h.stop(); }
+  });
 }
 
 test('brief movement keeps the accepted inner outline searching, then requests a fresh border retry', async () => {

@@ -104,9 +104,16 @@
         pending = null; clearManualAttempt(); stopLoop?.(); backend?.reset?.(); stopLoop = beginLoop();
       }
     };
-    const endRemovalWait = () => {
+    const endRemovalWait = (rearm = false) => {
       if (!awaitingRemoval) return;
       awaitingRemoval = false; removalRef = null; removalAbsentSince = null;
+      if (rearm) {
+        // The upstream loop can still hold the saved art for 2.5 seconds and
+        // emit only same:true for the next copy/reprint. A verified absence is
+        // a new physical episode: require a fresh full candidate payload.
+        pending = null; stopLoop?.(); backend?.reset?.();
+        if (running && stream && beginLoop) stopLoop = beginLoop();
+      }
       post({ kind: 'hide' });
     };
     const observeCard = () => {
@@ -239,7 +246,7 @@
             const update = normalizeView(view);
             if (!update.same && !update.candidates?.length) return;
             if (awaitingRemoval) {
-              if (!update.accepted || update.confidence < 50 ||
+              if (update.confidence < 50 ||
                   (!update.same && update.candidates[0].ref === removalRef)) { pending = null; return; }
               if (!removalRef || (update.same && (!pending || pending.ref === removalRef))) return;
             }
@@ -266,7 +273,8 @@
             const settled = pending.observations >= 3 && now - pending.since >= (update.accepted ? 600 : 1500);
             if (!settled || update.confidence < 50) return;
             // Another card can replace the saved one without an empty frame.
-            // Keep the same repeated-observation gate before releasing that wait.
+            // Use the normal accepted/guess settling gates for this different
+            // full reference; saving must not disable tentative-card review.
             if (awaitingRemoval) endRemovalWait();
             held = true;
             heldRef = pending.ref;
@@ -291,7 +299,7 @@
             if (awaitingRemoval) {
               if (fields.solid === false) {
                 if (removalAbsentSince === null) removalAbsentSince = now;
-                else if (now - removalAbsentSince >= 300) { pending = null; endRemovalWait(); }
+                else if (now - removalAbsentSince >= 300) endRemovalWait(true);
               } else if (fields.solid === true) removalAbsentSince = null;
             }
             if (fields.solid === true) observeCard();
