@@ -136,20 +136,30 @@ import XCTest
         let ready = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == true AND hittable == true AND enabled == true"), object: options)
         let hittable = XCTWaiter.wait(for: [ready], timeout: 5) == .completed
-        XCTAssertTrue(hittable, "List options must become hittable after navigation completes")
+        XCTAssertTrue(hittable, "List options must become hittable after navigation completes. " + optionsFailureContext(in: app))
         guard hittable else { return }
         XCTAssertEqual(app.state, .runningForeground)
         XCTAssertFalse(app.alerts.firstMatch.exists)
         XCTAssertFalse(XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch.exists)
         let bounds = options.frame, window = app.windows.firstMatch.frame
-        let onScreen = bounds.width > 0 && bounds.height > 0 && window.contains(bounds)
-        XCTAssertTrue(onScreen, "List options must be entirely on screen: \(bounds), window: \(window)")
+        let onScreen = bounds.width >= 44 && bounds.height >= 44 && window.contains(bounds)
+        XCTAssertTrue(onScreen, "List options must be entirely on screen with a 44-point target: \(bounds), window: \(window). " + optionsFailureContext(in: app))
         guard onScreen else { return }
         // XCTest attempted AXScrollToVisible on this fixed navigation-bar
         // button and failed even with its visible frame. Use the identified,
         // hittable control's validated center; the caller then requires the
         // actual Clear List Outcome menu action to appear before continuing.
         options.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+    }
+
+    private func optionsFailureContext(in app: XCUIApplication) -> String {
+        let matches = app.buttons.matching(identifier: "list.options").allElementsBoundByIndex
+        let controls = matches.map {
+            "label=\($0.label), frame=\($0.frame), enabled=\($0.isEnabled), hittable=\($0.isHittable)"
+        }.joined(separator: "; ")
+        return "App state: \(app.state.rawValue); window: \(app.windows.firstMatch.frame); "
+            + "matching options: [\(controls)]; navigation bars: "
+            + String(app.navigationBars.debugDescription.prefix(3500))
     }
 
     private func relaunchToLists(in app: XCUIApplication) {
