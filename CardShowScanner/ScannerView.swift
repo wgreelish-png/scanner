@@ -70,6 +70,7 @@ struct ScannerView: View {
                         Text("No stable match after four seconds. Search the saved catalog to add this card to the same list, or keep scanning.")
                     }
             }.padding(.horizontal, 16).padding(.vertical, 8)
+                .zIndex(1)
         }
         .toolbar(.hidden, for: .navigationBar)
         .statusBarHidden()
