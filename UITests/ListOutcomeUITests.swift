@@ -69,7 +69,7 @@ import XCTest
         let identifiedClear = app.buttons["list.clearOutcome"]
         let clear = identifiedClear.waitForExistence(timeout: 1)
             ? identifiedClear : app.buttons["Clear List Outcome"].firstMatch
-        XCTAssertTrue(clear.waitForExistence(timeout: 5)); clear.tap()
+        XCTAssertTrue(clear.waitForExistence(timeout: 5), "The physical Options tap must open Clear List Outcome. " + String(app.debugDescription.prefix(3000))); clear.tap()
         assertOutcome("No status", in: app)
         relaunchToLists(in: app)
         assertRow(recordedName, outcome: "No status", in: app)
@@ -134,10 +134,10 @@ import XCTest
         let options = app.navigationBars.buttons["list.options"]
         XCTAssertTrue(options.waitForExistence(timeout: 5))
         let ready = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "exists == true AND hittable == true AND enabled == true"), object: options)
-        let hittable = XCTWaiter.wait(for: [ready], timeout: 5) == .completed
-        XCTAssertTrue(hittable, "List options must become hittable after navigation completes. " + optionsFailureContext(in: app))
-        guard hittable else { return }
+            predicate: NSPredicate(format: "exists == true AND enabled == true"), object: options)
+        let enabled = XCTWaiter.wait(for: [ready], timeout: 5) == .completed
+        XCTAssertTrue(enabled, "List options must be enabled after navigation completes. " + optionsFailureContext(in: app))
+        guard enabled else { return }
         XCTAssertEqual(app.state, .runningForeground)
         XCTAssertFalse(app.alerts.firstMatch.exists)
         XCTAssertFalse(XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch.exists)
@@ -145,10 +145,10 @@ import XCTest
         let onScreen = bounds.width >= 44 && bounds.height >= 44 && window.contains(bounds)
         XCTAssertTrue(onScreen, "List options must be entirely on screen with a 44-point target: \(bounds), window: \(window). " + optionsFailureContext(in: app))
         guard onScreen else { return }
-        // XCTest attempted AXScrollToVisible on this fixed navigation-bar
-        // button and failed even with its visible frame. Use the identified,
-        // hittable control's validated center; the caller then requires the
-        // actual Clear List Outcome menu action to appear before continuing.
+        // This simulator reports the enabled, fully visible Menu as non-hittable
+        // and element.tap() fails AXScrollToVisible. Tap the identified control's
+        // validated center, as for the existing camera Options test. The caller
+        // requires the actual menu action, clear result and disk relaunch below.
         options.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
     }
 
