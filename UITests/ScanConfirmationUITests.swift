@@ -24,6 +24,7 @@ import XCTest
 
         let start = app.buttons["home.startNewScan"]
         XCTAssertTrue(start.waitForExistence(timeout: 10)); start.tap()
+        acceptInitialCameraPermission()
         // Handle the actual first-use screen too if the launch acknowledgment
         // has not been reflected when this scanner is presented.
         let connectionReturn = app.buttons.matching(NSPredicate(format:
@@ -76,6 +77,20 @@ import XCTest
         let item = menuItem(title, in: app)
         XCTAssertTrue(item.waitForExistence(timeout: 5), "Missing menu item: \(title)")
         item.tap()
+    }
+    private func acceptInitialCameraPermission() {
+        // A fresh simulator asks asynchronously after loading the local camera
+        // page. Wait on SpringBoard before taking app/WebKit AX snapshots; those
+        // snapshots can finish only after consent and otherwise miss its arrival.
+        let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+        guard alert.waitForExistence(timeout: 20) else { return } // Already authorized is valid too.
+        let text = ([alert.label] + alert.staticTexts.allElementsBoundByIndex.map(\.label)).joined(separator: " ").lowercased()
+        guard text.contains("camera") else { return }
+        let allow = alert.buttons["Allow"]
+        XCTAssertTrue(allow.waitForExistence(timeout: 5), "Camera consent has no Allow button: " + alert.debugDescription)
+        allow.tap()
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: alert)
+        XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 5), .completed, "Camera consent must close before testing scanner controls")
     }
     private func tapFixedControl(_ element: XCUIElement, in app: XCUIApplication) {
         let exists = element.waitForExistence(timeout: 10)
