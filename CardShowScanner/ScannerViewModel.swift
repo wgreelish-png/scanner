@@ -25,6 +25,7 @@ import AudioToolbox
     private var confirmationDeadline: Task<Void, Never>?
     private let confirmationTimeout: Duration
     private var priceRequestID = UUID()
+    private var savedRecognitionRef: String?
     private let provider: any ScannerProvider
     private let pricing: any MarketPricing
     // Injection makes a failed transaction/retry testable without corrupting a store.
@@ -46,7 +47,7 @@ import AudioToolbox
         }
         self.session = session
         DiagnosticLog.shared.record("scanner.start", ["provider": liveProvider == nil ? "mock" : "live"])
-        if selected == nil { waitingForRemoval = false }
+        if selected == nil { waitingForRemoval = false; savedRecognitionRef = nil }
         Task { [pricing] in await pricing.prepare() }
         provider.start(game: game)
         let stream = provider.results
@@ -61,8 +62,17 @@ import AudioToolbox
         guard !paused, !saving, selected == nil else {
             DiagnosticLog.shared.record("recognition.held", sampleEvery: 5); return
         }
-        if !scan.visible { waitingForRemoval = false; return }
-        guard !waitingForRemoval, !scan.same, let first = scan.candidates.first else { return }
+        if !scan.visible { waitingForRemoval = false; savedRecognitionRef = nil; return }
+        guard !scan.same, let first = scan.candidates.first else { return }
+        if waitingForRemoval {
+            // A hide and following scan can be coalesced by the stream's newest-
+            // only buffer. A fresh accepted different card is also a valid next
+            // episode; repeat frames of the saved card remain suppressed.
+            guard scan.accepted, first.confidence >= 50, let savedRecognitionRef,
+                  first.identity.productID != savedRecognitionRef else { return }
+            waitingForRemoval = false; self.savedRecognitionRef = nil
+            DiagnosticLog.shared.record("recognition.next_card", ["reason": "different_match"])
+        }
         result = scan; candidatePrintings = [:]
         var card = first; card.identity.condition = "Near Mint"
         selected = card
@@ -89,17 +99,19 @@ import AudioToolbox
     }
     func selectAndAdd(_ candidate: CardCandidate, list: CardList, context: ModelContext) {
         guard !selectionInProgress, !saving, session?.isActive == true,
-              result?.candidates.contains(where: { $0.id == candidate.id }) == true else { return }
+              let candidates = result?.candidates,
+              let index = candidates.firstIndex(where: { $0.identity.productID == candidate.identity.productID }) else { return }
         let condition = selected?.identity.condition ?? "Near Mint"
-        // Keep optional finish edits when confirming that same candidate.
-        var card = candidate
+        // Printing and a returned SKU change the draft's Identifiable ID. Match
+        // its stable product to the frozen result, then keep the user's edits.
+        var card = candidates[index]
         if let current = selected, current.identity.productID == candidate.identity.productID { card = current }
         card.identity.condition = condition
         card.requiresPrintingSelection = false
         let alreadyQuoted = !priceLoading && selected?.identity.productID == card.identity.productID &&
             selected?.identity.printing == card.identity.printing && selected?.identity.condition == card.identity.condition
         selected = card; confirmed = true; selectionInProgress = true
-        DiagnosticLog.shared.record("recognition.selected", ["candidate_index": String(result?.candidates.firstIndex(where: { $0.id == candidate.id }) ?? 0)])
+        DiagnosticLog.shared.record("recognition.selected", ["candidate_index": String(index)])
         pendingConfirmation = { [weak self] in
             guard let self else { return }
             self.addSelected(list: list, context: context)
@@ -205,6 +217,7 @@ import AudioToolbox
         guard confirmed, !saving, !priceLoading, let selected, let session else { return }
         saving = true
         defer { saving = false }
+        let recognitionRef = result?.candidates.first?.identity.productID ?? selected.identity.productID
         do {
             try SessionService.withScanSave(session: session, list: list, context: context) {
                 try self.saveCard(selected, session, list, context, self.result?.candidates.first?.identity.productID)
@@ -212,8 +225,8 @@ import AudioToolbox
             // Only a committed transaction releases the review snapshot.
             priceTask?.cancel(); priceRequestID = UUID()
             result = nil; candidatePrintings = [:]; self.selected = nil; confirmed = false; priceMessage = nil; priceConnectionRequired = false
-            waitingForRemoval = true; error = nil
-            liveProvider?.releaseReview()
+            waitingForRemoval = true; savedRecognitionRef = recognitionRef; error = nil
+            liveProvider?.releaseReview(recognitionRef: recognitionRef)
             DiagnosticLog.shared.record("add.saved", ["priced": String(selected.marketPrice != nil)])
             if UserDefaults.standard.object(forKey: "haptics") as? Bool ?? true {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -229,7 +242,7 @@ import AudioToolbox
         pendingConfirmation = nil; selectionInProgress = false
         // Intentional re-arm allows a second identical physical copy without identity merging.
         priceTask?.cancel(); priceRequestID = UUID(); priceLoading = false
-        result = nil; candidatePrintings = [:]; selected = nil; confirmed = false; waitingForRemoval = false; priceMessage = nil; priceConnectionRequired = false; error = nil
+        result = nil; candidatePrintings = [:]; selected = nil; confirmed = false; waitingForRemoval = false; savedRecognitionRef = nil; priceMessage = nil; priceConnectionRequired = false; error = nil
         liveProvider?.resetRecognition()
         DiagnosticLog.shared.record("recognition.rearmed")
     }

@@ -175,16 +175,18 @@
     {
       "path": "/newscanplus/assets/js/app/quickscan-worker.js",
       "url": "https://tcgtracking.com/newscanplus/assets/js/app/quickscan-worker.js?v=1792678406",
-      "sha256": "54b3aa7769c5e20943c5aa7b1525e5384f62611bac88884e3d0975d538f91975",
-      "bytes": 6349
+      "sha256": "ea921a8b86eb262963a562b70f69be699b89c28b236089969522f307395d0deb",
+      "bytes": 6429,
+      "upstream_sha256": "54b3aa7769c5e20943c5aa7b1525e5384f62611bac88884e3d0975d538f91975",
+      "adaptation": "App adaptation: forward only explicit boolean retainAcceptedBorder to the scan engine for a motion-reset retry; hard reset and pack replacement still clear all tracking/fusion."
     },
     {
       "path": "/newscanplus/assets/js/app/quickscan.js",
       "url": "https://tcgtracking.com/newscanplus/assets/js/app/quickscan.js?v=1792447586",
-      "sha256": "44108e69ce15ed0bd4788bdc3d6a82180bd70a12a71d18f8d8d8a2b94de965f1",
-      "bytes": 14756,
+      "sha256": "4c3fc6688d4f1ea7b3bfd3f87d2edd172ac8f23a9e8cd3cd37238193239356c2",
+      "bytes": 18927,
       "upstream_sha256": "2ced8f09522bb1d22949ad4b420191f56b12a0ef8bec6433fc9a338713f52cc6",
-      "adaptation": "Optional resolveCandidates=false skips online image-assisted reranking; preserves captured thumbnail and local pack candidates. App diagnostic adaptation: forwards existing scalar scan metadata and a lazy sampled whole-frame luma summary; no pixel, detection, matching, confidence or settling changes."
+      "adaptation": "App adaptation: optional resolveCandidates=false retains on-device candidates; bounded scalar diagnostics. Optional retainAcceptedBorder retries a recent accepted inner-card pose for at most 650ms after motion, renders searching rather than stale green, rejects incompatible movement and requires a fresh accepted scan; default-disabled upstream behavior preserved."
     },
     {
       "path": "/newscanplus/assets/js/app/reprint-rerank.js",
@@ -195,16 +197,18 @@
     {
       "path": "/newscanplus/assets/js/app/scan-backends.js",
       "url": "https://tcgtracking.com/newscanplus/assets/js/app/scan-backends.js?v=1792678406",
-      "sha256": "53743874a9ad9744b4c7cc06e838746de3501b32d07f921a56253b74ece2a5d5",
-      "bytes": 12354
+      "sha256": "0955ad695aa58268e0cc3430793d219dd84258eeb595f9c8f77d4a7a46a39d83",
+      "bytes": 12508,
+      "upstream_sha256": "53743874a9ad9744b4c7cc06e838746de3501b32d07f921a56253b74ece2a5d5",
+      "adaptation": "App adaptation: forward the opt-in accepted-border motion-reset flag through main-thread, RGBA-worker and bitmap-worker scan transports without changing capture sizes or worker fallback behavior."
     },
     {
       "path": "/newscanplus/assets/js/app/scan-engine.js",
       "url": "https://tcgtracking.com/newscanplus/assets/js/app/scan-engine.js?v=1792238053",
-      "sha256": "69de8dcf1ab257b48e37abba968488f9ce16a9b186f566491bb52b2a43f11cc8",
-      "bytes": 14691,
+      "sha256": "5b36909ea03273b96e0d02316125efec1d3f543a16806c2c9456d1a4cf37b4de",
+      "bytes": 16393,
       "upstream_sha256": "78e54cb99a218467c6be80faedfea8ca7580110d89bb42380c906768832b6515",
-      "adaptation": "App diagnostic adaptation: adds scalar counts/geometry of existing candidate and selected quads plus match distance/gap; no candidate ordering, gates, hashes, matching or decision changes."
+      "adaptation": "App adaptation: scalar detection/match diagnostics. Explicit motion-reset option retains only accepted quad geometry for at most 650ms with unchanged edge/contrast/drift gates; old hashes/fusion are discarded, a current-frame accepted same-reference match is required, otherwise original full detection runs immediately. Default reset behavior is unchanged."
     },
     {
       "path": "/newscanplus/assets/js/app/shared.js",

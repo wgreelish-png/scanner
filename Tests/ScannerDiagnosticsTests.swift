@@ -9,13 +9,13 @@ import XCTest
     }
 
     func testCameraGeometryAndLightingDecodeIntoBoundedScalarFields() async throws {
-        let wire = try envelope(["solid": true, "tracked": false, "scanStage": "full", "rawQuads": 12,
+        let wire = try envelope(["solid": true, "tracked": false, "borderRetry": true, "borderRetained": false, "scanStage": "full", "rawQuads": 12,
             "rejectedQuads": 3, "candidateQuads": 4, "selectedBase": 1, "quadSource": "selected",
             "quadAspect": 0.75, "quadArea": 0.51235, "quadSupport": 0.87, "meanLuma": 64.5,
             "lumaStd": 19.25, "matchDistance": 8.5, "matchGap": 4.75, "frames": 2, "backend": "worker"])
         let record = try XCTUnwrap(ScannerDiagnosticRecord.validated(wire))
         XCTAssertEqual(record.event, "web.scan_stats"); XCTAssertEqual(record.sampleEvery, 5)
-        XCTAssertEqual(record.fields, ["solid": "true", "tracked": "false", "scan_stage": "full", "raw_quads": "12",
+        XCTAssertEqual(record.fields, ["solid": "true", "tracked": "false", "border_retry": "true", "border_retained": "false", "scan_stage": "full", "raw_quads": "12",
             "rejected_quads": "3", "candidate_quads": "4", "selected_base": "1", "quad_source": "selected",
             "quad_aspect": "0.750", "quad_area": "0.512", "quad_support": "0.870", "mean_luma": "64.500",
             "luma_std": "19.250", "match_distance": "8.500", "match_gap": "4.750", "frames": "2", "backend": "worker"])
@@ -114,7 +114,7 @@ import XCTest
         log.record(record.event, record.fields)
         for _ in 0..<3 { log.record(record.event, record.fields, sampleEvery: 5) }
         log.record("web.scan_stats", ["scan_stage": "PRIVATE_CARD", "quad_source": "PRIVATE_REF", "mean_luma": "PRIVATE_TOKEN",
-            "quad_area": "2", "quad_support": "nan", "candidate_quads": "2.5", "solid": "PRIVATE_BOOL", "image": "PRIVATE_IMAGE"])
+            "quad_area": "2", "quad_support": "nan", "candidate_quads": "2.5", "solid": "PRIVATE_BOOL", "border_retry": "PRIVATE_BOOL", "border_retained": "1", "image": "PRIVATE_IMAGE"])
         let url = try log.export()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let content = try String(contentsOf: url, encoding: .utf8)

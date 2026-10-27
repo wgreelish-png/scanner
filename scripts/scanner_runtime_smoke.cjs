@@ -86,5 +86,46 @@ assert.ok(['opencv-nsp-412.js', 'opencv-nsp-412-simd.js'].includes(build));
     const canonical = JSON.stringify(decisions, (_key, value) => typeof value === 'number' ? Math.round(value * 1e6) / 1e6 : value);
     const decisionFingerprint = createHash('sha256').update(canonical).digest('hex');
     assert.equal(decisionFingerprint, 'e39192ac050a599fe2ae27fbc048fdb705e2b79c5d56064a3a28bf7004302afd', 'default decisions must match the pre-diagnostics engine');
-    console.log(JSON.stringify({ build, hash: hex, matchedSyntheticReference: 0, blankFrameRejected: true, decisionFingerprint, sourcePixelsUnchanged: true, metadataVerified: true }));
+
+    // Exercise real OpenCV detection/refitting and matching separately from the
+    // unchanged default fingerprint. Control only time so CPU load cannot make
+    // the 650ms window flaky; all pixels, warps, hashes and matches remain real.
+    const clockDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'performance');
+    let retryTime = 0;
+    Object.defineProperty(globalThis, 'performance', { configurable: true, value: { now: () => retryTime } });
+    const retryEngine = createScanEngine(); retryEngine.setPack(brightPack);
+    try {
+      const first = retryEngine.scanRGBA({ width, height, data }, { reset: true });
+      assert.equal(first.result?.accepted, true); assert.equal(first.result.best.i, 0);
+      const movedPixels = new Uint8ClampedArray(data.length);
+      for (let i = 0; i < movedPixels.length; i += 4) {
+        movedPixels[i] = movedPixels[i + 1] = movedPixels[i + 2] = 25; movedPixels[i + 3] = 255;
+      }
+      for (let y = 0; y < height; y++) {
+        movedPixels.set(data.subarray(y * width * 4, ((y + 1) * width - 3) * 4), (y * width + 3) * 4);
+      }
+      const movedOriginal = Buffer.from(movedPixels);
+      retryTime = 100;
+      const retried = retryEngine.scanRGBA({ width, height, data: movedPixels }, { reset: true, retainAcceptedBorder: true });
+      assert.equal(retried.diagnostics.borderRetry, true);
+      assert.equal(retried.diagnostics.borderRetained, true, 'real refitting must revalidate the slightly translated card');
+      assert.equal(retried.result?.accepted, true); assert.equal(retried.result.best.i, 0);
+      assert.equal(retried.frames, 1, 'old frame votes cannot survive the motion reset');
+      assert.equal(retried.tracked, true);
+      retryTime = 200;
+      const removed = retryEngine.scanRGBA({ width, height, data: new Uint8ClampedArray(data.length) }, { reset: true, retainAcceptedBorder: true });
+      assert.equal(removed.diagnostics.borderRetry, true); assert.equal(removed.diagnostics.borderRetained, false);
+      assert.equal(removed.result, null); assert.equal(removed.quad, null); assert.equal(removed.solid, false);
+      retryTime = 300;
+      const returned = retryEngine.scanRGBA({ width, height, data: movedPixels }, { reset: true, retainAcceptedBorder: true });
+      assert.equal(returned.diagnostics.borderRetry, undefined, 'a removed card must erase the retained seed');
+      assert.equal(returned.result?.accepted, true);
+      assert.deepEqual(Buffer.from(movedPixels), movedOriginal, 'border retry must not alter captured pixels');
+      assert.deepEqual(Buffer.from(data), sourcePixels);
+    } finally {
+      retryEngine.dispose();
+      if (clockDescriptor) Object.defineProperty(globalThis, 'performance', clockDescriptor);
+      else delete globalThis.performance;
+    }
+    console.log(JSON.stringify({ build, hash: hex, matchedSyntheticReference: 0, blankFrameRejected: true, decisionFingerprint, sourcePixelsUnchanged: true, metadataVerified: true, retainedBorderVerified: true }));
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -48,7 +48,7 @@
   function scanMetadata(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
     const fields = {};
-    for (const key of ['solid', 'tracked']) if (typeof value[key] === 'boolean') fields[key] = value[key];
+    for (const key of ['solid', 'tracked', 'borderRetry', 'borderRetained']) if (typeof value[key] === 'boolean') fields[key] = value[key];
     for (const [key, allowed] of [['scanStage', ['none', 'one', 'quick', 'full']], ['quadSource', ['none', 'detected', 'selected']]]) {
       if (allowed.includes(value[key])) fields[key] = value[key];
     }
@@ -79,10 +79,13 @@
   let resumeAfterManualSearchPrompt = () => {};
   let refreshDatabase = () => {};
   let markScanIssue = () => false;
+  let setSteadyCardBorder = () => {};
   async function install(config) {
     dispose();
     globalThis.CardShowNativeCache = typeof config.cacheToken === 'string' && config.cacheToken.length >= 32 ? { token: config.cacheToken } : null;
     let pending = null;
+    let heldRef = null, removalRef = null, removalAbsentSince = null;
+    let steadyCardBorder = config.steadyCardBorder === true;
     let manualAttempt = null, manualPromptPending = false;
     let latestScan = null, heldScan = null;
     let running = true, stopLoop = null, stream = null, backend = null, overlay = null, starting = false, held = false, awaitingRemoval = false, beginLoop = null;
@@ -92,6 +95,20 @@
     // Follow a continuously observed card, not camera-open time. Brief tracking
     // gaps retain the attempt; a longer absence begins another physical attempt.
     const clearManualAttempt = () => { manualAttempt = null; manualPromptPending = false; };
+    setSteadyCardBorder = enabled => {
+      if (!running || typeof enabled !== 'boolean' || held || manualPromptPending || enabled === steadyCardBorder) return;
+      steadyCardBorder = enabled;
+      // The option can be changed during startup, before a loop exists. Later
+      // changes re-arm geometry in the same already-authorized camera stream.
+      if (stream && beginLoop && backend) {
+        pending = null; clearManualAttempt(); stopLoop?.(); backend?.reset?.(); stopLoop = beginLoop();
+      }
+    };
+    const endRemovalWait = () => {
+      if (!awaitingRemoval) return;
+      awaitingRemoval = false; removalRef = null; removalAbsentSince = null;
+      post({ kind: 'hide' });
+    };
     const observeCard = () => {
       if (!running || !stream || held || awaitingRemoval || document.hidden) return;
       const now = clock();
@@ -146,7 +163,7 @@
     const canvas = document.createElement('canvas'); canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none';
     frame.append(video, canvas); root.append(frame, button, hint); document.body.append(root);
     const report = value => { hint.hidden = !!stream; hint.textContent = text(value); post({ kind: 'status', message: text(value) }); };
-    const stopCamera = () => { clearManualAttempt(); stopLoop?.(); stopLoop = null; stream?.getTracks().forEach(t => t.stop()); stream = null; video.srcObject = null; overlay?.destroy?.(); overlay = null; latestScan = null; heldScan = null; };
+    const stopCamera = () => { clearManualAttempt(); heldRef = removalRef = removalAbsentSince = null; stopLoop?.(); stopLoop = null; stream?.getTracks().forEach(t => t.stop()); stream = null; video.srcObject = null; overlay?.destroy?.(); overlay = null; latestScan = null; heldScan = null; };
     const visibility = () => { if (document.hidden) { diagnostic('camera_backgrounded'); pending = null; stopCamera(); post({ kind: 'hide' }); button.disabled = false; button.hidden = false; button.textContent = 'Resume Camera'; } };
     document.addEventListener('visibilitychange', visibility);
     dispose = () => { diagnostic('bridge_stopped'); running = false; pending = null; stopCamera(); backend?.dispose(); backend = null; root.remove(); document.removeEventListener('visibilitychange', visibility); window.removeEventListener?.('error', onError); window.removeEventListener?.('unhandledrejection', onRejection); };
@@ -216,11 +233,16 @@
           clear: () => overlay?.clear(),
           draw: options => { if (options?.quad) observeCard(); overlay?.draw({ ...options, label: null }); }
         };
-        beginLoop = () => quick.startQuickScan({ video, overlay: scanOverlay, backend, pack, fetchDetails: null, resolveCandidates: false,
+        beginLoop = () => quick.startQuickScan({ video, overlay: scanOverlay, backend, pack, fetchDetails: null, resolveCandidates: false, retainAcceptedBorder: steadyCardBorder,
           onShow: view => {
-            if (held || awaitingRemoval || manualPromptPending) return;
+            if (held || manualPromptPending) return;
             const update = normalizeView(view);
             if (!update.same && !update.candidates?.length) return;
+            if (awaitingRemoval) {
+              if (!update.accepted || update.confidence < 50 ||
+                  (!update.same && update.candidates[0].ref === removalRef)) { pending = null; return; }
+              if (!removalRef || (update.same && (!pending || pending.ref === removalRef))) return;
+            }
             const now = clock();
             if (!update.same) {
               const ref = update.candidates[0].ref;
@@ -243,20 +265,39 @@
             // Require repeated observations, never a timer firing on a stale frame.
             const settled = pending.observations >= 3 && now - pending.since >= (update.accepted ? 600 : 1500);
             if (!settled || update.confidence < 50) return;
+            // Another card can replace the saved one without an empty frame.
+            // Keep the same repeated-observation gate before releasing that wait.
+            if (awaitingRemoval) endRemovalWait();
             held = true;
+            heldRef = pending.ref;
             heldScan = latestScan ? { at: latestScan.at, fields: { ...latestScan.fields } } : null;
             diagnostic('recognition_settled', { elapsedMS: now - pending.since, frames: pending.observations });
             diagnostic('recognition_snapshot', issueFields());
             post(pending.result);
             pending = null;
-          }, onHide: () => { if (!held) { pending = null; awaitingRemoval = false; if (!manualPromptPending) post({ kind: 'hide' }); } },
+          }, onHide: () => {
+            if (!held) {
+              pending = null;
+              // Motion or an expired guess can hide the upstream panel without
+              // removing the physical card. Only observed absence or another
+              // settled accepted card releases the post-save wait.
+              if (!awaitingRemoval && !manualPromptPending) post({ kind: 'hide' });
+            }
+          },
           onHint: report, onStats: stats => {
             if (!running) return;
             const now = clock();
             const fields = scanStats(stats);
+            if (awaitingRemoval) {
+              if (fields.solid === false) {
+                if (removalAbsentSince === null) removalAbsentSince = now;
+                else if (now - removalAbsentSince >= 300) { pending = null; endRemovalWait(); }
+              } else if (fields.solid === true) removalAbsentSince = null;
+            }
             if (fields.solid === true) observeCard();
             if (!Object.keys(fields).length) return;
             latestScan = { at: now, fields };
+            if (fields.borderRetry === true) diagnostic('border_retry', fields);
             if (now - lastStats < 5000) return;
             lastStats = now;
             // Whole-frame quality is sampled only for this five-second event.
@@ -271,16 +312,26 @@
             diagnostic('scan_stats', { ...fields, ...quality });
           } });
         resetRecognition = () => {
-          clearManualAttempt(); pending = null; held = false; heldScan = null; latestScan = null; awaitingRemoval = false; stopLoop?.(); backend.reset?.();
+          clearManualAttempt(); pending = null; held = false; heldRef = removalRef = removalAbsentSince = null; heldScan = null; latestScan = null; awaitingRemoval = false; stopLoop?.(); backend?.reset?.();
           if (running && stream) stopLoop = beginLoop();
         };
-        releaseReview = () => { clearManualAttempt(); pending = null; held = false; heldScan = null; awaitingRemoval = true; };
+        releaseReview = ref => {
+          if (awaitingRemoval) return;
+          clearManualAttempt(); pending = null;
+          removalRef = typeof ref === 'string' && referencePattern.test(ref) ? ref : heldRef;
+          heldRef = null; removalAbsentSince = null;
+          held = false; heldScan = null; awaitingRemoval = true;
+          // The upstream loop may already have advanced while native review was
+          // held. Re-arm full payloads without reopening the authorized camera.
+          stopLoop?.(); backend?.reset?.();
+          if (running && stream) stopLoop = beginLoop();
+        };
         resumeAfterManualSearchPrompt = () => {
           manualPromptPending = false; pending = null;
           // A match reached while the popup was open may now emit only partial
           // same:true updates. Re-arm the loop for a full payload, retaining this
           // attempt's offered flag and the already-authorized camera stream.
-          stopLoop?.(); backend.reset?.();
+          stopLoop?.(); backend?.reset?.();
           if (running && stream) stopLoop = beginLoop();
         };
         stopLoop = beginLoop();
@@ -300,5 +351,5 @@
     };
     if (config.autoStart) await button.onclick();
   }
-  globalThis.CardShowBridge = { install, stop: () => dispose(), resetRecognition: () => resetRecognition(), releaseReview: () => releaseReview(), resumeAfterManualSearchPrompt: () => resumeAfterManualSearchPrompt(), refreshDatabase: () => refreshDatabase(), markScanIssue: reason => markScanIssue(reason), normalizeView };
+  globalThis.CardShowBridge = { install, stop: () => dispose(), resetRecognition: () => resetRecognition(), releaseReview: ref => releaseReview(ref), resumeAfterManualSearchPrompt: () => resumeAfterManualSearchPrompt(), refreshDatabase: () => refreshDatabase(), markScanIssue: reason => markScanIssue(reason), setSteadyCardBorder: enabled => setSteadyCardBorder(enabled), normalizeView };
 })();

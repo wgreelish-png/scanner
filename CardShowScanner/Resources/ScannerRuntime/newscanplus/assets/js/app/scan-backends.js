@@ -2,7 +2,7 @@
  * scan-backends.js - where quick-scan frames are processed.
  *
  * createBackend() -> Promise<Backend>   module worker when possible, else the main thread
- * Backend: {kind: 'worker' | 'main', quadEveryMs, setPack(pack), scan(video, {reset}) -> Promise<Scan | null>,
+ * Backend: {kind: 'worker' | 'main', quadEveryMs, setPack(pack), scan(video, {reset, retainAcceptedBorder=false}) -> Promise<Scan | null>,
  *           quad({data, width, height}) -> Promise<{quad, w, h} | null>, reset(), dispose()}
  *   Scan: scan-engine.js Scan plus ms.capture (main-thread frame capture) and, in the worker, ms.read.
  *   null = no video frame yet, backend switching, or a per-frame failure (logged).
@@ -125,19 +125,19 @@ function workerBackend() {
                 const buf = a ? a.slice().buffer : null;
                 w.postMessage({ type: 'allow', allow: buf }, buf ? [buf] : []);
             },
-            async scan(video, { reset = false } = {}) {
+            async scan(video, { reset = false, retainAcceptedBorder = false } = {}) {
                 if (dead || !video.videoWidth || video.readyState < 2) return null;
                 const t0 = performance.now();
                 let msg;
                 let transfer;
                 if (bitmapOK) {
                     const bitmap = await videoBitmap(video);
-                    msg = { type: 'scan', bitmap, longSide: LONG, reset };
+                    msg = { type: 'scan', bitmap, longSide: LONG, reset, retainAcceptedBorder };
                     transfer = [bitmap];
                 } else {
                     const image = reader.read(video, LONG);
                     if (!image) return null;
-                    msg = { type: 'scan', image, reset };
+                    msg = { type: 'scan', image, reset, retainAcceptedBorder };
                     transfer = [image.data.buffer];
                 }
                 const capture = performance.now() - t0;
@@ -216,7 +216,7 @@ async function mainBackend() {
                 return null;
             }
         },
-        async scan(video, { reset = false } = {}) {
+        async scan(video, { reset = false, retainAcceptedBorder = false } = {}) {
             if (!video.videoWidth || video.readyState < 2) return null;
             if (grabVideo !== video) {
                 grabber?.dispose();
@@ -229,7 +229,7 @@ async function mainBackend() {
             if (!f) return null;
             const capture = performance.now() - t0;
             try {
-                const out = engine.scanMat(f.mat, { reset });
+                const out = engine.scanMat(f.mat, { reset, retainAcceptedBorder });
                 out.ms.capture = capture;
                 return out;
             } catch (err) {

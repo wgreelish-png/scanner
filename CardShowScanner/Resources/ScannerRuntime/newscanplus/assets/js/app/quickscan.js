@@ -3,7 +3,8 @@
  * motion gate on its 160 px thumbnail, smooths and draws the outline and decides what the info panel shows;
  * detection, hashing and matching run in the backend (scan-backends.js: worker, or main-thread fallback).
  *
- * startQuickScan({video, overlay, backend, pack, onShow, onHide, onHint, onStats, reader?, frame?, now?}) -> stop()
+ * startQuickScan({video, overlay, backend, pack, onShow, onHide, onHint, onStats, retainAcceptedBorder=false,
+ *                 reader?, frame?, now?}) -> stop()
  *   onShow(view)  view: {same, ref, siblings, confidence, match_pct, d, accepted, gap, frames, thumb, matches}
  *                 confidence: calibrated P(correct) 0..99 (show this); match_pct/d: raw bh1 distance (diagnostics)
  *                 same=true only refreshes confidence/match_pct/accepted of the card already on the panel
@@ -29,6 +30,9 @@
  *   it has not moved). scan results: no solid card -> NO_CARD_MS backoff; not accepted -> next frame at once
  *   (worker fuses up to 3); accepted -> rescan every ACCEPTED_REPEAT_MS. Results of scans that overlapped
  *   movement are dropped.
+ * App adaptation (opt-in): a recently accepted card border can be retried for up to 650 ms after brief motion.
+ * Only geometry crosses that reset. During retry its outline is searching, not matched; a fresh accepted scan
+ * is required before green returns. Expiry, incompatible pose, no-card scan or stopping releases the border.
  * Panel: an accepted card replaces anything not the same art and is held HOLD_MS after its last confirmation.
  * A non-accepted guess shows only while nothing accepted is held, after GUESS_CONFIRM consecutive scans agree on
  * its art, and only while a solid card is in view: hidden at once on movement or on a no-card scan, and after
@@ -41,6 +45,7 @@ import { createFrameReader } from './video-frames.js';
 import { rankTies } from '../core/setrank.js';
 import { candidatesFrom, resolveScanCands, applyResolvedToView } from './desk-results.js';
 import { quadJpeg } from './desk-images.js';
+import { clockwise, polyArea, quadAspect } from '../core/geom.js';
 
 const SMALL = 320;
 const THUMB = 160;
@@ -51,6 +56,7 @@ const GUESS_HOLD_MS = 1200;
 const GUESS_CONFIRM = 2;
 const OUTLINE_HOLD_MS = 300;
 const SCAN_FRESH_MS = 1500;
+const ACCEPTED_BORDER_MS = 650;
 const GATE = { stableMs: 160, lowDiff: 4, highDiff: 9 };
 const HINTS = { tilt: 'Tilt the card - glare', retry: 'Hold steady' };
 
@@ -83,6 +89,7 @@ function defaultFrame(video, fn) {
 
 export function startQuickScan({
     video, overlay, backend, pack, onShow, onHide, onHint, onStats, fetchDetails = null, resolveCandidates = true,
+    retainAcceptedBorder = false,
     reader = createFrameReader(), frame = defaultFrame, now = () => performance.now(),
 }) {
     const gate = createMotionGate(GATE);
@@ -99,10 +106,55 @@ export function startQuickScan({
     let drawKey = '';
     let hintText = null;
     let tickMs = 0;
+    let acceptedPose = null;
+    let retryBorder = false;
 
     backend.reset();
 
     const sameArt = (a, b) => a === b || (pack.cl[a] >= 0 && pack.cl[a] === pack.cl[b]);
+
+    function clearAcceptedPose() { acceptedPose = null; retryBorder = false; }
+
+    // The accepted timestamp belongs to a real scan, never a paint/outline update.
+    function recentAccepted(t) {
+        if (!retainAcceptedBorder || !acceptedPose) return false;
+        const age = t - acceptedPose.at;
+        if (age < 0 || age > ACCEPTED_BORDER_MS ||
+            (acceptedPose.videoW && video.videoWidth !== acceptedPose.videoW) ||
+            (acceptedPose.videoH && video.videoHeight !== acceptedPose.videoH)) {
+            clearAcceptedPose(); return false;
+        }
+        return true;
+    }
+
+    function compatibleOutline(q, w, h) {
+        const p = acceptedPose;
+        if (!p || !q || !(w > 0 && h > 0) || Math.abs(w / h - p.w / p.h) > 0.01) return false;
+        const a = clockwise(p.quad).map(([x, y]) => [x / p.w, y / p.h]);
+        const b = clockwise(q).map(([x, y]) => [x / w, y / h]);
+        let aligned = b, error = Infinity;
+        for (let k = 0; k < 4; k++) {
+            const shifted = b.map((_, i) => b[(i + k) % 4]);
+            const e = shifted.reduce((sum, c, i) => sum + Math.hypot(c[0] - a[i][0], c[1] - a[i][1]), 0);
+            if (e < error) { error = e; aligned = shifted; }
+        }
+        const centre = points => points.reduce((c, v) => [c[0] + v[0] / 4, c[1] + v[1] / 4], [0, 0]);
+        const ac = centre(a), bc = centre(aligned), diagonal = Math.hypot(a[2][0] - a[0][0], a[2][1] - a[0][1]);
+        if (!(diagonal > 0) || Math.hypot(ac[0] - bc[0], ac[1] - bc[1]) / diagonal > 0.06) return false;
+        const av = [a[1][0] - a[0][0], a[1][1] - a[0][1]], bv = [aligned[1][0] - aligned[0][0], aligned[1][1] - aligned[0][1]];
+        const cosine = (av[0] * bv[0] + av[1] * bv[1]) / (Math.hypot(...av) * Math.hypot(...bv));
+        if (!Number.isFinite(cosine) || cosine < Math.cos(12 * Math.PI / 180)) return false;
+        const drift = Math.max(...aligned.map((c, i) => Math.hypot(c[0] - a[i][0], c[1] - a[i][1]))) / diagonal;
+        if (drift <= 0.04) return true;
+        // A nearby, enclosing holder can look like a modest pose change to the
+        // generic overlay tracker. Ignore that replacement only for this retry.
+        const ratio = polyArea(aligned) / polyArea(a);
+        const encloses = a.every(point => aligned.every((v, i) => {
+            const next = aligned[(i + 1) % 4];
+            return (next[0] - v[0]) * (point[1] - v[1]) - (next[1] - v[1]) * (point[0] - v[0]) >= -0.005 * diagonal * diagonal;
+        }));
+        return ratio >= 1.03 && ratio <= 1.8 && Math.abs(quadAspect(aligned) - quadAspect(a)) <= 0.1 && encloses;
+    }
 
     function hide() {
         shown = null;
@@ -117,6 +169,7 @@ export function startQuickScan({
         if (!small) return;
         const m = gate.update(thumbFromImageData(small, THUMB), undefined, t);
         if (m.state === 'moving') {
+            retryBorder = recentAccepted(t);
             dirty = true;
             scanView = null;
             pending = null;
@@ -142,7 +195,13 @@ export function startQuickScan({
         lastOutlineAt = t;
         try {
             const r = await backend.quad(small);
-            if (running && r?.quad) tracker.update(r.quad, now(), r.w, r.h);
+            if (running && r?.quad) {
+                if (retryBorder && recentAccepted(now())) {
+                    if (compatibleOutline(r.quad, r.w, r.h)) return;
+                    clearAcceptedPose(); tracker.reset();
+                }
+                tracker.update(r.quad, now(), r.w, r.h);
+            }
         } finally {
             inFlight = false;
         }
@@ -151,10 +210,11 @@ export function startQuickScan({
     async function requestScan(small) {
         inFlight = true;
         const reset = dirty;
+        const keepBorder = reset && retryBorder && recentAccepted(now());
         dirty = false;
         let s = null;
         try {
-            s = await backend.scan(video, { reset });
+            s = await backend.scan(video, { reset, retainAcceptedBorder: keepBorder });
         } finally {
             inFlight = false;
         }
@@ -168,6 +228,7 @@ export function startQuickScan({
             diagnostics: s.diagnostics, frameQuality: () => frameQuality(small) });
         if (dirty) return;
         if (!s.result || s.solid === false || !s.quad) {
+            clearAcceptedPose();
             scanView = null;
             pending = null;
             if (shown && !shown.accepted) hide();
@@ -175,6 +236,11 @@ export function startQuickScan({
             return;
         }
         const r = s.result;
+        retryBorder = false;
+        if (retainAcceptedBorder && r.accepted) {
+            acceptedPose = { quad: s.quad.map(p => p.slice()), w: s.w, h: s.h, at: t, i: r.best.i,
+                videoW: video.videoWidth || 0, videoH: video.videoHeight || 0 };
+        } else clearAcceptedPose();
         scanView = { quad: s.quad, w: s.w, h: s.h, accepted: r.accepted, hint: r.hint, i: r.best.i, at: t };
         tracker.update(s.quad, t, s.w, s.h);
         nextScanAt = t + (r.accepted ? ACCEPTED_REPEAT_MS : 0);
@@ -290,13 +356,16 @@ export function startQuickScan({
     }
 
     function draw(t, motion) {
-        const tq = tracker.current(t);
+        // A retained outline is deliberately searching/white. Only the fresh
+        // accepted scan below can make it green again.
+        const heldPose = retryBorder && recentAccepted(t) ? acceptedPose : null;
+        const tq = heldPose || tracker.current(t);
         let opts = null;
         let hint = 'hold a card in frame';
         if (tq) {
             opts = { quad: tq.quad, state: STATES.SEARCHING };
             hint = '';
-            if (scanView && motion !== 'moving') {
+            if (!heldPose && scanView && motion !== 'moving') {
                 if (scanView.accepted && shown?.accepted && !shown.resolving && sameArt(shown.i, scanView.i)) {
                     opts = { quad: tq.quad, state: STATES.MATCHED, label: label(shown.i) };
                 } else if (!scanView.accepted && !shown?.resolving) {
@@ -326,6 +395,7 @@ export function startQuickScan({
 
     return () => {
         running = false;
+        clearAcceptedPose();
         cancel?.();
         overlay.clear();
     };

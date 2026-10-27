@@ -18,7 +18,7 @@ After four seconds of observed card-like outline/solid scan activity without a s
 
 While the prompt is open, result/hide delivery is held. Keep Scanning rearms complete candidate delivery with the same camera stream and retains the offered attempt. Search Manually stops capture and opens the existing catalog against the current list/session; its condition, printing, exact pricing and explicit-add behavior are unchanged. Closing search returns to the existing scanner. No automatic mock fallback or save is introduced.
 
-The green outline is the upstream engine's current accepted match on a tracked quad. The app separately requires repeated observations before presenting the frozen confirmation. Movement invalidates scan state and can replace the accepted card outline with a newly detected holder outline; a visible holder outline does not establish a newly accepted holder match. This build does not change border tracking, detection, confidence gates or recognition algorithms.
+The green outline is the engine's current accepted match on a tracked quad. The app separately requires repeated observations before presenting the frozen confirmation. Movement invalidates scan state and can replace the accepted card outline with a newly detected holder outline; a visible holder outline does not establish a newly accepted holder match. Build 11 did not change border tracking. [Build 12](SteadyCardBorder.md) adds a bounded geometry-only retry and requires a fresh accepted match before green returns.
 
 ## Build 11 phone check
 

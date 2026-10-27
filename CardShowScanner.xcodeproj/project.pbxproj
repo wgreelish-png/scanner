@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        D12C0F1A7B6E4A8395D10001 /* ScanConfirmationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D12C0F1A7B6E4A8395D10002; };
         D1AB9CA2F03E4EA6B9C10007 /* ManualCardSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1AB9CA2F03E4EA6B9C10008; };
         D1AB9CA2F03E4EA6B9C10005 /* ManualCardSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1AB9CA2F03E4EA6B9C10006; };
         D1AB9CA2F03E4EA6B9C10003 /* ManualCardSearchModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1AB9CA2F03E4EA6B9C10004; };
@@ -71,6 +72,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        D12C0F1A7B6E4A8395D10002 /* ScanConfirmationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanConfirmationUITests.swift; sourceTree = "<group>"; };
         D1AB9CA2F03E4EA6B9C10008 /* ManualCardSearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualCardSearchTests.swift; sourceTree = "<group>"; };
         D1AB9CA2F03E4EA6B9C10006 /* ManualCardSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualCardSearchView.swift; sourceTree = "<group>"; };
         D1AB9CA2F03E4EA6B9C10004 /* ManualCardSearchModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualCardSearchModel.swift; sourceTree = "<group>"; };
@@ -147,7 +149,7 @@
 /* Begin PBXGroup section */
         C4D311E710AB4F79A8B00003 /* UITests */ = {
             isa = PBXGroup;
-            children = (C4D311E710AB4F79A8B0000C /* ListDeletionUITests.swift */,);
+            children = (C4D311E710AB4F79A8B0000C /* ListDeletionUITests.swift */, D12C0F1A7B6E4A8395D10002 /* ScanConfirmationUITests.swift */,);
             path = UITests;
             sourceTree = "<group>";
         };
@@ -357,7 +359,7 @@
         C4D311E710AB4F79A8B00004 /* Sources */ = {
             isa = PBXSourcesBuildPhase;
             buildActionMask = 2147483647;
-            files = (C4D311E710AB4F79A8B0000D /* ListDeletionUITests.swift in Sources */,);
+            files = (C4D311E710AB4F79A8B0000D /* ListDeletionUITests.swift in Sources */, D12C0F1A7B6E4A8395D10001 /* ScanConfirmationUITests.swift in Sources */,);
             runOnlyForDeploymentPostprocessing = 0;
         };
 		B2298129A58493C45A5D7D9A /* Sources */ = {
@@ -472,7 +474,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 11;
+				CURRENT_PROJECT_VERSION = 12;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -508,7 +510,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 11;
+				CURRENT_PROJECT_VERSION = 12;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";

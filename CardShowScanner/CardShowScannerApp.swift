@@ -75,7 +75,7 @@ struct HomeView: View {
                     }
                     Button("Start New Scan", systemImage: "viewfinder") {
                         start()
-                    }.font(.headline).padding(.vertical, 8)
+                    }.font(.headline).padding(.vertical, 8).accessibilityIdentifier("home.startNewScan")
                     Text("Starts a new session and list. Previous lists and saved offers stay available.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section {
