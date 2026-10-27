@@ -43,6 +43,8 @@ struct SavedListsView: View {
                         VStack(alignment: .leading) {
                             Text(list.name).font(.headline)
                             Text("\(list.quantity) cards • \(list.knownValue.money) known subtotal").font(.caption)
+                            Text(list.outcomeTitle).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                                .accessibilityIdentifier("savedList.outcome." + list.id.uuidString)
                         }
                     }
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
@@ -134,6 +136,9 @@ struct CardListView: View {
     @State private var exportText = ""
     @State private var exporting = false
     @State private var shareURL: URL?
+    @State private var choosingOutcome = false
+    @State private var savingOutcome = false
+    @State private var outcomeError: String?
     private var reviewSession: ScanSession? { session ?? sessions.first { $0.listID == list.id } }
     var filtered: [InventoryCard] {
         list.orderedCards.filter { search.isEmpty || [$0.snapshot.name, $0.snapshot.set, $0.snapshot.number, $0.snapshot.identity.productID].contains { $0.localizedCaseInsensitiveContains(search) } }
@@ -147,6 +152,7 @@ struct CardListView: View {
     }
     var body: some View {
         List {
+            listOutcomeSection
             Section("Export inventory") {
                 Button("Export CSV to Files", systemImage: "square.and.arrow.up") { exportCSV() }
                     .buttonStyle(.borderless).frame(minHeight: 44)
@@ -236,8 +242,12 @@ struct CardListView: View {
                         .disabled(list.cards.isEmpty || exporting || shareURL != nil)
                     Button("Share CSV") { share() }
                         .disabled(list.cards.isEmpty || exporting || shareURL != nil)
+                    Button("Clear List Outcome", systemImage: "arrow.uturn.backward") { recordOutcome(nil) }
+                        .disabled(list.transactionOutcomeData == nil || savingOutcome)
+                        .accessibilityIdentifier("list.clearOutcome")
                 } label: { Image(systemName: "ellipsis.circle") }
                     .accessibilityLabel("List options")
+                    .accessibilityIdentifier("list.options")
             }
             .alert("Rename List", isPresented: $rename) {
                 TextField("Name", text: $name)
@@ -256,6 +266,70 @@ struct CardListView: View {
                 if case .failure(let failure) = result { DiagnosticLog.shared.failure("csv.export_failed", failure); error = failure.localizedDescription }
                 else { DiagnosticLog.shared.record("csv.exported") }
             }.failureAlert($error)
+    }
+    private var recordedTransaction: ListOutcomeKind? {
+        guard let kind = list.outcomeRecord?.kind, kind != .nothingHappened else { return nil }
+        return kind
+    }
+    private var listOutcomeSection: some View {
+        Section("List outcome") {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Outcome")
+                    Spacer(minLength: 12)
+                    Text(list.outcomeTitle).accessibilityIdentifier("list.outcomeValue")
+                }.accessibilityElement(children: .contain)
+                if let record = list.outcomeRecord {
+                    Text("Recorded \(record.recordedAt.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("list.outcomeRecordedAt")
+                }
+                if let outcomeError {
+                    Text(outcomeError).font(.caption).foregroundStyle(.red)
+                        .accessibilityIdentifier("list.outcomeError")
+                }
+            }
+            Button {
+                choosingOutcome = true
+            } label: {
+                Label(recordedTransaction?.title ?? "Record Transaction",
+                      systemImage: recordedTransaction == nil ? "checkmark.circle" : "checkmark.circle.fill")
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }.buttonStyle(.borderedProminent)
+                .disabled(savingOutcome)
+                .accessibilityIdentifier("list.recordTransaction")
+                .accessibilityHint("Choose Purchase, Trade + Purchase, or Trade for this list.")
+                .confirmationDialog("Record Transaction", isPresented: $choosingOutcome, titleVisibility: .visible) {
+                    ForEach([ListOutcomeKind.purchase, .tradeAndPurchase, .trade]) { kind in
+                        Button(kind.title) { recordOutcome(kind) }
+                            .accessibilityIdentifier("list.outcome." + kind.rawValue)
+                    }
+                    Button("Cancel", role: .cancel) {}
+                }
+            Button {
+                recordOutcome(.nothingHappened)
+            } label: {
+                Label("Nothing Happened", systemImage: list.outcomeRecord?.kind == .nothingHappened
+                      ? "checkmark.circle.fill" : "minus.circle")
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }.buttonStyle(.bordered).tint(list.outcomeRecord?.kind == .nothingHappened ? Color.orange : Color.gray)
+                .disabled(savingOutcome)
+                .accessibilityIdentifier("list.nothingHappened")
+                .accessibilityHint("Record that this deal did not go ahead.")
+            Text("The outcome stays with this saved list until you change or clear it.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+    private func recordOutcome(_ kind: ListOutcomeKind?) {
+        guard !savingOutcome else { return }
+        savingOutcome = true
+        defer { savingOutcome = false }
+        do {
+            try ListOutcomeService.set(kind, for: list, context: context)
+            outcomeError = nil
+        } catch {
+            outcomeError = "The outcome could not be saved. Your previous status is kept. Please try again."
+        }
     }
     private func continueScanning(_ session: ScanSession) {
         guard reviewDestination == nil else { return }

@@ -5,6 +5,8 @@ import SwiftData
     @Attribute(.unique) var id: UUID
     var name: String
     var createdAt: Date
+    // Nil is an unmarked list; explicit outcomes are versioned app-owned JSON.
+    var transactionOutcomeData: Data? = nil
     @Relationship(deleteRule: .cascade, inverse: \InventoryCard.list) var cards: [InventoryCard] = []
     init(name: String) { id = UUID(); self.name = name; createdAt = .now }
     var orderedCards: [InventoryCard] {

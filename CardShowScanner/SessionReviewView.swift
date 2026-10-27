@@ -66,7 +66,7 @@ struct OfferBreakdownView: View {
                     LabeledContent("Market minus cash offer", value: (totals.market - cashTotal).money)
                     Text("Base rates and per-card overrides determine calculated offers. A custom cash amount updates the full-list cash value and the cash payout for unused trade value.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Text("Market minus cash offer excludes fees, shipping, labor and unsold inventory. It is not net profit or a recorded purchase.")
+                    Text("Market minus cash offer is a valuation estimate. Realized profit requires recorded purchase costs, sale proceeds and fees.")
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding(.top, 10)
             }.font(.subheadline)
