@@ -22,8 +22,15 @@ import XCTest
 
         let start = app.buttons["home.startNewScan"]
         XCTAssertTrue(start.waitForExistence(timeout: 10)); start.tap()
+        // Handle the actual first-use screen too if the launch acknowledgment
+        // has not been reflected when this scanner is presented.
+        let connectionReturn = app.buttons.matching(NSPredicate(format:
+            "label == %@ OR label == %@", "Continue to Scanner", "Return to Scanner")).firstMatch
+        if connectionReturn.waitForExistence(timeout: 3) {
+            tapFixedControl(connectionReturn, in: app)
+        }
         let options = app.buttons["scanner.options"]
-        XCTAssertTrue(options.waitForExistence(timeout: 10)); options.tap()
+        tapFixedControl(options, in: app)
         tapMenuItem("Developer Testing", in: app)
         let mock = menuItem("Mock — sample cards", in: app)
         if !mock.waitForExistence(timeout: 2) { tapMenuItem("Scanner source", in: app) }
@@ -39,7 +46,7 @@ import XCTest
         XCTAssertEqual(condition.value as? String, "Near Mint")
         XCTAssertEqual(printing.value as? String, "Normal")
 
-        condition.tap(); tapMenuItem("Lightly Played", in: app)
+        tapFixedControl(condition, in: app); tapMenuItem("Lightly Played", in: app)
         XCTAssertTrue(waitForValue("Lightly Played", of: condition))
         XCTAssertTrue(confirmation.exists, "Changing condition must not confirm the card")
         printing.tap(); tapMenuItem("Holofoil", in: app)
@@ -53,7 +60,7 @@ import XCTest
         XCTAssertTrue(app.buttons["scanner.scanNext"].waitForExistence(timeout: 10),
             "Explicit confirmation must return to scanning")
         let viewList = app.buttons["scanner.viewList"]
-        XCTAssertTrue(viewList.waitForExistence(timeout: 5)); viewList.tap()
+        tapFixedControl(viewList, in: app)
         XCTAssertTrue(app.navigationBars["Review & Offer"].waitForExistence(timeout: 5))
         let export = app.buttons["list.exportCSV"], share = app.buttons["list.shareCSV"]
         XCTAssertTrue(export.waitForExistence(timeout: 5)); XCTAssertTrue(export.isHittable); XCTAssertTrue(export.isEnabled)
@@ -67,6 +74,15 @@ import XCTest
         let item = menuItem(title, in: app)
         XCTAssertTrue(item.waitForExistence(timeout: 5), "Missing menu item: \(title)")
         item.tap()
+    }
+    private func tapFixedControl(_ element: XCUIElement, in app: XCUIApplication) {
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == true AND hittable == true"), object: element)
+        let hittable = XCTWaiter.wait(for: [ready], timeout: 10) == .completed
+        XCTAssertTrue(hittable, "Fixed control did not become hittable: \(element.identifier)\n" + String(app.debugDescription.prefix(4000)))
+        guard hittable else { return }
+        // XCTest's element.tap() attempts AXScrollToVisible even for a fixed
+        // camera overlay. Its validated center is already on screen.
+        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
     }
     private func waitForValue(_ expected: String, of element: XCUIElement) -> Bool {
         let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", expected), object: element)
