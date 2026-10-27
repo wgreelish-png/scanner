@@ -6,7 +6,7 @@ import OSLog
 /// enum-only even if another caller accidentally supplies arbitrary text.
 enum DiagnosticScanFields {
     static func accepts(_ key: String, _ value: String) -> Bool {
-        if key == "solid" || key == "tracked" { return value == "true" || value == "false" }
+        if ["solid", "tracked", "border_retry", "border_retained"].contains(key) { return value == "true" || value == "false" }
         if key == "scan_stage" { return ["none", "one", "quick", "full"].contains(value) }
         if key == "quad_source" { return ["none", "detected", "selected"].contains(value) }
         let integers: Set<String> = ["raw_quads", "rejected_quads", "candidate_quads", "selected_base", "sample_age_ms"]
@@ -33,7 +33,7 @@ enum DiagnosticScanFields {
     private let keys: Set<String> = ["provider", "game", "episode", "same", "accepted", "confidence", "candidates",
         "printing_required", "priced", "merged", "automatic", "quantity", "reason", "stage", "backend", "elapsed_ms",
         "scan_ms", "capture_ms", "frames", "domain", "code", "records", "rejected_records", "phase", "candidate_index", "app_version", "build", "downloaded_bytes", "cached_shards", "cache", "source", "persisted", "cache_backend", "revision",
-        "solid", "tracked", "scan_stage", "raw_quads", "rejected_quads", "candidate_quads", "selected_base", "quad_source",
+        "solid", "tracked", "border_retry", "border_retained", "scan_stage", "raw_quads", "rejected_quads", "candidate_quads", "selected_base", "quad_source",
         "quad_aspect", "quad_area", "quad_support", "mean_luma", "luma_std", "match_distance", "match_gap", "sample_age_ms"]
     private var current: URL { directory.appendingPathComponent("current.jsonl") }
     private var previous: URL { directory.appendingPathComponent("previous.jsonl") }

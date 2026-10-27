@@ -13,6 +13,7 @@ for (const build of ['opencv-nsp-412.js', 'opencv-nsp-412-simd.js']) {
     assert.equal(result.matchedSyntheticReference, 0);
     assert.equal(result.metadataVerified, true);
     assert.equal(result.sourcePixelsUnchanged, true);
+    assert.equal(result.retainedBorderVerified, true);
     assert.equal(result.decisionFingerprint, 'e39192ac050a599fe2ae27fbc048fdb705e2b79c5d56064a3a28bf7004302afd');
     if (scalarHash) assert.equal(result.hash, scalarHash); else scalarHash = result.hash;
   });

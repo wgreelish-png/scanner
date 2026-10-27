@@ -5,7 +5,7 @@
  *   {type:'init', map, cvUrl, staticBase}              -> {type:'ready', bitmap}   bitmap: OffscreenCanvas 2D usable;
  *                                                         staticBase becomes self.NSP_STATIC (core/static.js)
  *   {type:'pack', n, lo, hi, cl}                       (ArrayBuffers transferred; no reply)
- *   {type:'scan', seq, bitmap | image, longSide, reset} -> {type:'scan', seq, scan}  bitmap is closed here
+ *   {type:'scan', seq, bitmap | image, longSide, reset, retainAcceptedBorder?} -> {type:'scan', seq, scan}  bitmap is closed here
  *   {type:'quad', seq, image}                          -> {type:'quad', seq, quad, w, h}
  *   {type:'reset'}
  *   {type:'image', seq, bitmap | image, maxCards}      -> {type:'image', seq, scan}  still image (desktop upload):
@@ -107,7 +107,7 @@ function scan(msg) {
     const t0 = performance.now();
     const image = msg.bitmap ? bitmapToImage(msg.bitmap, msg.longSide || 1280) : msg.image;
     const read = performance.now() - t0;
-    const out = engine.scanRGBA(image, { reset: !!msg.reset });
+    const out = engine.scanRGBA(image, { reset: !!msg.reset, retainAcceptedBorder: msg.retainAcceptedBorder === true });
     out.ms.read = read;
     return { type: 'scan', seq: msg.seq, scan: out };
 }

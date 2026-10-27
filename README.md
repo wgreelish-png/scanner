@@ -54,6 +54,8 @@ Build 10 adds the manual catalog search above and includes the swipe-delete repa
 
 Build 11 makes condition and per-match printing menus visible directly on scan confirmation. The existing batch detail response populates printing choices for every frozen match, including alternatives whose downloaded metadata initially lists only Normal. After four seconds of an observed card without a settled result, the scanner offers **Search Manually** or **Keep Scanning**. Search opens the existing catalog for the same list and stops camera capture until you close it. Keep Scanning resumes without reopening the camera or repeatedly prompting for that attempt. A Search Manually button is also available when no border can be detected. See [the short phone check](docs/ScanConfirmationWorkflow.md#build-11-phone-check). Recognition thresholds and camera settings are unchanged.
 
+Build 12 adds **Steady Card Border**, a 650ms geometry retry after a real accepted match, requiring fresh validation before green returns. It repairs next-card handoff, pins Condition above confirmation and moves printing menus above artwork. **Export CSV to Files** and **Share CSV** are visible at the top of list review. Settings → About shows the installed build; install build 12 over the existing app to receive these changes. See [implementation limits and phone acceptance](docs/SteadyCardBorder.md).
+
 ## Review, offers and diagnostics
 
 Saved lists retain search, sorting, edits, conditions, quantities, renaming, duplication and native CSV sharing. Offer review retains independent cash/trade/maximum rates, per-card overrides and immutable saved estimates. Scanning does not record a purchase. CSV remains app-defined; TCGTracking import compatibility is unverified.

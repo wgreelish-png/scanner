@@ -10,6 +10,7 @@ struct ScannerView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.dismiss) private var dismiss
     @AppStorage("tcgTrackingConnectionIntroduced") private var connectionIntroduced = false
+    @AppStorage("steadyCardBorder") private var steadyCardBorder = true
     @Query private var sessions: [ScanSession]
     @State private var game: String
     @State private var pendingGame: String?
@@ -124,6 +125,7 @@ struct ScannerView: View {
             if !showing { startIfReady() }
         }
         .onChange(of: mode) { _, _ in restart() }
+        .onChange(of: steadyCardBorder) { _, enabled in model.liveProvider?.setSteadyCardBorder(enabled) }
         .failureAlert(Binding(get: { model.selected == nil ? model.error : nil }, set: { model.error = $0 }))
     }
     private var cameraHeader: some View {
@@ -155,6 +157,9 @@ struct ScannerView: View {
                     Button("Check Database Updates", systemImage: "arrow.down.circle") {
                         model.liveProvider?.refreshDatabase()
                     }.disabled(model.liveProvider == nil || model.paused || model.selected != nil)
+                    Toggle("Steady Card Border", isOn: $steadyCardBorder)
+                        .disabled(model.liveProvider == nil || model.selected != nil || model.selectionInProgress || model.saving)
+                        .accessibilityHint("Briefly retries a recently matched card border after small movements.")
                     scanIssueMenu
                     Menu("Developer Testing") {
                         Picker("Scanner source", selection: $mode) {
@@ -164,6 +169,7 @@ struct ScannerView: View {
                     }
                 } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
                     .accessibilityLabel("Scanner options")
+                    .accessibilityIdentifier("scanner.options")
             }
             if model.paused { Text("Camera paused").font(.subheadline) }
             else if let live = model.liveProvider { CameraStatusView(provider: live) }
@@ -186,6 +192,7 @@ struct ScannerView: View {
                 Text("Saved. Remove this card, then present the next one.").font(.subheadline)
                 Button("Scan Next Card", systemImage: "viewfinder") { model.scanNextCard() }
                     .buttonStyle(.borderedProminent).controlSize(.large).tint(.blue)
+                    .accessibilityIdentifier("scanner.scanNext")
             } else {
                 Text(model.paused ? "Resume when you're ready" : "Hold a card steady inside the camera")
                     .font(.subheadline)
@@ -211,7 +218,7 @@ struct ScannerView: View {
                     DiagnosticLog.shared.record("navigation.review_opened", ["phase": "scanner"])
                 } label: {
                     Label("View List", systemImage: "list.bullet").frame(minHeight: 44)
-                }.buttonStyle(.borderless)
+                }.buttonStyle(.borderless).accessibilityIdentifier("scanner.viewList")
                 Spacer()
                 if session.isActive { FinishSessionButton(session: session) { model.stop(); dismiss() } }
             }.font(.subheadline)
@@ -230,11 +237,6 @@ struct ScannerView: View {
                         }
                         Text("Tap the correct match to add it, then scan the next card.")
                             .font(.subheadline).foregroundStyle(.secondary)
-                        ScanReviewDropdown(title: "Condition", value: card.identity.condition, options: CatalogOptions.conditions,
-                            accessibilityID: "scanReview.condition", onChange: { model.changeCondition($0) })
-                            .disabled(model.selectionInProgress || model.saving || !session.isActive)
-                        Text("Condition applies to the card you add. Every new scan starts at Near Mint.")
-                            .font(.caption).foregroundStyle(.secondary)
                         if let message = model.priceMessage {
                             Text(message).font(.caption).foregroundStyle(.secondary)
                             if model.priceConnectionRequired && model.liveProvider != nil {
@@ -248,16 +250,17 @@ struct ScannerView: View {
                             ForEach(Array((model.result?.candidates ?? []).prefix(5))) { candidate in
                                 let draft = card.identity.productID == candidate.identity.productID ? card : candidate
                                 VStack(alignment: .leading, spacing: 8) {
-                                    Button { model.selectAndAdd(candidate, list: list, context: context) } label: {
-                                        CandidateMatchTile(candidate: candidate, selected: card, priceLoading: model.priceLoading)
-                                    }.buttonStyle(.plain)
-                                        .accessibilityElement(children: .combine)
-                                        .accessibilityHint("Adds this match using its displayed printing and condition. Use the dropdowns to change them first.")
                                     ScanReviewDropdown(title: "Type / printing", value: draft.identity.printing,
                                         options: model.printings(for: candidate),
                                         accessibilityID: "scanReview.printing." + candidate.identity.productID,
                                         accessibilityContext: candidate.name,
                                         onChange: { model.changePrinting($0, for: candidate) })
+                                    Button { model.selectAndAdd(candidate, list: list, context: context) } label: {
+                                        CandidateMatchTile(candidate: candidate, selected: card, priceLoading: model.priceLoading)
+                                    }.buttonStyle(.plain)
+                                        .accessibilityIdentifier("scanReview.add." + candidate.identity.productID)
+                                        .accessibilityElement(children: .combine)
+                                        .accessibilityHint("Adds this match using its displayed printing and condition. Use the dropdowns to change them first.")
                                 }.disabled(model.selectionInProgress || model.saving || !session.isActive)
                             }
                         }
@@ -270,6 +273,18 @@ struct ScannerView: View {
                 .toolbar(.visible, for: .navigationBar)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) { scanIssueMenu }
+                }
+                .safeAreaInset(edge: .top) {
+                    if let card = model.selected {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ScanReviewDropdown(title: "Condition", value: card.identity.condition, options: CatalogOptions.conditions,
+                                accessibilityID: "scanReview.condition", onChange: { model.changeCondition($0) })
+                                .disabled(model.selectionInProgress || model.saving || !session.isActive)
+                            Text("Applies to the card you add. Each new scan starts at Near Mint.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }.padding(.horizontal).padding(.vertical, 8).frame(maxWidth: .infinity)
+                            .background(.regularMaterial)
+                    }
                 }
                 .safeAreaInset(edge: .bottom) {
                     VStack(spacing: 8) {

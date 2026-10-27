@@ -54,6 +54,10 @@ function settle(h, view) {
     h.scannerOptions.onShow({ same: true, accepted: true, confidence: view.confidence });
   }
 }
+function removeObservedCard(h) {
+  h.scannerOptions.onStats({ diagnostics: { solid: false } });
+  h.advance(300); h.scannerOptions.onStats({ diagnostics: { solid: false } });
+}
 function clean(value) { return JSON.parse(JSON.stringify(value)); }
 test('winner, candidate metadata and per-printing price/SKU survive', () => {
   const { bridge } = harness();
@@ -97,7 +101,7 @@ test('camera bootstrap uses module interfaces and delivers scan/hide with nonce'
   assert.equal(h.messages.at(-1).kind, 'scan'); assert.equal(h.messages.at(-1).nonce, 'test-nonce');
   h.scannerOptions.onHide(); assert.equal(h.messages.at(-1).kind, 'scan');
   h.bridge.releaseReview();
-  h.scannerOptions.onHide(); assert.equal(h.messages.at(-1).kind, 'hide');
+  removeObservedCard(h); assert.equal(h.messages.at(-1).kind, 'hide');
   h.bridge.stop(); assert.ok(h.stopped >= 2); assert.equal(h.disposed, 1);
   const count = h.messages.length; h.scannerOptions.onShow({ ref: tuple() }); assert.equal(h.messages.length, count);
 });
@@ -173,9 +177,86 @@ test('saving waits for card removal instead of latching a duplicate frame', asyn
   const count = h.messages.length;
   settle(h, { ref: tuple(), accepted: true, confidence: 96 });
   assert.equal(h.messages.length, count);
-  h.scannerOptions.onHide(); assert.equal(h.messages.at(-1).kind, 'hide');
+  removeObservedCard(h); assert.equal(h.messages.at(-1).kind, 'hide');
   settle(h, { ref: tuple(), accepted: true, confidence: 96 });
   assert.equal(h.messages.at(-1).kind, 'scan');
+});
+
+test('a different accepted card settles after saving without requiring an upstream hide', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
+  // The loop may see the replacement while native confirmation still owns A.
+  settle(h, { ref: tuple(124), accepted: true, confidence: 96 });
+  assert.equal(h.messages.filter(m => m.kind === 'scan').length, 1);
+  h.bridge.releaseReview();
+  assert.equal(h.scannerStarts, 2, 'saving re-arms complete candidate snapshots');
+  assert.equal(h.messages.filter(m => m.event === 'camera_acquired').length, 1, 'the same camera stream is retained');
+  const count = h.messages.length;
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
+  assert.equal(h.messages.length, count, 'repeat frames of the saved card stay blocked');
+  h.scannerOptions.onShow({ ref: tuple(124), accepted: true, confidence: 96 });
+  h.advance(400); h.scannerOptions.onShow({ same: true, accepted: true, confidence: 96 });
+  assert.equal(h.messages.length, count, 'a replacement still requires the existing settling gate');
+  h.advance(400); h.scannerOptions.onShow({ same: true, accepted: true, confidence: 96 });
+  const deliveries = h.messages.slice(count).filter(m => m.kind === 'scan' || m.kind === 'hide');
+  assert.deepEqual(deliveries.map(m => m.kind), ['hide', 'scan']);
+  assert.equal(deliveries[1].candidates[0].ref, 'p:124');
+  const savedCount = h.messages.length;
+  settle(h, { ref: tuple(124), accepted: true, confidence: 96 });
+  assert.equal(h.messages.length, savedCount, 'the new review freezes after one delivery');
+});
+
+test('unaccepted replacements and partial updates cannot release the saved-card wait', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
+  h.bridge.releaseReview();
+  h.bridge.releaseReview();
+  assert.equal(h.scannerStarts, 2, 'duplicate release does not reset the saved identity');
+  const count = h.messages.length;
+  h.scannerOptions.onHide();
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
+  assert.equal(h.messages.length, count, 'a transient hide is not proof the saved physical card was removed');
+  for (let i = 0; i < 5; i++) {
+    h.scannerOptions.onShow({ ref: tuple(124), accepted: false, confidence: 90 });
+    h.advance(400); h.scannerOptions.onShow({ same: true, accepted: true, confidence: 96 });
+  }
+  assert.equal(h.messages.length, count);
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
+  assert.equal(h.messages.length, count);
+});
+
+test('actual no-solid samples re-arm an identical copy after the saved-card loop reset', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
+  h.bridge.releaseReview();
+  const deliveries = () => h.messages.filter(m => m.kind === 'scan' || m.kind === 'hide');
+  const count = deliveries().length;
+  h.scannerOptions.onStats({ diagnostics: { solid: false } });
+  h.advance(200); h.scannerOptions.onStats({ diagnostics: { solid: false } });
+  assert.equal(deliveries().length, count);
+  h.scannerOptions.onStats(borderStats());
+  h.advance(400); h.scannerOptions.onStats({ diagnostics: { solid: false } });
+  h.advance(299); h.scannerOptions.onStats({ diagnostics: { solid: false } });
+  assert.equal(deliveries().length, count, 'brief misses do not release a saved card');
+  h.advance(1); h.scannerOptions.onStats({ diagnostics: { solid: false } });
+  assert.equal(h.messages.at(-1).kind, 'hide');
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
+  assert.equal(h.messages.at(-1).kind, 'scan');
+  assert.equal(h.messages.filter(m => m.kind === 'scan').length, 2);
+});
+
+test('native frozen recognition identity survives a restarted camera before save completes', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'first', game: 'tcgp:3', autoStart: true });
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
+  await h.bridge.install({ nonce: 'restarted', game: 'tcgp:3', autoStart: true });
+  h.bridge.releaseReview('p:123');
+  const count = h.messages.length;
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
+  assert.equal(h.messages.length, count, 'a saved native review cannot be presented again after restart');
+  settle(h, { ref: tuple(124), accepted: true, confidence: 96 });
+  assert.equal(h.messages.at(-1).kind, 'scan');
+  assert.equal(h.messages.at(-1).nonce, 'restarted');
+  assert.equal(h.messages.at(-1).candidates[0].ref, 'p:124');
 });
 
  test('a corrected first guess must settle before presenting candidates', async () => {
@@ -438,7 +519,7 @@ test('held confirmation and saved-card removal wait never trigger manual search'
   h.bridge.releaseReview();
   for (let i = 0; i < 12; i++) await observeSolidCard(h);
   assert.equal(manualSuggestions(h).length, 0);
-  h.scannerOptions.onHide(); await waitOnCard(h);
+  removeObservedCard(h); await waitOnCard(h);
   assert.equal(manualSuggestions(h).length, 1);
 });
 test('reset, background and stop cancel queued timeout work and clear prior prompt state', async () => {
@@ -456,4 +537,34 @@ test('reset, background and stop cancel queued timeout work and clear prior prom
       await waitOnCard(h); assert.equal(manualSuggestions(h).length, 1, 'explicit Scan Next starts a fresh attempt');
     }
   }
+});
+
+test('steady border preference reaches scanning and can change without reopening the camera', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true, steadyCardBorder: true });
+  assert.equal(h.scannerOptions.retainAcceptedBorder, true);
+  h.bridge.setSteadyCardBorder(false);
+  assert.equal(h.scannerOptions.retainAcceptedBorder, false);
+  assert.equal(h.messages.filter(m => m.event === 'camera_acquired').length, 1);
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
+  h.bridge.setSteadyCardBorder(true);
+  assert.equal(h.scannerOptions.retainAcceptedBorder, false, 'changing a preference cannot interrupt a frozen review');
+  h.bridge.releaseReview();
+  h.bridge.setSteadyCardBorder(true);
+  assert.equal(h.scannerOptions.retainAcceptedBorder, true);
+  const count = h.messages.filter(m => m.kind === 'scan').length;
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
+  assert.equal(h.messages.filter(m => m.kind === 'scan').length, count, 'changing the preference does not re-add the saved card');
+  h.bridge.stop();
+});
+
+test('border retry diagnostics retain booleans without copying candidate or image data', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true, steadyCardBorder: true });
+  h.scannerOptions.onStats({ diagnostics: { borderRetry: true, borderRetained: false, image: 'PRIVATE_IMAGE', ref: 'PRIVATE_CARD' } });
+  const event = h.messages.find(m => m.event === 'border_retry');
+  assert.equal(event.borderRetry, true); assert.equal(event.borderRetained, false);
+  assert.equal(JSON.stringify(event).includes('PRIVATE_'), false);
+  const count = h.messages.filter(m => m.event === 'border_retry').length;
+  h.scannerOptions.onStats({ diagnostics: { borderRetry: 'true', borderRetained: 'PRIVATE_BOOL' } });
+  assert.equal(h.messages.filter(m => m.event === 'border_retry').length, count);
+  h.bridge.stop();
 });

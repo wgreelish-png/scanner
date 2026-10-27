@@ -17,8 +17,16 @@ struct SettingsView: View {
     @State private var showingConnection = false
     @State private var returningFromConnection = false
     @AppStorage("tcgTrackingConnectionIntroduced") private var connectionIntroduced = false
+    private var appVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown" }
+    private var appBuild: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown" }
+    private var appRevision: String { Bundle.main.object(forInfoDictionaryKey: "ScannerWorkflowRevision") as? String ?? "Unknown" }
     var body: some View {
         Form {
+            Section("About this app") {
+                LabeledContent("Version", value: appVersion)
+                LabeledContent("Build", value: appBuild).accessibilityIdentifier("settings.appBuild")
+                LabeledContent("Release", value: appRevision).accessibilityIdentifier("settings.appRevision")
+            }
             Section("Defaults") {
                 Picker("Game", selection: $game) { ForEach(CatalogOptions.games, id: \.self) { Text($0) } }
                 Text("Every scan starts at Near Mint and requires confirmation before saving.").font(.caption)

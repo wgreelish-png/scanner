@@ -29,6 +29,8 @@ struct TCGBridgeEnvelope: Decodable {
     var storagePersisted: Bool?
     var solid: Bool?
     var tracked: Bool?
+    var borderRetry: Bool?
+    var borderRetained: Bool?
     var scanStage: String?
     var rawQuads: Double?
     var rejectedQuads: Double?
@@ -56,7 +58,7 @@ struct ScannerDiagnosticRecord {
     static func validated(_ message: TCGBridgeEnvelope) -> Self? {
         let allowed: Set<String> = ["bridge_ready", "bridge_stopped", "startup_started", "modules_ready", "index_ready", "pack_ready", "pack_cache_warning",
             "backend_ready", "camera_requested", "camera_acquired", "video_playing", "scanner_ready", "startup_failed",
-            "scan_stats", "recognition_snapshot", "scan_issue", "recognition_settled", "camera_interrupted", "camera_backgrounded", "javascript_error", "javascript_rejection"]
+            "scan_stats", "border_retry", "recognition_snapshot", "scan_issue", "recognition_settled", "camera_interrupted", "camera_backgrounded", "javascript_error", "javascript_rejection"]
         guard message.kind == "diagnostic", let event = message.event, allowed.contains(event) else { return nil }
         var fields: [String: String] = [:]
         if let stage = message.stage, ["modules", "index", "pack", "backend", "camera", "video", "scan"].contains(stage) { fields["stage"] = stage }
@@ -79,9 +81,11 @@ struct ScannerDiagnosticRecord {
             if let age = message.sampleAgeMS, age.isFinite, (0...600_000).contains(age), age.rounded(.towardZero) == age { fields["sample_age_ms"] = String(Int(age)) }
         }
         let freshIssueSnapshot = message.sampleAgeMS.map { $0.isFinite && (0...15_000).contains($0) && $0.rounded(.towardZero) == $0 } ?? false
-        if event == "scan_stats" || event == "recognition_snapshot" || (event == "scan_issue" && freshIssueSnapshot) {
+        if event == "scan_stats" || event == "border_retry" || event == "recognition_snapshot" || (event == "scan_issue" && freshIssueSnapshot) {
             if let solid = message.solid { fields["solid"] = String(solid) }
             if let tracked = message.tracked { fields["tracked"] = String(tracked) }
+            if let retry = message.borderRetry { fields["border_retry"] = String(retry) }
+            if let retained = message.borderRetained { fields["border_retained"] = String(retained) }
             if let stage = message.scanStage, ["none", "one", "quick", "full"].contains(stage) { fields["scan_stage"] = stage }
             if let source = message.quadSource, ["none", "detected", "selected"].contains(source) { fields["quad_source"] = source }
             for (key, value) in [("raw_quads", message.rawQuads), ("rejected_quads", message.rejectedQuads),
@@ -96,7 +100,7 @@ struct ScannerDiagnosticRecord {
                 }
             }
         }
-        return Self(event: "web." + event, fields: fields, sampleEvery: event == "scan_stats" ? 5 : 0)
+        return Self(event: "web." + event, fields: fields, sampleEvery: event == "scan_stats" ? 5 : event == "border_retry" ? 1 : 0)
     }
 }
 
@@ -281,6 +285,25 @@ struct ScannerPageRecoveryPolicy {
     }
 }
 
+/// A saved frozen review can finish pricing before its restarted page is ready.
+/// Deliver its removal-wait transition once, when that page can handle it.
+struct ScannerReviewReleaseQueue {
+    private var ready = false
+    private var pending: String?
+    mutating func request(_ ref: String) -> String? {
+        if ready { return ref }
+        pending = ref; return nil
+    }
+    mutating func becameReady() -> String? {
+        ready = true
+        defer { pending = nil }
+        return pending
+    }
+    mutating func restart() { ready = false; pending = nil }
+    mutating func loading() { ready = false }
+    mutating func discardPending() { pending = nil }
+}
+
 @MainActor final class TCGTrackingScannerProvider: NSObject, ObservableObject, ScannerProvider, WKNavigationDelegate, WKUIDelegate {
     let label = "LIVE CAMERA • On-device recognition"
     private(set) var results: AsyncStream<ScanResult>
@@ -295,6 +318,7 @@ struct ScannerPageRecoveryPolicy {
     private var pageTask: Task<Void, Never>?
     private var pageNavigation: WKNavigation?
     private var recoveryAttempts = 0
+    private var reviewRelease = ScannerReviewReleaseQueue()
     static let pageURL = LocalScannerServer.pageURL
     static let gameKeys = ["Pokémon": "tcgp:3", "Magic: The Gathering": "tcgp:1", "Yu-Gi-Oh!": "tcgp:2"]
     private var messageProxy: WeakScanMessageHandler?
@@ -328,6 +352,7 @@ struct ScannerPageRecoveryPolicy {
         loadBundledPage(restartingServer: false)
     }
     private func loadBundledPage(restartingServer: Bool) {
+        reviewRelease.loading()
         pageTask?.cancel()
         let startupNonce = nonce
         pageTask = Task { [weak self] in
@@ -348,6 +373,7 @@ struct ScannerPageRecoveryPolicy {
     func stop() {
         if active { DiagnosticLog.shared.record("web.stopped") }
         active = false; nonce = UUID().uuidString; manualSearchSuggested = false
+        reviewRelease.restart()
         pageTask?.cancel(); pageTask = nil; pageNavigation = nil
         continuation.finish()
         webView.evaluateJavaScript("window.CardShowBridge?.stop()", completionHandler: nil)
@@ -373,9 +399,28 @@ struct ScannerPageRecoveryPolicy {
         return url.scheme == "http" && url.host == "127.0.0.1" && url.port == Int(LocalScannerServer.port) &&
             url.path == "/index.html" && url.query == nil && url.user == nil && url.password == nil
     }
-    func releaseReview() {
+    func releaseReview(recognitionRef: String? = nil) {
         manualSearchSuggested = false
-        webView.evaluateJavaScript("window.CardShowBridge?.releaseReview()", completionHandler: nil)
+        // The frozen recognition can outlive a WebKit restart. Pass its identity
+        // explicitly so removal waiting never attaches to a later camera guess.
+        let validRef = recognitionRef.flatMap { value in
+            value.range(of: #"^(p|t|ts|u):[0-9]{1,12}$"#, options: .regularExpression) != nil ? value : nil
+        }
+        guard let validRef else {
+            webView.evaluateJavaScript("window.CardShowBridge?.releaseReview()", completionHandler: nil); return
+        }
+        guard active, let readyRef = reviewRelease.request(validRef) else { return }
+        dispatchReviewRelease(readyRef)
+    }
+    private func dispatchReviewRelease(_ ref: String) {
+        let data = try? JSONEncoder().encode(ref)
+        let argument = data.flatMap { String(data: $0, encoding: .utf8) } ?? "null"
+        webView.evaluateJavaScript("window.CardShowBridge?.releaseReview(\(argument))", completionHandler: nil)
+    }
+    func setSteadyCardBorder(_ enabled: Bool) {
+        guard active, Self.allowed(webView.url) else { return }
+        DiagnosticLog.shared.record("scanner.steady_border_changed", ["reason": enabled ? "enabled" : "disabled"])
+        webView.evaluateJavaScript("window.CardShowBridge?.setSteadyCardBorder(\(enabled ? "true" : "false")); null;", completionHandler: nil)
     }
     func resumeAfterManualSearchPrompt() {
         guard active, manualSearchSuggested else { return }
@@ -391,6 +436,7 @@ struct ScannerPageRecoveryPolicy {
     }
     func resetRecognition() {
         manualSearchSuggested = false
+        reviewRelease.discardPending()
         normalizer = TCGBridgeNormalizer()
         webView.evaluateJavaScript("window.CardShowBridge?.resetRecognition()", completionHandler: nil)
     }
@@ -428,7 +474,8 @@ struct ScannerPageRecoveryPolicy {
         guard let url = Bundle.main.url(forResource: "TCGTrackingBridge", withExtension: "js"),
               let source = try? String(contentsOf: url, encoding: .utf8),
               let gameKey = Self.gameKeys[game],
-              let data = try? JSONSerialization.data(withJSONObject: ["nonce": nonce, "game": gameKey, "autoStart": true, "cacheToken": LocalScannerServer.shared.cacheToken]),
+              let data = try? JSONSerialization.data(withJSONObject: ["nonce": nonce, "game": gameKey, "autoStart": true, "cacheToken": LocalScannerServer.shared.cacheToken,
+                  "steadyCardBorder": UserDefaults.standard.object(forKey: "steadyCardBorder") as? Bool ?? true]),
               let config = String(data: data, encoding: .utf8) else {
             DiagnosticLog.shared.record("web.resource_missing")
             status = "Scanner adapter resource or game configuration is missing."; return
@@ -464,6 +511,7 @@ struct ScannerPageRecoveryPolicy {
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         guard active, webView === self.webView else { return }
         pageTask?.cancel(); pageTask = nil; pageNavigation = nil; manualSearchSuggested = false
+        reviewRelease.restart()
         DiagnosticLog.shared.record("web.process_terminated")
         status = "Scanner process stopped. Tap Retry Live Scanner."
         continuation.yield(ScanResult(id: UUID(), candidates: [], accepted: false, same: true, visible: false))
@@ -538,6 +586,10 @@ struct ScannerPageRecoveryPolicy {
     }
     private func logDiagnostic(_ message: TCGBridgeEnvelope) {
         guard let record = ScannerDiagnosticRecord.validated(message) else { return }
+        if let event = message.event, ["startup_started", "startup_failed", "camera_interrupted", "camera_backgrounded", "javascript_error", "javascript_rejection"].contains(event) {
+            reviewRelease.loading()
+        }
+        if message.event == "scanner_ready", let ref = reviewRelease.becameReady() { dispatchReviewRelease(ref) }
         DiagnosticLog.shared.record(record.event, record.fields, sampleEvery: record.sampleEvery)
     }
 

@@ -147,6 +147,18 @@ struct CardListView: View {
     }
     var body: some View {
         List {
+            Section("Export inventory") {
+                Button("Export CSV to Files", systemImage: "square.and.arrow.up") { exportCSV() }
+                    .buttonStyle(.borderless).frame(minHeight: 44)
+                    .disabled(list.cards.isEmpty || exporting || shareURL != nil)
+                    .accessibilityIdentifier("list.exportCSV")
+                Button("Share CSV", systemImage: "paperplane") { share() }
+                    .buttonStyle(.borderless).frame(minHeight: 44)
+                    .disabled(list.cards.isEmpty || exporting || shareURL != nil)
+                    .accessibilityIdentifier("list.shareCSV")
+                Text("Exports all \(list.quantity) cards in scan order, including quantity, condition, printing and market value. Search and sorting do not limit the export.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section {
                 if let session = reviewSession {
                     // This row contains several independent controls. Automatic
@@ -220,9 +232,12 @@ struct CardListView: View {
             .toolbar {
                 Menu {
                     Button("Rename") { name = list.name; rename = true }
-                    Button("Save CSV File") { exportText = csv; exporting = true }
+                    Button("Export CSV to Files") { exportCSV() }
+                        .disabled(list.cards.isEmpty || exporting || shareURL != nil)
                     Button("Share CSV") { share() }
+                        .disabled(list.cards.isEmpty || exporting || shareURL != nil)
                 } label: { Image(systemName: "ellipsis.circle") }
+                    .accessibilityLabel("List options")
             }
             .alert("Rename List", isPresented: $rename) {
                 TextField("Name", text: $name)
@@ -261,8 +276,13 @@ struct CardListView: View {
         return sessions.first { $0.id == id }
     }
     private var csv: String { CSVExportService.render(list.orderedCards.map { ExportRow(card: $0.snapshot, quantity: $0.quantity) }) }
+    private func exportCSV() {
+        guard !list.cards.isEmpty, !exporting, shareURL == nil else { return }
+        exportText = csv; exporting = true
+    }
     private func save() { do { try CardListService.save(context) } catch { self.error = error.localizedDescription } }
     private func share() {
+        guard !list.cards.isEmpty, !exporting, shareURL == nil else { return }
         do {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

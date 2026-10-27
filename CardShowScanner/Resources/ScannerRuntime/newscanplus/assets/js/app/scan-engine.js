@@ -8,7 +8,10 @@
  *   setPack({n, lo, hi, cl})           refs are not needed here: results carry pack indices; cl may be 2n long
  *                                      (second half = printing groups, see pack.js)
  *   reset()                            drop fused frames and the tracking seed
- *   scanMat(mat, {reset}) -> Scan      mat: CV_8UC4/CV_8UC3 frame (~1280 long side); not freed here
+ *   scanMat(mat, {reset, retainAcceptedBorder=false}) -> Scan
+ *                                      an opt-in motion reset may retry accepted geometry for <=650ms;
+ *                                      fusion is always cleared and a fresh same-reference match is required
+ *                                      mat: CV_8UC4/CV_8UC3 frame (~1280 long side); not freed here
  *   scanRGBA({data, width, height}, {reset}) -> Scan    copied into one reused Mat
  *   quadRGBA({data, width, height}) -> {quad|null, w, h}  fastQuad on a small (~320 px) frame (gated + solid only)
  *   dispose()                          frees the reused Mats
@@ -47,6 +50,7 @@ import { GAP_MIN, queryFromHex, matchFrames } from '../core/localmatch.js';
 const now = () => performance.now();
 const QUICK = 4;
 const ONE_GAP = GAP_MIN + 1.0;
+const BORDER_RETRY_MS = 650;
 
 const quadKey = (q) => q.map((p) => `${p[0].toFixed(2)},${p[1].toFixed(2)}`).join(';');
 
@@ -115,6 +119,7 @@ export function createScanEngine({ maxFuse = 3, maxCands = 8, stillDrift = 0.04,
     let history = [];
     let anchor = null;
     let seeds = null;
+    let acceptedBorder = null;
     let lsdFirst = false;
     const mats = new Map();
 
@@ -122,6 +127,7 @@ export function createScanEngine({ maxFuse = 3, maxCands = 8, stillDrift = 0.04,
         history = [];
         anchor = null;
         seeds = null;
+        acceptedBorder = null;
         lsdFirst = false;
     }
 
@@ -195,9 +201,17 @@ export function createScanEngine({ maxFuse = 3, maxCands = 8, stillDrift = 0.04,
         }
     }
 
-    function scanMat(mat, { reset: fresh = false } = {}) {
+    function scanMat(mat, { reset: fresh = false, retainAcceptedBorder = false } = {}) {
         const t0 = now();
+        // Carry coordinates only. The old frame hashes, fused votes, and match
+        // result must never survive a motion reset or validate the new frame.
+        let retry = null;
+        if (fresh && retainAcceptedBorder === true && track && acceptedBorder) {
+            const age = t0 - acceptedBorder.at;
+            if (age >= 0 && age <= BORDER_RETRY_MS && acceptedBorder.w === mat.cols && acceptedBorder.h === mat.rows) retry = acceptedBorder;
+        }
         if (fresh) reset();
+        let borderRetry = false, borderRetained = false;
         const ms = { detect: 0, lsd: 0, warp: 0, hash: 0, match: 0, total: 0 };
         const out = { result: null, quad: null, solid: false, w: mat.cols, h: mat.rows, frames: 0, tracked: false, stage: '', ms };
         let selectedSupport = null;
@@ -212,6 +226,7 @@ export function createScanEngine({ maxFuse = 3, maxCands = 8, stillDrift = 0.04,
                 candidateQuads: det?.quads?.length || 0,
                 quadSource: out.quad ? 'selected' : q ? 'detected' : 'none',
             };
+            if (borderRetry) { diagnostics.borderRetry = true; diagnostics.borderRetained = borderRetained; }
             if (selectedBase !== null) diagnostics.selectedBase = selectedBase;
             if (q) {
                 diagnostics.quadAspect = quadAspect(q);
@@ -236,9 +251,18 @@ export function createScanEngine({ maxFuse = 3, maxCands = 8, stillDrift = 0.04,
             return d;
         };
         // tracked seed -> full detection (contours) -> + LSD, each step only while there is no accepted match
-        let det = track && seeds && history.length ? detect(() => trackCandidates(mat, seeds, { drift: stillDrift })) : null;
+        let det = null;
         let run = null;
-        if (det && pack) run = runFrame(mat, det, ms, seen);
+        if (retry && pack) {
+            borderRetry = true;
+            det = detect(() => trackCandidates(mat, [retry.quad], { drift: stillDrift }));
+            if (det?.present) run = runFrame(mat, det, ms, seen);
+            borderRetained = !!(accepted(run) && run.used === run.cur && run.res.best?.i === retry.index);
+            if (!borderRetained) { det = null; run = null; }
+        } else {
+            det = track && seeds && history.length ? detect(() => trackCandidates(mat, seeds, { drift: stillDrift })) : null;
+            if (det && pack) run = runFrame(mat, det, ms, seen);
+        }
         if (!accepted(run)) {
             det = detect(() => detectCandidates(mat, { maxCands, lsd: lsd === 'auto' && lsdFirst ? true : lsd }));
             run = det.present && pack ? runFrame(mat, det, ms, seen) : null;
@@ -270,12 +294,16 @@ export function createScanEngine({ maxFuse = 3, maxCands = 8, stillDrift = 0.04,
         if (history.length > maxFuse) history.shift();
         if (res.best) cur.won = used === cur ? cur.cands[res.best.cand].base : -1;
         seeds = null;
+        acceptedBorder = null;
         if (res.best) {
             const cand = used.cands[res.best.cand];
             selectedBase = cand.base;
             selectedSupport = cand.support;
             anchor = used.quads[cand.base];
-            if (res.accepted && used === cur) seeds = [cand.quad];
+            if (res.accepted && used === cur) {
+                seeds = [cand.quad];
+                acceptedBorder = { quad: cand.quad.map((p) => [p[0], p[1]]), index: res.best.i, at: t0, w: mat.cols, h: mat.rows };
+            }
             out.quad = cand.quad;
             out.result = {
                 accepted: res.accepted,
@@ -305,6 +333,7 @@ export function createScanEngine({ maxFuse = 3, maxCands = 8, stillDrift = 0.04,
         },
         setAllow(mask) {
             allow = mask && pack && mask.length >= pack.n ? mask : null;
+            acceptedBorder = null;
         },
         reset,
         scanMat,

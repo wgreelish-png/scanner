@@ -633,6 +633,64 @@ import SwiftData
         XCTAssertEqual(list.orderedCards[0].snapshot.identity.condition, "Lightly Played")
         model.stop()
     }
+    func testConfirmingEditedDraftWithReturnedSKUStillAddsItsFrozenProduct() async throws {
+        let container = try store(), context = container.mainContext
+        let session = try SessionService.start(game: "Pokémon", context: context)
+        let list = try XCTUnwrap(SessionService.list(for: session, context: context))
+        let model = ScannerViewModel(provider: TestScannerProvider(), pricing: TestMarketPricing())
+        model.start(game: "Pokémon", list: list, context: context, session: session)
+        let cards = MockScannerProvider.samples(game: "Pokémon", index: 0)
+        model.receive(ScanResult(id: UUID(), candidates: cards, accepted: true, same: false))
+        model.changeCondition("Lightly Played"); model.changePrinting("Holofoil")
+        await waitForIdle(model)
+        let edited = try XCTUnwrap(model.selected)
+        XCTAssertNotEqual(edited.id, cards[0].id, "A valid draft changes identity after printing and SKU selection")
+        var foreign = edited; foreign.identity.productID = "p:999999999"
+        model.selectAndAdd(foreign, list: list, context: context)
+        XCTAssertEqual(list.quantity, 0); XCTAssertEqual(model.selected, edited)
+
+        model.selectAndAdd(edited, list: list, context: context)
+        await waitForIdle(model)
+        XCTAssertEqual(list.quantity, 1)
+        let saved = try XCTUnwrap(list.orderedCards.first).snapshot
+        XCTAssertEqual(saved.identity.productID, cards[0].identity.productID)
+        XCTAssertEqual(saved.identity.printing, "Holofoil")
+        XCTAssertEqual(saved.identity.condition, "Lightly Played")
+        XCTAssertEqual(saved.identity.skuID, "10"); XCTAssertEqual(saved.marketPrice, 2)
+        XCTAssertNil(model.selected); XCTAssertFalse(model.selectionInProgress)
+        model.selectAndAdd(edited, list: list, context: context)
+        XCTAssertEqual(list.quantity, 1, "A repeated confirmation cannot save the same result twice")
+        model.stop()
+    }
+    func testNextAcceptedCardCanArriveWithoutHideWhileSavedFramesStayBlocked() async throws {
+        let container = try store(), context = container.mainContext
+        let session = try SessionService.start(game: "Pokémon", context: context)
+        let list = try XCTUnwrap(SessionService.list(for: session, context: context))
+        let model = ScannerViewModel(provider: TestScannerProvider(), pricing: TestMarketPricing())
+        model.start(game: "Pokémon", list: list, context: context, session: session)
+        let cards = MockScannerProvider.samples(game: "Pokémon", index: 0)
+        model.receive(ScanResult(id: UUID(), candidates: [cards[0]], accepted: true, same: false))
+        await waitForIdle(model)
+        model.selectAndAdd(cards[0], list: list, context: context)
+        await waitForIdle(model)
+        XCTAssertEqual(list.quantity, 1); XCTAssertTrue(model.waitingForRemoval)
+
+        model.receive(ScanResult(id: UUID(), candidates: [cards[0]], accepted: true, same: false))
+        model.receive(ScanResult(id: UUID(), candidates: [cards[1]], accepted: true, same: true))
+        model.receive(ScanResult(id: UUID(), candidates: [cards[1]], accepted: false, same: false))
+        XCTAssertNil(model.selected); XCTAssertEqual(list.quantity, 1)
+        // The stream buffers only its newest event, so an earlier hide can be
+        // coalesced away before this fully settled different-card result arrives.
+        model.receive(ScanResult(id: UUID(), candidates: [cards[1]], accepted: true, same: false))
+        await waitForIdle(model)
+        XCTAssertFalse(model.waitingForRemoval)
+        XCTAssertEqual(model.selected?.identity.productID, cards[1].identity.productID)
+        XCTAssertEqual(list.quantity, 1, "Recognizing the next card does not confirm it")
+        model.selectAndAdd(cards[1], list: list, context: context)
+        await waitForIdle(model)
+        XCTAssertEqual(list.orderedCards.map { $0.snapshot.identity.productID }, [cards[0].identity.productID, cards[1].identity.productID])
+        model.stop()
+    }
     func testAlternativePrintingDropdownKeepsConditionAndOnlyConfirmationSavesExactCapturedQuote() async throws {
         let container = try store(), context = container.mainContext
         let session = try SessionService.start(game: "Pokémon", context: context)
