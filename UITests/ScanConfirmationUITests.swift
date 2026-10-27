@@ -14,7 +14,7 @@ import XCTest
         addUIInterruptionMonitor(withDescription: "Camera permission") { alert in
             let text = ([alert.label] + alert.staticTexts.allElementsBoundByIndex.map(\.label)).joined(separator: " ").lowercased()
             guard text.contains("camera") else { return false }
-            for title in ["Allow", "OK"] where alert.buttons[title].exists {
+            for title in ["Allow", "OK", "Allow Access"] where alert.buttons[title].exists {
                 alert.buttons[title].tap(); return true
             }
             return false
@@ -102,10 +102,19 @@ import XCTest
             for alert in owner.alerts.allElementsBoundByIndex where alert.exists {
                 let text = ([alert.label] + alert.staticTexts.allElementsBoundByIndex.map(\.label)).joined(separator: " ").lowercased()
                 guard text.contains("camera") else { continue }
-                for title in ["Allow", "OK"] {
+                // Interruption monitors run only on an attempted app interaction.
+                // Consent correctly makes the underlying Options non-hittable;
+                // waiting for it cannot invoke the monitor. The known modal
+                // intercepts this interaction before the ordinary camera UI.
+                app.tap()
+                guard alert.exists else { return }
+                for title in ["Allow", "OK", "Allow Access"] {
                     let button = alert.buttons[title]
-                    guard button.exists, button.isHittable else { continue }
-                    button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                    // SpringBoard can report a permission button as non-hittable
+                    // even while its actual modal is visible. Use its normal tap;
+                    // app controls still require the visibility assertion above.
+                    guard button.exists else { continue }
+                    button.tap()
                     return
                 }
             }
@@ -114,7 +123,8 @@ import XCTest
     private func failureContext(in app: XCUIApplication) -> String {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let alerts = springboard.alerts.allElementsBoundByIndex.filter(\.exists).map { alert in
-            ([alert.label] + alert.staticTexts.allElementsBoundByIndex.map(\.label)).joined(separator: " ")
+            ([alert.label] + alert.staticTexts.allElementsBoundByIndex.map(\.label)
+                + alert.buttons.allElementsBoundByIndex.map { "button=" + $0.label }).joined(separator: " ")
         }.joined(separator: " | ")
         let tree = app.debugDescription.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
         let system = alerts.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
