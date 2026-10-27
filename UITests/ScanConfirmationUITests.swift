@@ -62,8 +62,16 @@ import XCTest
         XCTAssertTrue(add.waitForExistence(timeout: 5)); add.tap()
         XCTAssertTrue(app.buttons["scanner.scanNext"].waitForExistence(timeout: 10),
             "Explicit confirmation must return to scanning")
-        let viewList = app.buttons["scanner.viewList"]
-        tapFixedControl(viewList, in: app)
+        // Mock intentionally emits another sample every six seconds. Stop that
+        // timer by relaunching before the separate saved-inventory export check;
+        // a fresh sample sheet must not race navigation to the already saved list.
+        // Reopening also verifies confirmation persisted this physical row.
+        app.terminate(); app.launch()
+        let open = app.buttons["home.openExistingLists"]
+        XCTAssertTrue(open.waitForExistence(timeout: 10)); open.tap()
+        let saved = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "1 cards • ")).firstMatch
+        XCTAssertTrue(saved.waitForExistence(timeout: 5), "The confirmed one-card inventory must survive relaunch")
+        saved.tap()
         XCTAssertTrue(app.navigationBars["Review & Offer"].waitForExistence(timeout: 5))
         let export = app.buttons["list.exportCSV"], share = app.buttons["list.shareCSV"]
         XCTAssertTrue(export.waitForExistence(timeout: 5)); XCTAssertTrue(export.isHittable); XCTAssertTrue(export.isEnabled)
