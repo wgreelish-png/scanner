@@ -30,7 +30,11 @@ jobs:
         run: python3 scripts/report_xcode_test_summary.py NativeTests.log
       - name: Report native test failures
         if: failure() && steps.native_tests.outcome == 'failure'
-        run: python3 scripts/annotate_xcode_errors.py NativeTests.log
+        shell: bash
+        run: |
+          python3 scripts/annotate_xcode_errors.py NativeTests.log --fallback 'Native tests failed; see the native-test-results artifact.'
+          xcrun xcresulttool export diagnostics --path TestResults.xcresult --output-path NativeDiagnostics || true
+          python3 scripts/report_simulator_crash.py NativeDiagnostics "$HOME/Library/Logs/DiagnosticReports" | tee NativeCrashSummary.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -38,6 +42,7 @@ jobs:
           path: |
             TestResults.xcresult
             NativeTests.log
+            NativeCrashSummary.log
   ui:
     runs-on: macos-15-intel
     timeout-minutes: 20

@@ -38,4 +38,4 @@ with open(sys.argv[1], 'wb') as output:
         'get-task-allow': True,
     }, output)
 PY
-xcodebuild test -only-testing:"$SCANNER_TEST_TARGET" -parallel-testing-enabled NO -test-timeouts-enabled YES -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 180 -project CardShowScanner.xcodeproj -scheme CardShowScanner -destination "platform=iOS Simulator,id=$DEVICE_ID" CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= CODE_SIGN_ENTITLEMENTS="$SCANNER_SIMULATOR_ENTITLEMENTS" -resultBundlePath TestResults.xcresult 2>&1 | tee NativeTests.log
+xcodebuild test -only-testing:"$SCANNER_TEST_TARGET" -parallel-testing-enabled NO -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 -project CardShowScanner.xcodeproj -scheme CardShowScanner -destination "platform=iOS Simulator,id=$DEVICE_ID" CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= CODE_SIGN_ENTITLEMENTS="$SCANNER_SIMULATOR_ENTITLEMENTS" -resultBundlePath TestResults.xcresult 2>&1 | tee NativeTests.log
