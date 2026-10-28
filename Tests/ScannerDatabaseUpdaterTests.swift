@@ -150,6 +150,73 @@ import XCTest
         XCTAssertTrue(deleted); XCTAssertNil(old)
     }
 
+    func testConditionalManifestReplacementSupportsInitialAndCurrentPointerCommits() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let cache = ScannerDatabaseCache(directory: root)
+        let initial = try await cache.replaceManifestIfCurrent(key: "cur:tcgp:3", expected: nil, data: json("pokemon/old.json"))
+        XCTAssertTrue(initial)
+        let replaced = try await cache.replaceManifestIfCurrent(key: "cur:tcgp:3", expected: "pokemon/old.json", data: json("pokemon/new.json"))
+        XCTAssertTrue(replaced)
+        let cancelled = Task {
+            try await cache.replaceManifestIfCurrent(key: "cur:tcgp:3", expected: "pokemon/new.json", data: json("pokemon/old.json"))
+        }
+        cancelled.cancel()
+        do { _ = try await cancelled.value; XCTFail("Cancelled replacement published") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        let reopened = ScannerDatabaseCache(directory: root)
+        let saved = try await reopened.read("cur:tcgp:3")
+        XCTAssertEqual(saved, try json("pokemon/new.json"))
+    }
+
+    func testRetiredDocumentManifestReplacementCannotRevertNativePublication() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let cache = ScannerDatabaseCache(directory: root)
+        try await stage("old", in: cache, current: true); try await stage("new", in: cache)
+        try await stage("other-game", in: cache, game: "tcgp:1", current: true)
+        try await cache.commitPreparedManifest(gameKey: "tcgp:3", previous: "pokemon/old.json", proposed: "pokemon/new.json")
+        let keys = try await cache.keys()
+        var before: [String: Data] = [:]
+        for key in keys { before[key] = try await cache.read(key) }
+        let stale = try await cache.replaceManifestIfCurrent(key: "cur:tcgp:3", expected: "pokemon/old.json", data: json("pokemon/old.json"))
+        let absent = try await cache.replaceManifestIfCurrent(key: "cur:tcgp:3", expected: nil, data: json("pokemon/old.json"))
+        XCTAssertFalse(stale); XCTAssertFalse(absent)
+        let afterKeys = try await cache.keys(); XCTAssertEqual(afterKeys, keys)
+        for key in keys {
+            let saved = try await cache.read(key)
+            XCTAssertEqual(saved, before[key], "A stale pointer replacement changed \(key)")
+        }
+    }
+
+    func testConditionalManifestReplacementFailsClosedForCorruptMarkersAndInvalidRequests() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let cache = ScannerDatabaseCache(directory: root)
+        try await stage("other-game", in: cache, game: "tcgp:1", current: true)
+        let unrelated = try await cache.read("cur:tcgp:1")
+        let corrupt = [Data([0, 255]), Data([1, 0]), try json(NSNull()), try json("/absolute.json"), try json("../unsafe.json")]
+        for marker in corrupt {
+            try await cache.write("cur:tcgp:3", data: marker)
+            for expected in [nil, "pokemon/old.json"] as [String?] {
+                let replaced = try await cache.replaceManifestIfCurrent(key: "cur:tcgp:3", expected: expected, data: json("pokemon/new.json"))
+                let saved = try await cache.read("cur:tcgp:3")
+                XCTAssertFalse(replaced); XCTAssertEqual(saved, marker)
+            }
+        }
+        let unchanged = try await cache.read("cur:tcgp:3"), keys = try await cache.keys()
+        let invalid: [(String, String?, Data)] = [("cur:tcgp:4", nil, try json("pokemon/new.json")),
+                                                ("M:pokemon/new.json", nil, try json("pokemon/new.json")),
+                                                ("cur:tcgp:3", "/absolute.json", try json("pokemon/new.json")),
+                                                ("cur:tcgp:3", nil, try json("/absolute.json")),
+                                                ("cur:tcgp:3", nil, try json(NSNull())),
+                                                ("cur:tcgp:3", nil, Data([0, 255]))]
+        for (key, expected, data) in invalid {
+            do { _ = try await cache.replaceManifestIfCurrent(key: key, expected: expected, data: data); XCTFail("Invalid replacement accepted") }
+            catch { XCTAssertTrue(error is ScannerDatabaseUpdateFailure) }
+        }
+        let afterKeys = try await cache.keys(), saved = try await cache.read("cur:tcgp:3")
+        let other = try await cache.read("cur:tcgp:1")
+        XCTAssertEqual(afterKeys, keys); XCTAssertEqual(saved, unchanged); XCTAssertEqual(other, unrelated)
+    }
+
     func testPruneFailsClosedForInvalidOrMissingCurrentManifest() async throws {
         let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
         let cache = ScannerDatabaseCache(directory: root)
@@ -233,12 +300,49 @@ import XCTest
         updater.setHomeVisible(true, game: "Unsupported"); await Task.yield(); XCTAssertTrue(runner.calls.isEmpty)
     }
 
-    func testNoCachedPackSkipDoesNotDownloadOrRecordSuccessfulCheck() async {
+    func testNoCachedPackSkipDoesNotDownloadOrRecordSuccessfulCheck() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let cache = ScannerDatabaseCache(directory: root)
         let (defaults, name) = preferences(); defer { defaults.removePersistentDomain(forName: name) }
         let runner = Runner(); runner.response = ScannerDatabaseUpdateResult(status: .skipped, downloadedBytes: 0, cachedShards: 0)
-        let updater = ScannerDatabaseUpdater(defaults: defaults, runner: runner, wait: { _ in })
+        let updater = ScannerDatabaseUpdater(defaults: defaults, cache: cache, runner: runner, wait: { _ in })
         updater.setHomeVisible(true, game: "Pokémon"); await waitUntil { updater.state == .unavailable }
-        XCTAssertNil(updater.lastSuccessfulCheck(for: "Pokémon")); XCTAssertEqual(runner.calls, ["tcgp:3"])
+        XCTAssertNil(updater.lastSuccessfulCheck(for: "Pokémon")); XCTAssertTrue(runner.calls.isEmpty)
+        updater.setHomeVisible(false, game: "Pokémon")
+    }
+
+    func testNativePreflightSkipsLegacyMissingAndInvalidCurrentManifests() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let cache = ScannerDatabaseCache(directory: root)
+        let (defaults, name) = preferences(); defer { defaults.removePersistentDomain(forName: name) }
+        let runner = Runner()
+        let updater = ScannerDatabaseUpdater(defaults: defaults, cache: cache, runner: runner, wait: { _ in })
+        let invalid: [Data?] = [nil, try json(["v": 1, "shards": [["hash": "old-hash", "meta": "old-meta"]]]),
+                                try json(["v": 2, "shards": []]), Data([0, 255]),
+                                try json(["v": 2, "shards": [["hash": "../unsafe", "meta": "old-meta"]]])]
+        try await stage("other-game", in: cache, game: "tcgp:1", current: true)
+        try await cache.write("cur:tcgp:3", data: json("pokemon/old.json"))
+        for manifest in invalid {
+            if let manifest { try await cache.write("M:pokemon/old.json", data: manifest) }
+            else { try await cache.remove("M:pokemon/old.json") }
+            updater.setHomeVisible(true, game: "Pokémon"); await waitUntil { updater.state == .unavailable }
+            XCTAssertTrue(runner.calls.isEmpty); XCTAssertNil(updater.lastSuccessfulCheck(for: "Pokémon"))
+            updater.setHomeVisible(false, game: "Pokémon")
+        }
+        try await cache.write("cur:tcgp:3", data: Data([0, 255]))
+        updater.setHomeVisible(true, game: "Pokémon"); await waitUntil { updater.state == .unavailable }
+        XCTAssertTrue(runner.calls.isEmpty); XCTAssertNil(updater.lastSuccessfulCheck(for: "Pokémon"))
+        updater.setHomeVisible(false, game: "Pokémon")
+    }
+
+    func testEligiblePackCanStillBeSkippedByRunnerWithoutSuccessTimestamp() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let cache = ScannerDatabaseCache(directory: root); try await stage("old", in: cache, current: true)
+        let (defaults, name) = preferences(); defer { defaults.removePersistentDomain(forName: name) }
+        let runner = Runner(); runner.response = ScannerDatabaseUpdateResult(status: .skipped, downloadedBytes: 0, cachedShards: 0)
+        let updater = ScannerDatabaseUpdater(defaults: defaults, cache: cache, runner: runner, wait: { _ in })
+        updater.setHomeVisible(true, game: "Pokémon"); await waitUntil { updater.state == .unavailable }
+        XCTAssertEqual(runner.calls, ["tcgp:3"]); XCTAssertNil(updater.lastSuccessfulCheck(for: "Pokémon"))
         updater.setHomeVisible(false, game: "Pokémon")
     }
 

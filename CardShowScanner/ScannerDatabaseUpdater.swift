@@ -41,6 +41,62 @@ struct ScannerDatabaseUpdatePolicy {
 }
 
 extension ScannerDatabaseCache {
+    /// First downloads and legacy packs remain scanner work. Optional background
+    /// maintenance only opens its local document for an existing native v2 pack.
+    func hasUpdateableManifest(gameKey: String) throws -> Bool {
+        try Task.checkCancellation()
+        guard ["tcgp:1", "tcgp:2", "tcgp:3"].contains(gameKey) else { return false }
+        do {
+            guard let marker = try read("cur:" + gameKey), marker.first == 0,
+                  let path = try JSONSerialization.jsonObject(with: Data(marker.dropFirst()), options: [.fragmentsAllowed]) as? String,
+                  Self.validKey("M:" + path),
+                  path.range(of: #"^[A-Za-z0-9][A-Za-z0-9_./-]*$"#, options: .regularExpression) != nil,
+                  path.split(separator: "/", omittingEmptySubsequences: false).allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }),
+                  let data = try read("M:" + path), data.first == 0,
+                  let manifest = try JSONSerialization.jsonObject(with: Data(data.dropFirst())) as? [String: Any],
+                  let version = manifest["v"] as? NSNumber, CFGetTypeID(version) != CFBooleanGetTypeID(), version.doubleValue == 2,
+                  let shards = manifest["shards"] as? [[String: Any]], !shards.isEmpty,
+                  shards.count <= 4094 else { return false }
+            let directory = path.lastIndex(of: "/").map { String(path[...$0]) } ?? ""
+            return shards.allSatisfy { shard in
+                guard let hash = shard["hash"] as? String, let metadata = shard["meta"] as? String,
+                      hash.range(of: #"^[A-Za-z0-9][A-Za-z0-9_.-]{0,199}$"#, options: .regularExpression) != nil,
+                      metadata.range(of: #"^[A-Za-z0-9][A-Za-z0-9_.-]{0,199}$"#, options: .regularExpression) != nil else { return false }
+                return Self.validKey("h:" + directory + hash) && Self.validKey("m:" + directory + metadata)
+            }
+        } catch {
+            if error is CancellationError { throw error }
+            return false
+        }
+    }
+
+    /// Resolve a document's saved pointer against the native pointer in one actor
+    /// operation, so a retired document cannot overwrite a newer publication.
+    @discardableResult
+    func replaceManifestIfCurrent(key: String, expected: String?, data: Data) throws -> Bool {
+        try Task.checkCancellation()
+        guard ["cur:tcgp:1", "cur:tcgp:2", "cur:tcgp:3"].contains(key),
+              expected.map({ !$0.hasPrefix("/") && Self.validKey("M:" + $0) }) ?? true,
+              data.first == 0,
+              let proposed = (try? JSONSerialization.jsonObject(with: Data(data.dropFirst()), options: [.fragmentsAllowed])) as? String,
+              !proposed.hasPrefix("/"), Self.validKey("M:" + proposed) else {
+            throw ScannerDatabaseUpdateFailure.invalidResult
+        }
+        let current: String?
+        if let saved = try read(key) {
+            guard saved.first == 0,
+                  let path = (try? JSONSerialization.jsonObject(with: Data(saved.dropFirst()), options: [.fragmentsAllowed])) as? String,
+                  !path.hasPrefix("/"), Self.validKey("M:" + path) else { return false }
+            current = path
+        } else {
+            current = nil
+        }
+        guard current == expected else { return false }
+        try Task.checkCancellation()
+        try write(key, data: data)
+        return true
+    }
+
     /// A retired document can have already queued prune requests. Resolve each
     /// deletion against current native pointers in this same actor operation;
     /// the old document's earlier keep-set cannot delete a newly published pack.
@@ -154,7 +210,7 @@ extension ScannerDatabaseCache {
     }
     private let defaults: UserDefaults
     private let cache: ScannerDatabaseCache
-    private let runner: any ScannerDatabaseUpdateRunning
+    private var runner: (any ScannerDatabaseUpdateRunning)?
     private let now: @MainActor () -> Date
     private let wait: @MainActor (Duration) async throws -> Void
     private var visible = false
@@ -172,7 +228,7 @@ extension ScannerDatabaseCache {
          now: @escaping @MainActor () -> Date = { .now },
          wait: @escaping @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.defaults = defaults; self.cache = cache
-        self.runner = runner ?? ScannerDatabaseUpdateWebRunner()
+        self.runner = runner
         self.now = now; self.wait = wait
         enabled = defaults.object(forKey: Self.enabledKey) as? Bool ?? true
         if !enabled { state = .disabled }
@@ -204,7 +260,7 @@ extension ScannerDatabaseCache {
     private var allowed: Bool { visible && foreground && enabled && scannerLeases.isEmpty }
     private func cancelWork() {
         generation = UUID(); work?.cancel(); work = nil; workingGame = nil
-        runner.cancel()
+        runner?.cancel()
         state = enabled ? .idle : .disabled
     }
     private func reconsider() {
@@ -222,9 +278,20 @@ extension ScannerDatabaseCache {
             do {
                 try await delay(.seconds(2)); try Task.checkCancellation()
                 guard let self, self.allowed, self.generation == id else { return }
+                let eligible = try await self.cache.hasUpdateableManifest(gameKey: key)
+                try Task.checkCancellation()
+                guard self.allowed, self.generation == id else { return }
+                guard eligible else {
+                    self.state = .unavailable
+                    self.work = nil; self.workingGame = nil
+                    DiagnosticLog.shared.record("database.auto_check_skipped", ["game": key])
+                    return
+                }
                 self.state = .checking
                 DiagnosticLog.shared.record("database.auto_check_started", ["game": key])
-                let result = try await self.runner.run(gameKey: key)
+                let runner = self.runner ?? ScannerDatabaseUpdateWebRunner()
+                self.runner = runner
+                let result = try await runner.run(gameKey: key)
                 try Task.checkCancellation()
                 guard self.allowed, self.generation == id else { return }
                 switch result.status {

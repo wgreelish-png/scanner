@@ -257,8 +257,20 @@ enum LocalScannerListenerState: Sendable {
                     guard let value = try await ScannerDatabaseCache.shared.read(key) else { send(connection, buffer: buffer, status: "404 Not Found", data: Data()); return }
                     send(connection, buffer: buffer, status: "200 OK", data: value)
                 case "PUT" where !body.isEmpty:
-                    try await ScannerDatabaseCache.shared.write(key, data: body)
-                    send(connection, buffer: buffer, status: "204 No Content", data: Data())
+                    if let encoded = headers["x-scanner-previous-manifest"] {
+                        guard encoded.utf8.count <= 2048,
+                              let decoded = encoded.removingPercentEncoding,
+                              let value = try? JSONSerialization.jsonObject(with: Data(decoded.utf8), options: [.fragmentsAllowed]),
+                              value is NSNull || value is String else {
+                            send(connection, buffer: buffer, status: "400 Bad Request", data: Data()); return
+                        }
+                        let committed = try await ScannerDatabaseCache.shared.replaceManifestIfCurrent(
+                            key: key, expected: value as? String, data: body)
+                        send(connection, buffer: buffer, status: committed ? "204 No Content" : "409 Conflict", data: Data())
+                    } else {
+                        try await ScannerDatabaseCache.shared.write(key, data: body)
+                        send(connection, buffer: buffer, status: "204 No Content", data: Data())
+                    }
                 case "DELETE" where body.isEmpty:
                     if headers["x-scanner-prune"] == "1" {
                         // A retired scanner document can have cleanup requests
@@ -271,7 +283,8 @@ enum LocalScannerListenerState: Sendable {
                     send(connection, buffer: buffer, status: "204 No Content", data: Data())
                 default: send(connection, buffer: buffer, status: "405 Method Not Allowed", data: Data())
                 }
-            } catch ScannerCacheFailure.invalidKey { send(connection, buffer: buffer, status: "400 Bad Request", data: Data()) }
+            } catch ScannerDatabaseUpdateFailure.invalidResult { send(connection, buffer: buffer, status: "400 Bad Request", data: Data()) }
+            catch ScannerCacheFailure.invalidKey { send(connection, buffer: buffer, status: "400 Bad Request", data: Data()) }
             catch ScannerCacheFailure.capacity {
                 DiagnosticLog.shared.record("cache.native_failed", ["reason": "capacity", "code": "507"])
                 send(connection, buffer: buffer, status: "507 Insufficient Storage", data: Data())

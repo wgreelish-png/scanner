@@ -128,15 +128,18 @@ export async function loadPackIndex({ requireNetwork = false, cacheResult = true
 }
 
 export async function loadPack(gameKey, onProgress, { groups = null, cacheFirst = false } = {}) {
+    // Capture before selecting a cached path or waiting for the remote index:
+    // native maintenance may publish a newer selection during either await.
+    const expectedMarker = !groups ? await idbGet(`cur:${gameKey}`).catch(() => null) : null;
     // App adaptation: reopening the camera should use a complete saved database
     // without checking the network. Updates are an explicit user action.
     if (cacheFirst) {
         const cachedIndex = await idbGet('index').catch(() => null);
         const entry = cachedIndex?.games?.[gameKey];
-        const previous = await idbGet(`cur:${gameKey}`).catch(() => null);
+        const previous = groups ? await idbGet(`cur:${gameKey}`).catch(() => null) : expectedMarker;
         const path = previous || entry?.v2?.manifest;
         try {
-            if (path) return await loadV2(gameKey, path, onProgress, groups, { cacheOnly: true });
+            if (path) return await loadV2(gameKey, path, onProgress, groups, { cacheOnly: true, expectedMarker });
             if (entry && !entry.v2?.manifest) return await loadV1(gameKey, entry, onProgress, { cacheOnly: true });
         } catch { /* A missing, evicted or damaged cache is repaired below. */ }
     }
@@ -144,17 +147,17 @@ export async function loadPack(gameKey, onProgress, { groups = null, cacheFirst 
     const entry = index.games?.[gameKey];
     if (entry?.v2?.manifest) {
         try {
-            return await loadV2(gameKey, entry.v2.manifest, onProgress, groups);
+            return await loadV2(gameKey, entry.v2.manifest, onProgress, groups, { expectedMarker });
         } catch (err) {
             const last = await idbGet(`cur:${gameKey}`).catch(() => null);
             if (!last || last === entry.v2.manifest) throw err;
             console.warn('[pack] using the last complete pack:', err);
-            return loadV2(gameKey, last, onProgress, groups, { cacheOnly: true });
+            return loadV2(gameKey, last, onProgress, groups, { cacheOnly: true, expectedMarker });
         }
     }
     if (!entry) {
         const last = await idbGet(`cur:${gameKey}`).catch(() => null);
-        if (last) return loadV2(gameKey, last, onProgress, groups, { cacheOnly: true });
+        if (last) return loadV2(gameKey, last, onProgress, groups, { cacheOnly: true, expectedMarker });
         throw new Error('no pack for this game yet');
     }
     return loadV1(gameKey, entry, onProgress);
@@ -244,7 +247,7 @@ async function getManifest(path, cacheOnly, cacheFailed) {
     return manifest;
 }
 
-async function loadV2(gameKey, manifestPath, onProgress, groups, { cacheOnly = false, prepareOnly = false } = {}) {
+async function loadV2(gameKey, manifestPath, onProgress, groups, { cacheOnly = false, prepareOnly = false, expectedMarker = null } = {}) {
     const persistP = requestPersistence();
     const stats = emptyStats();
     const manifest = await getManifest(manifestPath, cacheOnly, () => { stats.cache = 'failed'; });
@@ -303,7 +306,7 @@ async function loadV2(gameKey, manifestPath, onProgress, groups, { cacheOnly = f
     const pack = prepareOnly ? null : assemble(gameKey, manifestPath, parts);
     if (!want && !prepareOnly) {
         // Wait for the complete-pack marker before the camera may navigate away.
-        const committed = await idbPut(`cur:${gameKey}`, manifestPath).then(() => true, () => { stats.cache = 'failed'; return false; });
+        const committed = await idbCommitMarker(gameKey, manifestPath, expectedMarker).then(() => true, () => { stats.cache = 'failed'; return false; });
         // Never prune the previous complete pack when its replacement marker failed.
         if (committed) await idbPruneV2(dir, manifestPath, manifest, gameKey).catch(() => {});
     }
@@ -553,12 +556,13 @@ function nativeAvailable() {
     return globalThis.location?.origin === 'http://127.0.0.1:18764' &&
         typeof globalThis.CardShowNativeCache?.token === 'string' && globalThis.CardShowNativeCache.token.length >= 32;
 }
-async function nativeRequest(path, { method = 'GET', body, prune = false } = {}) {
+async function nativeRequest(path, { method = 'GET', body, prune = false, previousManifest } = {}) {
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 10000);
     try {
         const result = await fetch('/scanner-cache/' + path, {
             method, body, cache: 'no-store', credentials: 'same-origin', signal: controller.signal,
             headers: { 'X-Scanner-Cache': globalThis.CardShowNativeCache.token,
+                ...(previousManifest !== undefined ? { 'X-Scanner-Previous-Manifest': encodeURIComponent(JSON.stringify(previousManifest)) } : {}),
                 ...(prune ? { 'X-Scanner-Prune': '1' } : {}), ...(body ? { 'Content-Type': 'application/octet-stream' } : {}) }
         });
         if (!result.ok && result.status !== 404) throw new Error('Native database cache unavailable');
@@ -597,10 +601,10 @@ function decodeNative(buffer) {
     }
     throw new Error('Invalid native database entry');
 }
-async function nativePut(key, value) {
+async function nativePut(key, value, { previousManifest } = {}) {
     const bytes = encodeNative(value);
     if (bytes.byteLength > 32 * 1024 * 1024) throw new RangeError('Database entry too large');
-    const response = await nativeRequest('entry?key=' + encodeURIComponent(key), { method: 'PUT', body: bytes });
+    const response = await nativeRequest('entry?key=' + encodeURIComponent(key), { method: 'PUT', body: bytes, previousManifest });
     if (response.status !== 204) throw new Error('Native database cache did not commit');
 }
 async function idbGet(key) {
@@ -610,7 +614,12 @@ async function idbGet(key) {
         if (response.status !== 404) return decodeNative(await response.arrayBuffer());
     } catch { /* Repair damaged native entries or migrate an older website cache below. */ }
     const previous = await webIdbGet(key).catch(() => null);
-    if (previous != null) await nativePut(key, previous).catch(() => {});
+    if (previous != null) {
+        if (key.startsWith('cur:')) {
+            try { await nativePut(key, previous, { previousManifest: null }); }
+            catch { return (await readNativeValue(key).catch(() => null)) ?? previous; }
+        } else await nativePut(key, previous).catch(() => {});
+    }
     return previous;
 }
 async function idbGetMany(keys) {
@@ -629,6 +638,10 @@ async function idbKeys() {
     return [...new Set([...native, ...previous])];
 }
 async function idbPut(key, value) { return nativeAvailable() ? nativePut(key, value) : webIdbPut(key, value); }
+async function idbCommitMarker(gameKey, manifestPath, expectedMarker) {
+    const key = `cur:${gameKey}`;
+    return nativeAvailable() ? nativePut(key, manifestPath, { previousManifest: expectedMarker ?? null }) : webIdbPut(key, manifestPath);
+}
 async function idbDelete(test, { prune = false } = {}) {
     if (!nativeAvailable()) return webIdbDelete(test);
     for (const key of (await idbKeys()).filter(test)) await nativeRequest('entry?key=' + encodeURIComponent(key), { method: 'DELETE', prune });
