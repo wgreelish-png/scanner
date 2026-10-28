@@ -62,7 +62,7 @@ struct SettingsView: View {
                 Button(databaseUpdater.isRefreshing ? "Refreshing Database…" : "Refresh Database Now", systemImage: "arrow.clockwise") {
                     databaseUpdater.refreshNow(game: game)
                 }.buttonStyle(.borderless).frame(minHeight: 44)
-                    .disabled(databaseUpdater.isRefreshing)
+                    .disabled(databaseUpdater.isRefreshing || clearingCache)
                     .accessibilityIdentifier("settings.refreshDatabase")
                 Text(databaseUpdater.status).font(.caption).foregroundStyle(.secondary)
                     .accessibilityIdentifier("settings.databaseRefreshStatus")
@@ -84,7 +84,7 @@ struct SettingsView: View {
                         do { try await TCGTrackingScannerProvider.clearStoredCache(); cacheMessage = true }
                         catch { diagnosticError = "Could not clear the scanner database: " + error.localizedDescription }
                     }
-                }.disabled(clearingCache)
+                }.disabled(clearingCache || databaseUpdater.isRefreshing)
                 Text("Removes the downloaded scanner database from this app and clears its web resource caches. Lists, sessions, and sign-in cookies are preserved. Close the scanner first.").font(.caption)
             }
             Section("Diagnostics") {
