@@ -107,6 +107,7 @@ private struct ManualCardConfirmationView: View {
     let onAdded: (CardCandidate) -> Void
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
+    @AppStorage(PricingSource.defaultsKey) private var pricingSource = PricingSource.tcgTracking.rawValue
     @State private var model: ManualCardAddModel
     @State private var showingConnection = false
     @State private var hasRequestedPrice = false
@@ -121,6 +122,7 @@ private struct ManualCardConfirmationView: View {
             Form {
                 Section { CatalogCardPreview(card: model.pricing.card) }
                 Section("Printing & condition") {
+                    PricingSourcePicker(accessibilityID: "catalog.pricingSource")
                     Picker("Type / printing", selection: identityBinding(\.printing)) {
                         ForEach(Array(Set(model.pricing.card.printings + [model.pricing.card.identity.printing])).sorted(), id: \.self) { Text($0) }
                     }.pickerStyle(.menu)
@@ -129,6 +131,9 @@ private struct ManualCardConfirmationView: View {
                     }
                     if !validPrinting { Text("Choose a printing returned for this card.").foregroundStyle(.orange) }
                     LabeledContent("Market value", value: model.pricing.priceLoading ? "Checking…" : (model.pricing.card.marketPrice?.money ?? "Price unavailable"))
+                    if let metadata = model.pricing.card.marketPriceMetadata {
+                        Text(metadata.summary).font(.caption).foregroundStyle(.secondary)
+                    }
                     if let message = model.pricing.priceMessage { Text(message).font(.caption).foregroundStyle(.secondary) }
                     Button("Retry Market Price") { model.pricing.refreshPrice() }.disabled(model.pricing.priceLoading)
                     if model.pricing.priceConnectionRequired {
@@ -150,6 +155,7 @@ private struct ManualCardConfirmationView: View {
                     hasRequestedPrice = true; model.pricing.refreshPrice()
                 }
                 .onDisappear { model.pricing.cancelLookup() }
+                .onChange(of: pricingSource) { _, _ in model.pricing.pricingSourceChanged() }
                 .confirmationDialog("Finish the other active session?", isPresented: $model.needsSessionSwitch) {
                     Button("Finish & Add to This List") { add(finishingOtherSession: true) }
                     Button("Cancel", role: .cancel) {}

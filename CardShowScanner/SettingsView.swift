@@ -30,6 +30,11 @@ struct SettingsView: View {
                 LabeledContent("Build", value: appBuild).accessibilityIdentifier("settings.appBuild")
                 LabeledContent("Release", value: appRevision).accessibilityIdentifier("settings.appRevision")
             }
+            Section("Market pricing") {
+                PricingSourcePicker(accessibilityID: "settings.pricingSource")
+                Text("Existing TCGTracking uses the current website connection. Open API requests condition, printing and language prices directly, without website sign-in. You can switch back at any time.").font(.caption)
+                Text("Open API prices are published daily. The displayed update time describes the provider's data, not a new sale. This setting does not change the weekly recognition-database schedule or saved offers.").font(.caption).foregroundStyle(.secondary)
+            }
             Section("Defaults") {
                 Picker("Game", selection: $game) { ForEach(CatalogOptions.games, id: \.self) { Text($0) } }
                 Text("Every scan starts at Near Mint and requires confirmation before saving.").font(.caption)
@@ -52,7 +57,7 @@ struct SettingsView: View {
                     showingConnection = true
                     DiagnosticLog.shared.record("connection.opened", ["phase": "settings"])
                 }.disabled(returningFromConnection)
-                Text("Enter your sign-in details or use the website. Remember sign-in stores your details in this iPhone's Keychain; remove them with Forget Saved Sign-In. The website session is shared with market pricing. You can scan and save cards without prices.").font(.caption)
+                Text("This connection is used by Existing TCGTracking pricing. Open API pricing does not use website sign-in. Remember sign-in stores your details in this iPhone's Keychain; remove them with Forget Saved Sign-In. You can scan and save cards without prices.").font(.caption)
             }
             Section("Scanner") {
                 Toggle("Automatic Database Updates", isOn: $autoDatabaseUpdates)

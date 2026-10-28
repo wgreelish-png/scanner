@@ -89,6 +89,7 @@ struct HomeView: View {
             }.navigationTitle("Card Show Scanner")
                 .toolbar {
                     NavigationLink { SettingsView() } label: { Image(systemName: "gearshape") }
+                        .accessibilityIdentifier("home.settings")
                 }
                 .navigationDestination(item: $destination) { id in
                     if let session = sessions.first(where: { $0.id == id }) { BatchScannerDestination(session: session) }

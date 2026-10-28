@@ -7,6 +7,15 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        D16A1F0A7B6E4A8395D10011 /* PricingSourceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16A1F0A7B6E4A8395D10012; };
+        D16A1F0A7B6E4A8395D1000F /* PricingSourceIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16A1F0A7B6E4A8395D10010; };
+        D16A1F0A7B6E4A8395D1000D /* PricingSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16A1F0A7B6E4A8395D1000E; };
+        D16A1F0A7B6E4A8395D1000B /* OpenAPISetResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16A1F0A7B6E4A8395D1000C; };
+        D16A1F0A7B6E4A8395D10009 /* OpenAPIMarketPricingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16A1F0A7B6E4A8395D1000A; };
+        D16A1F0A7B6E4A8395D10007 /* PricingSourcePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16A1F0A7B6E4A8395D10008; };
+        D16A1F0A7B6E4A8395D10005 /* PricingSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16A1F0A7B6E4A8395D10006; };
+        D16A1F0A7B6E4A8395D10003 /* OpenAPISetResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16A1F0A7B6E4A8395D10004; };
+        D16A1F0A7B6E4A8395D10001 /* OpenAPIMarketPricing.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16A1F0A7B6E4A8395D10002; };
         D15A1F0A7B6E4A8395D10001 /* ScannerDatabaseUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15A1F0A7B6E4A8395D10002; };
         D15A1F0A7B6E4A8395D10003 /* ScannerDatabaseUpdaterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15A1F0A7B6E4A8395D10004; };
         D15A1F0A7B6E4A8395D10005 /* DatabaseUpdater.js in Resources */ = {isa = PBXBuildFile; fileRef = D15A1F0A7B6E4A8395D10006; };
@@ -80,6 +89,15 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        D16A1F0A7B6E4A8395D10012 /* PricingSourceUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingSourceUITests.swift; sourceTree = "<group>"; };
+        D16A1F0A7B6E4A8395D10010 /* PricingSourceIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingSourceIntegrationTests.swift; sourceTree = "<group>"; };
+        D16A1F0A7B6E4A8395D1000E /* PricingSourceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingSourceTests.swift; sourceTree = "<group>"; };
+        D16A1F0A7B6E4A8395D1000C /* OpenAPISetResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAPISetResolverTests.swift; sourceTree = "<group>"; };
+        D16A1F0A7B6E4A8395D1000A /* OpenAPIMarketPricingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAPIMarketPricingTests.swift; sourceTree = "<group>"; };
+        D16A1F0A7B6E4A8395D10008 /* PricingSourcePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingSourcePicker.swift; sourceTree = "<group>"; };
+        D16A1F0A7B6E4A8395D10006 /* PricingSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingSource.swift; sourceTree = "<group>"; };
+        D16A1F0A7B6E4A8395D10004 /* OpenAPISetResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAPISetResolver.swift; sourceTree = "<group>"; };
+        D16A1F0A7B6E4A8395D10002 /* OpenAPIMarketPricing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAPIMarketPricing.swift; sourceTree = "<group>"; };
         D15A1F0A7B6E4A8395D10002 /* ScannerDatabaseUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerDatabaseUpdater.swift; sourceTree = "<group>"; };
         D15A1F0A7B6E4A8395D10004 /* ScannerDatabaseUpdaterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerDatabaseUpdaterTests.swift; sourceTree = "<group>"; };
         D15A1F0A7B6E4A8395D10006 /* DatabaseUpdater.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = Resources/DatabaseUpdater.js; sourceTree = "<group>"; };
@@ -165,7 +183,8 @@
 /* Begin PBXGroup section */
         C4D311E710AB4F79A8B00003 /* UITests */ = {
             isa = PBXGroup;
-            children = (C4D311E710AB4F79A8B0000C /* ListDeletionUITests.swift */, D12C0F1A7B6E4A8395D10002 /* ScanConfirmationUITests.swift */, D14A1F0A7B6E4A8395D10006 /* ListOutcomeUITests.swift */,);
+            children = (
+                D16A1F0A7B6E4A8395D10012 /* PricingSourceUITests.swift */,C4D311E710AB4F79A8B0000C /* ListDeletionUITests.swift */, D12C0F1A7B6E4A8395D10002 /* ScanConfirmationUITests.swift */, D14A1F0A7B6E4A8395D10006 /* ListOutcomeUITests.swift */,);
             path = UITests;
             sourceTree = "<group>";
         };
@@ -182,6 +201,10 @@
 		59830EBC3A4184110566BF1A /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+                D16A1F0A7B6E4A8395D1000A /* OpenAPIMarketPricingTests.swift */,
+                D16A1F0A7B6E4A8395D1000C /* OpenAPISetResolverTests.swift */,
+                D16A1F0A7B6E4A8395D1000E /* PricingSourceTests.swift */,
+                D16A1F0A7B6E4A8395D10010 /* PricingSourceIntegrationTests.swift */,
                 D15A1F0A7B6E4A8395D10004 /* ScannerDatabaseUpdaterTests.swift */,
                 D14A1F0A7B6E4A8395D10004 /* ListOutcomeTests.swift */,
                 D13A1F0A7B6E4A8395D10002 /* ScannerUndoTests.swift */,
@@ -207,6 +230,10 @@
 		878A52FC5FF6A57D50B7B870 /* CardShowScanner */ = {
 			isa = PBXGroup;
 			children = (
+                D16A1F0A7B6E4A8395D10002 /* OpenAPIMarketPricing.swift */,
+                D16A1F0A7B6E4A8395D10004 /* OpenAPISetResolver.swift */,
+                D16A1F0A7B6E4A8395D10006 /* PricingSource.swift */,
+                D16A1F0A7B6E4A8395D10008 /* PricingSourcePicker.swift */,
                 D15A1F0A7B6E4A8395D10002 /* ScannerDatabaseUpdater.swift */,
                 D15A1F0A7B6E4A8395D10006 /* DatabaseUpdater.js */,
                 D14A1F0A7B6E4A8395D10002 /* ListOutcome.swift */,
@@ -383,13 +410,18 @@
         C4D311E710AB4F79A8B00004 /* Sources */ = {
             isa = PBXSourcesBuildPhase;
             buildActionMask = 2147483647;
-            files = (C4D311E710AB4F79A8B0000D /* ListDeletionUITests.swift in Sources */, D12C0F1A7B6E4A8395D10001 /* ScanConfirmationUITests.swift in Sources */, D14A1F0A7B6E4A8395D10005 /* ListOutcomeUITests.swift in Sources */,);
+            files = (
+                D16A1F0A7B6E4A8395D10011 /* PricingSourceUITests.swift in Sources */,C4D311E710AB4F79A8B0000D /* ListDeletionUITests.swift in Sources */, D12C0F1A7B6E4A8395D10001 /* ScanConfirmationUITests.swift in Sources */, D14A1F0A7B6E4A8395D10005 /* ListOutcomeUITests.swift in Sources */,);
             runOnlyForDeploymentPostprocessing = 0;
         };
 		B2298129A58493C45A5D7D9A /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                D16A1F0A7B6E4A8395D10009 /* OpenAPIMarketPricingTests.swift in Sources */,
+                D16A1F0A7B6E4A8395D1000B /* OpenAPISetResolverTests.swift in Sources */,
+                D16A1F0A7B6E4A8395D1000D /* PricingSourceTests.swift in Sources */,
+                D16A1F0A7B6E4A8395D1000F /* PricingSourceIntegrationTests.swift in Sources */,
                 D15A1F0A7B6E4A8395D10003 /* ScannerDatabaseUpdaterTests.swift in Sources */,
                 D14A1F0A7B6E4A8395D10003 /* ListOutcomeTests.swift in Sources */,
                 C4D311E710AB4F79A8B00011 /* ListDeletionTests.swift in Sources */,
@@ -414,6 +446,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                D16A1F0A7B6E4A8395D10001 /* OpenAPIMarketPricing.swift in Sources */,
+                D16A1F0A7B6E4A8395D10003 /* OpenAPISetResolver.swift in Sources */,
+                D16A1F0A7B6E4A8395D10005 /* PricingSource.swift in Sources */,
+                D16A1F0A7B6E4A8395D10007 /* PricingSourcePicker.swift in Sources */,
                 D15A1F0A7B6E4A8395D10001 /* ScannerDatabaseUpdater.swift in Sources */,
                 D14A1F0A7B6E4A8395D10001 /* ListOutcome.swift in Sources */,
                 C4D311E710AB4F79A8B0000F /* ListDeletionModel.swift in Sources */,
@@ -504,7 +540,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 15;
+				CURRENT_PROJECT_VERSION = 16;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -540,7 +576,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 15;
+				CURRENT_PROJECT_VERSION = 16;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";

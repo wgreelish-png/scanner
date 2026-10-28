@@ -27,6 +27,7 @@ struct CardCandidate: Identifiable, Codable, Hashable, Sendable {
     var printings: [String]
     var printingQuotes: [CardPrinting]? = nil
     var requiresPrintingSelection: Bool? = nil
+    var marketPriceMetadata: MarketPriceMetadata? = nil
 }
 
 struct ScanResult: Identifiable {

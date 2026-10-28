@@ -383,6 +383,7 @@ struct CardEditorView: View {
     let item: InventoryCard
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
+    @AppStorage(PricingSource.defaultsKey) private var pricingSource = PricingSource.tcgTracking.rawValue
     @State private var pricing: CardEditorPricingModel
     @State private var quantity: Int
     @State private var error: String?
@@ -414,9 +415,13 @@ struct CardEditorView: View {
                     TextField("Image URL (optional)", text: Binding(get: { pricing.card.imageURL?.absoluteString ?? "" }, set: { pricing.card.imageURL = URL(string: $0) })).keyboardType(.URL).textInputAutocapitalization(.never)
                 }
                 Section("Inventory") {
+                    PricingSourcePicker(accessibilityID: "cardEditor.pricingSource")
                     Picker("Condition", selection: identityBinding(\.condition)) { ForEach(CatalogOptions.conditions, id: \.self) { Text($0) } }
                     Stepper("Quantity: \(quantity)", value: $quantity, in: 1...100000)
                     TextField("Market price USD — blank means unknown", text: Binding(get: { pricing.price }, set: { pricing.setPrice($0) })).keyboardType(.decimalPad)
+                    if let metadata = pricing.card.marketPriceMetadata {
+                        Text(metadata.summary).font(.caption).foregroundStyle(.secondary)
+                    }
                     if pricing.priceLoading { ProgressView("Checking market value…") }
                     if let message = pricing.priceMessage { Text(message).font(.caption).foregroundStyle(.secondary) }
                     if pricing.priceConnectionRequired {
@@ -441,6 +446,7 @@ struct CardEditorView: View {
                     ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.disabled(pricing.priceLoading) }
                 }
                 .task { pricing.loadPrintingOptions() }
+                .onChange(of: pricingSource) { _, _ in pricing.pricingSourceChanged() }
                 .onDisappear { pricing.cancelLookup() }
                 .fullScreenCover(isPresented: $showingConnection, onDismiss: { pricing.refreshPrice() }) {
                     TCGTrackingConnectionView(continueTitle: "Return to Card") {

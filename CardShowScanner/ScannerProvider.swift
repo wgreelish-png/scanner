@@ -67,6 +67,7 @@ struct MarketDetails: Sendable {
     var quote: MarketQuote?
     var printings: [String] = []
     var printingsByProduct: [String: [String]] = [:]
+    var metadata: MarketPriceMetadata? = nil
 }
 
 protocol MarketPricing: Sendable {
