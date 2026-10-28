@@ -56,12 +56,15 @@ import XCTest
         XCTAssertTrue(waitForValue("Holofoil", of: printing))
         XCTAssertTrue(waitForValue("Lightly Played", of: condition))
         XCTAssertTrue(confirmation.exists, "Changing printing must not confirm the card")
-        XCTAssertFalse(app.buttons["scanner.scanNext"].exists)
+        XCTAssertFalse(app.buttons["scanner.addAnotherCopy"].exists)
 
         let add = app.buttons["scanReview.add." + firstProduct]
         XCTAssertTrue(add.waitForExistence(timeout: 5)); add.tap()
-        XCTAssertTrue(app.buttons["scanner.scanNext"].waitForExistence(timeout: 10),
-            "Explicit confirmation must return to scanning")
+        XCTAssertTrue(app.staticTexts["scanner.lastAdded"].waitForExistence(timeout: 10),
+            "Explicit confirmation must return with a committed last-card action")
+        XCTAssertTrue(app.buttons["scanner.undoLastAdd"].exists)
+        XCTAssertTrue(app.buttons["scanner.addAnotherCopy"].exists)
+        XCTAssertFalse(app.buttons["scanner.scanNext"].exists, "The next card must not require a Next button")
         // Mock intentionally emits another sample every six seconds. Stop that
         // timer by relaunching before the separate saved-inventory export check;
         // a fresh sample sheet must not race navigation to the already saved list.

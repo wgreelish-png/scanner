@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        D13A1F0A7B6E4A8395D10001 /* ScannerUndoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D13A1F0A7B6E4A8395D10002; };
+        D13A1F0A7B6E4A8395D10003 /* ScannerQuickActionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D13A1F0A7B6E4A8395D10004; };
         D12C0F1A7B6E4A8395D10001 /* ScanConfirmationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D12C0F1A7B6E4A8395D10002; };
         D1AB9CA2F03E4EA6B9C10007 /* ManualCardSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1AB9CA2F03E4EA6B9C10008; };
         D1AB9CA2F03E4EA6B9C10005 /* ManualCardSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1AB9CA2F03E4EA6B9C10006; };
@@ -72,6 +74,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        D13A1F0A7B6E4A8395D10002 /* ScannerUndoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerUndoTests.swift; sourceTree = "<group>"; };
+        D13A1F0A7B6E4A8395D10004 /* ScannerQuickActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerQuickActionTests.swift; sourceTree = "<group>"; };
         D12C0F1A7B6E4A8395D10002 /* ScanConfirmationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanConfirmationUITests.swift; sourceTree = "<group>"; };
         D1AB9CA2F03E4EA6B9C10008 /* ManualCardSearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualCardSearchTests.swift; sourceTree = "<group>"; };
         D1AB9CA2F03E4EA6B9C10006 /* ManualCardSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualCardSearchView.swift; sourceTree = "<group>"; };
@@ -166,6 +170,8 @@
 		59830EBC3A4184110566BF1A /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+                D13A1F0A7B6E4A8395D10002 /* ScannerUndoTests.swift */,
+                D13A1F0A7B6E4A8395D10004 /* ScannerQuickActionTests.swift */,
                 C4D311E710AB4F79A8B00010 /* ListDeletionTests.swift */,
                 62C79FEE709E4526B4520002 /* CameraPermissionTests.swift */,
                 D1AB9CA2F03E4EA6B9C10008 /* ManualCardSearchTests.swift */,
@@ -369,6 +375,8 @@
                 C4D311E710AB4F79A8B00011 /* ListDeletionTests.swift in Sources */,
                 62C79FEE709E4526B4520001 /* CameraPermissionTests.swift in Sources */,
                 D1AB9CA2F03E4EA6B9C10007 /* ManualCardSearchTests.swift in Sources */,
+                D13A1F0A7B6E4A8395D10001 /* ScannerUndoTests.swift in Sources */,
+                D13A1F0A7B6E4A8395D10003 /* ScannerQuickActionTests.swift in Sources */,
                 C0C2D1F0A3AD4B7CB6500005 /* ScannerPageRecoveryTests.swift in Sources */,
                 C0C2D1F0A3AD4B7CB6500003 /* ScannerDiagnosticsTests.swift in Sources */,
                 C0C2D1F0A3AD4B7CB6500001 /* LocalScannerServerTests.swift in Sources */,
@@ -474,7 +482,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 13;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -510,7 +518,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 13;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";

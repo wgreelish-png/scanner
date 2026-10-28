@@ -206,7 +206,7 @@ test('a different accepted card settles after saving without requiring an upstre
   assert.equal(h.messages.length, savedCount, 'the new review freezes after one delivery');
 });
 
-test('unaccepted replacements and partial updates cannot release the saved-card wait', async () => {
+test('saved references, partial-only updates and weak guesses cannot release the saved-card wait', async () => {
   const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
   settle(h, { ref: tuple(), accepted: true, confidence: 96 });
   h.bridge.releaseReview();
@@ -217,12 +217,32 @@ test('unaccepted replacements and partial updates cannot release the saved-card 
   settle(h, { ref: tuple(), accepted: true, confidence: 96 });
   assert.equal(h.messages.length, count, 'a transient hide is not proof the saved physical card was removed');
   for (let i = 0; i < 5; i++) {
-    h.scannerOptions.onShow({ ref: tuple(124), accepted: false, confidence: 90 });
+    h.scannerOptions.onShow({ same: true, accepted: true, confidence: 96 });
+    h.scannerOptions.onShow({ ref: tuple(124), accepted: false, confidence: 49 });
     h.advance(400); h.scannerOptions.onShow({ same: true, accepted: true, confidence: 96 });
   }
   assert.equal(h.messages.length, count);
   settle(h, { ref: tuple(), accepted: true, confidence: 96 });
   assert.equal(h.messages.length, count);
+});
+
+test('a different tentative card uses the normal slower settling gate after saving', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
+  h.bridge.releaseReview();
+  const count = h.messages.length;
+  h.scannerOptions.onShow({ ref: tuple(124), accepted: false, confidence: 90 });
+  for (let i = 0; i < 3; i++) {
+    h.advance(400); h.scannerOptions.onShow({ same: true, accepted: false, confidence: 90 });
+  }
+  assert.equal(h.messages.length, count, 'a tentative replacement cannot use the faster accepted gate');
+  h.advance(400); h.scannerOptions.onShow({ same: true, accepted: false, confidence: 90 });
+  const deliveries = h.messages.slice(count).filter(m => m.kind === 'scan' || m.kind === 'hide');
+  assert.deepEqual(deliveries.map(m => m.kind), ['hide', 'scan']);
+  assert.equal(deliveries[1].candidates[0].ref, 'p:124');
+  assert.equal(deliveries[1].accepted, false);
+  assert.equal(h.scannerStarts, 2, 'a settled different card needs no further loop reset');
+  assert.equal(h.messages.filter(m => m.event === 'camera_acquired').length, 1);
 });
 
 test('actual no-solid samples re-arm an identical copy after the saved-card loop reset', async () => {
@@ -231,6 +251,7 @@ test('actual no-solid samples re-arm an identical copy after the saved-card loop
   h.bridge.releaseReview();
   const deliveries = () => h.messages.filter(m => m.kind === 'scan' || m.kind === 'hide');
   const count = deliveries().length;
+  const starts = h.scannerStarts;
   h.scannerOptions.onStats({ diagnostics: { solid: false } });
   h.advance(200); h.scannerOptions.onStats({ diagnostics: { solid: false } });
   assert.equal(deliveries().length, count);
@@ -240,6 +261,10 @@ test('actual no-solid samples re-arm an identical copy after the saved-card loop
   assert.equal(deliveries().length, count, 'brief misses do not release a saved card');
   h.advance(1); h.scannerOptions.onStats({ diagnostics: { solid: false } });
   assert.equal(h.messages.at(-1).kind, 'hide');
+  assert.equal(h.scannerStarts, starts + 1, 'verified absence clears upstream same-art state');
+  h.scannerOptions.onStats({ diagnostics: { solid: false } });
+  assert.equal(h.scannerStarts, starts + 1, 'one physical boundary rearms the loop only once');
+  assert.equal(h.messages.filter(m => m.event === 'camera_acquired').length, 1, 'rearming retains the authorized camera');
   settle(h, { ref: tuple(), accepted: true, confidence: 96 });
   assert.equal(h.messages.at(-1).kind, 'scan');
   assert.equal(h.messages.filter(m => m.kind === 'scan').length, 2);

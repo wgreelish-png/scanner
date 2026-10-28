@@ -24,30 +24,56 @@ import AudioToolbox
     private var priceTask: Task<Void, Never>?
     private var confirmationDeadline: Task<Void, Never>?
     private let confirmationTimeout: Duration
+    private let quickActionCooldown: Duration
+    private var quickActionTask: Task<Void, Never>?
+    private(set) var quickActionCoolingDown = false
     private var priceRequestID = UUID()
     private var savedRecognitionRef: String?
+    private var savedRecognitionEpisode: UUID?
+    private var actionList: CardList?
+    private struct SavedAddition {
+        let receipt: ScannerAddReceipt
+        var review: ScanResult?
+        let printings: [String: [String]]
+    }
+    private var additions: [SavedAddition] = []
     private let provider: any ScannerProvider
     private let pricing: any MarketPricing
     // Injection makes a failed transaction/retry testable without corrupting a store.
     private let saveCard: @MainActor (CardCandidate, ScanSession, CardList, ModelContext, String?) throws -> Void
+    private let undoCard: @MainActor (ScannerAddReceipt, ScanSession, CardList, ModelContext) throws -> Void
     var label: String { provider.label }
     var liveProvider: TCGTrackingScannerProvider? { provider as? TCGTrackingScannerProvider }
+    private var currentAddition: SavedAddition? {
+        guard let last = additions.last, let session, let list = actionList,
+              SessionService.canUndoScannerAdd(last.receipt, session: session, list: list) else { return nil }
+        return last
+    }
+    var lastAddedCard: CardCandidate? { currentAddition?.receipt.card }
+    var canUndoLastAdd: Bool {
+        selected == nil && !saving && !selectionInProgress && !quickActionCoolingDown && currentAddition != nil
+    }
+    var canAddAnotherCopy: Bool { canUndoLastAdd }
     init(provider: (any ScannerProvider)? = nil, pricing: any MarketPricing = OnlineMarketPricing(),
          confirmationTimeout: Duration = .seconds(4),
+         quickActionCooldown: Duration = .milliseconds(500),
          saveCard: @escaping @MainActor (CardCandidate, ScanSession, CardList, ModelContext, String?) throws -> Void = {
              try SessionService.add($0, session: $1, list: $2, context: $3, recognitionRef: $4)
+         }, undoCard: @escaping @MainActor (ScannerAddReceipt, ScanSession, CardList, ModelContext) throws -> Void = {
+             try SessionService.undoScannerAdd($0, session: $1, list: $2, context: $3)
          }) {
         self.provider = provider ?? TCGTrackingScannerProvider()
         self.pricing = pricing; self.saveCard = saveCard; self.confirmationTimeout = confirmationTimeout
+        self.quickActionCooldown = quickActionCooldown; self.undoCard = undoCard
     }
     func start(game: String, list: CardList, context: ModelContext, session: ScanSession) {
         guard consumer == nil, !paused else { return }
         guard session.isActive, session.listID == list.id, session.game == game else {
             error = BatchFailure.unavailable.localizedDescription; return
         }
-        self.session = session
+        self.session = session; actionList = list
         DiagnosticLog.shared.record("scanner.start", ["provider": liveProvider == nil ? "mock" : "live"])
-        if selected == nil { waitingForRemoval = false; savedRecognitionRef = nil }
+        if selected == nil { waitingForRemoval = false; savedRecognitionRef = nil; savedRecognitionEpisode = nil }
         Task { [pricing] in await pricing.prepare() }
         provider.start(game: game)
         let stream = provider.results
@@ -62,16 +88,18 @@ import AudioToolbox
         guard !paused, !saving, selected == nil else {
             DiagnosticLog.shared.record("recognition.held", sampleEvery: 5); return
         }
-        if !scan.visible { waitingForRemoval = false; savedRecognitionRef = nil; return }
+        if !scan.visible { waitingForRemoval = false; savedRecognitionRef = nil; savedRecognitionEpisode = nil; return }
         guard !scan.same, let first = scan.candidates.first else { return }
         if waitingForRemoval {
-            // A hide and following scan can be coalesced by the stream's newest-
-            // only buffer. A fresh accepted different card is also a valid next
-            // episode; repeat frames of the saved card remain suppressed.
-            guard scan.accepted, first.confidence >= 50, let savedRecognitionRef,
-                  first.identity.productID != savedRecognitionRef else { return }
-            waitingForRemoval = false; self.savedRecognitionRef = nil
-            DiagnosticLog.shared.record("recognition.next_card", ["reason": "different_match"])
+            // The bridge has already settled these full results. A different
+            // card uses the normal accepted/tentative gates. After real absence,
+            // the normalizer also assigns a new episode even for the same art;
+            // its preceding hide can be coalesced by the newest-only stream.
+            let changedCard = savedRecognitionRef.map { first.identity.productID != $0 } ?? false
+            let newEpisode = savedRecognitionEpisode.map { scan.id != $0 } ?? false
+            guard first.confidence >= 50, changedCard || newEpisode else { return }
+            waitingForRemoval = false; self.savedRecognitionRef = nil; savedRecognitionEpisode = nil
+            DiagnosticLog.shared.record("recognition.next_card", ["reason": changedCard ? "different_match" : "new_episode"])
         }
         result = scan; candidatePrintings = [:]
         var card = first; card.identity.condition = "Near Mint"
@@ -218,15 +246,21 @@ import AudioToolbox
         saving = true
         defer { saving = false }
         let recognitionRef = result?.candidates.first?.identity.productID ?? selected.identity.productID
+        let episode = result?.id
+        let previousIDs = Set(list.cards.map(\.id)), previousRef = session.lastConsumedRecognitionRef
+        let review = result, printingChoices = candidatePrintings
         do {
             try SessionService.withScanSave(session: session, list: list, context: context) {
                 try self.saveCard(selected, session, list, context, self.result?.candidates.first?.identity.productID)
             }
+            rememberAddition(previousIDs: previousIDs, previousRef: previousRef, list: list,
+                             session: session, review: review, printings: printingChoices)
             // Only a committed transaction releases the review snapshot.
             priceTask?.cancel(); priceRequestID = UUID()
             result = nil; candidatePrintings = [:]; self.selected = nil; confirmed = false; priceMessage = nil; priceConnectionRequired = false
-            waitingForRemoval = true; savedRecognitionRef = recognitionRef; error = nil
+            waitingForRemoval = true; savedRecognitionRef = recognitionRef; savedRecognitionEpisode = episode; error = nil
             liveProvider?.releaseReview(recognitionRef: recognitionRef)
+            coolDownQuickActions()
             DiagnosticLog.shared.record("add.saved", ["priced": String(selected.marketPrice != nil)])
             if UserDefaults.standard.object(forKey: "haptics") as? Bool ?? true {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -237,12 +271,80 @@ import AudioToolbox
             DiagnosticLog.shared.failure("persistence.failed", error)
         }
     }
+    /// Explicitly confirms one more physical copy using the last committed quote.
+    /// It never merges quantities, requotes another condition, or restarts capture.
+    func addAnotherCopy(list: CardList, context: ModelContext) {
+        guard canAddAnotherCopy, let last = currentAddition, let session,
+              last.receipt.listID == list.id else { return }
+        saving = true
+        defer { saving = false }
+        let previousIDs = Set(list.cards.map(\.id)), previousRef = session.lastConsumedRecognitionRef
+        do {
+            try SessionService.withScanSave(session: session, list: list, context: context) {
+                try self.saveCard(last.receipt.card, session, list, context, last.receipt.consumedRecognitionRef)
+            }
+            rememberAddition(previousIDs: previousIDs, previousRef: previousRef, list: list,
+                             session: session, review: nil, printings: [:])
+            error = nil; coolDownQuickActions()
+            DiagnosticLog.shared.record("add.copy_saved", ["priced": String(last.receipt.card.marketPrice != nil)])
+        } catch {
+            self.error = "The copy was not saved. Tap Add Another Copy to retry."
+            DiagnosticLog.shared.failure("persistence.copy_failed", error)
+        }
+    }
+    /// Undo is available only for this scanner's latest unchanged physical row.
+    /// A scanned match reopens for correction; undoing a copy stays camera-ready.
+    func undoLastAdd(list: CardList, context: ModelContext) {
+        guard canUndoLastAdd, let last = currentAddition, let session,
+              last.receipt.listID == list.id else { return }
+        saving = true
+        defer { saving = false }
+        do {
+            try undoCard(last.receipt, session, list, context)
+            additions.removeLast()
+            error = nil; coolDownQuickActions()
+            if let review = last.review {
+                confirmationDeadline?.cancel(); confirmationDeadline = nil; pendingConfirmation = nil
+                priceTask?.cancel(); priceRequestID = UUID(); priceLoading = false
+                result = review; selected = last.receipt.card; confirmed = true
+                candidatePrintings = last.printings
+                waitingForRemoval = false; savedRecognitionRef = nil; savedRecognitionEpisode = nil
+                priceMessage = nil; priceConnectionRequired = false
+                refreshPrice(forceRefresh: false)
+            }
+            DiagnosticLog.shared.record("add.undone")
+        } catch {
+            self.error = "The card could not be undone. It is still saved; tap Undo Last Add to retry."
+            DiagnosticLog.shared.failure("persistence.undo_failed", error)
+        }
+    }
+    private func rememberAddition(previousIDs: Set<UUID>, previousRef: String?, list: CardList,
+                                  session: ScanSession, review: ScanResult?, printings: [String: [String]]) {
+        actionList = list
+        guard let row = list.orderedCards.last, !previousIDs.contains(row.id), row.quantity == 1 else { return }
+        // Keep a small undo history without retaining a JPEG for every scanned card.
+        for index in additions.indices { additions[index].review?.capturedImageData = nil }
+        additions.append(SavedAddition(receipt: ScannerAddReceipt(item: row, session: session, list: list,
+            previousRecognitionRef: previousRef), review: review, printings: printings))
+        if additions.count > 20 { additions.removeFirst(additions.count - 20) }
+    }
+    private func coolDownQuickActions() {
+        quickActionTask?.cancel(); quickActionTask = nil
+        guard quickActionCooldown > .zero else { quickActionCoolingDown = false; return }
+        quickActionCoolingDown = true
+        let delay = quickActionCooldown
+        quickActionTask = Task { [weak self] in
+            do { try await Task.sleep(for: delay) } catch { return }
+            guard let self, !Task.isCancelled else { return }
+            self.quickActionCoolingDown = false; self.quickActionTask = nil
+        }
+    }
     func scanNextCard() {
         confirmationDeadline?.cancel(); confirmationDeadline = nil
         pendingConfirmation = nil; selectionInProgress = false
         // Intentional re-arm allows a second identical physical copy without identity merging.
         priceTask?.cancel(); priceRequestID = UUID(); priceLoading = false
-        result = nil; candidatePrintings = [:]; selected = nil; confirmed = false; waitingForRemoval = false; savedRecognitionRef = nil; priceMessage = nil; priceConnectionRequired = false; error = nil
+        result = nil; candidatePrintings = [:]; selected = nil; confirmed = false; waitingForRemoval = false; savedRecognitionRef = nil; savedRecognitionEpisode = nil; priceMessage = nil; priceConnectionRequired = false; error = nil
         liveProvider?.resetRecognition()
         DiagnosticLog.shared.record("recognition.rearmed")
     }

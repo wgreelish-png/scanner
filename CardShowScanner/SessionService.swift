@@ -15,6 +15,40 @@ enum BatchFailure: LocalizedError {
     }
 }
 
+/// An in-memory undo target for one committed physical card, never a merged quantity.
+/// Values keep later edits or a newer row from changing what Undo would remove.
+struct ScannerAddReceipt: Sendable {
+    let inventoryID: UUID
+    let listID: UUID
+    let sessionID: UUID
+    let card: CardCandidate
+    let addedAt: Date
+    let previousRecognitionRef: String?
+    let consumedRecognitionRef: String?
+    fileprivate let data: Data
+    fileprivate let quantity: Int
+    fileprivate let cashOverrideText: String?
+    fileprivate let tradeOverrideText: String?
+    fileprivate let maximumOverrideText: String?
+
+    @MainActor init(item: InventoryCard, session: ScanSession, list: CardList,
+                    previousRecognitionRef: String?) {
+        inventoryID = item.id; listID = list.id; sessionID = session.id
+        card = item.snapshot; data = item.data; quantity = item.quantity; addedAt = item.addedAt
+        cashOverrideText = item.cashOverrideText; tradeOverrideText = item.tradeOverrideText
+        maximumOverrideText = item.maximumOverrideText
+        self.previousRecognitionRef = previousRecognitionRef
+        consumedRecognitionRef = session.lastConsumedRecognitionRef
+    }
+}
+
+enum ScannerUndoFailure: LocalizedError, Equatable {
+    case noLongerAvailable
+    var errorDescription: String? {
+        "This addition can no longer be undone here. Review the saved list to edit or remove it."
+    }
+}
+
 @MainActor enum SessionService {
     static func list(for session: ScanSession, context: ModelContext) throws -> CardList? {
         guard let id = session.listID else { return nil }
@@ -116,6 +150,66 @@ enum BatchFailure: LocalizedError {
             session.record(card)
             session.lastConsumedRecognitionRef = recognitionRef ?? card.identity.productID
             try context.save()
+        }
+    }
+    static func canUndoScannerAdd(_ receipt: ScannerAddReceipt, session: ScanSession, list: CardList) -> Bool {
+        guard session.isActive, session.id == receipt.sessionID, session.listID == list.id,
+              list.id == receipt.listID, session.game == receipt.card.identity.game,
+              receipt.quantity == 1, let item = list.orderedCards.last,
+              item.id == receipt.inventoryID, item.list?.id == list.id,
+              item.quantity == 1, item.data == receipt.data, item.addedAt == receipt.addedAt,
+              item.cashOverrideText == receipt.cashOverrideText,
+              item.tradeOverrideText == receipt.tradeOverrideText,
+              item.maximumOverrideText == receipt.maximumOverrideText,
+              session.addedQuantity > 0 else { return false }
+        if let price = receipt.card.marketPrice {
+            guard let knownValue = Decimal(string: session.knownValueText) else { return false }
+            return NSDecimalNumber(decimal: price).doubleValue.isFinite && price >= 0 &&
+                NSDecimalNumber(decimal: knownValue).doubleValue.isFinite && knownValue >= price
+        }
+        return session.unpricedQuantity > 0
+    }
+    /// Delete only the unchanged latest row. Historical offers remain snapshots.
+    /// Committing existing edits first gives rollback a safe baseline without
+    /// discarding an unrelated pending list or edit when this deletion fails.
+    static func undoScannerAdd(_ receipt: ScannerAddReceipt, session: ScanSession, list: CardList,
+                               context: ModelContext,
+                               save: @MainActor (ModelContext) throws -> Void = { try $0.save() }) throws {
+        guard canUndoScannerAdd(receipt, session: session, list: list),
+              let item = list.cards.first(where: { $0.id == receipt.inventoryID }),
+              !context.deletedModelsArray.contains(where: { ObjectIdentifier($0) == ObjectIdentifier(item) }) else {
+            throw ScannerUndoFailure.noLongerAvailable
+        }
+        // If this baseline save fails, nothing has been removed or rolled back.
+        if context.hasChanges { try context.save() }
+        let cards = list.cards
+        let quantity = session.addedQuantity, value = session.knownValueText
+        let unpriced = session.unpricedQuantity, recognitionRef = session.lastConsumedRecognitionRef
+        do {
+            list.cards.removeAll { $0.id == receipt.inventoryID }
+            context.delete(item)
+            session.addedQuantity -= 1
+            if let price = receipt.card.marketPrice {
+                session.knownValueText = CSVExportService.number(session.knownValue - price)
+            } else {
+                session.unpricedQuantity -= 1
+            }
+            if session.lastConsumedRecognitionRef == receipt.consumedRecognitionRef {
+                session.lastConsumedRecognitionRef = receipt.previousRecognitionRef
+            }
+            try save(context)
+            DiagnosticLog.shared.record("inventory.undo_saved")
+        } catch {
+            context.rollback()
+            // SwiftData may retain a mutated relationship in a live view even
+            // after rollback. Restore its cached state alongside the counters.
+            list.cards = cards
+            if item.list?.id != list.id { item.list = list }
+            session.addedQuantity = quantity; session.knownValueText = value
+            session.unpricedQuantity = unpriced; session.lastConsumedRecognitionRef = recognitionRef
+            context.processPendingChanges()
+            DiagnosticLog.shared.failure("inventory.undo_failed", error)
+            throw error
         }
     }
     /// SwiftData rollback can leave a live relationship's cached array mutated.

@@ -669,15 +669,17 @@ import SwiftData
         let model = ScannerViewModel(provider: TestScannerProvider(), pricing: TestMarketPricing())
         model.start(game: "Pokémon", list: list, context: context, session: session)
         let cards = MockScannerProvider.samples(game: "Pokémon", index: 0)
-        model.receive(ScanResult(id: UUID(), candidates: [cards[0]], accepted: true, same: false))
+        let episode = UUID()
+        model.receive(ScanResult(id: episode, candidates: [cards[0]], accepted: true, same: false))
         await waitForIdle(model)
         model.selectAndAdd(cards[0], list: list, context: context)
         await waitForIdle(model)
         XCTAssertEqual(list.quantity, 1); XCTAssertTrue(model.waitingForRemoval)
 
-        model.receive(ScanResult(id: UUID(), candidates: [cards[0]], accepted: true, same: false))
+        model.receive(ScanResult(id: episode, candidates: [cards[0]], accepted: true, same: false))
         model.receive(ScanResult(id: UUID(), candidates: [cards[1]], accepted: true, same: true))
-        model.receive(ScanResult(id: UUID(), candidates: [cards[1]], accepted: false, same: false))
+        var weakCard = cards[1]; weakCard.confidence = 49
+        model.receive(ScanResult(id: UUID(), candidates: [weakCard], accepted: false, same: false))
         XCTAssertNil(model.selected); XCTAssertEqual(list.quantity, 1)
         // The stream buffers only its newest event, so an earlier hide can be
         // coalesced away before this fully settled different-card result arrives.
@@ -690,6 +692,61 @@ import SwiftData
         await waitForIdle(model)
         XCTAssertEqual(list.orderedCards.map { $0.snapshot.identity.productID }, [cards[0].identity.productID, cards[1].identity.productID])
         model.stop()
+    }
+    func testNextSettledTentativeCardIsReviewedAfterSaveWithoutManualReset() async throws {
+        let container = try store(), context = container.mainContext
+        let session = try SessionService.start(game: "Pokémon", context: context)
+        let list = try XCTUnwrap(SessionService.list(for: session, context: context))
+        let model = ScannerViewModel(provider: TestScannerProvider(), pricing: TestMarketPricing())
+        model.start(game: "Pokémon", list: list, context: context, session: session)
+        defer { model.stop() }
+        let cards = MockScannerProvider.samples(game: "Pokémon", index: 0)
+        model.receive(ScanResult(id: UUID(), candidates: [cards[0]], accepted: true, same: false))
+        await waitForIdle(model)
+        model.selectAndAdd(cards[0], list: list, context: context)
+        await waitForIdle(model)
+        XCTAssertTrue(model.waitingForRemoval)
+        // The bridge applies its ordinary longer settling gate to this guess.
+        model.receive(ScanResult(id: UUID(), candidates: [cards[1]], accepted: false, same: false))
+        await waitForIdle(model)
+        XCTAssertFalse(model.waitingForRemoval)
+        XCTAssertEqual(model.selected?.identity.productID, cards[1].identity.productID)
+        XCTAssertEqual(model.selected?.identity.condition, "Near Mint")
+        XCTAssertEqual(list.quantity, 1, "A next-card review still needs explicit confirmation")
+    }
+    func testSameArtNewEpisodeAfterVerifiedRemovalSurvivesCoalescedHide() async throws {
+        let container = try store(), context = container.mainContext
+        let session = try SessionService.start(game: "Pokémon", context: context)
+        let list = try XCTUnwrap(SessionService.list(for: session, context: context))
+        let model = ScannerViewModel(provider: TestScannerProvider(), pricing: TestMarketPricing())
+        model.start(game: "Pokémon", list: list, context: context, session: session)
+        defer { model.stop() }
+        let candidate = TCGBridgeCandidate(ref: "p:123", name: "Same art", number: "1", set: "Demo", confidence: 96,
+            printing: "Normal", skuID: "10", marketPrice: 2,
+            printings: [CardPrinting(label: "Normal", skuID: "10", marketPrice: 2)], requiresPrintingSelection: false)
+        var normalizer = TCGBridgeNormalizer()
+        let wire = TCGBridgeEnvelope(nonce: "n", kind: "scan", same: false, accepted: true, confidence: 96, candidates: [candidate])
+        let first = try XCTUnwrap(normalizer.receive(wire, game: "Pokémon"))
+        model.receive(first); await waitForIdle(model)
+        model.selectAndAdd(first.candidates[0], list: list, context: context)
+        await waitForIdle(model)
+        let repeated = try XCTUnwrap(normalizer.receive(wire, game: "Pokémon"))
+        XCTAssertEqual(repeated.id, first.id)
+        model.receive(repeated)
+        XCTAssertNil(model.selected, "Full repeated frames are not another physical copy")
+        // The provider consumes hide, but its newest-only stream replaces it
+        // with the following scan before the native consumer is scheduled.
+        _ = try normalizer.receive(TCGBridgeEnvelope(nonce: "n", kind: "hide"), game: "Pokémon")
+        let next = try XCTUnwrap(normalizer.receive(wire, game: "Pokémon"))
+        XCTAssertNotEqual(next.id, first.id)
+        model.receive(next); await waitForIdle(model)
+        XCTAssertNotNil(model.selected)
+        XCTAssertFalse(model.waitingForRemoval)
+        XCTAssertEqual(list.quantity, 1)
+        model.selectAndAdd(next.candidates[0], list: list, context: context)
+        await waitForIdle(model)
+        XCTAssertEqual(list.orderedCards.map(\.quantity), [1, 1])
+        XCTAssertNotEqual(list.orderedCards[0].id, list.orderedCards[1].id)
     }
     func testAlternativePrintingDropdownKeepsConditionAndOnlyConfirmationSavesExactCapturedQuote() async throws {
         let container = try store(), context = container.mainContext
