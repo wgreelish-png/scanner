@@ -105,10 +105,15 @@ import XCTest
     }
     private func tapCameraOptions(_ element: XCUIElement, in app: XCUIApplication) {
         XCTAssertTrue(element.waitForExistence(timeout: 10))
+        // A cold database load can finish after the initial permission wait.
+        // Handle the actual camera prompt at the point of interaction as well.
+        dismissCameraPermission(in: app)
         XCTAssertEqual(app.state, .runningForeground)
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        XCTAssertFalse(springboard.alerts.firstMatch.exists, "System consent must close before opening Options")
-        XCTAssertFalse(app.alerts.firstMatch.exists, "An app alert must not cover Options")
+        let noSystemAlert = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: springboard.alerts.firstMatch)
+        XCTAssertEqual(XCTWaiter.wait(for: [noSystemAlert], timeout: 5), .completed,
+                       "System consent must close before opening Options. " + failureContext(in: app))
+        XCTAssertFalse(app.alerts.firstMatch.exists, "An app alert must not cover Options. " + failureContext(in: app))
         XCTAssertTrue(element.isEnabled)
         let bounds = element.frame, window = app.windows.firstMatch.frame
         let onScreen = bounds.width >= 44 && bounds.height >= 44 && window.contains(bounds)
