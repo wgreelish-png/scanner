@@ -158,7 +158,7 @@ import SwiftData
         XCTAssertEqual(model.result?.id, frozen.id)
     }
 
-    func testOldInventoryJSONWithoutProvenanceStillDecodesWithItsSavedQuote() throws {
+    func testOldInventoryJSONWithoutProvenanceStillDecodesWithItsSavedQuote() async throws {
         let oldJSON = Data(#"{"identity":{"game":"Pokémon","productID":"p:101","skuID":"original","printing":"Normal","language":"English","condition":"Near Mint"},"name":"Original card","set":"Original set","number":"1/100","marketPrice":10.25,"confidence":96,"printings":["Normal"]}"#.utf8)
         let decoded = try JSONDecoder().decode(CardCandidate.self, from: oldJSON)
         XCTAssertEqual(decoded.identity.skuID, "original")
@@ -243,7 +243,7 @@ import SwiftData
         XCTAssertEqual(model.price, "")
     }
 
-    func testManualPriceAndSKUChangesRemoveProviderProvenance() {
+    func testManualPriceAndSKUChangesRemoveProviderProvenance() async {
         var saved = card(); saved.marketPriceMetadata = publicMetadata; saved.identity.skuID = "provider-sku"
         let priceEdit = CardEditorPricingModel(card: saved, pricing: SourceIntegrationPricing())
         priceEdit.setPrice("12.50")
@@ -257,7 +257,7 @@ import SwiftData
         XCTAssertEqual(saved.marketPriceMetadata, publicMetadata)
     }
 
-    func testManualAddDraftClearsInheritedQuoteAndProvenanceBeforeAnyLookup() {
+    func testManualAddDraftClearsInheritedQuoteAndProvenanceBeforeAnyLookup() async {
         var saved = card(); saved.marketPriceMetadata = publicMetadata; saved.identity.skuID = "saved-sku"
         let model = ManualCardAddModel(card: saved, pricing: SourceIntegrationPricing())
         XCTAssertNil(model.pricing.card.marketPrice)
