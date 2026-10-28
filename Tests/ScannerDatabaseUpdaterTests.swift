@@ -48,14 +48,16 @@ import XCTest
         XCTFail("Expected updater state did not arrive", file: file, line: line)
     }
 
-    func testDailyAndFailureIntervalsAndChangedClock() async {
+    func testWeeklyAttemptAndSuccessIntervalsAndChangedClock() async {
         let date = Date(timeIntervalSince1970: 1_700_000_000)
-        XCTAssertTrue(ScannerDatabaseUpdatePolicy.isDue(lastSuccess: nil, lastFailure: nil, now: date))
-        XCTAssertFalse(ScannerDatabaseUpdatePolicy.isDue(lastSuccess: date.addingTimeInterval(-86_399), lastFailure: nil, now: date))
-        XCTAssertTrue(ScannerDatabaseUpdatePolicy.isDue(lastSuccess: date.addingTimeInterval(-86_400), lastFailure: nil, now: date))
-        XCTAssertFalse(ScannerDatabaseUpdatePolicy.isDue(lastSuccess: nil, lastFailure: date.addingTimeInterval(-3_599), now: date))
-        XCTAssertTrue(ScannerDatabaseUpdatePolicy.isDue(lastSuccess: nil, lastFailure: date.addingTimeInterval(-3_600), now: date))
-        XCTAssertTrue(ScannerDatabaseUpdatePolicy.isDue(lastSuccess: date.addingTimeInterval(86_400), lastFailure: nil, now: date), "A clock correction must not block checks indefinitely")
+        XCTAssertTrue(ScannerDatabaseUpdatePolicy.isDue(lastSuccess: nil, lastAttempt: nil, now: date))
+        for recent in [date, date.addingTimeInterval(-86_400), date.addingTimeInterval(-604_799)] {
+            XCTAssertFalse(ScannerDatabaseUpdatePolicy.isDue(lastSuccess: recent, lastAttempt: nil, now: date))
+            XCTAssertFalse(ScannerDatabaseUpdatePolicy.isDue(lastSuccess: nil, lastAttempt: recent, now: date))
+        }
+        XCTAssertTrue(ScannerDatabaseUpdatePolicy.isDue(lastSuccess: date.addingTimeInterval(-604_800), lastAttempt: nil, now: date))
+        XCTAssertTrue(ScannerDatabaseUpdatePolicy.isDue(lastSuccess: nil, lastAttempt: date.addingTimeInterval(-604_800), now: date))
+        XCTAssertTrue(ScannerDatabaseUpdatePolicy.isDue(lastSuccess: date.addingTimeInterval(604_800), lastAttempt: nil, now: date), "A clock correction must not block checks indefinitely")
     }
 
     func testWireResultsRejectUnknownStatusInvalidCountsAndUnsafePaths() async throws {
@@ -230,7 +232,7 @@ import XCTest
         XCTAssertFalse(missing); XCTAssertNotNil(retained)
     }
 
-    func testSuccessfulCheckPersistsDailyPerGameThrottleAcrossCoordinatorRelaunch() async throws {
+    func testSuccessfulCheckPersistsWeeklyPerGameThrottleAcrossCoordinatorRelaunch() async throws {
         let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
         let cache = ScannerDatabaseCache(directory: root)
         try await stage("old", in: cache, current: true); try await stage("new", in: cache)
@@ -247,14 +249,14 @@ import XCTest
         reopened.setHomeVisible(true, game: "Pokémon")
         XCTAssertEqual(reopened.state, .upToDate); XCTAssertTrue(secondRunner.calls.isEmpty)
         XCTAssertNil(reopened.lastSuccessfulCheck(for: "Magic: The Gathering"))
-        date = date.addingTimeInterval(86_400)
+        date = date.addingTimeInterval(604_800)
         reopened.setHomeVisible(true, game: "Pokémon")
         await waitUntil { secondRunner.calls.count == 1 && reopened.state == .upToDate }
         XCTAssertEqual(reopened.lastSuccessfulCheck(for: "Pokémon"), date)
         reopened.setHomeVisible(false, game: "Pokémon")
     }
 
-    func testFailedCheckRetainsDatabaseAndRetriesAfterBackoffWithoutSuccessTimestamp() async throws {
+    func testFailedAttemptPersistsWeeklyThrottleAcrossRelaunchAndKeepsDatabase() async throws {
         let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
         let cache = ScannerDatabaseCache(directory: root); try await stage("old", in: cache, current: true)
         let (defaults, name) = preferences(); defer { defaults.removePersistentDomain(forName: name) }
@@ -262,12 +264,18 @@ import XCTest
         let runner = Runner(); runner.response = ScannerDatabaseUpdateResult(status: .failed, downloadedBytes: 0, cachedShards: 0)
         let updater = ScannerDatabaseUpdater(defaults: defaults, cache: cache, runner: runner, now: { date }, wait: { _ in })
         updater.setHomeVisible(true, game: "Pokémon"); await waitUntil { updater.state == .failed }
-        XCTAssertNil(updater.lastSuccessfulCheck(for: "Pokémon"))
-        updater.setHomeVisible(true, game: "Pokémon"); XCTAssertEqual(runner.calls.count, 1)
-        date = date.addingTimeInterval(3_600)
-        updater.setHomeVisible(true, game: "Pokémon"); await waitUntil { runner.calls.count == 2 && updater.state == .failed }
-        let pointer = try await cache.read("cur:tcgp:3"); XCTAssertEqual(pointer, try json("pokemon/old.json"))
+        XCTAssertNil(updater.lastSuccessfulCheck(for: "Pokémon")); XCTAssertEqual(updater.lastAttempt(for: "Pokémon"), date)
         updater.setHomeVisible(false, game: "Pokémon")
+        let reopenedRunner = Runner(); reopenedRunner.response = runner.response
+        let reopened = ScannerDatabaseUpdater(defaults: defaults, cache: cache, runner: reopenedRunner, now: { date }, wait: { _ in })
+        date = date.addingTimeInterval(604_799)
+        reopened.setHomeVisible(true, game: "Pokémon")
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertTrue(reopenedRunner.calls.isEmpty)
+        date = date.addingTimeInterval(1)
+        reopened.setHomeVisible(true, game: "Pokémon"); await waitUntil { reopenedRunner.calls.count == 1 && reopened.state == .failed }
+        let pointer = try await cache.read("cur:tcgp:3"); XCTAssertEqual(pointer, try json("pokemon/old.json"))
+        reopened.setHomeVisible(false, game: "Pokémon")
     }
 
     func testScannerLeasesCancelLateResultAndPreventPublicationUntilAllReleased() async throws {
@@ -283,8 +291,10 @@ import XCTest
         let pointer = try await cache.read("cur:tcgp:3"); XCTAssertEqual(pointer, try json("pokemon/old.json"))
         XCTAssertNil(updater.lastSuccessfulCheck(for: "Pokémon"))
         updater.endScannerUse(first); await Task.yield(); XCTAssertEqual(runner.calls.count, 1)
-        updater.endScannerUse(second); await waitUntil { runner.pending.count == 1 && runner.calls.count == 2 }
-        runner.complete(result()); await waitUntil { updater.state == .updated }
+        updater.endScannerUse(second)
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(runner.calls.count, 1, "A canceled automatic attempt still consumes its weekly check")
+        XCTAssertNotNil(updater.lastAttempt(for: "Pokémon"))
         updater.setHomeVisible(false, game: "Pokémon")
     }
 
@@ -307,7 +317,7 @@ import XCTest
         let runner = Runner(); runner.response = ScannerDatabaseUpdateResult(status: .skipped, downloadedBytes: 0, cachedShards: 0)
         let updater = ScannerDatabaseUpdater(defaults: defaults, cache: cache, runner: runner, wait: { _ in })
         updater.setHomeVisible(true, game: "Pokémon"); await waitUntil { updater.state == .unavailable }
-        XCTAssertNil(updater.lastSuccessfulCheck(for: "Pokémon")); XCTAssertTrue(runner.calls.isEmpty)
+        XCTAssertNil(updater.lastSuccessfulCheck(for: "Pokémon")); XCTAssertNil(updater.lastAttempt(for: "Pokémon")); XCTAssertTrue(runner.calls.isEmpty)
         updater.setHomeVisible(false, game: "Pokémon")
     }
 
@@ -346,20 +356,25 @@ import XCTest
         updater.setHomeVisible(false, game: "Pokémon")
     }
 
-    func testBackgroundCancellationIgnoresLateResultAndRetriesWithoutFailureBackoff() async throws {
+    func testBackgroundCancellationIgnoresLateResultAndPersistsWeeklyAttemptAcrossRelaunch() async throws {
         let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
         let cache = ScannerDatabaseCache(directory: root)
         try await stage("old", in: cache, current: true); try await stage("new", in: cache)
         let (defaults, name) = preferences(); defer { defaults.removePersistentDomain(forName: name) }
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
         let runner = Runner()
-        let updater = ScannerDatabaseUpdater(defaults: defaults, cache: cache, runner: runner, wait: { _ in })
+        let updater = ScannerDatabaseUpdater(defaults: defaults, cache: cache, runner: runner, now: { date }, wait: { _ in })
         updater.setHomeVisible(true, game: "Pokémon"); await waitUntil { runner.pending.count == 1 }
         updater.setForeground(false); runner.complete(result()); await Task.yield()
-        XCTAssertNil(updater.lastSuccessfulCheck(for: "Pokémon"))
+        XCTAssertNil(updater.lastSuccessfulCheck(for: "Pokémon")); XCTAssertEqual(updater.lastAttempt(for: "Pokémon"), date)
         let old = try await cache.read("cur:tcgp:3"); XCTAssertEqual(old, try json("pokemon/old.json"))
-        updater.setForeground(true); await waitUntil { runner.calls.count == 2 && runner.pending.count == 1 }
-        runner.complete(result()); await waitUntil { updater.state == .updated }
-        updater.setHomeVisible(false, game: "Pokémon")
+        updater.setForeground(true)
+        let secondRunner = Runner()
+        let reopened = ScannerDatabaseUpdater(defaults: defaults, cache: cache, runner: secondRunner, now: { date }, wait: { _ in })
+        reopened.setHomeVisible(true, game: "Pokémon")
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(runner.calls.count, 1); XCTAssertTrue(secondRunner.calls.isEmpty)
+        updater.setHomeVisible(false, game: "Pokémon"); reopened.setHomeVisible(false, game: "Pokémon")
     }
 
     func testLeavingHomeDuringDebounceNeverStartsNetworkRunner() async {
@@ -373,6 +388,113 @@ import XCTest
         updater.setHomeVisible(false, game: "Pokémon"); release?.resume(); release = nil
         for _ in 0..<10 { await Task.yield() }
         XCTAssertTrue(runner.calls.isEmpty); XCTAssertNil(updater.lastSuccessfulCheck(for: "Pokémon"))
+    }
+
+    func testLegacySuccessSkipsNativeCacheOpeningUntilAWeekHasPassed() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let unopened = root.appendingPathComponent("unopened-cache")
+        let cache = ScannerDatabaseCache(directory: unopened)
+        let (defaults, name) = preferences(); defer { defaults.removePersistentDomain(forName: name) }
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        defaults.set(date.addingTimeInterval(-86_400).timeIntervalSince1970, forKey: "scanner.databaseUpdate.lastSuccess.tcgp:3")
+        let runner = Runner()
+        var waits = 0
+        let updater = ScannerDatabaseUpdater(defaults: defaults, cache: cache, runner: runner, now: { date }, wait: { _ in waits += 1 })
+        updater.setHomeVisible(true, game: "Pokémon")
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(updater.state, .upToDate); XCTAssertFalse(updater.isRefreshing)
+        XCTAssertEqual(waits, 0); XCTAssertTrue(runner.calls.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: unopened.path), "A recent check must be rejected before opening the native database")
+        XCTAssertNil(updater.lastAttempt(for: "Pokémon"))
+        updater.setHomeVisible(false, game: "Pokémon")
+    }
+
+    func testManualRefreshBypassesDisabledAutomaticUpdatesAndWeeklyThrottleWithoutDebounce() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let cache = ScannerDatabaseCache(directory: root)
+        try await stage("old", in: cache, current: true); try await stage("new", in: cache)
+        let (defaults, name) = preferences(); defer { defaults.removePersistentDomain(forName: name) }
+        var date = Date(timeIntervalSince1970: 1_700_000_000)
+        defaults.set(false, forKey: ScannerDatabaseUpdater.enabledKey)
+        defaults.set(date.timeIntervalSince1970, forKey: "scanner.databaseUpdate.lastSuccess.tcgp:3")
+        let runner = Runner()
+        var waits = 0
+        let updater = ScannerDatabaseUpdater(defaults: defaults, cache: cache, runner: runner, now: { date }, wait: { _ in waits += 1 })
+        updater.setSettingsVisible(true, game: "Pokémon")
+        date = date.addingTimeInterval(60)
+        updater.refreshNow(game: "Pokémon")
+        XCTAssertTrue(updater.isRefreshing)
+        await waitUntil { runner.pending.count == 1 }
+        XCTAssertEqual(waits, 0); XCTAssertEqual(runner.calls, ["tcgp:3"])
+        updater.setEnabled(false)
+        XCTAssertTrue(updater.isRefreshing, "The automatic preference must not cancel an explicit manual check")
+        date = date.addingTimeInterval(60)
+        runner.complete(result()); await waitUntil { updater.state == .updated }
+        XCTAssertEqual(updater.lastSuccessfulCheck(for: "Pokémon"), date)
+        XCTAssertEqual(updater.lastAttempt(for: "Pokémon"), date)
+        updater.setSettingsVisible(false, game: "Pokémon"); updater.setEnabled(true)
+        updater.setHomeVisible(true, game: "Pokémon")
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(runner.calls.count, 1, "A successful manual refresh restarts the weekly automatic cadence")
+        updater.setHomeVisible(false, game: "Pokémon")
+    }
+
+    func testManualRefreshRequiresVisibleSettingsForegroundAndNoScannerLease() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let cache = ScannerDatabaseCache(directory: root); try await stage("old", in: cache, current: true)
+        let (defaults, name) = preferences(); defer { defaults.removePersistentDomain(forName: name) }
+        let runner = Runner(); runner.response = result(.upToDate, proposed: "old")
+        let updater = ScannerDatabaseUpdater(defaults: defaults, cache: cache, runner: runner, wait: { _ in })
+        updater.refreshNow(game: "Pokémon")
+        updater.setSettingsVisible(true, game: "Pokémon"); updater.setForeground(false)
+        updater.refreshNow(game: "Pokémon")
+        updater.setForeground(true)
+        let lease = updater.beginScannerUse()
+        updater.refreshNow(game: "Pokémon")
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertTrue(runner.calls.isEmpty); XCTAssertNil(updater.lastAttempt(for: "Pokémon"))
+        updater.endScannerUse(lease)
+        updater.refreshNow(game: "Pokémon"); await waitUntil { updater.state == .upToDate }
+        XCTAssertEqual(runner.calls, ["tcgp:3"])
+        updater.setSettingsVisible(false, game: "Pokémon")
+    }
+
+    func testManualRefreshCancellationOnLeavingSettingsBackgroundGameChangeAndScannerUse() async throws {
+        for reason in ["settings", "background", "game", "scanner"] {
+            let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+            let cache = ScannerDatabaseCache(directory: root)
+            try await stage("old", in: cache, current: true); try await stage("new", in: cache)
+            let (defaults, name) = preferences(); defer { defaults.removePersistentDomain(forName: name) }
+            let runner = Runner()
+            let updater = ScannerDatabaseUpdater(defaults: defaults, cache: cache, runner: runner, wait: { _ in })
+            updater.setSettingsVisible(true, game: "Pokémon"); updater.refreshNow(game: "Pokémon")
+            await waitUntil { runner.pending.count == 1 }
+            switch reason {
+            case "settings": updater.setSettingsVisible(false, game: "Pokémon")
+            case "background": updater.setForeground(false)
+            case "game": updater.setSettingsVisible(true, game: "Magic: The Gathering")
+            default: _ = updater.beginScannerUse()
+            }
+            runner.complete(result())
+            for _ in 0..<10 { await Task.yield() }
+            let pointer = try await cache.read("cur:tcgp:3")
+            XCTAssertEqual(pointer, try json("pokemon/old.json"), "A manual refresh canceled by \(reason) cannot publish")
+            XCTAssertNil(updater.lastSuccessfulCheck(for: "Pokémon")); XCTAssertFalse(updater.isRefreshing)
+            updater.setSettingsVisible(false, game: "Pokémon")
+        }
+    }
+
+    func testManualRefreshWithoutNativePackKeepsFirstDownloadInScanner() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let cache = ScannerDatabaseCache(directory: root)
+        let (defaults, name) = preferences(); defer { defaults.removePersistentDomain(forName: name) }
+        let runner = Runner()
+        let updater = ScannerDatabaseUpdater(defaults: defaults, cache: cache, runner: runner, wait: { _ in XCTFail("A manual refresh must not debounce") })
+        updater.setSettingsVisible(true, game: "Pokémon"); updater.refreshNow(game: "Pokémon")
+        await waitUntil { updater.state == .unavailable }
+        XCTAssertTrue(runner.calls.isEmpty); XCTAssertNil(updater.lastAttempt(for: "Pokémon"))
+        XCTAssertNil(updater.lastSuccessfulCheck(for: "Pokémon")); XCTAssertFalse(updater.isRefreshing)
+        updater.setSettingsVisible(false, game: "Pokémon")
     }
 
     func testPreparedResultCannotRecordSuccessWhenPublicationFails() async throws {

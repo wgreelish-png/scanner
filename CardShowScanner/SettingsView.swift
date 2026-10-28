@@ -2,6 +2,7 @@ import SwiftUI
 import SwiftData
 
 struct SettingsView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var databaseUpdater = ScannerDatabaseUpdater.shared
     @AppStorage("defaultGame") private var game = "Pokémon"
     @AppStorage("sound") private var sound = false
@@ -57,12 +58,22 @@ struct SettingsView: View {
                 Toggle("Automatic Database Updates", isOn: $autoDatabaseUpdates)
                     .accessibilityIdentifier("settings.autoDatabaseUpdates")
                     .onChange(of: autoDatabaseUpdates) { _, enabled in ScannerDatabaseUpdater.shared.setEnabled(enabled) }
-                Text("Checks the selected game's saved database once a day while the Home screen is open. Only changed files download. Opening the scanner cancels a check and uses the saved database immediately. The first download still happens when you start scanning. Recognition-engine changes come through app updates.").font(.caption)
+                Text("Automatically checks the selected game's saved database at most once every seven days. Reopening the app during that week keeps using the cache. Refresh manually below whenever you need an update. The first download still happens when you start scanning. Recognition-engine changes come through app updates.").font(.caption)
+                Button(databaseUpdater.isRefreshing ? "Refreshing Database…" : "Refresh Database Now", systemImage: "arrow.clockwise") {
+                    databaseUpdater.refreshNow(game: game)
+                }.buttonStyle(.borderless).frame(minHeight: 44)
+                    .disabled(databaseUpdater.isRefreshing)
+                    .accessibilityIdentifier("settings.refreshDatabase")
+                Text(databaseUpdater.status).font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("settings.databaseRefreshStatus")
                 if let date = databaseUpdater.lastSuccessfulCheck(for: game) {
-                    LabeledContent("Last automatic check", value: date.formatted(date: .abbreviated, time: .shortened))
+                    LabeledContent("Last successful refresh", value: date.formatted(date: .abbreviated, time: .shortened))
                         .accessibilityIdentifier("settings.lastDatabaseCheck")
                 } else {
-                    Text("No automatic check has completed for this game yet.").font(.caption).foregroundStyle(.secondary)
+                    Text("No refresh has completed for this game yet.").font(.caption).foregroundStyle(.secondary)
+                }
+                if let date = databaseUpdater.lastAttempt(for: game) {
+                    LabeledContent("Last refresh attempt", value: date.formatted(date: .abbreviated, time: .shortened))
                 }
                 Text("Live camera scanning opens by default. Download the selected game database once before scanning. Later camera openings load the saved database. Scanner options → Check Database Updates remains available for a manual check. Market values use an online lookup. Mock scanning is under Developer Testing.")
                 Text("Finish a batch from its scanner or review screen. Cards and saved estimates are preserved.")
@@ -88,6 +99,13 @@ struct SettingsView: View {
             }
             Section("Privacy") { Text("Lists, sessions and diagnostic logs stay on this iPhone unless you export them. Camera frames are processed by the bundled recognition engine on this phone. Game databases download from TCGTracking; card images and market quotes use internet requests. CSV sharing sends the selected list through the iOS share sheet.") }
         }.navigationTitle("Settings")
+            .onAppear {
+                databaseUpdater.setForeground(scenePhase == .active)
+                databaseUpdater.setSettingsVisible(true, game: game)
+            }
+            .onDisappear { databaseUpdater.setSettingsVisible(false, game: game) }
+            .onChange(of: game) { _, game in databaseUpdater.setSettingsVisible(true, game: game) }
+            .onChange(of: scenePhase) { _, phase in databaseUpdater.setForeground(phase == .active) }
             .fullScreenCover(isPresented: $showingConnection, onDismiss: {
                 returningFromConnection = false
                 DiagnosticLog.shared.record("connection.closed", ["phase": "settings"])

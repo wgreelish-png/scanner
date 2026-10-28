@@ -30,10 +30,9 @@ struct ScannerDatabaseUpdateResult: Decodable, Equatable {
 enum ScannerDatabaseUpdateFailure: Error { case invalidResult, unavailable, timedOut, changedCache, incompleteCache }
 
 struct ScannerDatabaseUpdatePolicy {
-    static let successInterval: TimeInterval = 24 * 60 * 60
-    static let failureInterval: TimeInterval = 60 * 60
-    static func isDue(lastSuccess: Date?, lastFailure: Date?, now: Date) -> Bool {
-        for (date, interval) in [(lastSuccess, successInterval), (lastFailure, failureInterval)] {
+    static let interval: TimeInterval = 7 * 24 * 60 * 60
+    static func isDue(lastSuccess: Date?, lastAttempt: Date?, now: Date) -> Bool {
+        for date in [lastSuccess, lastAttempt] {
             if let date, date <= now, now.timeIntervalSince(date) < interval { return false }
         }
         return true
@@ -190,16 +189,17 @@ extension ScannerDatabaseCache {
     func cancel()
 }
 
-/// Foreground Home-only maintenance. The scanner's lease always takes priority;
-/// no recognition engine, camera, session, list or offer is involved in a check.
+/// Weekly foreground Home maintenance and explicit refreshes in Settings. The
+/// scanner's lease always takes priority over either kind of database check.
 @MainActor final class ScannerDatabaseUpdater: ObservableObject {
     static let shared = ScannerDatabaseUpdater()
     static let enabledKey = "autoDatabaseUpdates"
     enum State: Equatable { case idle, checking, upToDate, updated, unavailable, failed, disabled }
     @Published private(set) var state: State = .idle
+    var isRefreshing: Bool { state == .checking }
     var status: String {
         switch state {
-        case .idle: return "Saved databases open immediately. Automatic checks run between scans."
+        case .idle: return "Saved databases open immediately. Automatic checks run at most once a week."
         case .checking: return "Checking the saved game database for updates…"
         case .upToDate: return "The saved game database is up to date."
         case .updated: return "The saved game database was updated for your next scan."
@@ -213,7 +213,9 @@ extension ScannerDatabaseCache {
     private var runner: (any ScannerDatabaseUpdateRunning)?
     private let now: @MainActor () -> Date
     private let wait: @MainActor (Duration) async throws -> Void
-    private var visible = false
+    private enum Mode { case automatic, manual }
+    private var homeVisible = false
+    private var settingsVisible = false
     private var foreground = true
     private var enabled: Bool
     private var game = "Pokémon"
@@ -221,6 +223,7 @@ extension ScannerDatabaseCache {
     private var lastFailures: [String: Date] = [:]
     private var work: Task<Void, Never>?
     private var workingGame: String?
+    private var workingMode: Mode?
     private var generation = UUID()
 
     init(defaults: UserDefaults = .standard, cache: ScannerDatabaseCache = .shared,
@@ -234,12 +237,29 @@ extension ScannerDatabaseCache {
         if !enabled { state = .disabled }
     }
     func lastSuccessfulCheck(for game: String) -> Date? {
-        guard let key = Self.gameKey(game), let value = defaults.object(forKey: Self.successKey(key)) as? NSNumber,
+        guard let key = Self.gameKey(game) else { return nil }
+        return savedDate(forKey: Self.successKey(key))
+    }
+    func lastAttempt(for game: String) -> Date? {
+        guard let key = Self.gameKey(game) else { return nil }
+        return savedDate(forKey: Self.attemptKey(key))
+    }
+    private func savedDate(forKey key: String) -> Date? {
+        guard let value = defaults.object(forKey: key) as? NSNumber,
               value.doubleValue.isFinite, value.doubleValue > 0 else { return nil }
         return Date(timeIntervalSince1970: value.doubleValue)
     }
     func setHomeVisible(_ value: Bool, game: String) {
-        visible = value; self.game = game; reconsider()
+        homeVisible = value; self.game = game; reconsider()
+    }
+    func setSettingsVisible(_ value: Bool, game: String) {
+        settingsVisible = value; self.game = game; reconsider()
+    }
+    func refreshNow(game: String) {
+        guard allowed(for: .manual), let key = Self.gameKey(game) else { return }
+        if work != nil, workingGame == key, workingMode == .manual { return }
+        self.game = game
+        start(gameKey: key, mode: .manual)
     }
     func setForeground(_ value: Bool) { foreground = value; reconsider() }
     func setEnabled(_ value: Bool) {
@@ -257,43 +277,59 @@ extension ScannerDatabaseCache {
         ["Pokémon": "tcgp:3", "Magic: The Gathering": "tcgp:1", "Yu-Gi-Oh!": "tcgp:2"][game]
     }
     private static func successKey(_ gameKey: String) -> String { "scanner.databaseUpdate.lastSuccess." + gameKey }
-    private var allowed: Bool { visible && foreground && enabled && scannerLeases.isEmpty }
+    private static func attemptKey(_ gameKey: String) -> String { "scanner.databaseUpdate.lastAttempt." + gameKey }
+    private func allowed(for mode: Mode) -> Bool {
+        guard foreground, scannerLeases.isEmpty else { return false }
+        switch mode {
+        case .automatic: return homeVisible && !settingsVisible && enabled
+        case .manual: return settingsVisible
+        }
+    }
     private func cancelWork() {
-        generation = UUID(); work?.cancel(); work = nil; workingGame = nil
+        generation = UUID(); work?.cancel(); work = nil; workingGame = nil; workingMode = nil
         runner?.cancel()
         state = enabled ? .idle : .disabled
     }
     private func reconsider() {
-        guard allowed, let key = Self.gameKey(game) else { cancelWork(); return }
-        if work != nil, workingGame == key { return }
-        guard ScannerDatabaseUpdatePolicy.isDue(lastSuccess: lastSuccessfulCheck(for: game), lastFailure: lastFailures[key], now: now()) else {
+        if work != nil, workingGame == Self.gameKey(game), let mode = workingMode, allowed(for: mode) { return }
+        guard allowed(for: .automatic), let key = Self.gameKey(game) else { cancelWork(); return }
+        let success = lastSuccessfulCheck(for: game), attempt = lastAttempt(for: game)
+        guard ScannerDatabaseUpdatePolicy.isDue(lastSuccess: success, lastAttempt: attempt, now: now()) else {
             cancelWork()
-            state = lastFailures[key].map { $0 <= now() && now().timeIntervalSince($0) < ScannerDatabaseUpdatePolicy.failureInterval } == true ? .failed : .upToDate
+            if lastFailures[key] != nil { state = .failed }
+            else if let success, attempt.map({ success >= $0 }) ?? true { state = .upToDate }
             return
         }
+        start(gameKey: key, mode: .automatic)
+    }
+    private func start(gameKey key: String, mode: Mode) {
         cancelWork()
-        let id = UUID(); generation = id; workingGame = key
+        let id = UUID(); generation = id; workingGame = key; workingMode = mode
+        state = .checking
         let delay = wait
         work = Task { [weak self] in
             do {
-                try await delay(.seconds(2)); try Task.checkCancellation()
-                guard let self, self.allowed, self.generation == id else { return }
+                if mode == .automatic { try await delay(.seconds(2)) }
+                try Task.checkCancellation()
+                guard let self, self.allowed(for: mode), self.generation == id else { return }
                 let eligible = try await self.cache.hasUpdateableManifest(gameKey: key)
                 try Task.checkCancellation()
-                guard self.allowed, self.generation == id else { return }
+                guard self.allowed(for: mode), self.generation == id else { return }
                 guard eligible else {
                     self.state = .unavailable
-                    self.work = nil; self.workingGame = nil
-                    DiagnosticLog.shared.record("database.auto_check_skipped", ["game": key])
+                    self.work = nil; self.workingGame = nil; self.workingMode = nil
+                    DiagnosticLog.shared.record("database.auto_check_skipped", ["game": key, "phase": mode == .manual ? "manual" : "automatic"])
                     return
                 }
-                self.state = .checking
-                DiagnosticLog.shared.record("database.auto_check_started", ["game": key])
+                // Persist before opening the local server/WebKit. Interrupted or
+                // failed checks must not repeat on every foreground or relaunch.
+                self.defaults.set(self.now().timeIntervalSince1970, forKey: Self.attemptKey(key))
+                DiagnosticLog.shared.record("database.auto_check_started", ["game": key, "phase": mode == .manual ? "manual" : "automatic"])
                 let runner = self.runner ?? ScannerDatabaseUpdateWebRunner()
                 self.runner = runner
                 let result = try await runner.run(gameKey: key)
                 try Task.checkCancellation()
-                guard self.allowed, self.generation == id else { return }
+                guard self.allowed(for: mode), self.generation == id else { return }
                 switch result.status {
                 case .updated, .upToDate:
                     guard let previous = result.previousManifestPath, let proposed = result.proposedManifestPath else {
@@ -301,25 +337,27 @@ extension ScannerDatabaseCache {
                     }
                     try await self.cache.commitPreparedManifest(gameKey: key, previous: previous, proposed: proposed)
                     try Task.checkCancellation()
-                    guard self.allowed, self.generation == id else { return }
-                    self.defaults.set(self.now().timeIntervalSince1970, forKey: Self.successKey(key))
+                    guard self.allowed(for: mode), self.generation == id else { return }
+                    let completed = self.now().timeIntervalSince1970
+                    self.defaults.set(completed, forKey: Self.successKey(key))
+                    self.defaults.set(completed, forKey: Self.attemptKey(key))
                     self.lastFailures[key] = nil
                     self.state = result.status == .updated ? .updated : .upToDate
-                    DiagnosticLog.shared.record("database.auto_check_completed", ["game": key,
+                    DiagnosticLog.shared.record("database.auto_check_completed", ["game": key, "phase": mode == .manual ? "manual" : "automatic",
                         "downloaded_bytes": String(result.downloadedBytes), "cached_shards": String(result.cachedShards)])
                 case .skipped:
                     self.state = .unavailable
-                    DiagnosticLog.shared.record("database.auto_check_skipped", ["game": key])
+                    DiagnosticLog.shared.record("database.auto_check_skipped", ["game": key, "phase": mode == .manual ? "manual" : "automatic"])
                 case .failed:
                     throw ScannerDatabaseUpdateFailure.unavailable
                 }
-                self.work = nil; self.workingGame = nil
+                self.work = nil; self.workingGame = nil; self.workingMode = nil
             } catch {
                 guard let self, self.generation == id else { return }
-                self.work = nil; self.workingGame = nil
+                self.work = nil; self.workingGame = nil; self.workingMode = nil
                 if error is CancellationError || Task.isCancelled { self.state = .idle; return }
                 self.lastFailures[key] = self.now(); self.state = .failed
-                DiagnosticLog.shared.record("database.auto_check_failed", ["game": key])
+                DiagnosticLog.shared.record("database.auto_check_failed", ["game": key, "phase": mode == .manual ? "manual" : "automatic"])
             }
         }
     }
