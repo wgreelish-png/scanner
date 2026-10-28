@@ -22,6 +22,8 @@ Install the new build over the existing app using the same signing configuration
 
 ## Validation and phone acceptance
 
+At `9494491`, [macOS CI](https://github.com/wgreelish-png/scanner/actions/runs/40519206789) passed 151 native tests, both simulator UI tests, the Personal-scheme Release iPhone compile, 99 JavaScript tests, 20 Python helper tests, source/resource membership and all 47 pinned assets. The confirmation UI test explicitly selects Mock through the regular menu, edits condition and printing before saving, then relaunches and opens the persisted one-card inventory to verify export/share controls. This does not exercise real camera recognition or the iOS Files/share destinations.
+
 Local JavaScript coverage includes engine expiry/identity/current-frame gates, main/worker transport, white outline behavior, camera-preserving preference changes, same-card suppression, different-card handoff and bounded diagnostics. Real scalar and SIMD OpenCV checks revalidate a three-pixel synthetic movement using one fresh frame, reject removal and preserve the original default decision fingerprint and source pixels. Synthetic frames do not establish real top-loader or glare accuracy.
 
 On the phone:
