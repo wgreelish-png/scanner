@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        D14A1F0A7B6E4A8395D10001 /* ListOutcome.swift in Sources */ = {isa = PBXBuildFile; fileRef = D14A1F0A7B6E4A8395D10002; };
+        D14A1F0A7B6E4A8395D10003 /* ListOutcomeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D14A1F0A7B6E4A8395D10004; };
+        D14A1F0A7B6E4A8395D10005 /* ListOutcomeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D14A1F0A7B6E4A8395D10006; };
         D13A1F0A7B6E4A8395D10001 /* ScannerUndoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D13A1F0A7B6E4A8395D10002; };
         D13A1F0A7B6E4A8395D10003 /* ScannerQuickActionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D13A1F0A7B6E4A8395D10004; };
         D12C0F1A7B6E4A8395D10001 /* ScanConfirmationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D12C0F1A7B6E4A8395D10002; };
@@ -74,6 +77,9 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        D14A1F0A7B6E4A8395D10002 /* ListOutcome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListOutcome.swift; sourceTree = "<group>"; };
+        D14A1F0A7B6E4A8395D10004 /* ListOutcomeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListOutcomeTests.swift; sourceTree = "<group>"; };
+        D14A1F0A7B6E4A8395D10006 /* ListOutcomeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListOutcomeUITests.swift; sourceTree = "<group>"; };
         D13A1F0A7B6E4A8395D10002 /* ScannerUndoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerUndoTests.swift; sourceTree = "<group>"; };
         D13A1F0A7B6E4A8395D10004 /* ScannerQuickActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerQuickActionTests.swift; sourceTree = "<group>"; };
         D12C0F1A7B6E4A8395D10002 /* ScanConfirmationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanConfirmationUITests.swift; sourceTree = "<group>"; };
@@ -153,7 +159,7 @@
 /* Begin PBXGroup section */
         C4D311E710AB4F79A8B00003 /* UITests */ = {
             isa = PBXGroup;
-            children = (C4D311E710AB4F79A8B0000C /* ListDeletionUITests.swift */, D12C0F1A7B6E4A8395D10002 /* ScanConfirmationUITests.swift */,);
+            children = (C4D311E710AB4F79A8B0000C /* ListDeletionUITests.swift */, D12C0F1A7B6E4A8395D10002 /* ScanConfirmationUITests.swift */, D14A1F0A7B6E4A8395D10006 /* ListOutcomeUITests.swift */,);
             path = UITests;
             sourceTree = "<group>";
         };
@@ -170,6 +176,7 @@
 		59830EBC3A4184110566BF1A /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+                D14A1F0A7B6E4A8395D10004 /* ListOutcomeTests.swift */,
                 D13A1F0A7B6E4A8395D10002 /* ScannerUndoTests.swift */,
                 D13A1F0A7B6E4A8395D10004 /* ScannerQuickActionTests.swift */,
                 C4D311E710AB4F79A8B00010 /* ListDeletionTests.swift */,
@@ -193,6 +200,7 @@
 		878A52FC5FF6A57D50B7B870 /* CardShowScanner */ = {
 			isa = PBXGroup;
 			children = (
+                D14A1F0A7B6E4A8395D10002 /* ListOutcome.swift */,
                 C4D311E710AB4F79A8B0000E /* ListDeletionModel.swift */,
                 F32586CC414E405F92C90002 /* TradeTransactionCalculator.swift */,
                 8F3B2A904EAD4B17B4880002 /* TCGTrackingCredentials.swift */,
@@ -365,13 +373,14 @@
         C4D311E710AB4F79A8B00004 /* Sources */ = {
             isa = PBXSourcesBuildPhase;
             buildActionMask = 2147483647;
-            files = (C4D311E710AB4F79A8B0000D /* ListDeletionUITests.swift in Sources */, D12C0F1A7B6E4A8395D10001 /* ScanConfirmationUITests.swift in Sources */,);
+            files = (C4D311E710AB4F79A8B0000D /* ListDeletionUITests.swift in Sources */, D12C0F1A7B6E4A8395D10001 /* ScanConfirmationUITests.swift in Sources */, D14A1F0A7B6E4A8395D10005 /* ListOutcomeUITests.swift in Sources */,);
             runOnlyForDeploymentPostprocessing = 0;
         };
 		B2298129A58493C45A5D7D9A /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                D14A1F0A7B6E4A8395D10003 /* ListOutcomeTests.swift in Sources */,
                 C4D311E710AB4F79A8B00011 /* ListDeletionTests.swift in Sources */,
                 62C79FEE709E4526B4520001 /* CameraPermissionTests.swift in Sources */,
                 D1AB9CA2F03E4EA6B9C10007 /* ManualCardSearchTests.swift in Sources */,
@@ -394,6 +403,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                D14A1F0A7B6E4A8395D10001 /* ListOutcome.swift in Sources */,
                 C4D311E710AB4F79A8B0000F /* ListDeletionModel.swift in Sources */,
                 F32586CC414E405F92C90001 /* TradeTransactionCalculator.swift in Sources */,
                 2D4112386E9A02AA267C9F0E /* ScannerDatabaseCache.swift in Sources */,
@@ -482,7 +492,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -518,7 +528,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
