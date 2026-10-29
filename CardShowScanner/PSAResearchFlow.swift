@@ -100,6 +100,8 @@ struct PSAResearchFlow: View {
                 if let set = metadata.set { LabeledContent("Set", value: set) }
                 if let year = metadata.year { LabeledContent("Year", value: year) }
                 if let number = metadata.number { LabeledContent("Card number", value: number) }
+                if let printing = metadata.printing { LabeledContent("Printing", value: printing) }
+                if let language = metadata.language { LabeledContent("Language", value: language) }
                 LabeledContent("Card grade", value: metadata.grader + " " + metadata.grade)
                 if let qualifiers = metadata.qualifiers, !qualifiers.isEmpty {
                     LabeledContent("Qualifiers", value: qualifiers.joined(separator: ", "))
@@ -142,9 +144,16 @@ private struct PSACatalogMatchView: View {
         self.match = match
         var card = match.card
         card.marketPrice = nil; card.marketPriceMetadata = nil; card.identity.skuID = nil
-        if let printing = match.metadata?.printing,
-           card.printings.contains(printing) { card.identity.printing = printing }
-        if let language = match.metadata?.language { card.identity.language = language }
+        if let printing = match.metadata?.printing?.trimmingCharacters(in: .whitespacesAndNewlines), !printing.isEmpty {
+            // Retain the certificate finish on this confirmation-only copy even
+            // when the cached catalog does not list it. Research still requires
+            // an exact returned variant before showing a value.
+            if !card.printings.contains(printing) { card.printings.append(printing) }
+            card.identity.printing = printing
+        }
+        if let language = match.metadata?.language?.trimmingCharacters(in: .whitespacesAndNewlines), !language.isEmpty {
+            card.identity.language = language
+        }
         _card = State(initialValue: card)
     }
     var body: some View {
@@ -163,6 +172,8 @@ private struct PSACatalogMatchView: View {
                 TextField("Language", text: $card.identity.language).autocorrectionDisabled()
                 if let metadata = match.metadata {
                     LabeledContent("Certificate", value: metadata.certificateNumber)
+                    if let printing = metadata.printing { LabeledContent("Certificate printing", value: printing) }
+                    if let language = metadata.language { LabeledContent("Certificate language", value: language) }
                     LabeledContent("Card grade", value: "PSA " + metadata.researchGrade)
                     if let autograph = metadata.autographGrade { LabeledContent("Autograph grade", value: autograph) }
                 } else {
