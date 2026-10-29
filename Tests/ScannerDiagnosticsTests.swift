@@ -2,6 +2,47 @@ import XCTest
 @testable import CardShowScanner
 
 @MainActor final class ScannerDiagnosticsTests: XCTestCase {
+    func testResearchDiagnosticExportKeepsMethodAndStatusWithoutCredentialContent() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = "ResearchDiagnosticExport." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let log = DiagnosticLog(directory: directory, defaults: defaults)
+        var fields = ServiceDiagnosticFields.failure(ResearchFailure.directAuthorizationRequired)
+        fields["method"] = "direct"; fields["phase"] = "research_meta"
+        log.record("research.connection_check_failed", fields)
+        log.record("research.connection_check_failed", ["method": "PRIVATE_KEY", "token": "PRIVATE_TOKEN", "url": "https://private.example"])
+        let exported = try log.export()
+        defer { try? FileManager.default.removeItem(at: exported.deletingLastPathComponent()) }
+        let text = try String(contentsOf: exported, encoding: .utf8)
+        XCTAssertFalse(text.contains("PRIVATE_")); XCTAssertFalse(text.contains("private.example"))
+        let rows = try text.split(separator: "\n").map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
+        let failures = rows.filter { $0["event"] as? String == "research.connection_check_failed" }
+        let saved = try XCTUnwrap(failures.first?["fields"] as? [String: String])
+        XCTAssertEqual(saved["method"], "direct"); XCTAssertEqual(saved["code"], "401")
+        XCTAssertEqual(saved["phase"], "research_meta"); XCTAssertEqual(saved["reason"], "research_credentials_rejected")
+        XCTAssertEqual((failures.last?["fields"] as? [String: String])?.count, 0)
+    }
+
+    func testServiceFailureClassificationSeparatesResearchFromCertificateSetup() async throws {
+        XCTAssertEqual(ServiceDiagnosticFields.failure(ResearchFailure.notConfigured), ["domain": "research", "reason": "server_not_configured"])
+        XCTAssertEqual(ServiceDiagnosticFields.failure(PSACertificateFailure.notConfigured), ["domain": "psa", "reason": "adapter_not_configured"])
+        XCTAssertEqual(ServiceDiagnosticFields.failure(ResearchFailure.accessDenied)["code"], "403")
+        XCTAssertEqual(ServiceDiagnosticFields.failure(ResearchFailure.authorizationRequired)["reason"], "device_token_rejected")
+        XCTAssertEqual(ServiceDiagnosticFields.failure(ResearchConnectionFailure.storage)["reason"], "keychain_unavailable")
+        XCTAssertNil(ServiceDiagnosticFields.failure(ResearchFailure.serviceUnavailable(99))["code"])
+        XCTAssertNil(ServiceDiagnosticFields.failure(ResearchFailure.serviceUnavailable(600))["code"])
+    }
+
+    func testServiceFailureClassificationDoesNotExposeUnknownErrorDescriptions() async throws {
+        let secret = "PRIVATE_CERT_KEY_AND_URL"
+        let error = NSError(domain: secret, code: 123, userInfo: [NSLocalizedDescriptionKey: secret, NSURLErrorFailingURLErrorKey: secret])
+        let fields = ServiceDiagnosticFields.failure(error)
+        XCTAssertEqual(fields, ["domain": "request", "reason": "unclassified_failure"])
+        XCTAssertFalse(String(describing: fields).contains(secret))
+    }
+
     private func envelope(_ values: [String: Any] = [:]) throws -> TCGBridgeEnvelope {
         var object: [String: Any] = ["nonce": "test", "kind": "diagnostic", "event": "scan_stats"]
         object.merge(values) { _, value in value }

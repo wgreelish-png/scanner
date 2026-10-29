@@ -128,6 +128,101 @@ import XCTest
         XCTAssertNil(model.metadata)
         XCTAssertEqual(model.message, PSACertificateFailure.invalidResponse.errorDescription)
     }
+
+    func testDirectResearchCredentialsDoNotPretendToConfigureCertificateLookup() async throws {
+        let service = "PSAResearchTests." + UUID().uuidString
+        let store = ResearchConnectionStore(service: service)
+        defer { try? store.delete(); try? store.deleteDirect() }
+        try store.saveDirect(.validated(shipperID: "123", apiKey: "PRIVATE_DIRECT_KEY"))
+        let fixture = try diagnosticLog(); defer { clean(fixture) }
+        let lookup = ConfiguredPSACertificateLookup(store: store, log: fixture.log)
+        do { _ = try await lookup.lookup("00123456"); XCTFail("Direct Research is not a PSA certification adapter") }
+        catch { XCTAssertEqual(error as? ResearchFailure, .notConfigured) }
+        let snapshot = try exported(fixture.log)
+        let fields = try XCTUnwrap(snapshot.rows.first { $0["event"] as? String == "psa.setup_failed" }?["fields"] as? [String: String])
+        XCTAssertEqual(fields["reason"], "server_not_configured")
+        XCTAssertFalse(snapshot.rows.contains { $0["event"] as? String == "psa.http_started" })
+        XCTAssertFalse(snapshot.text.contains("00123456")); XCTAssertFalse(snapshot.text.contains("PRIVATE_DIRECT_KEY"))
+    }
+
+    func testCertificateHTTPStatusAndTypedFailuresAreExportedWithoutPrivateContent() async throws {
+        let fixture = try diagnosticLog(); defer { clean(fixture) }
+        let address = try XCTUnwrap(URL(string: "https://private-psa-server.example"))
+        for status in [401, 403, 404, 501, 503] {
+            let client = PSACertificateClient(baseURL: address, deviceToken: "PRIVATE_DEVICE_TOKEN",
+                loader: PSATestHTTP(data: Data("PRIVATE_PROVIDER_RESPONSE".utf8), status: status), log: fixture.log)
+            let model = PSAResearchModel(lookup: client, log: fixture.log)
+            model.accept(try XCTUnwrap(PSACertificateCode.parse("00123456", kind: .manual)))
+            try await waitUntil { !model.loading }
+            XCTAssertNil(model.metadata); XCTAssertNotNil(model.message)
+        }
+        let snapshot = try exported(fixture.log)
+        let responses = snapshot.rows.filter { $0["event"] as? String == "psa.http_response" }
+        let fields = responses.compactMap { $0["fields"] as? [String: String] }
+        XCTAssertEqual(fields.compactMap { $0["code"] }, ["401", "403", "404", "501", "503"])
+        XCTAssertTrue(fields.allSatisfy { $0["phase"] == "certificate" && $0["provider"] == "psa_server" && Int($0["elapsed_ms"] ?? "") != nil })
+        let failures = snapshot.rows.filter { $0["event"] as? String == "psa.lookup_failed" }
+        XCTAssertEqual(failures.count, 5)
+        XCTAssertTrue(failures.allSatisfy { ($0["fields"] as? [String: String])?["reason"]?.isEmpty == false })
+        for secret in ["00123456", "PRIVATE_DEVICE_TOKEN", "PRIVATE_PROVIDER_RESPONSE", "private-psa-server.example"] {
+            XCTAssertFalse(snapshot.text.contains(secret))
+        }
+    }
+
+    func testTransportFailureLogsOnlySafeClassificationAndKeepsSecretsOutOfMessage() async throws {
+        let fixture = try diagnosticLog(); defer { clean(fixture) }
+        let client = PSACertificateClient(baseURL: URL(string: "https://private-psa-server.example")!,
+            deviceToken: "PRIVATE_DEVICE_TOKEN", loader: FailingPSATestHTTP(), log: fixture.log)
+        let model = PSAResearchModel(lookup: client, log: fixture.log)
+        model.accept(try XCTUnwrap(PSACertificateCode.parse("00123456", kind: .manual)))
+        try await waitUntil { !model.loading }
+        XCTAssertEqual(model.message, PSACertificateFailure.unavailable.errorDescription)
+        let snapshot = try exported(fixture.log)
+        let failure = try XCTUnwrap(snapshot.rows.first { $0["event"] as? String == "psa.http_failed" }?["fields"] as? [String: String])
+        XCTAssertEqual(failure["phase"], "certificate")
+        XCTAssertNotNil(failure["reason"])
+        for secret in ["00123456", "PRIVATE_DEVICE_TOKEN", "PRIVATE_TRANSPORT_ERROR", "private-psa-server.example"] {
+            XCTAssertFalse(snapshot.text.contains(secret)); XCTAssertFalse(model.message?.contains(secret) == true)
+        }
+    }
+
+    func testCanceledCertificateRequestDoesNotLogLateResponseOrLookupFailure() async throws {
+        let fixture = try diagnosticLog(); defer { clean(fixture) }
+        let loader = ControlledPSATestHTTP()
+        let client = PSACertificateClient(baseURL: URL(string: "https://private-psa-server.example")!,
+            deviceToken: "PRIVATE_DEVICE_TOKEN", loader: loader, log: fixture.log)
+        let model = PSAResearchModel(lookup: client, log: fixture.log)
+        model.accept(try XCTUnwrap(PSACertificateCode.parse("00123456", kind: .manual)))
+        try await loader.waitUntilStarted(); model.cancel()
+        await loader.complete(with: try body())
+        for _ in 0..<20 { await Task.yield() }
+        let snapshot = try exported(fixture.log)
+        for event in ["psa.http_response", "psa.http_failed", "psa.lookup_finished", "psa.lookup_failed"] {
+            XCTAssertFalse(snapshot.rows.contains { $0["event"] as? String == event })
+        }
+        XCTAssertFalse(model.loading); XCTAssertNil(model.metadata); XCTAssertNil(model.message)
+    }
+
+    private typealias DiagnosticFixture = (log: DiagnosticLog, directory: URL, defaults: UserDefaults, suite: String)
+    private func diagnosticLog() throws -> DiagnosticFixture {
+        let suite = "PSAResearchTests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        return (DiagnosticLog(directory: directory, defaults: defaults), directory, defaults, suite)
+    }
+    private func clean(_ fixture: DiagnosticFixture) {
+        try? FileManager.default.removeItem(at: fixture.directory)
+        fixture.defaults.removePersistentDomain(forName: fixture.suite)
+    }
+    private func exported(_ log: DiagnosticLog) throws -> (text: String, rows: [[String: Any]]) {
+        let url = try log.export()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let rows = try text.split(separator: "\n").map { line in
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+        }
+        return (text, rows)
+    }
     private func waitForCalls(_ count: Int, _ lookup: PendingPSATestLookup) async throws {
         for _ in 0..<100 {
             let calls = await lookup.count
@@ -165,5 +260,32 @@ private actor PendingPSATestLookup: PSACertificateLookingUp {
     func complete(_ index: Int, value: PSACertificateMetadata) {
         let continuation = continuations[index]; continuations[index] = nil
         continuation?.resume(returning: value)
+    }
+}
+
+private struct FailingPSATestHTTP: ResearchHTTPDataLoading {
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        throw NSError(domain: NSURLErrorDomain, code: URLError.notConnectedToInternet.rawValue,
+            userInfo: [NSLocalizedDescriptionKey: "PRIVATE_TRANSPORT_ERROR", NSURLErrorFailingURLStringErrorKey: request.url!.absoluteString])
+    }
+}
+
+private actor ControlledPSATestHTTP: ResearchHTTPDataLoading {
+    private var continuation: CheckedContinuation<(Data, HTTPURLResponse), Error>?
+    private var url: URL?
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        url = request.url
+        return try await withCheckedThrowingContinuation { continuation = $0 }
+    }
+    func waitUntilStarted() async throws {
+        for _ in 0..<200 {
+            if continuation != nil { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        throw URLError(.timedOut)
+    }
+    func complete(with data: Data) {
+        continuation?.resume(returning: (data, HTTPURLResponse(url: url!, statusCode: 200, httpVersion: nil, headerFields: nil)!))
+        continuation = nil
     }
 }

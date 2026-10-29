@@ -41,12 +41,18 @@ struct ResearchClient: ResearchProviding {
             request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
         }
         let data: Data, response: HTTPURLResponse
+        let started = Date()
+        await ServiceDiagnosticFields.record("research.http_started", method: .server, phase: .researchProduct)
+        try Task.checkCancellation()
         do { (data, response) = try await loader.data(for: request) }
         catch {
             try Task.checkCancellation()
+            await ServiceDiagnosticFields.record("research.http_failed", method: .server, phase: .researchProduct, started: started, error: error)
             if let failure = error as? ResearchFailure { throw failure }
             throw ResearchFailure.networkUnavailable
         }
+        try Task.checkCancellation()
+        await ServiceDiagnosticFields.record("research.http_response", method: .server, phase: .researchProduct, status: response.statusCode, started: started)
         try Task.checkCancellation()
         guard response.url == url else { throw ResearchFailure.invalidResponse }
         switch response.statusCode {

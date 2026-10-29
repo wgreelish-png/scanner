@@ -63,8 +63,9 @@ struct PSACertificateClient: PSACertificateLookingUp {
     let baseURL: URL
     let deviceToken: String
     private let loader: any ResearchHTTPDataLoading
-    init(baseURL: URL, deviceToken: String, loader: any ResearchHTTPDataLoading = NativeResearchHTTPDataLoader()) {
-        self.baseURL = baseURL; self.deviceToken = deviceToken; self.loader = loader
+    private let log: DiagnosticLog?
+    init(baseURL: URL, deviceToken: String, loader: any ResearchHTTPDataLoading = NativeResearchHTTPDataLoader(), log: DiagnosticLog? = nil) {
+        self.baseURL = baseURL; self.deviceToken = deviceToken; self.loader = loader; self.log = log
     }
     func lookup(_ certificateNumber: String) async throws -> PSACertificateMetadata {
         guard PSACertificateCode.parse(certificateNumber, kind: .manual)?.certificateNumber == certificateNumber else {
@@ -79,9 +80,22 @@ struct PSACertificateClient: PSACertificateLookingUp {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 25)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("Bearer " + deviceToken, forHTTPHeaderField: "Authorization")
+        let started = Date()
+        await recordPSADiagnostic("psa.http_started", ["phase": "certificate", "provider": "psa_server"], log: log)
+        try Task.checkCancellation()
         let data: Data, response: HTTPURLResponse
         do { (data, response) = try await loader.data(for: request) }
-        catch { try Task.checkCancellation(); throw PSACertificateFailure.unavailable }
+        catch {
+            try Task.checkCancellation()
+            var fields = ServiceDiagnosticFields.failure(error)
+            fields["phase"] = "certificate"; fields["provider"] = "psa_server"
+            fields["elapsed_ms"] = elapsedPSAMilliseconds(since: started)
+            await recordPSADiagnostic("psa.http_failed", fields, log: log)
+            throw PSACertificateFailure.unavailable
+        }
+        try Task.checkCancellation()
+        await recordPSADiagnostic("psa.http_response", ["phase": "certificate", "provider": "psa_server",
+            "code": String(response.statusCode), "elapsed_ms": elapsedPSAMilliseconds(since: started)], log: log)
         try Task.checkCancellation()
         guard response.url == url else { throw PSACertificateFailure.invalidResponse }
         switch response.statusCode {
@@ -96,9 +110,37 @@ struct PSACertificateClient: PSACertificateLookingUp {
 }
 
 struct ConfiguredPSACertificateLookup: PSACertificateLookingUp {
+    private let store: ResearchConnectionStore
+    private let log: DiagnosticLog?
+    init(store: ResearchConnectionStore = .init(), log: DiagnosticLog? = nil) { self.store = store; self.log = log }
     func lookup(_ certificateNumber: String) async throws -> PSACertificateMetadata {
-        guard let configuration = try ResearchConnectionStore().load() else { throw ResearchFailure.notConfigured }
-        return try await PSACertificateClient(baseURL: configuration.baseURL, deviceToken: configuration.deviceToken).lookup(certificateNumber)
+        try Task.checkCancellation()
+        let configuration: ResearchServerConfiguration?
+        do { configuration = try store.load() }
+        catch {
+            var fields = ServiceDiagnosticFields.failure(error); fields["phase"] = "certificate_setup"
+            await recordPSADiagnostic("psa.setup_failed", fields, log: log)
+            throw error
+        }
+        guard let configuration else {
+            await recordPSADiagnostic("psa.setup_failed", ["phase": "certificate_setup", "reason": "server_not_configured"], log: log)
+            throw ResearchFailure.notConfigured
+        }
+        await recordPSADiagnostic("psa.setup_checked", ["phase": "certificate_setup", "reason": "server_configured"], log: log)
+        try Task.checkCancellation()
+        return try await PSACertificateClient(baseURL: configuration.baseURL, deviceToken: configuration.deviceToken, log: log).lookup(certificateNumber)
+    }
+}
+
+private func elapsedPSAMilliseconds(since started: Date) -> String {
+    String(Int(max(0, min(600_000, Date().timeIntervalSince(started) * 1_000))))
+}
+
+private func recordPSADiagnostic(_ event: String, _ fields: [String: String], log: DiagnosticLog?) async {
+    guard !Task.isCancelled else { return }
+    await MainActor.run {
+        guard !Task.isCancelled else { return }
+        (log ?? DiagnosticLog.shared).record(event, fields)
     }
 }
 
@@ -108,26 +150,33 @@ struct ConfiguredPSACertificateLookup: PSACertificateLookingUp {
     private(set) var loading = false
     private(set) var message: String?
     private let lookup: any PSACertificateLookingUp
+    private let log: DiagnosticLog
     private var task: Task<Void, Never>?
     private var requestID = UUID()
-    init(lookup: any PSACertificateLookingUp = ConfiguredPSACertificateLookup()) { self.lookup = lookup }
+    init(lookup: any PSACertificateLookingUp = ConfiguredPSACertificateLookup(), log: DiagnosticLog? = nil) {
+        self.lookup = lookup; self.log = log ?? .shared
+    }
     func accept(_ code: PSACertificateCode) {
         cancel(); certificateNumber = code.certificateNumber; metadata = nil; message = nil; loading = true
+        log.record("psa.lookup_started", ["phase": "certificate"])
         let request = requestID, number = certificateNumber
         task = Task { [weak self, lookup] in
             do {
                 let metadata = try await lookup.lookup(number)
                 guard let self, !Task.isCancelled, self.requestID == request else { return }
                 guard self.certificateNumber == metadata.certificateNumber else {
-                    self.loading = false; self.message = PSACertificateFailure.invalidResponse.errorDescription; return
+                    self.loading = false; self.message = PSACertificateFailure.invalidResponse.errorDescription
+                    var fields = ServiceDiagnosticFields.failure(PSACertificateFailure.invalidResponse); fields["phase"] = "certificate"
+                    self.log.record("psa.lookup_failed", fields); return
                 }
                 self.metadata = metadata; self.loading = false
-                DiagnosticLog.shared.record("psa.lookup_finished")
+                self.log.record("psa.lookup_finished", ["phase": "certificate"])
             } catch {
                 guard let self, !Task.isCancelled, self.requestID == request else { return }
                 self.loading = false
                 self.message = (error as? LocalizedError)?.errorDescription ?? PSACertificateFailure.unavailable.errorDescription
-                DiagnosticLog.shared.record("psa.lookup_failed")
+                var fields = ServiceDiagnosticFields.failure(error); fields["phase"] = "certificate"
+                self.log.record("psa.lookup_failed", fields)
             }
         }
     }

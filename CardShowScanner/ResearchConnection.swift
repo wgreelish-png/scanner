@@ -119,7 +119,9 @@ struct ResearchConnectionStore: Sendable {
 struct ConfiguredResearchProvider: ResearchProviding {
     func research(for card: CardCandidate, forceRefresh: Bool) async throws -> ResearchProductDetails {
         let store = ResearchConnectionStore()
-        switch try ResearchAccessMethod.selected(store: store) {
+        let method = try ResearchAccessMethod.selected(store: store)
+        await ServiceDiagnosticFields.record("research.provider_selected", method: method, phase: .setup)
+        switch method {
         case .direct:
             guard let credentials = try store.loadDirect() else { throw ResearchFailure.directNotConfigured }
             return try await DirectResearchClient(credentials: credentials).research(for: card, forceRefresh: forceRefresh)
@@ -270,10 +272,17 @@ struct ResearchConnectionView: View {
             case .direct: target = .direct(try .validated(shipperID: shipperID, apiKey: apiKey))
             case .server: target = .server(try .validated(address: address, token: token))
             }
-        } catch { message = error.localizedDescription; return }
+        } catch {
+            message = error.localizedDescription
+            var fields = ServiceDiagnosticFields.failure(error)
+            fields["method"] = method.rawValue; fields["phase"] = "setup"
+            DiagnosticLog.shared.record("research.connection_check_failed", fields)
+            return
+        }
         cancelProbe()
         let requestID = UUID(); probeID = requestID
         busy = true; message = nil
+        DiagnosticLog.shared.record("research.connection_check_started", ["method": method.rawValue])
         probe = Task { @MainActor in
             defer { if probeID == requestID { busy = false; probe = nil } }
             do {
@@ -285,7 +294,9 @@ struct ResearchConnectionView: View {
             } catch {
                 guard !Task.isCancelled, probeID == requestID else { return }
                 message = (error as? LocalizedError)?.errorDescription ?? "Research could not connect. Check your connection and retry."
-                DiagnosticLog.shared.record("research.connection_check_failed", ["method": method.rawValue])
+                var fields = ServiceDiagnosticFields.failure(error)
+                fields["method"] = method.rawValue
+                DiagnosticLog.shared.record("research.connection_check_failed", fields)
             }
         }
     }
@@ -302,8 +313,17 @@ private enum ResearchConnectionProbe: Sendable {
             var request = URLRequest(url: connection.baseURL.appendingPathComponent("api/v1/health"), timeoutInterval: 25)
             request.setValue("Bearer " + connection.deviceToken, forHTTPHeaderField: "Authorization")
             request.setValue("application/json", forHTTPHeaderField: "Accept")
-            let (data, response) = try await NativeResearchHTTPDataLoader().data(for: request)
+            let started = Date()
+            await ServiceDiagnosticFields.record("research.http_started", method: .server, phase: .serverHealth)
+            let data: Data, response: HTTPURLResponse
+            do { (data, response) = try await NativeResearchHTTPDataLoader().data(for: request) }
+            catch {
+                try Task.checkCancellation()
+                await ServiceDiagnosticFields.record("research.http_failed", method: .server, phase: .serverHealth, started: started, error: error)
+                throw error
+            }
             try Task.checkCancellation()
+            await ServiceDiagnosticFields.record("research.http_response", method: .server, phase: .serverHealth, status: response.statusCode, started: started)
             guard response.url == request.url else { throw ResearchConnectionFailure.invalidResponse }
             if response.statusCode == 401 { throw ResearchFailure.authorizationRequired }
             guard response.statusCode == 200, let health = try? JSONDecoder().decode(ResearchServerHealth.self, from: data), health.status == "ok" else {
