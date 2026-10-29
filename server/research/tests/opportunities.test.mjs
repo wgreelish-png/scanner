@@ -6,7 +6,9 @@ import { createResearchHandler, MAX_RESPONSE_BYTES } from '../src/research.mjs';
 // marketplace inventory, an actual transaction or Research subscription status.
 const TOKEN = 'synthetic-opportunities-device-token-0000000000';
 const KEY = 'tcgt_beta_' + 'b'.repeat(48);
-const options = { shipperID: '123', apiKey: KEY, deviceToken: TOKEN };
+// Isolated OppsV2 schema fixtures use the legacy one-hour shard-only option;
+// cadence.test exercises production-default index/daily behavior separately.
+const options = { shipperID: '123', apiKey: KEY, deviceToken: TOKEN, syncIndex: false, ttlMs: 3_600_000 };
 const PATH = '/api/v1/opportunities/3/42/101';
 const UPSTREAM = 'https://beta.tcgtracking.com/v1/3/sets/42';
 const researchPath = '/api/v1/research/3/42/101';
@@ -277,6 +279,7 @@ test('concurrent opportunities requests deduplicate only their own shard', async
   const waiting = []; let calls = 0;
   const handle = createResearchHandler({ ...options, fetchImpl: url => { calls++; return new Promise(accept => waiting.push(() => accept(reply(url.endsWith('/research') ? researchFixture() : fixture())))); } });
   const responses = [handle(request()), handle(request('/api/v1/opportunities/3/42/202')), handle(request(researchPath))];
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(calls, 2, 'Research and opportunities require independent upstream loads');
   waiting.forEach(resolve => resolve());
   assert.deepEqual((await Promise.all(responses)).map(response => response.status), [200, 200, 200]);

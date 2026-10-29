@@ -43,7 +43,7 @@ import Observation
                 self.publicDetails = details
                 self.publicLoading = false; self.publicLookup = nil
                 DiagnosticLog.shared.record("market_details.public_finished", ["phase": "openapi",
-                    "priced": String(details.quote?.marketPrice != nil), "cache": details.metadata?.isOffline == true ? "offline" : "online"])
+                    "priced": String(details.quote?.marketPrice != nil), "cache": details.metadata?.isOffline == true ? "offline" : (details.metadata?.isCached == true ? "cached" : "online")])
             } catch {
                 guard let self, !Task.isCancelled, self.publicRequestID == requestID else { return }
                 self.publicLoading = false; self.publicLookup = nil

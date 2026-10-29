@@ -86,6 +86,9 @@ struct MarketInsightsView: View {
                     if metadata.isOffline == true {
                         Label("Offline cached public prices", systemImage: "wifi.slash")
                             .foregroundStyle(.secondary).accessibilityIdentifier("marketDetails.offline")
+                    } else if metadata.isCached == true {
+                        Label("Cached public prices", systemImage: "clock")
+                            .foregroundStyle(.secondary).accessibilityIdentifier("marketDetails.cached")
                     }
                     LabeledContent("Price data updated", value: metadata.updatedAt.map(dateLabel) ?? "Unavailable")
                     LabeledContent("Retrieved", value: dateLabel(metadata.fetchedAt))

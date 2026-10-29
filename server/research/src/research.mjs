@@ -1,8 +1,11 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { lstat, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 export const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const UPSTREAM = 'https://beta.tcgtracking.com';
 const HOUR = 60 * 60 * 1000;
+const DAY = 24 * HOUR;
 const META_FIELDS = ['schema_version', 'status', 'category_id', 'game_name', 'group_id', 'set_name', 'set_abbr', 'published_on', 'generated_at', 'etag', 'product_count', 'grade_row_count', 'catalog_ref_url', 'opportunities_ref_url'];
 const PRODUCT_FIELDS = ['product_id', 'name', 'ext_number', 'ext_rarity', 'catalog_market_price'];
 const GRADE_FIELDS = ['grader', 'grade', 'grade_sort', 'pop', 'sales', 'guide_value', 'market_value', 'confidence', 'last_sold_at', 'synced_on'];
@@ -258,6 +261,23 @@ function validateOpportunitiesShard(body, category, group) {
   }
   return { meta, products };
 }
+function validateIndex(body) {
+  if (!record(body) || !record(body.categories)) throw invalid();
+  const categories = Object.create(null);
+  for (const [category, value] of Object.entries(body.categories)) {
+    if (!identifier(category) || !record(value) || !record(value.sets) || (value.category_id !== undefined && value.category_id !== Number(category))) throw invalid();
+    const sets = Object.create(null);
+    for (const [group, row] of Object.entries(value.sets)) {
+      if (!identifier(group) || !record(row) || (row.group_id !== undefined && row.group_id !== Number(group)) || (row.category_id !== undefined && row.category_id !== Number(category))) throw invalid();
+      if (row.etag !== undefined && row.etag !== null && !text(row.etag, 128)) throw invalid();
+      sets[group] = row.etag == null ? {} : { etag: row.etag };
+    }
+    categories[category] = { sets };
+  }
+  // The index is internal cadence metadata. Do not retain arbitrary URLs,
+  // provider diagnostics or other fields in memory or the disk snapshot.
+  return { categories };
+}
 export function normalizePSACertificate(value, certificateNumber) {
   if (!record(value) || value.certificateNumber !== certificateNumber || value.grader !== 'PSA' || !text(value.grade, 24) || !text(value.name, 200) || !text(value.source, 200)) throw invalid();
   const result = pick(value, ['certificateNumber', 'grader', 'grade', 'name', 'year', 'set', 'number', 'language', 'printing', 'imageURL', 'source', 'qualifiers', 'autographGrade']);
@@ -280,12 +300,82 @@ export function normalizePSACertificate(value, certificateNumber) {
 
 /** All upstream credentials stay in this process. The phone uses its own token. */
 export function createResearchHandler({ shipperID, apiKey, deviceToken, fetchImpl = fetch, now = Date.now, psaLookup = null,
-  ttlMs = HOUR, maxEntries = 4, maxRequestsPerMinute = 120, rateWindowMs = 60_000, maxClients = 1024, maxPending = 4 } = {}) {
+  ttlMs = DAY, indexTTLms = DAY, syncIndex = true, cacheDirectory = null, maxUpstreamRequestsPerMinute = 120,
+  maxEntries = 4, maxRequestsPerMinute = 120, rateWindowMs = 60_000, maxClients = 1024, maxPending = 4 } = {}) {
   if (!secret(deviceToken) || deviceToken.length < 32) throw new Error('RESEARCH_DEVICE_TOKEN must be a strong 32–512 character printable token.');
-  if (!Number.isInteger(maxEntries) || maxEntries < 1 || maxEntries > 16 || !Number.isFinite(ttlMs) || ttlMs <= 0 || ttlMs > HOUR || !Number.isInteger(maxRequestsPerMinute) || maxRequestsPerMinute < 1 || !Number.isFinite(rateWindowMs) || rateWindowMs <= 0 || !Number.isInteger(maxClients) || maxClients < 1 || !Number.isInteger(maxPending) || maxPending < 1) throw new Error('Invalid bounded cache or rate limit configuration.');
+  if (!Number.isInteger(maxEntries) || maxEntries < 1 || maxEntries > 16 || !Number.isFinite(ttlMs) || ttlMs <= 0 || ttlMs > DAY || !Number.isFinite(indexTTLms) || indexTTLms <= 0 || indexTTLms > DAY || typeof syncIndex !== 'boolean' || (cacheDirectory !== null && (typeof cacheDirectory !== 'string' || !cacheDirectory.length)) || !Number.isInteger(maxUpstreamRequestsPerMinute) || maxUpstreamRequestsPerMinute < 1 || maxUpstreamRequestsPerMinute > 120 || !Number.isInteger(maxRequestsPerMinute) || maxRequestsPerMinute < 1 || !Number.isFinite(rateWindowMs) || rateWindowMs <= 0 || !Number.isInteger(maxClients) || maxClients < 1 || !Number.isInteger(maxPending) || maxPending < 1) throw new Error('Invalid bounded cache or rate limit configuration.');
   const expectedToken = digest(deviceToken);
   const researchConfigured = identifier(shipperID) && secret(apiKey);
   const cache = new Map(), pending = new Map(), clients = new Map(), cooldown = new Map();
+  const upstreamRate = { window: Math.floor(now() / 60_000) * 60_000, used: 0, limit: maxUpstreamRequestsPerMinute, remaining: null, resetAt: 0, blockedUntil: 0, inFlight: 0 };
+  let restorePromise, persistPromise = Promise.resolve();
+  const snapshotPath = cacheDirectory ? join(cacheDirectory, 'cache.json') : null;
+  async function restore() {
+    if (!snapshotPath) return;
+    if (!restorePromise) restorePromise = (async () => {
+      try {
+        const stat = await lstat(snapshotPath);
+        if (!stat.isFile() || stat.size > maxEntries * MAX_RESPONSE_BYTES + 65_536) return;
+        const saved = JSON.parse(await readFile(snapshotPath, 'utf8'));
+        if (!record(saved) || saved.version !== 1 || !Array.isArray(saved.entries) || saved.entries.length > maxEntries) return;
+        const restored = [];
+        for (const row of saved.entries) {
+          if (!record(row) || typeof row.key !== 'string' || !Number.isFinite(row.checkedAt) || row.checkedAt < 0 || row.checkedAt > now() || (row.etag !== undefined && !validETag(row.etag)) || Buffer.byteLength(JSON.stringify(row.body)) > MAX_RESPONSE_BYTES) return;
+          let body;
+          const shard = /^(research|opportunities):([123]):([1-9][0-9]{0,11})$/.exec(row.key);
+          if (/^index:(research|opportunities)$/.test(row.key)) body = validateIndex(row.body);
+          else if (shard) body = (shard[1] === 'research' ? validateShard : validateOpportunitiesShard)(row.body, Number(shard[2]), Number(shard[3]));
+          else return;
+          restored.push([row.key, { body, etag: row.etag, checkedAt: row.checkedAt }]);
+        }
+        for (const [key, value] of restored) cache.set(key, value);
+      } catch { /* Missing, corrupt or inaccessible cache is a cold start. */ }
+    })();
+    await restorePromise;
+  }
+  async function persist() {
+    if (!snapshotPath) return;
+    // Serialize writes so an older network completion cannot overwrite newer
+    // state. Only sanitized bodies, validators and timestamps are persisted.
+    const snapshot = JSON.stringify({ version: 1, entries: [...cache].map(([key, value]) => ({ key, ...value })) });
+    persistPromise = persistPromise.then(async () => {
+      const temporary = `${snapshotPath}.${randomUUID()}.tmp`;
+      try {
+        await mkdir(cacheDirectory, { recursive: true, mode: 0o700 });
+        await writeFile(temporary, snapshot, { mode: 0o600, flag: 'wx' });
+        await rename(temporary, snapshotPath);
+      } catch { try { await unlink(temporary); } catch { /* Best-effort cache. */ } }
+    });
+    await persistPromise;
+  }
+  const validETag = value => typeof value === 'string' && value.length > 0 && value.length <= 512 && !/[\r\n]/.test(value);
+  function upstreamBlocked(until) {
+    return new APIError(503, 'upstream_rate_limited', 'The Beta request budget is temporarily exhausted. Please retry later.', Math.max(1, Math.ceil((until - now()) / 1000)));
+  }
+  function reserveUpstream() {
+    const time = now();
+    if (time < upstreamRate.window || time >= upstreamRate.window + 60_000) { upstreamRate.window = Math.floor(time / 60_000) * 60_000; upstreamRate.used = 0; }
+    if (time >= upstreamRate.resetAt) { upstreamRate.remaining = null; upstreamRate.resetAt = 0; }
+    if (time < upstreamRate.blockedUntil) throw upstreamBlocked(upstreamRate.blockedUntil);
+    if (upstreamRate.remaining === 0) throw upstreamBlocked(upstreamRate.resetAt);
+    if (upstreamRate.used >= upstreamRate.limit) throw upstreamBlocked(upstreamRate.window + 60_000);
+    upstreamRate.used++;
+    upstreamRate.inFlight++;
+    if (upstreamRate.remaining !== null) upstreamRate.remaining = Math.max(0, upstreamRate.remaining - 1);
+  }
+  function observeUpstream(response) {
+    const number = name => { const value = response.headers.get(name); return /^[0-9]{1,6}$/.test(value ?? '') ? Number(value) : null; };
+    const limit = number('X-RateLimit-Limit'), remaining = number('X-RateLimit-Remaining'), reset = number('X-RateLimit-Reset');
+    if (limit !== null && limit > 0) upstreamRate.limit = Math.min(maxUpstreamRequestsPerMinute, limit);
+    if (remaining !== null || (limit !== null && limit > 0 && reset !== null)) {
+      // Other in-flight calls may consume slots after this response snapshot.
+      // Never increase an already observed allowance within the same window.
+      const available = remaining !== null ? Math.max(0, Math.min(120, remaining) - Math.max(0, upstreamRate.inFlight - 1)) : Math.max(0, Math.min(120, limit) - upstreamRate.used);
+      upstreamRate.remaining = upstreamRate.remaining === null ? available : Math.min(upstreamRate.remaining, available);
+      upstreamRate.resetAt = Math.max(upstreamRate.resetAt, reset !== null ? now() + Math.max(1, Math.min(3600, reset)) * 1000 : upstreamRate.window + 60_000);
+    }
+    if ([429, 503].includes(response.status)) upstreamRate.blockedUntil = Math.max(upstreamRate.blockedUntil, now() + retrySeconds(response.headers.get('Retry-After')) * 1000);
+  }
   function rateLimit(clientIP) {
     const time = now();
     for (const [key, value] of clients) if (value.until <= time) clients.delete(key);
@@ -301,40 +391,41 @@ export function createResearchHandler({ shipperID, apiKey, deviceToken, fetchImp
     cache.delete(key); cache.set(key, value);
     while (cache.size > maxEntries) cache.delete(cache.keys().next().value);
   }
-  async function loadSet(category, group, kind = 'research') {
+  async function loadRemote(key, kind, url, validate, previous) {
     const opportunities = kind === 'opportunities';
     const label = opportunities ? 'market insights' : 'research';
-    if (!researchConfigured) throw new APIError(503, `${kind}_not_configured`, opportunities ? 'Configure Beta API credentials on the server before requesting market insights.' : 'Configure Research API credentials on the server before requesting research.');
-    // Both adapters share bounded cache/queue capacity and request rates, with
-    // distinct identity, cached bodies, ETags and per-shard failure cooldowns.
-    const key = `${kind}:${category}:${group}`, time = now(), previous = cache.get(key);
-    if (previous && time >= previous.checkedAt && time < previous.checkedAt + ttlMs) { remember(key, previous); return previous.body; }
+    const time = now();
     const blocked = cooldown.get(key);
     if (blocked && time < blocked.until) throw blocked.error;
     if (blocked) cooldown.delete(key);
     if (pending.has(key)) return pending.get(key);
     if (pending.size >= maxPending) throw new APIError(503, 'server_busy', 'The research service is busy. Please retry shortly.', 2);
     const task = (async () => {
-      const url = `${UPSTREAM}/v1/${category}/sets/${group}${opportunities ? '' : '/research'}`;
       const headers = { Accept: 'application/json', 'X-Shipper-Id': String(shipperID), 'X-Api-Key': apiKey };
       if (previous?.etag) headers['If-None-Match'] = previous.etag;
       try {
-        const response = await fetchImpl(url, { method: 'GET', headers, redirect: 'error', signal: AbortSignal.timeout(15_000) });
+        reserveUpstream();
+        let response;
+        try {
+          response = await fetchImpl(url, { method: 'GET', headers, redirect: 'error', signal: AbortSignal.timeout(15_000) });
+          if (!response.url || response.url === url) observeUpstream(response);
+        } finally { upstreamRate.inFlight--; }
         if (response.status !== 200 || (response.url && response.url !== url)) {
           try { await response.body?.cancel(); } catch { /* Retain the safe status error. */ }
         }
         if (response.url && response.url !== url) throw invalid();
         if (response.status === 304) {
           if (!previous) throw invalid();
-          remember(key, { ...previous, checkedAt: now() }); return previous.body;
+          remember(key, { ...previous, checkedAt: now() }); await persist(); return previous.body;
         }
-        if (response.status === 404) { cache.delete(key); throw new APIError(404, 'not_covered', opportunities ? 'Market insights are not available for this set.' : 'Research is not available for this set.'); }
+        if (response.status === 404) { cache.delete(key); await persist(); throw new APIError(404, 'not_covered', opportunities ? 'Market insights are not available for this set.' : 'Research is not available for this set.'); }
         if ([401, 403].includes(response.status)) throw new APIError(502, `${kind}_access_denied`, opportunities ? 'The Beta provider rejected server access. Check the server’s credentials, Beta access, and IP allowlist.' : 'The research provider rejected server access. Check the server’s credentials, subscription, and IP allowlist.');
         if (response.status === 429 || response.status === 503) throw new APIError(503, `${kind}_temporarily_unavailable`, `The ${label} provider is temporarily unavailable. Please retry later.`, retrySeconds(response.headers.get('Retry-After')));
         if (response.status !== 200) throw new APIError(502, `${kind}_unavailable`, `The ${label} provider could not complete this request.`);
-        const body = (opportunities ? validateOpportunitiesShard : validateShard)(await boundedJSON(response), category, group);
+        const body = validate(await boundedJSON(response));
         const etag = response.headers.get('ETag');
-        remember(key, { body, etag: etag && etag.length <= 512 && !/[\r\n]/.test(etag) ? etag : undefined, checkedAt: now() });
+        remember(key, { body, etag: validETag(etag) ? etag : undefined, checkedAt: now() });
+        await persist();
         return body;
       } catch (error) {
         const safe = error instanceof APIError ? error : new APIError(error?.name === 'TimeoutError' || error?.name === 'AbortError' ? 504 : 502, `${kind}_unavailable`, `The ${label} provider could not complete this request.`);
@@ -346,6 +437,26 @@ export function createResearchHandler({ shipperID, apiKey, deviceToken, fetchImp
     })();
     pending.set(key, task);
     try { return await task; } finally { if (pending.get(key) === task) pending.delete(key); }
+  }
+  async function loadIndex(kind, force) {
+    const key = `index:${kind}`, previous = cache.get(key), time = now();
+    if (!force && previous && time >= previous.checkedAt && time < previous.checkedAt + indexTTLms) { remember(key, previous); return previous.body; }
+    const url = `${UPSTREAM}/v1/${kind === 'research' ? 'research/' : ''}meta`;
+    return loadRemote(key, kind, url, validateIndex, previous);
+  }
+  async function loadSet(category, group, kind = 'research', force = false) {
+    if (!researchConfigured) throw new APIError(503, `${kind}_not_configured`, kind === 'opportunities' ? 'Configure Beta API credentials on the server before requesting market insights.' : 'Configure Research API credentials on the server before requesting research.');
+    await restore();
+    const index = syncIndex ? await loadIndex(kind, force) : null;
+    const key = `${kind}:${category}:${group}`, previous = cache.get(key), time = now();
+    const dataHash = index?.categories?.[category]?.sets?.[group]?.etag;
+    // The data hash is only a comparison token. HTTP If-None-Match always
+    // comes from the matching endpoint's stored HTTP ETag header.
+    if (previous && dataHash && previous.body.meta.etag === dataHash) { remember(key, previous); return previous.body; }
+    const changed = dataHash && previous && previous.body.meta.etag !== dataHash;
+    if (!force && !changed && previous && time >= previous.checkedAt && time < previous.checkedAt + ttlMs) { remember(key, previous); return previous.body; }
+    const url = `${UPSTREAM}/v1/${category}/sets/${group}${kind === 'opportunities' ? '' : '/research'}`;
+    return loadRemote(key, kind, url, body => (kind === 'opportunities' ? validateOpportunitiesShard : validateShard)(body, category, group), previous);
   }
   return async function handle(request, { clientIP = 'unknown' } = {}) {
     try {
@@ -359,17 +470,18 @@ export function createResearchHandler({ shipperID, apiKey, deviceToken, fetchImp
       const supplied = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
       if (supplied.length > 512 || !timingSafeEqual(digest(supplied), expectedToken)) throw new APIError(401, 'unauthorized', 'The research server requires a valid device token.');
       if (url.pathname === '/api/v1/health') return health();
+      const force = /(?:^|,)\s*no-cache\s*(?:,|$)/i.test(request.headers.get('Cache-Control') ?? '');
       const route = /^\/api\/v1\/research\/([123])\/([1-9][0-9]{0,11})\/([1-9][0-9]{0,11})$/.exec(url.pathname);
       if (route) {
         const [, cat, group, product] = route;
-        const body = await loadSet(Number(cat), Number(group));
+        const body = await loadSet(Number(cat), Number(group), 'research', force);
         if (!Object.hasOwn(body.products, product)) throw new APIError(404, 'product_not_covered', 'Research is not available for this product in the selected set.');
         return json(200, { meta: body.meta, product: body.products[product] });
       }
       const opportunityRoute = /^\/api\/v1\/opportunities\/([123])\/([1-9][0-9]{0,11})\/([1-9][0-9]{0,11})$/.exec(url.pathname);
       if (opportunityRoute) {
         const [, category, group, product] = opportunityRoute;
-        const body = await loadSet(Number(category), Number(group), 'opportunities');
+        const body = await loadSet(Number(category), Number(group), 'opportunities', force);
         if (!Object.hasOwn(body.products, product)) throw new APIError(404, 'product_not_covered', 'Market insights are not available for this product in the selected set.');
         return json(200, { meta: body.meta, product: body.products[product] });
       }

@@ -34,7 +34,7 @@ struct SettingsView: View {
                 PricingSourcePicker(accessibilityID: "settings.pricingSource")
                 Text("Existing TCGTracking uses the current website connection. Open API requests condition, printing and language prices directly, without website sign-in. You can switch back at any time.").font(.caption)
                 Text("Open API prices are published daily. The displayed update time describes the provider's data, not a new sale. This setting does not change the weekly recognition-database schedule or saved offers.").font(.caption).foregroundStyle(.secondary)
-                Text("With Open API selected, previously downloaded quotes for up to four recent sets can be used offline. Provider update and retrieval times are shown. An unavailable condition, printing or language stays unpriced.").font(.caption).foregroundStyle(.secondary)
+                Text("Open API keeps downloaded quotes for up to four recent sets across app launches and checks them once every 24 hours. Refresh Market Price checks sooner. Cached prices show their original update time; during a connectivity failure, previously downloaded quotes can be used offline. Missing conditions, printings and languages stay unpriced.").font(.caption).foregroundStyle(.secondary)
             }
             Section("TCGTracking API Connection") {
                 NavigationLink { ResearchConnectionView() } label: {

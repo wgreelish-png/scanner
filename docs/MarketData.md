@@ -1,6 +1,6 @@
 # Public pricing and OppsV2 market activity
 
-Build 20 includes **Market Details & Sales Activity** in the saved-card editor and scanner confirmation screen. It uses public OpenAPI prices and the independent OppsV2 market-activity API. Graded Research remains a separate experimental feature with its own product coverage.
+Build 21 includes **Market Details & Sales Activity** in the saved-card editor and scanner confirmation screen. It uses public OpenAPI prices and the independent OppsV2 market-activity API. Graded Research remains a separate experimental feature with its own product coverage.
 
 ## Using Market Details
 
@@ -19,15 +19,19 @@ Settings → **TCGTracking API Connection** reuses existing device-only Keychain
 - **Direct TCGTracking:** uses the fixed `https://beta.tcgtracking.com` origin, `X-Shipper-Id` and `X-Api-Key`. The subscription must permit Opportunities access and the phone's current public outbound IP must be allowlisted. Moving between Wi-Fi/cellular/VPN can change that IP.
 - **My Server:** uses the saved HTTPS server origin and separate device bearer token. Deploy the updated [server adapter](../server/research/README.md) to expose `/api/v1/opportunities/{category}/{group}/{product}`. Its upstream Beta keys stay on the server. The server's `opportunitiesConfigured` health flag reports configuration, not verified provider entitlement or exact-card coverage. An older server that omits the flag is reported as not supporting that check.
 
-Research and OppsV2 use separate shard/cache namespaces; Research access failures cannot populate an OppsV2 response. Direct OppsV2 retains at most four hourly set bodies in memory, separated by credentials. ETags revalidate expired bodies, HTTP 404 removes a shard, and 429/503 cooldowns honor bounded Retry-After values. No background bulk polling or automatic repeated authentication attempts are introduced. The server shares bounded cache, queue and rate budgets across the two services.
+Research and OppsV2 use separate shard/cache namespaces. Following the user’s daily-refresh preference, their indices are checked on demand at most once every 24 hours. Each needed shard contains all available products/SKUs for its set; changing cards in that set reuses the same body. The index data hash is compared to the cached shard meta.etag: an unchanged hash skips the shard request entirely, while a changed hash fetches that needed shard. Index and shard HTTP ETags are stored separately and only those HTTP validators are sent as If-None-Match. Manual refresh revalidates the index sooner; it does not force provider regeneration. No background polling or bulk download of all games is introduced.
+
+A shared native coordinator proactively caps authenticated Research/Opps requests at 120 per fixed 60-second window per shipper, including metadata, HEAD and 304 attempts. It respects provider Limit/Remaining/Reset headers and Retry-After on 429/503. Cache keys include credential identity, while the request budget remains shipper-specific even after key rotation. The updated server likewise shares its own upstream budget across both families and separately limits incoming device requests. Independent external apps/processes are outside these local budgets, so provider response headers remain authoritative. Cancellation interrupts queued waits.
+
+Validated, account-isolated native snapshots persist across app launches, with up to four combined Beta shard bodies within 32 MiB and an 8 MiB index pool; the bounded in-memory caches remain separate from saved inventory and offers. A full/evicted/missing cache can require another request for a needed set. The server optionally persists its bounded snapshots on a configured writable volume. Old data timestamps are preserved and a provider/auth failure is not presented as a newly refreshed response.
 
 ## Previously downloaded OpenAPI prices offline
 
-Selecting **Open API** now retains up to four recently fetched, validated public SKU set responses on disk, with a 32 MiB total cap. Successful online lookups populate the cache automatically. Disk data is separate from recognition packs, website cookies, Beta credentials and saved offers.
+Selecting **Open API** now retains up to four recently fetched, validated public SKU set responses on disk, with a 32 MiB total cap. Successful online lookups populate the cache automatically. Fresh bodies are reused for 24 hours, including after a restart, and labeled cached without claiming an offline connection. Refresh Market Price can revalidate sooner. Disk data is separate from recognition packs, website cookies, Beta credentials and saved offers.
 
 On a genuine connectivity failure, an available cached set can supply the exact product/printing/language/condition quote. It is labeled **cached / offline**, keeps its original provider/retrieval timestamps, and does not become a fresh online response. A missing condition, ambiguous SKU or missing market value remains unavailable. Authentication/HTTP errors, malformed responses and canceled requests do not silently return cached data. The selected pricing provider is never switched as a fallback.
 
-This is a bounded recent-price cache, not an offline copy of every inventory price or an offline Research/Opportunities database. Looking up a set outside the retained four still needs internet. Public prices are documented as daily data, so current internet access does not imply a real-time sale quote. Existing offline recognition behavior is unchanged and needs its own physical-device acceptance.
+These are bounded recent-data caches, not complete offline copies of every inventory card or provider dataset. Beta views require a usable cached index and shard, or connectivity to refresh them. Looking up a set outside the retained four still needs internet. Public prices are documented as daily data, so current internet access does not imply a real-time sale quote. Existing offline recognition behavior is unchanged and needs its own physical-device acceptance.
 
 ## Endpoints used
 

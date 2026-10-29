@@ -27,6 +27,18 @@ enum ServiceDiagnosticFields {
         case opportunitiesMeta = "opportunities_meta", opportunitiesProduct = "opportunities_product"
     }
     static func failure(_ error: Error) -> [String: String] {
+        if let error = error as? BetaAPICadenceFailure {
+            switch error {
+            case .invalidRequest: return ["domain": "beta", "reason": "invalid_request"]
+            case .invalidResponse: return ["domain": "beta", "reason": "invalid_response"]
+            case .responseTooLarge: return ["domain": "beta", "reason": "response_too_large"]
+            case .networkUnavailable: return ["domain": "beta", "reason": "network_unavailable"]
+            case .httpStatus(let code):
+                var fields = ["domain": "beta", "reason": "http_failure"]
+                if (100...599).contains(code) { fields["code"] = String(code) }
+                return fields
+            }
+        }
         if let error = error as? OpenAPIPricingFailure {
             let reason: String
             var status: Int?

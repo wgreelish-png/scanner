@@ -30,23 +30,34 @@ struct DirectOpportunitiesClient: OpportunitiesProviding {
     private let resolver: any OpenAPISetResolving
     private let loader: any ResearchHTTPDataLoading
     private let cache: OpportunitiesSetCache
+    private let cadence: BetaAPICadence?
     private let now: @Sendable () -> Date
 
     init(credentials: DirectResearchCredentials,
          resolver: any OpenAPISetResolving = CatalogOpenAPISetResolver.shared,
          loader: any ResearchHTTPDataLoading = NativeResearchHTTPDataLoader(maximumBytes: DirectOpportunitiesClient.maximumSetBytes),
-         cache: OpportunitiesSetCache = .shared, now: @escaping @Sendable () -> Date = { Date() }) {
-        self.credentials = credentials; self.resolver = resolver; self.loader = loader; self.cache = cache; self.now = now
+         cache: OpportunitiesSetCache = .shared, cadence: BetaAPICadence? = .shared,
+         now: @escaping @Sendable () -> Date = { Date() }) {
+        self.credentials = credentials; self.resolver = resolver; self.loader = loader; self.cache = cache; self.cadence = cadence; self.now = now
     }
 
     func opportunities(for card: CardCandidate, forceRefresh: Bool) async throws -> OpportunitiesDetails {
         try Task.checkCancellation()
         let checked = try checkedCredentials()
         let identity = try await OpportunitiesRequestIdentity.resolve(card, using: resolver)
-        let account = OpportunitiesTransport.namespace(["direct", checked.shipperID, checked.apiKey])
+        let account = BetaAPICadence.account(for: checked)
+        let index: BetaAPISetInfo?
+        do {
+            index = try await cadence?.setInfo(family: .opportunities, category: identity.category, group: identity.group,
+                forceRefresh: forceRefresh, credentials: checked, loader: loader)
+        } catch {
+            try Task.checkCancellation()
+            throw OpportunitiesTransport.cadenceFailure(error)
+        }
         let request = Self.request(path: "/v1/\(identity.category)/sets/\(identity.group)", credentials: checked)
         return try await OpportunitiesTransport.load(request: request, key: account + ":\(identity.category):\(identity.group)",
-            account: account, forceRefresh: forceRefresh, method: .direct, loader: loader, cache: cache, now: now) { data in
+            account: account, forceRefresh: forceRefresh, method: .direct, loader: loader, cache: cache, now: now,
+            cadence: cadence, credentials: checked, index: index) { data in
                 try OpportunitiesDetails.decodeSet(data, for: card, expectedCategoryID: identity.category,
                     expectedGroupID: identity.group, expectedProductID: identity.product)
             }
@@ -57,10 +68,10 @@ struct DirectOpportunitiesClient: OpportunitiesProviding {
     func testConnection() async throws {
         try Task.checkCancellation()
         let checked = try checkedCredentials()
-        let account = OpportunitiesTransport.namespace(["direct", checked.shipperID, checked.apiKey])
-        try await cache.checkCooldown(account: account, now: now())
+        let account = BetaAPICadence.account(for: checked)
+        if cadence == nil { try await cache.checkCooldown(account: account, now: now()) }
         let (data, response) = try await OpportunitiesTransport.fetch(Self.request(path: "/v1/meta", credentials: checked),
-            loader: loader, method: .direct, phase: .opportunitiesMeta)
+            loader: loader, method: .direct, phase: .opportunitiesMeta, cadence: cadence, credentials: checked)
         try await OpportunitiesTransport.checkStatus(response, method: .direct, account: account, cache: cache, now: now())
         guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               object["error"] == nil, (object["success"] as? Bool) != false,
@@ -150,13 +161,17 @@ private enum OpportunitiesTransport {
     static func load(request: URLRequest, key: String, account: String, forceRefresh: Bool,
                      method: ResearchAccessMethod, loader: any ResearchHTTPDataLoading, cache: OpportunitiesSetCache,
                      now: @Sendable () -> Date,
+                     cadence: BetaAPICadence? = nil, credentials: DirectResearchCredentials? = nil, index: BetaAPISetInfo? = nil,
                      decode: @Sendable (Data) throws -> OpportunitiesDetails) async throws -> OpportunitiesDetails {
         try Task.checkCancellation()
-        let lookup = try await cache.lookup(key: key, account: account, now: now())
+        let lookup = try await cache.lookup(key: key, account: account, now: now(), index: index, daily: cadence != nil,
+                                           forceRequest: method == .server && forceRefresh)
         try Task.checkCancellation()
         switch lookup {
         case .fresh(let entry):
-            let result = try decode(entry.data)
+            let result: OpportunitiesDetails
+            do { result = try decode(entry.data) }
+            catch OpportunitiesFailure.invalidResponse { await cache.remove(key: key); throw OpportunitiesFailure.invalidResponse }
             try Task.checkCancellation()
             return result
         case .request(let ticket):
@@ -164,7 +179,8 @@ private enum OpportunitiesTransport {
                 var request = request
                 if let etag = ticket.previous?.etag { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
                 if forceRefresh { request.setValue("no-cache", forHTTPHeaderField: "Cache-Control") }
-                let (body, response) = try await fetch(request, loader: loader, method: method, phase: .opportunitiesProduct)
+                let (body, response) = try await fetch(request, loader: loader, method: method, phase: .opportunitiesProduct,
+                                                     cadence: cadence, credentials: credentials)
                 try await cache.requireCurrent(ticket)
                 let data: Data
                 if response.statusCode == 304 {
@@ -174,6 +190,9 @@ private enum OpportunitiesTransport {
                     if response.statusCode == 404 || response.statusCode == 204 { try await cache.invalidate(ticket) }
                     try await checkStatus(response, method: method, account: account, cache: cache, now: now())
                     data = body
+                }
+                if let expected = index?.dataETag, let actual = dataETag(data), expected != actual {
+                    throw OpportunitiesFailure.invalidResponse
                 }
                 // A valid shard can be cached when this product/SKU lacks coverage.
                 // All other decode failures are rejected before any cache mutation.
@@ -185,7 +204,7 @@ private enum OpportunitiesTransport {
                 } catch OpportunitiesFailure.skuNotCovered { result = .failure(.skuNotCovered) }
                 try Task.checkCancellation()
                 try await cache.store(.init(data: data, etag: etag(response) ?? (response.statusCode == 304 ? ticket.previous?.etag : nil),
-                                            checkedAt: now()), ticket: ticket)
+                                            checkedAt: now(), dataETag: dataETag(data)), ticket: ticket)
                 try Task.checkCancellation()
                 return try result.get()
             } catch {
@@ -197,17 +216,22 @@ private enum OpportunitiesTransport {
     }
 
     static func fetch(_ request: URLRequest, loader: any ResearchHTTPDataLoading,
-                      method: ResearchAccessMethod, phase: ServiceDiagnosticFields.Phase) async throws -> (Data, HTTPURLResponse) {
+                      method: ResearchAccessMethod, phase: ServiceDiagnosticFields.Phase,
+                      cadence: BetaAPICadence? = nil, credentials: DirectResearchCredentials? = nil) async throws -> (Data, HTTPURLResponse) {
         try Task.checkCancellation()
         let started = Date()
         await ServiceDiagnosticFields.record("opportunities.http_started", method: method, phase: phase)
         try Task.checkCancellation()
         let data: Data, response: HTTPURLResponse
-        do { (data, response) = try await loader.data(for: request) }
+        do {
+            if let cadence, let credentials { (data, response) = try await cadence.send(request, credentials: credentials, loader: loader) }
+            else { (data, response) = try await loader.data(for: request) }
+        }
         catch {
             try Task.checkCancellation()
             let failure: OpportunitiesFailure
-            if let typed = error as? OpportunitiesFailure { failure = typed }
+            if error is BetaAPICadenceFailure { failure = cadenceFailure(error) }
+            else if let typed = error as? OpportunitiesFailure { failure = typed }
             else if error as? ResearchFailure == .responseTooLarge { failure = .responseTooLarge }
             else if error as? ResearchFailure == .invalidResponse { failure = .invalidResponse }
             else { failure = .networkUnavailable }
@@ -256,15 +280,44 @@ private enum OpportunitiesTransport {
               !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return nil }
         return value
     }
+
+    static func cadenceFailure(_ error: Error) -> OpportunitiesFailure {
+        guard let failure = error as? BetaAPICadenceFailure else { return .networkUnavailable }
+        switch failure {
+        case .invalidRequest: return .directNotConfigured
+        case .invalidResponse: return .invalidResponse
+        case .responseTooLarge: return .responseTooLarge
+        case .networkUnavailable: return .networkUnavailable
+        case .httpStatus(401): return .directAuthorizationRequired
+        case .httpStatus(403): return .accessDenied
+        case .httpStatus(204), .httpStatus(404): return .notCovered
+        case .httpStatus(429): return .rateLimited
+        case .httpStatus(let status): return .serviceUnavailable(status)
+        }
+    }
+
+    static func dataETag(_ data: Data) -> String? {
+        guard let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let meta = body["meta"] as? [String: Any], let hash = meta["etag"] as? String,
+              !hash.isEmpty, hash.utf8.count <= 512,
+              !hash.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return nil }
+        return hash
+    }
 }
 
 /// Four bounded in-memory bodies. Account digests include method, origin and
 /// credential material; a clear/newer request invalidates every older ticket.
-/// Fresh bodies honor the provider's hourly cadence even on explicit refresh.
+/// Direct snapshots follow the user's daily cadence. A manually checked index
+/// can confirm an unchanged body or require a changed shard immediately.
 actor OpportunitiesSetCache {
-    static let shared = OpportunitiesSetCache()
-    struct Entry: Sendable { let data: Data; let etag: String?; let checkedAt: Date }
-    struct Ticket: Sendable { let key: String; let generation: UUID; let epoch: UUID; let previous: Entry? }
+    static let shared = OpportunitiesSetCache(disk: .shared)
+    struct Entry: Sendable {
+        let data: Data; let etag: String?; let checkedAt: Date; let dataETag: String?
+        init(data: Data, etag: String?, checkedAt: Date, dataETag: String? = nil) {
+            self.data = data; self.etag = etag; self.checkedAt = checkedAt; self.dataETag = dataETag
+        }
+    }
+    struct Ticket: Sendable { let key: String; let generation: UUID; let epoch: UUID; let previous: Entry?; let persist: Bool }
     enum Lookup: Sendable { case fresh(Entry), request(Ticket) }
     private var entries: [String: Entry] = [:]
     private var order: [String] = []
@@ -272,20 +325,44 @@ actor OpportunitiesSetCache {
     private var epoch = UUID()
     private struct Cooldown: Sendable { let until: Date; let failure: OpportunitiesFailure }
     private var cooldowns: [String: Cooldown] = [:]
+    private let disk: BetaAPIDiskCache?
+    init(disk: BetaAPIDiskCache? = nil) { self.disk = disk }
     var cachedEntryCount: Int { entries.count }
 
-    func lookup(key: String, account: String, now: Date) throws -> Lookup {
-        if let entry = entries[key], now >= entry.checkedAt, now.timeIntervalSince(entry.checkedAt) < 3_600 { return .fresh(entry) }
-        try checkCooldown(account: account, now: now)
+    func lookup(key: String, account: String, now: Date, index: BetaAPISetInfo? = nil, daily: Bool = false,
+                forceRequest: Bool = false) async throws -> Lookup {
+        let currentEpoch = epoch
+        if daily, entries[key] == nil, let saved = await disk?.entry(for: key, kind: .opportunities) {
+            try Task.checkCancellation()
+            guard epoch == currentEpoch else { throw CancellationError() }
+            if entries[key] == nil {
+                entries[key] = Entry(data: saved.data, etag: saved.httpETag, checkedAt: saved.checkedAt,
+                                     dataETag: OpportunitiesTransport.dataETag(saved.data))
+                order.removeAll { $0 == key }; order.append(key)
+                while order.count > 4 { entries[order.removeFirst()] = nil }
+            }
+        }
+        if !forceRequest, let entry = entries[key] {
+            if let hash = index?.dataETag {
+                if hash == entry.dataETag { return .fresh(entry) }
+            } else if now >= entry.checkedAt, now.timeIntervalSince(entry.checkedAt) < (daily ? 86_400 : 3_600) { return .fresh(entry) }
+        }
+        if !daily { try checkCooldown(account: account, now: now) }
         let generation = UUID(); requests[key] = generation
-        return .request(Ticket(key: key, generation: generation, epoch: epoch, previous: entries[key]))
+        return .request(Ticket(key: key, generation: generation, epoch: epoch, previous: entries[key], persist: daily))
     }
     func requireCurrent(_ ticket: Ticket) throws {
         guard epoch == ticket.epoch, requests[ticket.key] == ticket.generation else { throw CancellationError() }
     }
-    func store(_ entry: Entry, ticket: Ticket) throws {
+    func store(_ entry: Entry, ticket: Ticket) async throws {
         try Task.checkCancellation()
         try requireCurrent(ticket)
+        if ticket.persist {
+            await disk?.store(.init(data: entry.data, httpETag: entry.etag, dataETag: entry.dataETag, checkedAt: entry.checkedAt),
+                              for: ticket.key, kind: .opportunities)
+            try Task.checkCancellation()
+            try requireCurrent(ticket)
+        }
         entries[ticket.key] = entry; order.removeAll { $0 == ticket.key }; order.append(ticket.key)
         requests[ticket.key] = nil
         while order.count > 4 { entries[order.removeFirst()] = nil }
@@ -293,9 +370,14 @@ actor OpportunitiesSetCache {
     func finish(_ ticket: Ticket) {
         if epoch == ticket.epoch, requests[ticket.key] == ticket.generation { requests[ticket.key] = nil }
     }
-    func invalidate(_ ticket: Ticket) throws {
+    func invalidate(_ ticket: Ticket) async throws {
         try requireCurrent(ticket)
         entries[ticket.key] = nil; order.removeAll { $0 == ticket.key }
+        if ticket.persist { await disk?.remove(for: ticket.key, kind: .opportunities) }
+    }
+    func remove(key: String) async {
+        entries[key] = nil; order.removeAll { $0 == key }
+        await disk?.remove(for: key, kind: .opportunities)
     }
     func checkCooldown(account: String, now: Date) throws {
         if let cooldown = cooldowns[account], cooldown.until > now { throw cooldown.failure }
@@ -305,7 +387,8 @@ actor OpportunitiesSetCache {
         if (cooldowns[account]?.until ?? .distantPast) <= until { cooldowns[account] = Cooldown(until: until, failure: failure) }
         if cooldowns.count > 16, let oldest = cooldowns.min(by: { $0.value.until < $1.value.until })?.key { cooldowns[oldest] = nil }
     }
-    func clear() {
+    func clear() async {
         epoch = UUID(); entries.removeAll(); order.removeAll(); requests.removeAll(); cooldowns.removeAll()
+        await disk?.clear()
     }
 }

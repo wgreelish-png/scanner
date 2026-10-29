@@ -13,6 +13,9 @@ import XCTest
         XCTAssertEqual(ServiceDiagnosticFields.failure(OpenAPIPricingFailure.catalogUnavailable),
                        ["domain": "openapi", "reason": "catalog_mapping_missing"])
         XCTAssertEqual(ServiceDiagnosticFields.failure(OpenAPIPricingFailure.httpStatus(503))["code"], "503")
+        XCTAssertEqual(ServiceDiagnosticFields.failure(BetaAPICadenceFailure.httpStatus(429)),
+                       ["domain": "beta", "reason": "http_failure", "code": "429"])
+        XCTAssertNil(ServiceDiagnosticFields.failure(BetaAPICadenceFailure.httpStatus(600))["code"])
     }
 
     func testResearchDiagnosticExportKeepsMethodAndStatusWithoutCredentialContent() async throws {

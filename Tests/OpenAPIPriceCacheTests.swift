@@ -2,6 +2,37 @@ import XCTest
 @testable import CardShowScanner
 
 @MainActor final class OpenAPIPriceCacheTests: XCTestCase {
+    func testDailyPriceCacheReopensWithoutNetworkAndManualRefreshRevalidates() async throws {
+        let folder = directory(); defer { try? FileManager.default.removeItem(at: folder) }
+        let fetched = Date(timeIntervalSince1970: 1_800_000_000)
+        let firstLoader = OfflineCacheLoader([.response(200, body(), "\"daily\"")])
+        let first = OpenAPIMarketPricing(resolver: OfflineCacheSetResolver(), loader: firstLoader,
+            now: { fetched }, cacheDirectory: folder)
+        let original = try await first.details(for: card(), candidates: [], forceRefresh: false)
+        let loader = OfflineCacheLoader([.response(304, Data(), "\"daily\"")])
+        let later = fetched.addingTimeInterval(12 * 60 * 60)
+        let restarted = OpenAPIMarketPricing(resolver: OfflineCacheSetResolver(), loader: loader,
+            now: { later }, cacheDirectory: folder)
+        let cached = try await restarted.details(for: card(), candidates: [], forceRefresh: false)
+        XCTAssertEqual(cached.quote, original.quote)
+        XCTAssertEqual(cached.metadata?.fetchedAt, original.metadata?.fetchedAt)
+        XCTAssertEqual(cached.metadata?.updatedAt, original.metadata?.updatedAt)
+        XCTAssertEqual(cached.metadata?.isCached, true)
+        XCTAssertNotEqual(cached.metadata?.isOffline, true)
+        XCTAssertTrue(cached.metadata?.summary.contains("cached") == true)
+        let played = try await restarted.details(for: card(condition: "Lightly Played"), candidates: [], forceRefresh: false)
+        XCTAssertEqual(played.quote?.marketPrice, 8)
+        var requests = await loader.requests
+        XCTAssertEqual(requests.count, 0, "Relaunching or changing condition within one day reuses the set body")
+        let refreshed = try await restarted.details(for: card(), candidates: [], forceRefresh: true)
+        XCTAssertEqual(refreshed.quote, original.quote)
+        XCTAssertEqual(refreshed.metadata?.updatedAt, original.metadata?.updatedAt)
+        XCTAssertEqual(refreshed.metadata?.fetchedAt, later)
+        requests = await loader.requests
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.first?.value(forHTTPHeaderField: "If-None-Match"), "\"daily\"")
+    }
+
     private func directory() -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("OpenAPIPriceCacheTests-" + UUID().uuidString, isDirectory: true)
     }

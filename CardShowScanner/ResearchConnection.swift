@@ -263,7 +263,10 @@ struct ResearchConnectionView: View {
                 try store.save(configuration)
                 tokenOrigin = configuration.baseURL.absoluteString; address = configuration.baseURL.absoluteString
             }
-            Task { await OpportunitiesSetCache.shared.clear() }
+            Task {
+                await OpportunitiesSetCache.shared.clear()
+                await BetaAPICadence.shared.clear()
+            }
             UserDefaults.standard.set(method.rawValue, forKey: ResearchAccessMethod.defaultsKey)
             message = method.label + " connection saved on this iPhone."
             DiagnosticLog.shared.record("research.connection_saved", ["method": method.rawValue])
@@ -279,7 +282,10 @@ struct ResearchConnectionView: View {
             case .server:
                 try store.delete(); tokenOrigin = nil; address = ""; token = ""
             }
-            Task { await OpportunitiesSetCache.shared.clear() }
+            Task {
+                await OpportunitiesSetCache.shared.clear()
+                await BetaAPICadence.shared.clear()
+            }
             message = method.label + " connection removed."
         } catch { message = error.localizedDescription }
     }

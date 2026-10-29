@@ -37,7 +37,7 @@ import XCTest
 
     func testFixedDirectRequestExactSKUAndReportedSalesDoNotChangeSavedPrice() async throws {
         let loader = OpportunitiesLoader([.init(data: try fixture())]), saved = card()
-        let client = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader, cache: OpportunitiesSetCache())
+        let client = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader, cache: OpportunitiesSetCache(), cadence: nil)
         let result = try await client.opportunities(for: saved, forceRefresh: false)
         let requests = await loader.requests
         let request = try XCTUnwrap(requests.first)
@@ -129,13 +129,13 @@ import XCTest
 
     func testDirectMetaTestsOpportunitiesIndependentlyFromResearch() async throws {
         let loader = OpportunitiesLoader([.init(data: Data("{\"categories\":{}}".utf8))])
-        try await DirectOpportunitiesClient(credentials: credentials, loader: loader, cache: OpportunitiesSetCache()).testConnection()
+        try await DirectOpportunitiesClient(credentials: credentials, loader: loader, cache: OpportunitiesSetCache(), cadence: nil).testConnection()
         let requests = await loader.requests
         XCTAssertEqual(requests.first?.url?.absoluteString, "https://beta.tcgtracking.com/v1/meta")
         XCTAssertEqual(requests.first?.value(forHTTPHeaderField: "X-Api-Key"), credentials.apiKey)
         for reply in [OpportunitiesLoader.Reply(data: Data("{}".utf8)), .init(data: Data("[]".utf8)),
                       .init(data: Data("{\"categories\":{}}".utf8), url: URL(string: "https://untrusted.example/meta"))] {
-            do { try await DirectOpportunitiesClient(credentials: credentials, loader: OpportunitiesLoader([reply]), cache: OpportunitiesSetCache()).testConnection(); XCTFail("Malformed meta") }
+            do { try await DirectOpportunitiesClient(credentials: credentials, loader: OpportunitiesLoader([reply]), cache: OpportunitiesSetCache(), cadence: nil).testConnection(); XCTFail("Malformed meta") }
             catch { XCTAssertEqual(error as? OpportunitiesFailure, .invalidResponse) }
         }
     }
@@ -148,11 +148,11 @@ import XCTest
             (.init(data: try fixture(), url: URL(string: "https://untrusted.example/set")), .invalidResponse),
             (.init(data: Data(repeating: 32, count: OpportunitiesDetails.maximumBytes + 1)), .responseTooLarge)]
         for (reply, expected) in cases {
-            let client = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: OpportunitiesLoader([reply]), cache: OpportunitiesSetCache())
+            let client = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: OpportunitiesLoader([reply]), cache: OpportunitiesSetCache(), cadence: nil)
             do { _ = try await client.opportunities(for: card(), forceRefresh: false); XCTFail("Explicit failure") }
             catch { XCTAssertEqual(error as? OpportunitiesFailure, expected) }
         }
-        let raw = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: FailingOpportunitiesLoader(), cache: OpportunitiesSetCache())
+        let raw = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: FailingOpportunitiesLoader(), cache: OpportunitiesSetCache(), cadence: nil)
         do { _ = try await raw.opportunities(for: card(), forceRefresh: false); XCTFail("Transport failure") }
         catch {
             XCTAssertEqual(error as? OpportunitiesFailure, .networkUnavailable)
@@ -164,14 +164,14 @@ import XCTest
         let loader = OpportunitiesLoader([])
         for reference in ["mock:42", "p:42?key=secret", "https://example.com/product/42", "p:0"] {
             var selected = card(); selected.identity.productID = reference
-            let client = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader, cache: OpportunitiesSetCache())
+            let client = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader, cache: OpportunitiesSetCache(), cadence: nil)
             do { _ = try await client.opportunities(for: selected, forceRefresh: false); XCTFail("Unsupported product") }
             catch { XCTAssertEqual(error as? OpportunitiesFailure, .unsupportedCard) }
         }
-        let unknown = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(nil), loader: loader, cache: OpportunitiesSetCache())
+        let unknown = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(nil), loader: loader, cache: OpportunitiesSetCache(), cadence: nil)
         do { _ = try await unknown.opportunities(for: card(), forceRefresh: false); XCTFail("Unknown set") }
         catch { XCTAssertEqual(error as? OpportunitiesFailure, .catalogUnavailable) }
-        let unsafe = DirectOpportunitiesClient(credentials: .init(shipperID: "id", apiKey: "key\r\ninjected"), loader: loader)
+        let unsafe = DirectOpportunitiesClient(credentials: .init(shipperID: "id", apiKey: "key\r\ninjected"), loader: loader, cadence: nil)
         do { try await unsafe.testConnection(); XCTFail("Unsafe headers") }
         catch { XCTAssertEqual(error as? OpportunitiesFailure, .directNotConfigured) }
         let requests = await loader.requests; XCTAssertTrue(requests.isEmpty)
@@ -196,13 +196,13 @@ import XCTest
     func testHourlySetCacheAndETag304AreAccountSeparated() async throws {
         let loader = OpportunitiesLoader([.init(data: try fixture(), headers: ["ETag": "\"v1\""]), .init(status: 304), .init(data: try fixture())])
         let cache = OpportunitiesSetCache(), firstDate = instant, later = instant.addingTimeInterval(3_601)
-        let first = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader, cache: cache, now: { firstDate })
+        let first = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader, cache: cache, cadence: nil, now: { firstDate })
         _ = try await first.opportunities(for: card(), forceRefresh: false)
         _ = try await first.opportunities(for: card(), forceRefresh: true)
-        let expired = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader, cache: cache, now: { later })
+        let expired = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader, cache: cache, cadence: nil, now: { later })
         _ = try await expired.opportunities(for: card(), forceRefresh: true)
         let other = DirectOpportunitiesClient(credentials: .init(shipperID: credentials.shipperID, apiKey: "other-key"),
-            resolver: OpportunitiesResolver(1430), loader: loader, cache: cache, now: { later })
+            resolver: OpportunitiesResolver(1430), loader: loader, cache: cache, cadence: nil, now: { later })
         _ = try await other.opportunities(for: card(), forceRefresh: false)
         let requests = await loader.requests
         XCTAssertEqual(requests.count, 3)
@@ -216,15 +216,15 @@ import XCTest
         for status in [429, 503] {
             let loader = OpportunitiesLoader([.init(status: status, headers: ["Retry-After": "120"]), .init(data: try fixture()), .init(data: try fixture())])
             let cache = OpportunitiesSetCache(), start = instant, after = instant.addingTimeInterval(121)
-            let client = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader, cache: cache, now: { start })
+            let client = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader, cache: cache, cadence: nil, now: { start })
             for _ in 0..<2 {
                 do { _ = try await client.opportunities(for: card(), forceRefresh: true); XCTFail("Cooldown") }
                 catch { XCTAssertEqual(error as? OpportunitiesFailure, status == 429 ? .rateLimited : .serviceUnavailable(503)) }
             }
             var requests = await loader.requests; XCTAssertEqual(requests.count, 1)
-            let other = DirectOpportunitiesClient(credentials: .init(shipperID: "other", apiKey: "other"), resolver: OpportunitiesResolver(1430), loader: loader, cache: cache, now: { start })
+            let other = DirectOpportunitiesClient(credentials: .init(shipperID: "other", apiKey: "other"), resolver: OpportunitiesResolver(1430), loader: loader, cache: cache, cadence: nil, now: { start })
             _ = try await other.opportunities(for: card(), forceRefresh: false)
-            let resumed = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader, cache: cache, now: { after })
+            let resumed = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader, cache: cache, cadence: nil, now: { after })
             _ = try await resumed.opportunities(for: card(), forceRefresh: false)
             requests = await loader.requests; XCTAssertEqual(requests.count, 3)
         }
@@ -233,9 +233,9 @@ import XCTest
     func testStaleSetIsNotUsedOnFailureAnd404DropsItsValidator() async throws {
         let loader = OpportunitiesLoader([.init(data: try fixture(), headers: ["ETag": "\"v1\""]), .init(status: 503), .init(status: 404), .init(data: try fixture())])
         let cache = OpportunitiesSetCache(), start = instant, later = instant.addingTimeInterval(3_601)
-        let first = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader, cache: cache, now: { start })
+        let first = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader, cache: cache, cadence: nil, now: { start })
         _ = try await first.opportunities(for: card(), forceRefresh: false)
-        let expired = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader, cache: cache, now: { later })
+        let expired = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader, cache: cache, cadence: nil, now: { later })
         let failures: [OpportunitiesFailure] = [.serviceUnavailable(503), .notCovered]
         for expected in failures {
             do { _ = try await expired.opportunities(for: card(), forceRefresh: false); XCTFail("No stale fallback") }
@@ -249,7 +249,7 @@ import XCTest
     func testCacheRetainsAtMostFourBoundedBodies() async throws {
         let loader = OpportunitiesLoader(try (1...5).map { .init(data: try fixture(group: $0)) }), cache = OpportunitiesSetCache()
         for group in 1...5 {
-            let client = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(group), loader: loader, cache: cache)
+            let client = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(group), loader: loader, cache: cache, cadence: nil)
             _ = try await client.opportunities(for: card(), forceRefresh: false)
         }
         let count = await cache.cachedEntryCount; XCTAssertEqual(count, 4)
@@ -258,7 +258,7 @@ import XCTest
     func testCanceledOrClearedLateReplyCannotReturnOrRepopulateCache() async throws {
         for cancel in [true, false] {
             let loader = ControlledOpportunitiesLoader(), cache = OpportunitiesSetCache()
-            let client = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader, cache: cache)
+            let client = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader, cache: cache, cadence: nil)
             let selected = card(), pending = Task { try await client.opportunities(for: selected, forceRefresh: false) }
             try await loader.waitUntilStarted()
             if cancel { pending.cancel() } else { await cache.clear() }
@@ -271,10 +271,10 @@ import XCTest
 
     func testNewRequestSupersedesOlderReplyForSameAccountAndSet() async throws {
         let oldLoader = ControlledOpportunitiesLoader(), newLoader = OpportunitiesLoader([.init(data: try fixture())]), cache = OpportunitiesSetCache()
-        let old = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: oldLoader, cache: cache)
+        let old = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: oldLoader, cache: cache, cadence: nil)
         let selected = card(), pending = Task { try await old.opportunities(for: selected, forceRefresh: false) }
         try await oldLoader.waitUntilStarted()
-        let newer = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: newLoader, cache: cache)
+        let newer = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: newLoader, cache: cache, cadence: nil)
         _ = try await newer.opportunities(for: selected, forceRefresh: false)
         await oldLoader.complete(with: try fixture())
         do { _ = try await pending.value; XCTFail("Older reply") }

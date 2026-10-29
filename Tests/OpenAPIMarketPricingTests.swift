@@ -159,7 +159,7 @@ import XCTest
         let clock = PricingClock(Date())
         let loader = PricingHTTPLoader([.init(status: 200, data: body(exactRows)), .init(status: 503), .init(status: 403), .init(status: 503)])
         let pricing = OpenAPIMarketPricing(resolver: PricingSetResolver(set: 1), loader: loader, now: { clock.read() }, cacheDirectory: nil)
-        _ = try await pricing.quote(for: card()); clock.advance(901)
+        _ = try await pricing.quote(for: card()); clock.advance(86_401)
         for (force, status) in [(false, 503), (true, 403), (false, 503)] {
             do { _ = try await pricing.details(for: card(), candidates: [], forceRefresh: force); XCTFail("Stale body must not be a fallback") }
             catch { XCTAssertEqual(error as? OpenAPIPricingFailure, .httpStatus(status)) }

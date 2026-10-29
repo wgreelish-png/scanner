@@ -13,6 +13,7 @@ The package is dependency-free. From this directory, run `npm test` for the mock
    - `RESEARCH_DEVICE_TOKEN`: a unique 32–512 character printable token. This goes in the app's **My Server** Research connection settings; it is **not** a TCGTracking API key.
    - `TCG_BETA_SHIPPER_ID`: your BetaSupporter shipper ID.
    - `TCG_BETA_API_KEY`: your Beta API key, shared by the separate Research and Opportunities adapters.
+   - Optional `TCG_BETA_CACHE_DIRECTORY`: writable private cache directory; defaults to `.cache/tcg-beta` under the server's working directory. Use a persistent writable volume for containers.
 3. Add this server's public outbound IP to the TCGTracking Beta IP allowlist. The phone's changing IP is not the upstream caller.
 4. Run `node --env-file=.env src/server.mjs`. Plain `npm start` reads values already supplied in the process environment. The default listener is `127.0.0.1:8787`; empty device-token configuration refuses startup.
 5. Put your existing HTTPS reverse proxy in front of the listener. For example, a Caddy site:
@@ -28,6 +29,19 @@ The package is dependency-free. From this directory, run `npm test` for the mock
 The service accepts only GET, with no request body or query parameters. Headers, client rates, connections, pending upstream requests, bodies and caches are bounded. The HTTP wrapper uses the actual socket peer for rate limits and ignores untrusted `X-Forwarded-For`; devices behind one reverse proxy share the rate bucket. Ensure proxy access logs do not record Authorization values. Keep `.env` readable only to the server account. Certificate identifiers appear in request paths, so configure access-log retention appropriately for this personal service.
 
 For Docker, build from this directory, provide the environment at runtime and bind the published port to loopback behind HTTPS. The image copies only package metadata and source, never `.env`. `HOST=0.0.0.0` is set inside the container; do not expose its plain HTTP port directly to the Internet. Docker execution has not been validated in the cloud workspace.
+
+To retain the daily cache across container replacement, mount a private volume. The image prepares `/app/.cache/tcg-beta` for its `node` user (UID/GID 1000). This example initializes the volume's ownership explicitly; keep the volume when replacing the container:
+
+```sh
+docker build -t card-show-research:local .
+docker volume create tcg-beta-cache
+docker run --rm --user 0:0 --entrypoint sh \
+  --mount type=volume,src=tcg-beta-cache,dst=/cache \
+  card-show-research:local -c 'chown 1000:1000 /cache && chmod 700 /cache'
+docker run -d --name card-show-research --env-file /private/research.env \
+  --mount type=volume,src=tcg-beta-cache,dst=/app/.cache/tcg-beta \
+  -p 127.0.0.1:8787:8787 card-show-research:local
+```
 
 ## App API
 
@@ -61,7 +75,15 @@ The response is:
 
 The product retains its documented `variants["{language}:{finish}"].grades[]`. The app selects language, full printing, grader and full grade string exactly. There is no RAW/Near Mint substitution for a slab, numeric collapse of `10 Pristine`/`10 Black Label`, or condition-discount calculation. Only documented fields are forwarded. Missing values, returned zeroes, provider dates and sparse daily series are preserved. Unknown history dates are not filled with zero sales.
 
-The upstream endpoint is fixed to `https://beta.tcgtracking.com/v1/{category}/sets/{group}/research`, authenticated with server-only `X-Shipper-Id` and `X-Api-Key`. The app's bearer token is never sent upstream. Redirects are rejected. Each set is cached for one hour with conditional HTTP ETag revalidation; the metadata's data hash is not substituted for the HTTP ETag. Research and Opportunities together retain at most four set bodies and four concurrent different-shard loads. A response is limited to 8 MiB and a request to 15 seconds. A phone refresh does not bypass the provider's hourly cadence. Expired data is not silently returned as a successful refresh when the provider fails; Retry-After/cooldowns prevent repeated upstream hits.
+The upstream endpoint is fixed to `https://beta.tcgtracking.com/v1/{category}/sets/{group}/research`, authenticated with server-only `X-Shipper-Id` and `X-Api-Key`. The app's bearer token is never sent upstream. Redirects are rejected. The default check interval is **24 hours**, matching the selected daily refresh preference. Research and Opportunities together retain at most four bodies, including their indexes, and four concurrent different-endpoint loads. A response is limited to 8 MiB and a request to 15 seconds. The provider may update at most hourly; a manual check cannot force it to regenerate data. Expired data is not silently returned as a successful refresh when the provider fails; Retry-After/cooldowns prevent repeated upstream hits.
+
+On demand, Research checks `https://beta.tcgtracking.com/v1/research/meta` and Opportunities checks `https://beta.tcgtracking.com/v1/meta`. Each index has its own cached body, HTTP ETag and daily check timestamp. The server compares only the requested set's index data hash with the cached shard's `meta.etag`. An equal hash skips the shard entirely, even after its ordinary daily deadline. A changed hash fetches that needed shard immediately. A missing index entry/hash falls back to daily shard HTTP revalidation; it does not turn another set's data into a match. Index and shard HTTP `If-None-Match` values always come from their own HTTP ETag headers, never the data hash. No background polling, bulk set downloads, automatic retries or timers run.
+
+An authenticated route request with `Cache-Control: no-cache` performs a manual index HTTP revalidation now. If the data hash is unchanged, the existing shard remains sufficient; if changed, the server revalidates that shard with its own HTTP ETag. Where no index hash is available, a manual check revalidates the needed shard directly. Provider timestamps remain unchanged on HTTP 304, and this read-only API never updates saved inventory quotes.
+
+The configured shipper has a shared **120 upstream attempts per fixed 60-second window** across both adapters. Index requests, shard requests and HTTP 304 responses all consume that budget, separately from incoming client rate limits. The server additionally honors `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` (seconds until reset) and shared Retry-After deadlines. Exhaustion returns 503 `upstream_rate_limited` with Retry-After without sending another request. This budget belongs to this server process; other callers using the same shipper account must coordinate their own traffic, with returned account headers providing an additional constraint. This service issues only GET upstream; HEAD is not an app endpoint.
+
+The HTTP server persists its bounded sanitized cache in one atomic `cache.json` snapshot with mode 0600, containing only provider bodies, HTTP validators and check timestamps. Keys, device tokens and raw provider errors are excluded. On restart, valid daily cache entries can be reused without downloading again. Missing/corrupt/future-dated snapshots cold-start safely. Cache I/O is best effort: ensure the configured directory is writable and persist the directory across server/container restarts to retain these savings. The embedded `createResearchHandler` accepts `cacheDirectory`; null disables disk persistence. Index and shard records share the same four-entry LRU bound in memory and on disk, so evicted sets require reloading when requested again.
 
 Research is documented by the provider as **in testing**. `guide_value` is a blended estimate; `market_value` is a separate provider field. `pop` is a grading-company population count. `sales` is historical sales count. `daily_history.stats.month` is the documented 30-day count/average, and daily series are aggregates rather than individual transactions. These metrics can inform demand; the server does not invent a demand score, sell-through rate, buyer count or certainty of authenticity. Saved inventory prices and offer snapshots are outside this read-only API.
 
@@ -76,7 +98,7 @@ Research is documented by the provider as **in testing**. `guide_value` is a ble
 }
 ```
 
-This route can work independently of Research coverage. A Research denial, failure cooldown, cached body or ETag cannot stand in for its Opportunities equivalent. The adapters use separate prefixed shard identities while sharing the service's global rate, cache-size and pending-request limits. Opportunities uses the same one-hour TTL, HTTP ETag/304 revalidation, time/body limits, redirect rejection and Retry-After behavior. The request cannot supply an upstream URL or override the provider cadence.
+This route can work independently of Research coverage. A Research denial, failure cooldown, cached body or ETag cannot stand in for its Opportunities equivalent. The adapters use separate prefixed shard/index identities while sharing the service's upstream budget, incoming rate, cache-size and pending-request limits. Opportunities uses the same daily check interval, index/data-hash comparison, HTTP ETag/304 revalidation, persistence, time/body limits, redirect rejection and Retry-After behavior. The request cannot supply an upstream URL or force a newer provider dataset.
 
 Each SKU retains its exact `condition_id`, full condition, language and finish, along with documented timestamps, pricing, opportunity comparisons, marketplace listings and trends. SKU dictionaries are limited to 512 rows per product, each marketplace listing array to 20 rows, weekly quantity arrays to 52 elements, and trend windows to the documented `30d`, `90d` and `365d` keys. Oversized arrays are rejected; data is not silently truncated. Missing fields, explicit nulls, zeroes and false values remain distinct. The documented nullable `sku_id` is preserved, with the numeric dictionary key identifying that row. Non-null SKU IDs must equal their dictionary key; a returned product ID must equal its dictionary key.
 

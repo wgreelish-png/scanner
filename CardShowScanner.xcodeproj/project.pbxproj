@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        DDDB2F4EB4BF02BCCAF10BB9 /* BetaAPICadenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8D7863F83D8465351776EE3; };
+        745DEEE75356CFFFD0B3FC92 /* BetaAPIDiskCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5CEFDAE66D37A8C2248D8AD; };
+        BABD2D5D412DAD7767D1589F /* BetaAPICadence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EF9FD3AA38991E6EF78D3CF; };
         2386A5FFC727F19648D5A85F /* OpenAPIProductLookupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45A5D4C11FA4CAFD671CC0A6; };
         F0BFD9F9BDA677A3D8355D02 /* OpenAPIProductLookup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77F08FF0783D6A737278D49E; };
         876E7DF0BC19BF316CBEDA58 /* OpportunitiesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8953F864B6E1055A7601AA2B; };
@@ -115,6 +118,9 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        E8D7863F83D8465351776EE3 /* BetaAPICadenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BetaAPICadenceTests.swift; sourceTree = "<group>"; };
+        F5CEFDAE66D37A8C2248D8AD /* BetaAPIDiskCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BetaAPIDiskCache.swift; sourceTree = "<group>"; };
+        8EF9FD3AA38991E6EF78D3CF /* BetaAPICadence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BetaAPICadence.swift; sourceTree = "<group>"; };
         45A5D4C11FA4CAFD671CC0A6 /* OpenAPIProductLookupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAPIProductLookupTests.swift; sourceTree = "<group>"; };
         77F08FF0783D6A737278D49E /* OpenAPIProductLookup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAPIProductLookup.swift; sourceTree = "<group>"; };
         8953F864B6E1055A7601AA2B /* OpportunitiesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpportunitiesTests.swift; sourceTree = "<group>"; };
@@ -254,6 +260,7 @@
 		59830EBC3A4184110566BF1A /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+                E8D7863F83D8465351776EE3 /* BetaAPICadenceTests.swift */,
                 45A5D4C11FA4CAFD671CC0A6 /* OpenAPIProductLookupTests.swift */,
                 8953F864B6E1055A7601AA2B /* OpportunitiesTests.swift */,
                 1419551746BF43B4F7FE3838 /* OpenAPIPriceCacheTests.swift */,
@@ -292,6 +299,8 @@
 		878A52FC5FF6A57D50B7B870 /* CardShowScanner */ = {
 			isa = PBXGroup;
 			children = (
+                F5CEFDAE66D37A8C2248D8AD /* BetaAPIDiskCache.swift */,
+                8EF9FD3AA38991E6EF78D3CF /* BetaAPICadence.swift */,
                 77F08FF0783D6A737278D49E /* OpenAPIProductLookup.swift */,
                 40B49B0E708FD128C8B4BFD1 /* OpportunitiesDomain.swift */,
                 0AF68C461393586EB4886CD0 /* OpportunitiesClient.swift */,
@@ -497,6 +506,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                DDDB2F4EB4BF02BCCAF10BB9 /* BetaAPICadenceTests.swift in Sources */,
                 2386A5FFC727F19648D5A85F /* OpenAPIProductLookupTests.swift in Sources */,
                 876E7DF0BC19BF316CBEDA58 /* OpportunitiesTests.swift in Sources */,
                 A0006BB776FD0C46A9362EEB /* OpenAPIPriceCacheTests.swift in Sources */,
@@ -534,6 +544,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                745DEEE75356CFFFD0B3FC92 /* BetaAPIDiskCache.swift in Sources */,
+                BABD2D5D412DAD7767D1589F /* BetaAPICadence.swift in Sources */,
                 F0BFD9F9BDA677A3D8355D02 /* OpenAPIProductLookup.swift in Sources */,
                 EDF016E80AB79E732A4DB78A /* OpportunitiesDomain.swift in Sources */,
                 50A06957531FA2139F5F8AB1 /* OpportunitiesClient.swift in Sources */,
@@ -644,7 +656,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 20;
+				CURRENT_PROJECT_VERSION = 21;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -680,7 +692,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 20;
+				CURRENT_PROJECT_VERSION = 21;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";

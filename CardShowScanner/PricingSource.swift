@@ -26,12 +26,14 @@ struct MarketPriceMetadata: Codable, Hashable, Sendable {
     var updatedAt: Date? = nil
     var fetchedAt: Date
     var isOffline: Bool? = nil
+    var isCached: Bool? = nil
 
     var summary: String {
-        if isOffline == true {
+        if isOffline == true || isCached == true {
             let date = updatedAt ?? fetchedAt
-            let label = updatedAt == nil ? "cached " : "data updated "
-            return source.title + " • cached / offline • " + label + date.formatted(date: .abbreviated, time: .shortened)
+            let label = updatedAt == nil ? "retrieved " : "data updated "
+            let state = isOffline == true ? "cached / offline" : "cached"
+            return source.title + " • " + state + " • " + label + date.formatted(date: .abbreviated, time: .shortened)
         }
         guard let updatedAt else { return source.title }
         return source.title + " • data updated " + updatedAt.formatted(date: .abbreviated, time: .shortened)
