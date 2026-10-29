@@ -1,6 +1,6 @@
 # Public pricing and OppsV2 market activity
 
-Build 19 adds **Market Details & Sales Activity** in the saved-card editor and scanner confirmation screen. It uses public OpenAPI prices and the independent OppsV2 market-activity API. Graded Research remains a separate experimental feature with its own product coverage.
+Build 20 includes **Market Details & Sales Activity** in the saved-card editor and scanner confirmation screen. It uses public OpenAPI prices and the independent OppsV2 market-activity API. Graded Research remains a separate experimental feature with its own product coverage.
 
 ## Using Market Details
 
@@ -34,11 +34,16 @@ This is a bounded recent-price cache, not an offline copy of every inventory pri
 | Purpose | Endpoint |
 | --- | --- |
 | Public exact-condition SKU prices/context | `GET https://openapi.tcgtracking.com/v1/{category}/sets/{group}/skus` |
+| Recover an exact product's category/set metadata | `GET https://openapi.tcgtracking.com/v1/products/{product}` |
 | Beta Opportunities connection check | `GET https://beta.tcgtracking.com/v1/meta` |
 | Direct Beta Opportunities set | `GET https://beta.tcgtracking.com/v1/{category}/sets/{group}` |
 | Own-server exact product activity | `GET {configured-origin}/api/v1/opportunities/{category}/{group}/{product}` |
 
-Set IDs come from exact product references in the downloaded native v2 recognition metadata. Card names or collector numbers never guess a set, and a price for another printing/condition/language is never substituted. The single-product OpenAPI route is not a fallback until its actual response contract and mapping fields have been verified. It is not necessary for the existing SKU or documented OppsV2 paths above.
+Set IDs first come from exact product references in the downloaded native v2 recognition metadata. If that lookup cannot resolve a set, public pricing and OppsV2 can recover the exact product's mapping from `/v1/products/{product}`. Both the outer and nested product IDs, category and positive set/group ID must match before it is used. Card names or collector numbers never guess a set, and the captured card's identity is not rewritten.
+
+The single-product response contract was verified against the user's successful Charmander response, retained as `Tests/Fixtures/OpenAPICharmanderProduct.json`. Its product-level market value was **68.63**, while its exact Near Mint Holofoil SKU was **47.55** and Lightly Played was **42.70**. These are historical fixture values, not current price claims. The product lookup recovers metadata only: its aggregate or finish-level prices never replace the exact-condition quote from the SKU pricing route.
+
+Recovered metadata is retained for seven days in a separate bounded cache of at most 128 small records. It stores only validated IDs, names and image metadata, not the endpoint's raw prices or account data. On a connectivity failure, an older verified mapping can support the separate cached-SKU lookup. HTTP/malformed responses and cancellation remain failures. Normal native catalog resolution remains an offline-only reader and is preferred whenever it supplies an exact mapping. This does not change the weekly recognition-database update policy.
 
 ## Validation and device acceptance
 

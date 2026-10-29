@@ -47,7 +47,7 @@ final class NativeOpenAPIHTTPDataLoader: OpenAPIHTTPDataLoading, @unchecked Send
         guard let url else { return false }
         return url.scheme == "https" && url.host == "openapi.tcgtracking.com" && (url.port == nil || url.port == 443) &&
             url.user == nil && url.password == nil && url.query == nil && url.fragment == nil &&
-            url.path.range(of: #"^/v1/[123]/sets/[1-9][0-9]*/skus\z"#, options: .regularExpression) != nil
+            url.path.range(of: #"^/v1/(?:[123]/sets/[1-9][0-9]*/skus|products/[1-9][0-9]{0,11})\z"#, options: .regularExpression) != nil
     }
     private final class PublicOnlyDelegate: NSObject, URLSessionTaskDelegate {
         func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
@@ -65,7 +65,7 @@ struct OpenAPIMarketPricing: MarketPricing {
     private let loader: any OpenAPIHTTPDataLoading
     private let now: @Sendable () -> Date
     private let cache: OpenAPISetPriceCache
-    init(resolver: any OpenAPISetResolving = NativeOpenAPISetResolver.shared,
+    init(resolver: any OpenAPISetResolving = CatalogOpenAPISetResolver.shared,
          loader: any OpenAPIHTTPDataLoading = NativeOpenAPIHTTPDataLoader(),
          now: @escaping @Sendable () -> Date = { Date() },
          cacheDirectory: URL? = OpenAPIPriceDiskCache.defaultDirectory) {

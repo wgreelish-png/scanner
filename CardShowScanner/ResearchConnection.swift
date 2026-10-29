@@ -202,6 +202,9 @@ struct ResearchConnectionView: View {
                 }
             }
             Section {
+                if let message {
+                    Text(message).accessibilityIdentifier("researchConnection.status")
+                }
                 Button("Save Connection") { save() }.disabled(busy).accessibilityIdentifier("researchConnection.save")
                 Button("Test Market Activity") { test(marketActivity: true) }.disabled(busy)
                     .accessibilityIdentifier("researchConnection.testMarketActivity")
@@ -211,7 +214,6 @@ struct ResearchConnectionView: View {
                 Text("The tests check each API independently with the entered settings. You can save valid credentials without running either test. A successful test does not guarantee coverage for a particular card.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            if let message { Section { Text(message).accessibilityIdentifier("researchConnection.status") } }
             Section("Raw market activity (OppsV2)") {
                 Text("Market Details can show exact-condition reported sales and comparable listings from active opportunities. This optional Beta API does not cover every card; missing coverage does not mean zero sales or listings.")
                 Text("Market Details is read-only. Browsing activity preserves saved inventory prices and offers.")

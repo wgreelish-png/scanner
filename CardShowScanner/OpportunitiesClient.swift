@@ -33,7 +33,7 @@ struct DirectOpportunitiesClient: OpportunitiesProviding {
     private let now: @Sendable () -> Date
 
     init(credentials: DirectResearchCredentials,
-         resolver: any OpenAPISetResolving = NativeOpenAPISetResolver.shared,
+         resolver: any OpenAPISetResolving = CatalogOpenAPISetResolver.shared,
          loader: any ResearchHTTPDataLoading = NativeResearchHTTPDataLoader(maximumBytes: DirectOpportunitiesClient.maximumSetBytes),
          cache: OpportunitiesSetCache = .shared, now: @escaping @Sendable () -> Date = { Date() }) {
         self.credentials = credentials; self.resolver = resolver; self.loader = loader; self.cache = cache; self.now = now
@@ -95,7 +95,7 @@ struct OpportunitiesClient: OpportunitiesProviding {
     private let now: @Sendable () -> Date
 
     init(baseURL: URL, token: String,
-         resolver: any OpenAPISetResolving = NativeOpenAPISetResolver.shared,
+         resolver: any OpenAPISetResolving = CatalogOpenAPISetResolver.shared,
          loader: any ResearchHTTPDataLoading = NativeResearchHTTPDataLoader(maximumBytes: OpportunitiesDetails.maximumBytes),
          cache: OpportunitiesSetCache = .shared, now: @escaping @Sendable () -> Date = { Date() }) {
         self.baseURL = baseURL; self.token = token; self.resolver = resolver; self.loader = loader; self.cache = cache; self.now = now

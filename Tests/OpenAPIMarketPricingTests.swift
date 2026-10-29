@@ -183,9 +183,12 @@ import XCTest
     }
     func testNativeURLPolicyRejectsCredentialsQueriesFragmentsAndOtherPaths() async {
         XCTAssertTrue(NativeOpenAPIHTTPDataLoader.allows(URL(string: "https://openapi.tcgtracking.com/v1/3/sets/1/skus")))
+        XCTAssertTrue(NativeOpenAPIHTTPDataLoader.allows(URL(string: "https://openapi.tcgtracking.com/v1/products/512035")))
         for url in ["http://openapi.tcgtracking.com/v1/3/sets/1/skus", "https://openapi.tcgtracking.com.evil/v1/3/sets/1/skus",
                     "https://user:secret@openapi.tcgtracking.com/v1/3/sets/1/skus", "https://openapi.tcgtracking.com/v1/3/sets/1/pricing",
-                    "https://openapi.tcgtracking.com/v1/3/sets/1/skus?token=secret", "https://openapi.tcgtracking.com/v1/3/sets/1/skus#x"] {
+                    "https://openapi.tcgtracking.com/v1/3/sets/1/skus?token=secret", "https://openapi.tcgtracking.com/v1/3/sets/1/skus#x",
+                    "https://openapi.tcgtracking.com/v1/products/0", "https://openapi.tcgtracking.com/v1/products/512035/skus",
+                    "https://openapi.tcgtracking.com/v1/products/512035?token=secret", "https://openapi.tcgtracking.com/v1/products/512035#x"] {
             XCTAssertFalse(NativeOpenAPIHTTPDataLoader.allows(URL(string: url)))
         }
     }
