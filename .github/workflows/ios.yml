@@ -19,6 +19,7 @@ jobs:
         with:
           node-version: '22'
       - run: node --experimental-vm-modules --test Tests/JavaScript/*.cjs
+      - run: node --test server/research/tests/*.test.mjs
       - run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - run: python3 scripts/check_xcode_sources.py
       - run: python3 scripts/check_scanner_runtime.py
@@ -29,7 +30,7 @@ jobs:
         if: ${{ always() && steps.native_tests.outcome != 'skipped' }}
         run: python3 scripts/report_xcode_test_summary.py NativeTests.log
       - name: Report native test failures
-        if: failure() && steps.native_tests.outcome == 'failure'
+        if: ${{ always() && steps.native_tests.outcome != 'success' && steps.native_tests.outcome != 'skipped' }}
         shell: bash
         run: |
           python3 scripts/annotate_xcode_errors.py NativeTests.log --fallback 'Native tests failed; see the native-test-results artifact.'
@@ -55,7 +56,7 @@ jobs:
         if: ${{ always() && steps.ui_tests.outcome != 'skipped' }}
         run: python3 scripts/report_xcode_test_summary.py NativeTests.log
       - name: Report UI test failures
-        if: failure() && steps.ui_tests.outcome == 'failure'
+        if: ${{ always() && steps.ui_tests.outcome != 'success' && steps.ui_tests.outcome != 'skipped' }}
         shell: bash
         run: |
           python3 scripts/annotate_xcode_errors.py NativeTests.log --fallback 'UI tests failed; see the ui-test-results artifact.'
@@ -65,6 +66,32 @@ jobs:
         if: always()
         with:
           name: ui-test-results
+          path: |
+            TestResults.xcresult
+            NativeTests.log
+            NativeCrashSummary.log
+  research_ui:
+    runs-on: macos-15-intel
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run Research UI checks independently
+        id: research_ui_tests
+        run: bash scripts/run_ios_tests.sh CardShowScannerUITests/ResearchUITests
+      - name: Publish Research UI summary
+        if: ${{ always() && steps.research_ui_tests.outcome != 'skipped' }}
+        run: python3 scripts/report_xcode_test_summary.py NativeTests.log
+      - name: Report Research UI failures
+        if: ${{ always() && steps.research_ui_tests.outcome != 'success' && steps.research_ui_tests.outcome != 'skipped' }}
+        shell: bash
+        run: |
+          python3 scripts/annotate_xcode_errors.py NativeTests.log --fallback 'Research UI tests failed; see the research-ui-test-results artifact.'
+          xcrun xcresulttool export diagnostics --path TestResults.xcresult --output-path NativeDiagnostics || true
+          python3 scripts/report_simulator_crash.py NativeDiagnostics "$HOME/Library/Logs/DiagnosticReports" | tee NativeCrashSummary.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: research-ui-test-results
           path: |
             TestResults.xcresult
             NativeTests.log

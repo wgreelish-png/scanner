@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Shared simulator preparation; native and UI suites run on separate CI hosts.
 set -euo pipefail
-SCANNER_TEST_TARGET="${1:?Expected CardShowScannerTests or CardShowScannerUITests}"
+SCANNER_TEST_TARGET="${1:?Expected an allowlisted native or UI suite}"
 case "$SCANNER_TEST_TARGET" in
-  CardShowScannerTests|CardShowScannerUITests) ;;
+  CardShowScannerTests|CardShowScannerUITests|CardShowScannerUITests/ResearchUITests) ;;
   *) echo "Unknown test target" >&2; exit 2 ;;
 esac
 DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for k,v in d["devices"].items() if "iOS" in k for x in v if x["name"].startswith("iPhone")))')

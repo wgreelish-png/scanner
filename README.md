@@ -102,6 +102,12 @@ python3 scripts/configure_signing.py --team YOUR_10_CHARACTER_TEAM_ID
 
 For a new checkout, use the explicit-team command. The helper is idempotent for the same team and refuses to overwrite a differing local configuration. Edit the local xcconfig directly when switching teams. No Apple account passwords, certificates or provisioning profiles are stored in it. You still need the Apple account available in Xcode and normal device provisioning; this does not change Personal Team expiration limits.
 
+## Research and PSA slabs — build 17
+
+[Research and PSA slabs](docs/ResearchAndPSA.md) adds sales activity, population, distinct guide estimates/market values and sparse daily history for an exact catalog language/printing/grader/grade. Open **Research** from Edit Card or **Research a PSA Slab** on Home. The slab flow reads a supported barcode or typed certification number, uses an optional authorized metadata adapter, then asks you to confirm the catalog card before showing Research. Missing coverage stays unavailable; research is read-only and does not change inventory prices or saved offers.
+
+Settings → Research Connection offers **Direct TCGTracking** or **My Server**. Direct mode saves your user-entered shipper ID/API key in device-only Keychain and requests the fixed Beta API from the phone; its current public outbound IP must be provider-allowlisted, so Wi-Fi/cellular changes can interrupt access. The optional HTTPS [Research server](server/research/README.md) keeps upstream keys on a server with a stable IP and uses a separate device token. The Research API does not resolve PSA certificates; automatic metadata still needs an authorized server adapter, which can remain available while Research uses direct mode. Otherwise use manual catalog/grade selection. Direct live access, server deployment and physical PSA-label acceptance remain unverified; see the feature guide for checks and limitations.
+
 ## Latest diagnostics and public pricing
 
 Earlier phone logs show HTTP 401 price failures after the pricing view was ready. The supplied HAR establishes the successful POST URL, candidate payload and response, but its omitted cookies do not establish anonymous access. Subsequent user-provided headers show the same first-party `detail.php` request returning 401 and later 200. The user reports an in-app price without signing in, and different private-browser behavior on iPhone and Chrome. A universal login requirement is not established; the app now provides an explicit connection/sign-in step at the user's request.

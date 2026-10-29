@@ -86,6 +86,13 @@ struct HomeView: View {
                         Label("Open Existing List", systemImage: "list.bullet.rectangle")
                     }.font(.headline).padding(.vertical, 8).accessibilityIdentifier("home.openExistingLists")
                 }
+                Section("Research") {
+                    NavigationLink { PSAResearchFlow() } label: {
+                        Label("Research a PSA Slab", systemImage: "barcode.viewfinder")
+                    }.accessibilityIdentifier("home.psaResearch")
+                    Text("Read a PSA certification code, confirm the catalog card, and view research for its grade.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }.navigationTitle("Card Show Scanner")
                 .toolbar {
                     NavigationLink { SettingsView() } label: { Image(systemName: "gearshape") }

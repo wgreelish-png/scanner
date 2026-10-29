@@ -7,6 +7,22 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        D17A1F0A7B6E4A8395D1001F /* DirectResearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A1F0A7B6E4A8395D10020; };
+        D17A1F0A7B6E4A8395D1001D /* DirectResearchClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A1F0A7B6E4A8395D1001E; };
+        D17A1F0A7B6E4A8395D10001 /* PSABarcode.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A1F0A7B6E4A8395D10002; };
+        D17A1F0A7B6E4A8395D10003 /* PSABarcodeScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A1F0A7B6E4A8395D10004; };
+        D17A1F0A7B6E4A8395D10005 /* PSACertClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A1F0A7B6E4A8395D10006; };
+        D17A1F0A7B6E4A8395D10007 /* PSAResearchFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A1F0A7B6E4A8395D10008; };
+        D17A1F0A7B6E4A8395D10009 /* ResearchClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A1F0A7B6E4A8395D1000A; };
+        D17A1F0A7B6E4A8395D1000B /* ResearchConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A1F0A7B6E4A8395D1000C; };
+        D17A1F0A7B6E4A8395D1000D /* ResearchDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A1F0A7B6E4A8395D1000E; };
+        D17A1F0A7B6E4A8395D1000F /* ResearchModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A1F0A7B6E4A8395D10010; };
+        D17A1F0A7B6E4A8395D10011 /* ResearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A1F0A7B6E4A8395D10012; };
+        D17A1F0A7B6E4A8395D10013 /* PSABarcodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A1F0A7B6E4A8395D10014; };
+        D17A1F0A7B6E4A8395D10015 /* PSAResearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A1F0A7B6E4A8395D10016; };
+        D17A1F0A7B6E4A8395D10017 /* ResearchConnectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A1F0A7B6E4A8395D10018; };
+        D17A1F0A7B6E4A8395D10019 /* ResearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A1F0A7B6E4A8395D1001A; };
+        D17A1F0A7B6E4A8395D1001B /* ResearchUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A1F0A7B6E4A8395D1001C; };
         D16A1F0A7B6E4A8395D10011 /* PricingSourceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16A1F0A7B6E4A8395D10012; };
         D16A1F0A7B6E4A8395D1000F /* PricingSourceIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16A1F0A7B6E4A8395D10010; };
         D16A1F0A7B6E4A8395D1000D /* PricingSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16A1F0A7B6E4A8395D1000E; };
@@ -89,6 +105,22 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        D17A1F0A7B6E4A8395D10020 /* DirectResearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectResearchTests.swift; sourceTree = "<group>"; };
+        D17A1F0A7B6E4A8395D1001E /* DirectResearchClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectResearchClient.swift; sourceTree = "<group>"; };
+        D17A1F0A7B6E4A8395D10002 /* PSABarcode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PSABarcode.swift; sourceTree = "<group>"; };
+        D17A1F0A7B6E4A8395D10004 /* PSABarcodeScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PSABarcodeScannerView.swift; sourceTree = "<group>"; };
+        D17A1F0A7B6E4A8395D10006 /* PSACertClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PSACertClient.swift; sourceTree = "<group>"; };
+        D17A1F0A7B6E4A8395D10008 /* PSAResearchFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PSAResearchFlow.swift; sourceTree = "<group>"; };
+        D17A1F0A7B6E4A8395D1000A /* ResearchClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchClient.swift; sourceTree = "<group>"; };
+        D17A1F0A7B6E4A8395D1000C /* ResearchConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchConnection.swift; sourceTree = "<group>"; };
+        D17A1F0A7B6E4A8395D1000E /* ResearchDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchDomain.swift; sourceTree = "<group>"; };
+        D17A1F0A7B6E4A8395D10010 /* ResearchModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchModel.swift; sourceTree = "<group>"; };
+        D17A1F0A7B6E4A8395D10012 /* ResearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchView.swift; sourceTree = "<group>"; };
+        D17A1F0A7B6E4A8395D10014 /* PSABarcodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PSABarcodeTests.swift; sourceTree = "<group>"; };
+        D17A1F0A7B6E4A8395D10016 /* PSAResearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PSAResearchTests.swift; sourceTree = "<group>"; };
+        D17A1F0A7B6E4A8395D10018 /* ResearchConnectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchConnectionTests.swift; sourceTree = "<group>"; };
+        D17A1F0A7B6E4A8395D1001A /* ResearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchTests.swift; sourceTree = "<group>"; };
+        D17A1F0A7B6E4A8395D1001C /* ResearchUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchUITests.swift; sourceTree = "<group>"; };
         D16A1F0A7B6E4A8395D10012 /* PricingSourceUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingSourceUITests.swift; sourceTree = "<group>"; };
         D16A1F0A7B6E4A8395D10010 /* PricingSourceIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingSourceIntegrationTests.swift; sourceTree = "<group>"; };
         D16A1F0A7B6E4A8395D1000E /* PricingSourceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingSourceTests.swift; sourceTree = "<group>"; };
@@ -184,6 +216,7 @@
         C4D311E710AB4F79A8B00003 /* UITests */ = {
             isa = PBXGroup;
             children = (
+                D17A1F0A7B6E4A8395D1001C /* ResearchUITests.swift */,
                 D16A1F0A7B6E4A8395D10012 /* PricingSourceUITests.swift */,C4D311E710AB4F79A8B0000C /* ListDeletionUITests.swift */, D12C0F1A7B6E4A8395D10002 /* ScanConfirmationUITests.swift */, D14A1F0A7B6E4A8395D10006 /* ListOutcomeUITests.swift */,);
             path = UITests;
             sourceTree = "<group>";
@@ -201,6 +234,11 @@
 		59830EBC3A4184110566BF1A /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+                D17A1F0A7B6E4A8395D10020 /* DirectResearchTests.swift */,
+                D17A1F0A7B6E4A8395D10014 /* PSABarcodeTests.swift */,
+                D17A1F0A7B6E4A8395D10016 /* PSAResearchTests.swift */,
+                D17A1F0A7B6E4A8395D10018 /* ResearchConnectionTests.swift */,
+                D17A1F0A7B6E4A8395D1001A /* ResearchTests.swift */,
                 D16A1F0A7B6E4A8395D1000A /* OpenAPIMarketPricingTests.swift */,
                 D16A1F0A7B6E4A8395D1000C /* OpenAPISetResolverTests.swift */,
                 D16A1F0A7B6E4A8395D1000E /* PricingSourceTests.swift */,
@@ -230,6 +268,16 @@
 		878A52FC5FF6A57D50B7B870 /* CardShowScanner */ = {
 			isa = PBXGroup;
 			children = (
+                D17A1F0A7B6E4A8395D1001E /* DirectResearchClient.swift */,
+                D17A1F0A7B6E4A8395D10002 /* PSABarcode.swift */,
+                D17A1F0A7B6E4A8395D10004 /* PSABarcodeScannerView.swift */,
+                D17A1F0A7B6E4A8395D10006 /* PSACertClient.swift */,
+                D17A1F0A7B6E4A8395D10008 /* PSAResearchFlow.swift */,
+                D17A1F0A7B6E4A8395D1000A /* ResearchClient.swift */,
+                D17A1F0A7B6E4A8395D1000C /* ResearchConnection.swift */,
+                D17A1F0A7B6E4A8395D1000E /* ResearchDomain.swift */,
+                D17A1F0A7B6E4A8395D10010 /* ResearchModel.swift */,
+                D17A1F0A7B6E4A8395D10012 /* ResearchView.swift */,
                 D16A1F0A7B6E4A8395D10002 /* OpenAPIMarketPricing.swift */,
                 D16A1F0A7B6E4A8395D10004 /* OpenAPISetResolver.swift */,
                 D16A1F0A7B6E4A8395D10006 /* PricingSource.swift */,
@@ -411,6 +459,7 @@
             isa = PBXSourcesBuildPhase;
             buildActionMask = 2147483647;
             files = (
+                D17A1F0A7B6E4A8395D1001B /* ResearchUITests.swift in Sources */,
                 D16A1F0A7B6E4A8395D10011 /* PricingSourceUITests.swift in Sources */,C4D311E710AB4F79A8B0000D /* ListDeletionUITests.swift in Sources */, D12C0F1A7B6E4A8395D10001 /* ScanConfirmationUITests.swift in Sources */, D14A1F0A7B6E4A8395D10005 /* ListOutcomeUITests.swift in Sources */,);
             runOnlyForDeploymentPostprocessing = 0;
         };
@@ -418,6 +467,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                D17A1F0A7B6E4A8395D1001F /* DirectResearchTests.swift in Sources */,
+                D17A1F0A7B6E4A8395D10013 /* PSABarcodeTests.swift in Sources */,
+                D17A1F0A7B6E4A8395D10015 /* PSAResearchTests.swift in Sources */,
+                D17A1F0A7B6E4A8395D10017 /* ResearchConnectionTests.swift in Sources */,
+                D17A1F0A7B6E4A8395D10019 /* ResearchTests.swift in Sources */,
                 D16A1F0A7B6E4A8395D10009 /* OpenAPIMarketPricingTests.swift in Sources */,
                 D16A1F0A7B6E4A8395D1000B /* OpenAPISetResolverTests.swift in Sources */,
                 D16A1F0A7B6E4A8395D1000D /* PricingSourceTests.swift in Sources */,
@@ -446,6 +500,16 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                D17A1F0A7B6E4A8395D1001D /* DirectResearchClient.swift in Sources */,
+                D17A1F0A7B6E4A8395D10001 /* PSABarcode.swift in Sources */,
+                D17A1F0A7B6E4A8395D10003 /* PSABarcodeScannerView.swift in Sources */,
+                D17A1F0A7B6E4A8395D10005 /* PSACertClient.swift in Sources */,
+                D17A1F0A7B6E4A8395D10007 /* PSAResearchFlow.swift in Sources */,
+                D17A1F0A7B6E4A8395D10009 /* ResearchClient.swift in Sources */,
+                D17A1F0A7B6E4A8395D1000B /* ResearchConnection.swift in Sources */,
+                D17A1F0A7B6E4A8395D1000D /* ResearchDomain.swift in Sources */,
+                D17A1F0A7B6E4A8395D1000F /* ResearchModel.swift in Sources */,
+                D17A1F0A7B6E4A8395D10011 /* ResearchView.swift in Sources */,
                 D16A1F0A7B6E4A8395D10001 /* OpenAPIMarketPricing.swift in Sources */,
                 D16A1F0A7B6E4A8395D10003 /* OpenAPISetResolver.swift in Sources */,
                 D16A1F0A7B6E4A8395D10005 /* PricingSource.swift in Sources */,
@@ -540,7 +604,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 17;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -576,7 +640,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 17;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";

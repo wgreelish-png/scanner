@@ -414,6 +414,14 @@ struct CardEditorView: View {
                     TextField("Language", text: identityBinding(\.language))
                     TextField("Image URL (optional)", text: Binding(get: { pricing.card.imageURL?.absoluteString ?? "" }, set: { pricing.card.imageURL = URL(string: $0) })).keyboardType(.URL).textInputAutocapitalization(.never)
                 }
+                Section("Research & demand") {
+                    NavigationLink { ResearchView(card: pricing.card) } label: {
+                        Label("View Research & Sales", systemImage: "chart.bar.xaxis")
+                    }.disabled(pricing.priceLoading)
+                        .accessibilityIdentifier("cardEditor.research")
+                    Text("View reported sales and grading estimates for this catalog card. Research does not apply a new inventory price or change saved offers.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Section("Inventory") {
                     PricingSourcePicker(accessibilityID: "cardEditor.pricingSource")
                     Picker("Condition", selection: identityBinding(\.condition)) { ForEach(CatalogOptions.conditions, id: \.self) { Text($0) } }
