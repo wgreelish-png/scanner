@@ -35,6 +35,13 @@ struct SettingsView: View {
                 Text("Existing TCGTracking uses the current website connection. Open API requests condition, printing and language prices directly, without website sign-in. You can switch back at any time.").font(.caption)
                 Text("Open API prices are published daily. The displayed update time describes the provider's data, not a new sale. This setting does not change the weekly recognition-database schedule or saved offers.").font(.caption).foregroundStyle(.secondary)
             }
+            Section("Research & demand") {
+                NavigationLink { ResearchConnectionView() } label: {
+                    Label("Research Connection", systemImage: "chart.bar.xaxis")
+                }.accessibilityIdentifier("settings.researchConnection")
+                Text("Connect your server to view catalog-linked sales, grading population and valuation estimates. Its TCGTracking and PSA account keys stay on the server.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Defaults") {
                 Picker("Game", selection: $game) { ForEach(CatalogOptions.games, id: \.self) { Text($0) } }
                 Text("Every scan starts at Near Mint and requires confirmation before saving.").font(.caption)
@@ -102,7 +109,7 @@ struct SettingsView: View {
                 if DiagnosticLog.shared.storageFailed { Text("Diagnostics could not be written to local storage.").foregroundStyle(.orange) }
                 Text("Keeps up to about 512 KB of recent local events across app launches. Includes scanner stages, timings, confidence, add decisions and save errors. Excludes card/list contents, credentials and camera images. Logs leave this device only when you share them.").font(.caption)
             }
-            Section("Privacy") { Text("Lists, sessions and diagnostic logs stay on this iPhone unless you export them. Camera frames are processed by the bundled recognition engine on this phone. Game databases download from TCGTracking; card images and market quotes use internet requests. CSV sharing sends the selected list through the iOS share sheet.") }
+            Section("Privacy") { Text("Lists, sessions and diagnostic logs stay on this iPhone unless you export them. Camera frames are processed on this phone. Game databases download from TCGTracking; card images and market quotes use internet requests. Research sends the selected card’s catalog identifiers to your configured server. PSA lookup sends the certification number to that server and its certification service; barcode images stay on this phone. CSV sharing sends the selected list through the iOS share sheet.") }
         }.navigationTitle("Settings")
             .onAppear {
                 databaseUpdater.setForeground(scenePhase == .active)
