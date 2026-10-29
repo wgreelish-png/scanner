@@ -27,6 +27,8 @@ Missing prices and counts differ from returned zeroes. A guide estimate is not a
 
 Both methods cache set-level Research for one hour and then revalidate with the HTTP ETag. Refresh does not bypass a fresh one-hour cache, and expired data is not silently returned as a successful refresh after provider failure. The direct client retains at most four set responses in memory, separated by credentials and set identity; it does not add a persistent offline Research database. Coverage and freshness depend on the upstream Research dataset, not the downloaded recognition database. Internet access is required for Research; this does not add offline market pricing.
 
+For independent API checks, import the [Postman diagnostic collection and local environment](../postman/README.md). It resolves the set ID automatically, checks the exact product/printing/grade and produces a shareable summary without request credentials. It defaults to Charmander SV Promo 044, product 512035, EN:Holofoil PSA 9.
+
 ## Research a PSA slab
 
 1. On Home, choose **Research a PSA Slab**. Scan a supported PSA QR/Code 128 label or type the certification number. The camera holds the first valid candidate until **Use This Certification**; it does not automatically look up every frame. Typed entry remains available when camera permission is denied or no camera is available.
