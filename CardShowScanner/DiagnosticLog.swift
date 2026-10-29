@@ -24,8 +24,58 @@ enum DiagnosticScanFields {
 enum ServiceDiagnosticFields {
     enum Phase: String, Sendable {
         case setup, researchMeta = "research_meta", serverHealth = "server_health", researchProduct = "research_product"
+        case opportunitiesMeta = "opportunities_meta", opportunitiesProduct = "opportunities_product"
     }
     static func failure(_ error: Error) -> [String: String] {
+        if let error = error as? BetaAPICadenceFailure {
+            switch error {
+            case .invalidRequest: return ["domain": "beta", "reason": "invalid_request"]
+            case .invalidResponse: return ["domain": "beta", "reason": "invalid_response"]
+            case .responseTooLarge: return ["domain": "beta", "reason": "response_too_large"]
+            case .networkUnavailable: return ["domain": "beta", "reason": "network_unavailable"]
+            case .httpStatus(let code):
+                var fields = ["domain": "beta", "reason": "http_failure"]
+                if (100...599).contains(code) { fields["code"] = String(code) }
+                return fields
+            }
+        }
+        if let error = error as? OpenAPIPricingFailure {
+            let reason: String
+            var status: Int?
+            switch error {
+            case .httpStatus(let code): reason = "http_failure"; status = code
+            case .invalidResponse: reason = "invalid_response"
+            case .responseTooLarge: reason = "response_too_large"
+            case .unsupportedCard: reason = "unsupported_card"
+            case .catalogUnavailable: reason = "catalog_mapping_missing"
+            }
+            var fields = ["domain": "openapi", "reason": reason]
+            if let status, (100...599).contains(status) { fields["code"] = String(status) }
+            return fields
+        }
+        if let error = error as? OpportunitiesFailure {
+            let reason: String
+            var status: Int?
+            switch error {
+            case .notConfigured: reason = "server_not_configured"
+            case .directNotConfigured: reason = "direct_credentials_missing"
+            case .unsupportedCard: reason = "unsupported_card"
+            case .catalogUnavailable: reason = "catalog_mapping_missing"
+            case .authorizationRequired: reason = "device_token_rejected"; status = 401
+            case .directAuthorizationRequired: reason = "beta_credentials_rejected"; status = 401
+            case .accessDenied: reason = "access_denied"; status = 403
+            case .notCovered: reason = "product_not_covered"
+            case .skuNotCovered: reason = "exact_sku_not_covered"
+            case .invalidResponse: reason = "invalid_response"
+            case .responseTooLarge: reason = "response_too_large"
+            case .networkUnavailable: reason = "network_unavailable"
+            case .rateLimited: reason = "rate_limited"; status = 429
+            case .serviceUnavailable(let code): reason = "service_unavailable"; status = code
+            }
+            var fields = ["domain": "opportunities", "reason": reason]
+            if let status, (100...599).contains(status) { fields["code"] = String(status) }
+            return fields
+        }
         if let error = error as? PSACertificateFailure {
             let reason: String
             switch error {

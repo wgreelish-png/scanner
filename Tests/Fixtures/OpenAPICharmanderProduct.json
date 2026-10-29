@@ -1,0 +1,114 @@
+{
+  "success": true,
+  "product_id": 512035,
+  "product": {
+    "product_id": 512035,
+    "category_id": 3,
+    "group_id": 22872,
+    "name": "Charmander - 044",
+    "clean_name": "Charmander 044",
+    "search_blob": "Charmander 044 Charmander - 044 044 SV: Scarlet & Violet Promo Cards SVP",
+    "image_url": "https://tcgplayer-cdn.tcgplayer.com/product/512035_200w.jpg",
+    "url": "https://www.tcgplayer.com/product/512035/pokemon-sv-scarlet-and-violet-promo-cards-charmander-044",
+    "modified_on": "2026-09-22 06:06:08",
+    "image_count": 1,
+    "is_presale": 0,
+    "presale_release_on": null,
+    "presale_note": null,
+    "ext_number": "044",
+    "ext_rarity": "Promo",
+    "sealed_packaging": null,
+    "ext_data": {
+      "Card Number / Rarity": "044 / Promo",
+      "Card Type / HP / Stage": "Fire / 60 / Basic",
+      "Attack 1": "[R] Heat Tackle: (30) <br>\r\nThis Pokemon does 10 damage to itself.",
+      "Weakness / Resistance / Retreat Cost": "Wx2 / None / 1",
+      "Artist": "MINAMINAMI Take"
+    },
+    "market_price": "68.63",
+    "manapool_low": null,
+    "manapool_qty": null,
+    "scryfall_id": null,
+    "mtgjson_uuid": null,
+    "cardmarket_id": 715758,
+    "cardtrader_id": 256710,
+    "cardtrader_expansion_id": 3221,
+    "cardtrader_synced_at": "2026-05-30 06:52:10",
+    "mtg_colors": null,
+    "mtg_color_identity": null,
+    "mtg_mana_value": null,
+    "mtg_finishes": null,
+    "mtg_is_full_art": null,
+    "mtg_is_promo": null,
+    "mtg_is_textless": null,
+    "mtg_frame_effects": null,
+    "mtg_promo_types": null,
+    "mtg_border_color": null,
+    "mtg_keywords": null,
+    "mtgjson_synced_at": null,
+    "mtg_primary_color": null,
+    "created_at": "2026-01-25 13:19:47",
+    "updated_at": "2026-10-05 14:31:06",
+    "set_name": "SV: Scarlet & Violet Promo Cards",
+    "set_abbr": "SVP",
+    "set_released": "2023-03-31",
+    "set_modified": "2026-10-22 06:00:10",
+    "category_name": "Pokemon",
+    "category_display_name": "Pokemon"
+  },
+  "prices": {
+    "tcgplayer": [{
+      "product_id": 512035,
+      "sub_type_name": "Holofoil",
+      "low_price": "7.99",
+      "mid_price": "75.11",
+      "high_price": "42754.00",
+      "market_price": "47.55",
+      "direct_low_price": "69.36",
+      "updated_at": "2026-10-22 08:42:35"
+    }],
+    "manapool": null,
+    "manapool_variants": []
+  },
+  "skus": [
+    {"sku_id": 7354291, "product_id": 512035, "condition_name": "Near Mint", "variant_name": "Holofoil", "language_name": "English", "condition_id": 1, "variant_id": 3, "language_id": 1, "market_price": "47.55", "lowest_price": "7.99", "highest_price": "61.32", "price_count": 25, "price_updated_at": "2026-10-22 08:38:48", "sku_checked_at": "2026-10-05 14:31:06", "created_at": "2026-01-29 17:20:15", "updated_at": "2026-10-22 08:38:48"},
+    {"sku_id": 7354292, "product_id": 512035, "condition_name": "Lightly Played", "variant_name": "Holofoil", "language_name": "English", "condition_id": 2, "variant_id": 3, "language_id": 1, "market_price": "42.70", "lowest_price": "34.99", "highest_price": "50.13", "price_count": 25, "price_updated_at": "2026-10-22 08:38:48", "sku_checked_at": "2026-10-05 14:31:06", "created_at": "2026-01-29 17:20:15", "updated_at": "2026-10-22 08:38:48"},
+    {"sku_id": 7354293, "product_id": 512035, "condition_name": "Moderately Played", "variant_name": "Holofoil", "language_name": "English", "condition_id": 3, "variant_id": 3, "language_id": 1, "market_price": "42.42", "lowest_price": "33.99", "highest_price": "52.55", "price_count": 25, "price_updated_at": "2026-10-22 08:38:48", "sku_checked_at": "2026-10-05 14:31:06", "created_at": "2026-01-29 17:20:15", "updated_at": "2026-10-22 08:38:48"},
+    {"sku_id": 7354294, "product_id": 512035, "condition_name": "Heavily Played", "variant_name": "Holofoil", "language_name": "English", "condition_id": 4, "variant_id": 3, "language_id": 1, "market_price": "42.30", "lowest_price": "24.99", "highest_price": "54.97", "price_count": 25, "price_updated_at": "2026-10-22 08:38:48", "sku_checked_at": "2026-10-05 14:31:06", "created_at": "2026-01-29 17:20:15", "updated_at": "2026-10-22 08:38:48"},
+    {"sku_id": 7354295, "product_id": 512035, "condition_name": "Damaged", "variant_name": "Holofoil", "language_name": "English", "condition_id": 5, "variant_id": 3, "language_id": 1, "market_price": "38.63", "lowest_price": "15.00", "highest_price": "50.00", "price_count": 25, "price_updated_at": "2026-10-22 08:38:48", "sku_checked_at": "2026-10-05 14:31:06", "created_at": "2026-01-29 17:20:15", "updated_at": "2026-10-22 08:38:48"}
+  ],
+  "sku_count": 5,
+  "sku_dimensions": {
+    "variants": [{"id": 3, "name": "Holofoil"}],
+    "conditions": [{"id": 1, "name": "Near Mint"}, {"id": 2, "name": "Lightly Played"}, {"id": 3, "name": "Moderately Played"}, {"id": 4, "name": "Heavily Played"}, {"id": 5, "name": "Damaged"}],
+    "languages": [{"id": 1, "name": "English"}]
+  },
+  "sku_sync_status": {"product_id": 512035, "sku_count": 5, "last_synced_at": "2026-10-05 14:31:06", "last_changed_at": null, "sync_error": null},
+  "cardtrader": {
+    "product_map": [{"product_id": 512035, "category_id": 3, "blueprint_id": 256710, "variant_foil": "nonfoil", "variant_language": "en", "variant_finish": null, "match_type": "tcgplayer", "match_confidence": 100, "created_at": "2026-05-30 06:52:01", "updated_at": "2026-05-30 06:52:01"}],
+    "blueprints": [{
+      "product_id": 512035, "blueprint_id": 256710, "match_type": "tcgplayer", "match_confidence": 100,
+      "name": "Charmander", "version": "SVP 044", "ct_game_id": 5, "ct_category_id": 73, "ct_expansion_id": 3221,
+      "rarity": "Promo", "collector_number": "044", "fixed_properties": "{\"collector_number\":\"044\",\"pokemon_rarity\":\"Promo\"}",
+      "has_foil": 0, "has_nonfoil": 1, "has_etched": 0, "languages": ["en", "fr", "de", "it", "pt", "es"],
+      "editable_properties": [
+        {"name": "condition", "type": "string", "default_value": "Near Mint", "possible_values": ["Mint", "Near Mint", "Slightly Played", "Moderately Played", "Played", "Poor"]},
+        {"name": "signed", "type": "boolean", "default_value": "false", "possible_values": [true, false]},
+        {"name": "altered", "type": "boolean", "default_value": "false", "possible_values": [true, false]},
+        {"name": "pokemon_language", "type": "string", "default_value": "en", "possible_values": ["en", "fr", "de", "it", "pt", "es"]}
+      ],
+      "scryfall_id": "", "tcg_player_id": 512035, "card_market_ids": [715758],
+      "image_url": "https://cardtrader.com/uploads/blueprints/image/256710/preview_charmander-044-sv-black-star-promos.jpg",
+      "content_hash": "6dd1b7378f1bb01f15229554ce34e1c4", "created_at": "2026-01-29 08:35:20", "updated_at": "2026-07-01 05:09:33",
+      "expansion_name": "SV Black Star Promos", "expansion_code": "svpromo", "cardtrader_group_id": 22872,
+      "cardtrader_category_name": "Pokémon Singles", "cardtrader_product_type": "single"
+    }],
+    "sku_mappings": [
+      {"sku_id": 7354291, "blueprint_id": 256710, "ct_condition": "Near Mint", "ct_language": "en", "ct_foil": 1, "tcg_condition_id": 1, "tcg_variant_id": 3, "tcg_language_id": 1, "created_at": "2026-05-30 07:13:32", "updated_at": "2026-07-02 06:06:16"},
+      {"sku_id": 7354292, "blueprint_id": 256710, "ct_condition": "Slightly Played", "ct_language": "en", "ct_foil": 1, "tcg_condition_id": 2, "tcg_variant_id": 3, "tcg_language_id": 1, "created_at": "2026-05-30 07:13:32", "updated_at": "2026-07-02 06:06:16"},
+      {"sku_id": 7354293, "blueprint_id": 256710, "ct_condition": "Moderately Played", "ct_language": "en", "ct_foil": 1, "tcg_condition_id": 3, "tcg_variant_id": 3, "tcg_language_id": 1, "created_at": "2026-05-30 07:13:32", "updated_at": "2026-07-02 06:06:16"},
+      {"sku_id": 7354294, "blueprint_id": 256710, "ct_condition": "Played", "ct_language": "en", "ct_foil": 1, "tcg_condition_id": 4, "tcg_variant_id": 3, "tcg_language_id": 1, "created_at": "2026-05-30 07:13:32", "updated_at": "2026-07-02 06:06:16"},
+      {"sku_id": 7354295, "blueprint_id": 256710, "ct_condition": "Poor", "ct_language": "en", "ct_foil": 1, "tcg_condition_id": 5, "tcg_variant_id": 3, "tcg_language_id": 1, "created_at": "2026-05-30 07:13:32", "updated_at": "2026-07-02 06:06:16"}
+    ]
+  }
+}

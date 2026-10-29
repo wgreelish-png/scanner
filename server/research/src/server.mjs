@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { isIP } from 'node:net';
 import { pathToFileURL } from 'node:url';
+import { resolve } from 'node:path';
 import { createResearchHandler } from './research.mjs';
 import { createPSACertBridge } from './psa-bridge.mjs';
 
@@ -10,13 +11,14 @@ export function configurationFromEnvironment(environment = process.env) {
   if (!Number.isInteger(port) || port < 1 || port > 65535 || !(host === 'localhost' || isIP(host))) throw new Error('Configure a valid listen IP and port.');
   return { host, port, shipperID: environment.TCG_BETA_SHIPPER_ID, apiKey: environment.TCG_BETA_API_KEY,
     deviceToken: environment.RESEARCH_DEVICE_TOKEN,
+    cacheDirectory: environment.TCG_BETA_CACHE_DIRECTORY || resolve('.cache/tcg-beta'),
     certURLTemplate: environment.PSA_CERT_SERVICE_URL_TEMPLATE,
     certToken: environment.PSA_CERT_SERVICE_TOKEN };
 }
 
 export function createResearchServer(configuration) {
   const psaLookup = configuration.psaLookup ?? createPSACertBridge({ urlTemplate: configuration.certURLTemplate, token: configuration.certToken });
-  const handler = createResearchHandler({ shipperID: configuration.shipperID, apiKey: configuration.apiKey, deviceToken: configuration.deviceToken, psaLookup,
+  const handler = createResearchHandler({ shipperID: configuration.shipperID, apiKey: configuration.apiKey, deviceToken: configuration.deviceToken, psaLookup, cacheDirectory: configuration.cacheDirectory ?? null,
     ...(configuration.fetchImpl ? { fetchImpl: configuration.fetchImpl } : {}) });
   const server = createServer({ maxHeaderSize: 8192, requestTimeout: 20_000, headersTimeout: 10_000, keepAliveTimeout: 5_000 }, async (incoming, outgoing) => {
     try {

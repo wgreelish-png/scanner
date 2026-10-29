@@ -7,6 +7,19 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        DDDB2F4EB4BF02BCCAF10BB9 /* BetaAPICadenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8D7863F83D8465351776EE3; };
+        745DEEE75356CFFFD0B3FC92 /* BetaAPIDiskCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5CEFDAE66D37A8C2248D8AD; };
+        BABD2D5D412DAD7767D1589F /* BetaAPICadence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EF9FD3AA38991E6EF78D3CF; };
+        2386A5FFC727F19648D5A85F /* OpenAPIProductLookupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45A5D4C11FA4CAFD671CC0A6; };
+        F0BFD9F9BDA677A3D8355D02 /* OpenAPIProductLookup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77F08FF0783D6A737278D49E; };
+        876E7DF0BC19BF316CBEDA58 /* OpportunitiesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8953F864B6E1055A7601AA2B; };
+        A0006BB776FD0C46A9362EEB /* OpenAPIPriceCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1419551746BF43B4F7FE3838; };
+        B640DBA35B6BA84BDAF18B85 /* MarketInsightsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 285C7A6EA72D4EBA58E1A417; };
+        EDF016E80AB79E732A4DB78A /* OpportunitiesDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40B49B0E708FD128C8B4BFD1; };
+        50A06957531FA2139F5F8AB1 /* OpportunitiesClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AF68C461393586EB4886CD0; };
+        7397BE63478C27FC5DABED03 /* OpenAPIPriceDiskCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A935B1BCE7CEAE74E9ECC7; };
+        394F2389F2F732AD205ACBF8 /* MarketInsightsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88F9D3853BCB311B3D422DE7; };
+        12D152F952BC508094833BCF /* MarketInsightsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3604B4999AD4E927DDA13772; };
         D17A1F0A7B6E4A8395D1001F /* DirectResearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A1F0A7B6E4A8395D10020; };
         D17A1F0A7B6E4A8395D1001D /* DirectResearchClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A1F0A7B6E4A8395D1001E; };
         D17A1F0A7B6E4A8395D10001 /* PSABarcode.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A1F0A7B6E4A8395D10002; };
@@ -105,6 +118,19 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        E8D7863F83D8465351776EE3 /* BetaAPICadenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BetaAPICadenceTests.swift; sourceTree = "<group>"; };
+        F5CEFDAE66D37A8C2248D8AD /* BetaAPIDiskCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BetaAPIDiskCache.swift; sourceTree = "<group>"; };
+        8EF9FD3AA38991E6EF78D3CF /* BetaAPICadence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BetaAPICadence.swift; sourceTree = "<group>"; };
+        45A5D4C11FA4CAFD671CC0A6 /* OpenAPIProductLookupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAPIProductLookupTests.swift; sourceTree = "<group>"; };
+        77F08FF0783D6A737278D49E /* OpenAPIProductLookup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAPIProductLookup.swift; sourceTree = "<group>"; };
+        8953F864B6E1055A7601AA2B /* OpportunitiesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpportunitiesTests.swift; sourceTree = "<group>"; };
+        1419551746BF43B4F7FE3838 /* OpenAPIPriceCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAPIPriceCacheTests.swift; sourceTree = "<group>"; };
+        285C7A6EA72D4EBA58E1A417 /* MarketInsightsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketInsightsTests.swift; sourceTree = "<group>"; };
+        40B49B0E708FD128C8B4BFD1 /* OpportunitiesDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpportunitiesDomain.swift; sourceTree = "<group>"; };
+        0AF68C461393586EB4886CD0 /* OpportunitiesClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpportunitiesClient.swift; sourceTree = "<group>"; };
+        C7A935B1BCE7CEAE74E9ECC7 /* OpenAPIPriceDiskCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAPIPriceDiskCache.swift; sourceTree = "<group>"; };
+        88F9D3853BCB311B3D422DE7 /* MarketInsightsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketInsightsView.swift; sourceTree = "<group>"; };
+        3604B4999AD4E927DDA13772 /* MarketInsightsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketInsightsModel.swift; sourceTree = "<group>"; };
         D17A1F0A7B6E4A8395D10020 /* DirectResearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectResearchTests.swift; sourceTree = "<group>"; };
         D17A1F0A7B6E4A8395D1001E /* DirectResearchClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectResearchClient.swift; sourceTree = "<group>"; };
         D17A1F0A7B6E4A8395D10002 /* PSABarcode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PSABarcode.swift; sourceTree = "<group>"; };
@@ -234,6 +260,11 @@
 		59830EBC3A4184110566BF1A /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+                E8D7863F83D8465351776EE3 /* BetaAPICadenceTests.swift */,
+                45A5D4C11FA4CAFD671CC0A6 /* OpenAPIProductLookupTests.swift */,
+                8953F864B6E1055A7601AA2B /* OpportunitiesTests.swift */,
+                1419551746BF43B4F7FE3838 /* OpenAPIPriceCacheTests.swift */,
+                285C7A6EA72D4EBA58E1A417 /* MarketInsightsTests.swift */,
                 D17A1F0A7B6E4A8395D10020 /* DirectResearchTests.swift */,
                 D17A1F0A7B6E4A8395D10014 /* PSABarcodeTests.swift */,
                 D17A1F0A7B6E4A8395D10016 /* PSAResearchTests.swift */,
@@ -268,6 +299,14 @@
 		878A52FC5FF6A57D50B7B870 /* CardShowScanner */ = {
 			isa = PBXGroup;
 			children = (
+                F5CEFDAE66D37A8C2248D8AD /* BetaAPIDiskCache.swift */,
+                8EF9FD3AA38991E6EF78D3CF /* BetaAPICadence.swift */,
+                77F08FF0783D6A737278D49E /* OpenAPIProductLookup.swift */,
+                40B49B0E708FD128C8B4BFD1 /* OpportunitiesDomain.swift */,
+                0AF68C461393586EB4886CD0 /* OpportunitiesClient.swift */,
+                C7A935B1BCE7CEAE74E9ECC7 /* OpenAPIPriceDiskCache.swift */,
+                88F9D3853BCB311B3D422DE7 /* MarketInsightsView.swift */,
+                3604B4999AD4E927DDA13772 /* MarketInsightsModel.swift */,
                 D17A1F0A7B6E4A8395D1001E /* DirectResearchClient.swift */,
                 D17A1F0A7B6E4A8395D10002 /* PSABarcode.swift */,
                 D17A1F0A7B6E4A8395D10004 /* PSABarcodeScannerView.swift */,
@@ -467,6 +506,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                DDDB2F4EB4BF02BCCAF10BB9 /* BetaAPICadenceTests.swift in Sources */,
+                2386A5FFC727F19648D5A85F /* OpenAPIProductLookupTests.swift in Sources */,
+                876E7DF0BC19BF316CBEDA58 /* OpportunitiesTests.swift in Sources */,
+                A0006BB776FD0C46A9362EEB /* OpenAPIPriceCacheTests.swift in Sources */,
+                B640DBA35B6BA84BDAF18B85 /* MarketInsightsTests.swift in Sources */,
                 D17A1F0A7B6E4A8395D1001F /* DirectResearchTests.swift in Sources */,
                 D17A1F0A7B6E4A8395D10013 /* PSABarcodeTests.swift in Sources */,
                 D17A1F0A7B6E4A8395D10015 /* PSAResearchTests.swift in Sources */,
@@ -500,6 +544,14 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                745DEEE75356CFFFD0B3FC92 /* BetaAPIDiskCache.swift in Sources */,
+                BABD2D5D412DAD7767D1589F /* BetaAPICadence.swift in Sources */,
+                F0BFD9F9BDA677A3D8355D02 /* OpenAPIProductLookup.swift in Sources */,
+                EDF016E80AB79E732A4DB78A /* OpportunitiesDomain.swift in Sources */,
+                50A06957531FA2139F5F8AB1 /* OpportunitiesClient.swift in Sources */,
+                7397BE63478C27FC5DABED03 /* OpenAPIPriceDiskCache.swift in Sources */,
+                394F2389F2F732AD205ACBF8 /* MarketInsightsView.swift in Sources */,
+                12D152F952BC508094833BCF /* MarketInsightsModel.swift in Sources */,
                 D17A1F0A7B6E4A8395D1001D /* DirectResearchClient.swift in Sources */,
                 D17A1F0A7B6E4A8395D10001 /* PSABarcode.swift in Sources */,
                 D17A1F0A7B6E4A8395D10003 /* PSABarcodeScannerView.swift in Sources */,
@@ -604,7 +656,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 18;
+				CURRENT_PROJECT_VERSION = 21;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -640,7 +692,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 18;
+				CURRENT_PROJECT_VERSION = 21;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";

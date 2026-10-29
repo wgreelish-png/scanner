@@ -41,8 +41,8 @@ enum ResearchConnectionFailure: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidConfiguration: return "Enter your server’s HTTPS origin, such as https://research.example.com, and its device access token (at least 32 characters). Do not enter a TCGTracking or PSA API key."
-        case .storage: return "Research connection settings could not be read or saved. Unlock this iPhone and retry."
-        case .invalidResponse: return "The server did not return the expected research connection response."
+        case .storage: return "TCGTracking API connection settings could not be read or saved. Unlock this iPhone and retry."
+        case .invalidResponse: return "The server did not return the expected API connection response."
         }
     }
 }
@@ -137,6 +137,15 @@ struct ResearchServerHealth: Decodable, Sendable {
     let status: String
     let researchConfigured: Bool
     let psaConfigured: Bool
+    let opportunitiesConfigured: Bool?
+
+    var marketActivityStatus: String {
+        switch opportunitiesConfigured {
+        case .some(true): return "configured"
+        case .some(false): return "needs server credentials"
+        case .none: return "not reported by this server"
+        }
+    }
 }
 
 struct ResearchConnectionView: View {
@@ -157,29 +166,29 @@ struct ResearchConnectionView: View {
     var body: some View {
         Form {
             Section("Access method") {
-                Picker("Research requests", selection: $method) {
+                Picker("Beta API requests", selection: $method) {
                     ForEach(ResearchAccessMethod.allCases) { Text($0.label).tag($0) }
                 }.pickerStyle(.menu).disabled(busy).accessibilityIdentifier("researchConnection.method")
-                Text("Save Connection applies your selected access method. Switching research access does not change market pricing or saved offers.")
+                Text("Save Connection applies this access method to raw market activity and graded research. Public Open API pricing works without these credentials. Saved prices and offers are preserved.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             if method == .direct {
-                Section("TCGTracking Research API") {
+                Section("TCGTracking Beta API") {
                     TextField("Shipper ID", text: $shipperID)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().disabled(busy)
                         .focused($focusedField, equals: .shipperID)
                         .accessibilityIdentifier("researchConnection.shipperID")
-                    SecureField("Research API key", text: $apiKey)
+                    SecureField("API key", text: $apiKey)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().disabled(busy)
                         .focused($focusedField, equals: .apiKey)
                         .accessibilityIdentifier("researchConnection.apiKey")
                     Text("Requests go directly to beta.tcgtracking.com. Your entered credentials stay in this iPhone’s device-only Keychain and are sent only to that service.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Text("Your Research subscription must be active and this phone’s public network IP must be on TCGTracking’s allowlist. Changing Wi-Fi or cellular networks may require updating that allowlist.")
+                    Text("Your subscription must permit the requested Beta API and this phone’s public network IP must be on TCGTracking’s allowlist. Changing Wi-Fi or cellular networks may require updating that allowlist.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             } else {
-                Section("Research server") {
+                Section("My API server") {
                     TextField("HTTPS server address", text: $address)
                         .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled().disabled(busy)
                         .focused($focusedField, equals: .address)
@@ -193,19 +202,28 @@ struct ResearchConnectionView: View {
                 }
             }
             Section {
+                if let message {
+                    Text(message).accessibilityIdentifier("researchConnection.status")
+                }
                 Button("Save Connection") { save() }.disabled(busy).accessibilityIdentifier("researchConnection.save")
-                Button(busy ? "Checking…" : "Test Connection") { test() }.disabled(busy).accessibilityIdentifier("researchConnection.test")
+                Button("Test Market Activity") { test(marketActivity: true) }.disabled(busy)
+                    .accessibilityIdentifier("researchConnection.testMarketActivity")
+                Button("Test Graded Research") { test() }.disabled(busy).accessibilityIdentifier("researchConnection.test")
+                if busy { ProgressView("Checking access…") }
                 Button("Forget This Connection", role: .destructive) { forget() }.disabled(busy)
-                Text("Test Connection checks access with the entered settings. A successful check does not guarantee research coverage for a particular card, printing or grade.")
+                Text("The tests check each API independently with the entered settings. You can save valid credentials without running either test. A successful test does not guarantee coverage for a particular card.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            if let message { Section { Text(message).accessibilityIdentifier("researchConnection.status") } }
-            Section("Research and PSA slabs") {
-                Text("Research shows catalog-linked sales, population and valuation estimates. Coverage varies by product, printing, language and grade.")
+            Section("Raw market activity (OppsV2)") {
+                Text("Market Details can show exact-condition reported sales and comparable listings from active opportunities. This optional Beta API does not cover every card; missing coverage does not mean zero sales or listings.")
+                Text("Market Details is read-only. Browsing activity preserves saved inventory prices and offers.")
+            }
+            Section("Graded Research (experimental)") {
+                Text("Research shows catalog-linked sales, population and valuation estimates. This API remains experimental. Coverage varies by product, printing, language and grade.")
                 Text("Automatic PSA certificate lookup uses your saved server connection and its authorized certification adapter, even if research requests use Direct TCGTracking. Without that adapter, find the card and select its grade manually.")
                 Text("Research is separate from inventory market pricing and saved offers.")
             }
-        }.navigationTitle("Research Connection").navigationBarTitleDisplayMode(.inline)
+        }.navigationTitle("TCGTracking API Connection").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
@@ -245,6 +263,10 @@ struct ResearchConnectionView: View {
                 try store.save(configuration)
                 tokenOrigin = configuration.baseURL.absoluteString; address = configuration.baseURL.absoluteString
             }
+            Task {
+                await OpportunitiesSetCache.shared.clear()
+                await BetaAPICadence.shared.clear()
+            }
             UserDefaults.standard.set(method.rawValue, forKey: ResearchAccessMethod.defaultsKey)
             message = method.label + " connection saved on this iPhone."
             DiagnosticLog.shared.record("research.connection_saved", ["method": method.rawValue])
@@ -260,13 +282,18 @@ struct ResearchConnectionView: View {
             case .server:
                 try store.delete(); tokenOrigin = nil; address = ""; token = ""
             }
+            Task {
+                await OpportunitiesSetCache.shared.clear()
+                await BetaAPICadence.shared.clear()
+            }
             message = method.label + " connection removed."
         } catch { message = error.localizedDescription }
     }
     private func cancelProbe() { probeID = UUID(); probe?.cancel(); probe = nil; busy = false }
-    private func test() {
+    private func test(marketActivity: Bool = false) {
         focusedField = nil
         let target: ResearchConnectionProbe
+        let diagnosticPrefix = marketActivity ? "opportunities" : "research"
         do {
             switch method {
             case .direct: target = .direct(try .validated(shipperID: shipperID, apiKey: apiKey))
@@ -276,27 +303,30 @@ struct ResearchConnectionView: View {
             message = error.localizedDescription
             var fields = ServiceDiagnosticFields.failure(error)
             fields["method"] = method.rawValue; fields["phase"] = "setup"
-            DiagnosticLog.shared.record("research.connection_check_failed", fields)
+            DiagnosticLog.shared.record(diagnosticPrefix + ".connection_check_failed", fields)
             return
         }
         cancelProbe()
         let requestID = UUID(); probeID = requestID
         busy = true; message = nil
-        DiagnosticLog.shared.record("research.connection_check_started", ["method": method.rawValue])
+        DiagnosticLog.shared.record(diagnosticPrefix + ".connection_check_started", ["method": method.rawValue])
         probe = Task { @MainActor in
             defer { if probeID == requestID { busy = false; probe = nil } }
             do {
-                let result = try await target.check()
+                let result: String
+                if marketActivity { result = try await target.checkMarketActivity() }
+                else { result = try await target.check() }
                 try Task.checkCancellation()
                 guard probeID == requestID else { return }
                 message = result
-                DiagnosticLog.shared.record("research.connection_checked", ["method": method.rawValue])
+                DiagnosticLog.shared.record(diagnosticPrefix + ".connection_checked", ["method": method.rawValue])
             } catch {
                 guard !Task.isCancelled, probeID == requestID else { return }
-                message = (error as? LocalizedError)?.errorDescription ?? "Research could not connect. Check your connection and retry."
+                message = (error as? LocalizedError)?.errorDescription
+                    ?? (marketActivity ? "Market activity could not connect. Check your connection and retry." : "Research could not connect. Check your connection and retry.")
                 var fields = ServiceDiagnosticFields.failure(error)
                 fields["method"] = method.rawValue
-                DiagnosticLog.shared.record("research.connection_check_failed", fields)
+                DiagnosticLog.shared.record(diagnosticPrefix + ".connection_check_failed", fields)
             }
         }
     }
@@ -304,32 +334,49 @@ struct ResearchConnectionView: View {
 
 private enum ResearchConnectionProbe: Sendable {
     case direct(DirectResearchCredentials), server(ResearchServerConfiguration)
+
     func check() async throws -> String {
         switch self {
         case .direct(let credentials):
             try await DirectResearchClient(credentials: credentials).testConnection()
-            return "Connected directly to TCGTracking Research from this network. Save Connection to use these settings. Card coverage is checked when you open research."
+            return "Connected directly to TCGTracking Graded Research from this network. Save Connection to use these settings. Card coverage is checked when you open research."
         case .server(let connection):
-            var request = URLRequest(url: connection.baseURL.appendingPathComponent("api/v1/health"), timeoutInterval: 25)
-            request.setValue("Bearer " + connection.deviceToken, forHTTPHeaderField: "Authorization")
-            request.setValue("application/json", forHTTPHeaderField: "Accept")
-            let started = Date()
-            await ServiceDiagnosticFields.record("research.http_started", method: .server, phase: .serverHealth)
-            let data: Data, response: HTTPURLResponse
-            do { (data, response) = try await NativeResearchHTTPDataLoader().data(for: request) }
-            catch {
-                try Task.checkCancellation()
-                await ServiceDiagnosticFields.record("research.http_failed", method: .server, phase: .serverHealth, started: started, error: error)
-                throw error
-            }
-            try Task.checkCancellation()
-            await ServiceDiagnosticFields.record("research.http_response", method: .server, phase: .serverHealth, status: response.statusCode, started: started)
-            guard response.url == request.url else { throw ResearchConnectionFailure.invalidResponse }
-            if response.statusCode == 401 { throw ResearchFailure.authorizationRequired }
-            guard response.statusCode == 200, let health = try? JSONDecoder().decode(ResearchServerHealth.self, from: data), health.status == "ok" else {
-                throw ResearchConnectionFailure.invalidResponse
-            }
-            return "Connected. Research: \(health.researchConfigured ? "configured" : "needs server credentials"). PSA lookup: \(health.psaConfigured ? "configured" : "not configured"). Save Connection to use these settings."
+            let health = try await Self.serverHealth(connection)
+            return "Connected. Graded research: \(health.researchConfigured ? "configured" : "needs server credentials"). PSA lookup: \(health.psaConfigured ? "configured" : "not configured"). Raw market activity: \(health.marketActivityStatus). Save Connection to use these settings."
         }
+    }
+
+    func checkMarketActivity() async throws -> String {
+        switch self {
+        case .direct(let credentials):
+            try await DirectOpportunitiesClient(credentials: credentials).testConnection()
+            return "Connected directly to TCGTracking Market Activity from this network. Save Connection to use these settings. OppsV2 covers active opportunities; exact card coverage is checked in Market Details."
+        case .server(let connection):
+            let health = try await Self.serverHealth(connection)
+            return "Connected to your server. Raw market activity: \(health.marketActivityStatus). Save Connection to use these settings. OppsV2 covers active opportunities; exact card coverage is checked in Market Details."
+        }
+    }
+
+    private static func serverHealth(_ connection: ResearchServerConfiguration) async throws -> ResearchServerHealth {
+        var request = URLRequest(url: connection.baseURL.appendingPathComponent("api/v1/health"), timeoutInterval: 25)
+        request.setValue("Bearer " + connection.deviceToken, forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let started = Date()
+        await ServiceDiagnosticFields.record("research.http_started", method: .server, phase: .serverHealth)
+        let data: Data, response: HTTPURLResponse
+        do { (data, response) = try await NativeResearchHTTPDataLoader().data(for: request) }
+        catch {
+            try Task.checkCancellation()
+            await ServiceDiagnosticFields.record("research.http_failed", method: .server, phase: .serverHealth, started: started, error: error)
+            throw error
+        }
+        try Task.checkCancellation()
+        await ServiceDiagnosticFields.record("research.http_response", method: .server, phase: .serverHealth, status: response.statusCode, started: started)
+        guard response.url == request.url else { throw ResearchConnectionFailure.invalidResponse }
+        if response.statusCode == 401 { throw ResearchFailure.authorizationRequired }
+        guard response.statusCode == 200, let health = try? JSONDecoder().decode(ResearchServerHealth.self, from: data), health.status == "ok" else {
+            throw ResearchConnectionFailure.invalidResponse
+        }
+        return health
     }
 }

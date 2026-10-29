@@ -6,7 +6,9 @@ import { createResearchHandler, MAX_RESPONSE_BYTES } from '../src/research.mjs';
 // Research API coverage or evidence of an actual PSA certificate or sale.
 const TOKEN = 'device-token-for-tests-0000000000000000';
 const KEY = 'tcgt_beta_' + 'a'.repeat(48);
-const options = { shipperID: '123', apiKey: KEY, deviceToken: TOKEN };
+// These focused shard-contract fixtures deliberately omit index traffic. The
+// production-default daily/index/budget integration is covered in cadence.test.
+const options = { shipperID: '123', apiKey: KEY, deviceToken: TOKEN, syncIndex: false, ttlMs: 3_600_000 };
 const PATH = '/api/v1/research/3/42/101';
 const UPSTREAM = 'https://beta.tcgtracking.com/v1/3/sets/42/research';
 

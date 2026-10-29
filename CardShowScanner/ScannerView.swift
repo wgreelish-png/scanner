@@ -309,8 +309,12 @@ struct ScannerView: View {
                             }
                         }
                         if model.priceLoading && !model.selectionInProgress { ProgressView("Checking market value…") }
-
-
+                        NavigationLink {
+                            MarketInsightsView(card: card)
+                        } label: {
+                            Label("Market Details & Sales Activity", systemImage: "chart.xyaxis.line")
+                        }.disabled(model.selectionInProgress || model.saving)
+                            .accessibilityIdentifier("scanReview.marketDetails")
                     }
                 }.padding().padding(.top, 8)
             }.navigationTitle("Choose the Card").navigationBarTitleDisplayMode(.inline)

@@ -1,0 +1,332 @@
+{
+  "info": {
+    "_postman_id": "21cf4b15-6d7e-47c5-baa0-f35bf390bfc6",
+    "name": "Card Show Scanner - Public Price and Opportunities Diagnostics",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Three independent read-only requests: public exact-SKU pricing, Beta Opportunities index, Beta exact-SKU market insights. No Research dependency. Import the existing empty TCGTracking-Local environment, set local tcgt_shipper_id/tcgt_beta_key if available, and Run collection once in order. Public results remain available if Beta credentials/access/coverage are missing. Defaults: Pokemon category 3, known group22872, Charmander SV Promo044 product512035, EN Holofoil Near Mint. Edit tcgt_market_* collection variables for another target; the group never changes automatically. Live coverage for this example is unknown. HTTP success and exact SKU coverage have separate tests/statuses. No credentials/raw error bodies are logged or included in tcgt_market_summary. Do not share populated credential environments or request headers."
+  },
+  "auth": {
+    "type": "noauth"
+  },
+  "variable": [
+    {
+      "key": "tcgt_market_category_id",
+      "value": "3",
+      "type": "string"
+    },
+    {
+      "key": "tcgt_market_group_id",
+      "value": "22872",
+      "type": "string"
+    },
+    {
+      "key": "tcgt_market_product_id",
+      "value": "512035",
+      "type": "string"
+    },
+    {
+      "key": "tcgt_market_card_name",
+      "value": "Charmander",
+      "type": "string"
+    },
+    {
+      "key": "tcgt_market_set_name",
+      "value": "SV: Scarlet & Violet Promo Cards",
+      "type": "string"
+    },
+    {
+      "key": "tcgt_market_language",
+      "value": "EN",
+      "type": "string"
+    },
+    {
+      "key": "tcgt_market_printing",
+      "value": "Holofoil",
+      "type": "string"
+    },
+    {
+      "key": "tcgt_market_condition",
+      "value": "NM",
+      "type": "string"
+    },
+    {
+      "key": "tcgt_market_summary",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "(function () {",
+          "    ['X-Shipper-Id', 'X-Api-Key', 'Authorization', 'If-None-Match'].forEach(key => pm.request.headers.remove(key));",
+          "    const get = key => String(pm.collectionVariables.get('tcgt_market_' + key) || '').trim();",
+          "    const target = {category_id: get('category_id'), group_id: get('group_id'), product_id: get('product_id'), card_name: get('card_name'), set_name: get('set_name'), language: get('language'), printing: get('printing'), condition: get('condition')};",
+          "    const first = pm.info.requestName.startsWith('01');",
+          "    let summary;",
+          "    try { summary = JSON.parse(pm.collectionVariables.get('tcgt_market_summary') || 'null'); } catch (_) {}",
+          "    if (first || !summary || JSON.stringify(summary.target) !== JSON.stringify(target)) {",
+          "        summary = {target, public: {status: 'not_run'}, beta_index: {status: 'not_run'}, opportunities: {status: 'not_run'}, notes: [",
+          "            'Public pricing is independent of Beta credentials and Research.',",
+          "            'Opps coverage is not a complete record of sales or stock; missing coverage does not mean zero.',",
+          "            'pricing.avg_30d may fall back to a market average. Only explicitly named tcg_sold_avg fields are sold averages.',",
+          "            'This diagnostic does not establish physical authenticity or a PSA grade.'",
+          "        ]};",
+          "    }",
+          "    const section = first ? 'public' : pm.info.requestName.startsWith('02') ? 'beta_index' : 'opportunities';",
+          "    summary[section] = {status: 'pending'};",
+          "    pm.collectionVariables.set('tcgt_market_summary', JSON.stringify(summary, null, 2));",
+          "    function skip(message) {",
+          "        summary[section] = {status: 'invalid_request', message};",
+          "        pm.collectionVariables.set('tcgt_market_summary', JSON.stringify(summary, null, 2));",
+          "        pm.execution.skipRequest();",
+          "        throw new Error(message);",
+          "    }",
+          "    const languages = {EN: 'English', JP: 'Japanese', FR: 'French', DE: 'German', IT: 'Italian', ES: 'Spanish', PT: 'Portuguese', RU: 'Russian', KO: 'Korean', CS: 'Simplified Chinese', CT: 'Traditional Chinese'};",
+          "    const conditions = {NM: 'Near Mint', LP: 'Lightly Played', MP: 'Moderately Played', HP: 'Heavily Played', DMG: 'Damaged', Unopened: 'Unopened'};",
+          "    if (!/^[123]$/.test(target.category_id) || !/^[1-9][0-9]{0,11}$/.test(target.group_id) || !/^[1-9][0-9]{0,11}$/.test(target.product_id) ||",
+          "        !Object.hasOwn(languages, target.language) || !Object.hasOwn(conditions, target.condition) || !target.printing || target.printing.length > 80 || target.card_name.length > 200 || target.set_name.length > 200) {",
+          "        skip('Use supported category, canonical numeric group/product, exact language code, full printing and condition code.');",
+          "    }",
+          "    for (const [key, value] of Object.entries(target)) pm.variables.set('tcgt_market_' + key, value);",
+          "    const publicURL = 'https://openapi.tcgtracking.com/v1/' + target.category_id + '/sets/' + target.group_id + '/skus';",
+          "    const metaURL = 'https://beta.tcgtracking.com/v1/meta';",
+          "    const oppsURL = 'https://beta.tcgtracking.com/v1/' + target.category_id + '/sets/' + target.group_id;",
+          "    const expectedURL = section === 'public' ? publicURL : section === 'beta_index' ? metaURL : oppsURL;",
+          "    if (pm.variables.replaceIn(pm.request.url.toString()) !== expectedURL) skip('Unexpected endpoint: only the exact fixed public/Beta URL is allowed.');",
+          "    if (section !== 'public') {",
+          "        const shipper = String(pm.environment.get('tcgt_shipper_id') || '').trim();",
+          "        const key = String(pm.environment.get('tcgt_beta_key') || '').trim();",
+          "        if (/^[1-9][0-9]{0,11}$/.test(shipper) && /^[\\x21-\\x7e]{16,512}$/.test(key)) {",
+          "            pm.request.headers.upsert({key: 'X-Shipper-Id', value: shipper});",
+          "            pm.request.headers.upsert({key: 'X-Api-Key', value: key});",
+          "        } else {",
+          "            // An unauthenticated fixed-host request still produces a response",
+          "            // for request 03's Visualize pane, while public results survive.",
+          "            summary[section].credentials = 'missing_or_invalid_local_values';",
+          "            pm.collectionVariables.set('tcgt_market_summary', JSON.stringify(summary, null, 2));",
+          "        }",
+          "    }",
+          "}());"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "(function () {",
+          "    const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);",
+          "    const id = value => typeof value === 'string' && /^[1-9][0-9]{0,19}$/.test(value);",
+          "    const scalar = value => value === null || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value)) || (typeof value === 'string' && value.length <= 512);",
+          "    const numeric = value => value === undefined || value === null || (typeof value === 'number' && Number.isFinite(value)) || (typeof value === 'string' && /^-?[0-9]{1,20}(?:\\.[0-9]{1,8})?$/.test(value));",
+          "    const numericFields = (value, keys) => keys.every(key => numeric(value[key]));",
+          "    const pick = (value, keys) => Object.fromEntries(keys.filter(key => Object.hasOwn(value, key) && scalar(value[key])).map(key => [key, value[key]]));",
+          "    const fail = (name, condition) => pm.test(name, () => { if (!condition) throw new Error(name); });",
+          "    const summary = JSON.parse(pm.collectionVariables.get('tcgt_market_summary'));",
+          "    const target = summary.target;",
+          "    const publicRequest = pm.info.requestName.startsWith('01');",
+          "    const metaRequest = pm.info.requestName.startsWith('02');",
+          "    const section = publicRequest ? 'public' : metaRequest ? 'beta_index' : 'opportunities';",
+          "    const label = publicRequest ? 'Public SKU' : metaRequest ? 'Beta opportunities index' : 'Beta exact SKU';",
+          "    const result = {status: 'http_error', http_status: pm.response.code};",
+          "    if (summary[section].credentials) result.credentials = summary[section].credentials;",
+          "    summary[section] = result;",
+          "    fail(label + ' HTTP 200', pm.response.code === 200);",
+          "    function finish() {",
+          "        // Never log provider bodies, headers or credentials. Share only this",
+          "        // allowlisted summary. Redact an echoed API key as an extra safeguard.",
+          "        const key = String(pm.environment.get('tcgt_beta_key') || '');",
+          "        const serialized = JSON.stringify(summary, (_, value) => typeof value === 'string' && key.length >= 16 ? value.split(key).join('[redacted]') : value, 2);",
+          "        pm.collectionVariables.set('tcgt_market_summary', serialized);",
+          "        if (!publicRequest && !metaRequest) pm.visualizer.set('<style>body{font-family:system-ui;padding:20px}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style><h2>Public price + exact SKU market insights</h2><p>Null or missing values are unavailable. Zero is a returned value. Missing Beta coverage does not mean zero sales or stock. avg_30d can be a market-average fallback.</p><pre>{{summary}}</pre>', {summary: serialized});",
+          "    }",
+          "    if (pm.response.code !== 200) { finish(); return; }",
+          "    let body;",
+          "    try { body = pm.response.json(); } catch (_) { result.status = 'invalid_response'; fail(label + ' valid JSON/schema', false); finish(); return; }",
+          "    function invalid(status = 'invalid_response') { result.status = status; fail(label + ' valid identity/schema', false); finish(); }",
+          "    const languages = {EN: 'English', JP: 'Japanese', FR: 'French', DE: 'German', IT: 'Italian', ES: 'Spanish', PT: 'Portuguese', RU: 'Russian', KO: 'Korean', CS: 'Simplified Chinese', CT: 'Traditional Chinese'};",
+          "    const conditions = {NM: 'Near Mint', LP: 'Lightly Played', MP: 'Moderately Played', HP: 'Heavily Played', DMG: 'Damaged', Unopened: 'Unopened'};",
+          "    const conditionIDs = {NM: 1, LP: 2, MP: 3, HP: 4, DMG: 5, Unopened: 6};",
+          "    if (metaRequest) {",
+          "        if (!record(body) || !record(body.categories)) { invalid(); return; }",
+          "        const category = body.categories[target.category_id];",
+          "        if (!record(category) || !record(category.sets)) { result.status = 'category_not_indexed'; fail('Target category is indexed for opportunities', false); finish(); return; }",
+          "        if (category.category_id !== undefined && category.category_id !== Number(target.category_id)) { invalid('identity_mismatch'); return; }",
+          "        const matches = Object.entries(category.sets).filter(([key, row]) => id(key) && record(row) && row.set_name === target.set_name);",
+          "        result.exact_set_name_match_count = matches.length;",
+          "        if (matches.length === 1) result.exact_set_name_hint = {group_id: matches[0][0], set_name: matches[0][1].set_name};",
+          "        result.requested_group_id = target.group_id;",
+          "        result.group_was_changed = false;",
+          "        const selected = category.sets[target.group_id];",
+          "        if (selected === undefined) { result.status = 'set_not_indexed'; fail('Requested group is indexed for opportunities', false); finish(); return; }",
+          "        if (!record(selected) || (selected.group_id !== undefined && selected.group_id !== Number(target.group_id)) || (selected.category_id !== undefined && selected.category_id !== Number(target.category_id))) { invalid('identity_mismatch'); return; }",
+          "        result.status = 'set_indexed';",
+          "        result.selected_set = pick(selected, ['group_id', 'category_id', 'set_name', 'opp_count', 'product_count', 'sku_count', 'updated_at', 'etag']);",
+          "        fail('Requested group is indexed for opportunities', true); finish(); return;",
+          "    }",
+          "    if (!record(body) || !record(body.products)) { invalid(); return; }",
+          "    if (publicRequest) {",
+          "        if (body.set_id !== Number(target.group_id) || (body.category_id !== undefined && body.category_id !== Number(target.category_id))) { invalid('identity_mismatch'); return; }",
+          "        result.provider = pick(body, ['set_id', 'updated']);",
+          "    } else {",
+          "        if (!record(body.meta) || typeof body.meta.schema_version !== 'string') { invalid(); return; }",
+          "        if (body.meta.category_id !== Number(target.category_id) || body.meta.group_id !== Number(target.group_id)) { invalid('identity_mismatch'); return; }",
+          "        result.provider = pick(body.meta, ['schema_version', 'category_id', 'group_id', 'game_name', 'set_name', 'generated_at', 'product_count', 'sku_count', 'opp_count']);",
+          "    }",
+          "    const keys = Object.keys(body.products);",
+          "    result.returned_product_count = keys.length;",
+          "    result.returned_product_sample = keys.slice(0, 10);",
+          "    if (keys.some(key => !id(key) || key.length > 12)) { invalid('unexpected_product_keys'); return; }",
+          "    if (!Object.hasOwn(body.products, target.product_id)) {",
+          "        result.status = 'product_missing'; fail('Exact product ' + target.product_id + ' is present', false); finish(); return;",
+          "    }",
+          "    const product = body.products[target.product_id];",
+          "    if (!record(product)) { invalid(); return; }",
+          "    if (!publicRequest && (product.product_id !== Number(target.product_id) || typeof product.name !== 'string' || !record(product.skus))) { invalid('invalid_product'); return; }",
+          "    if (!publicRequest) result.product = pick(product, ['product_id', 'name', 'ext_number', 'ext_rarity']);",
+          "    const rows = publicRequest ? product : product.skus;",
+          "    if (Object.keys(rows).length > 512) { invalid(); return; }",
+          "    const entries = Object.entries(rows);",
+          "    if (entries.some(([key, row]) => !id(key) || !record(row) || (publicRequest ?",
+          "        typeof row.cnd !== 'string' || typeof row.var !== 'string' || typeof row.lng !== 'string' :",
+          "        !Object.hasOwn(row, 'sku_id') || (row.sku_id !== null && !((typeof row.sku_id === 'string' || Number.isSafeInteger(row.sku_id)) && String(row.sku_id) === key)) ||",
+          "        !Number.isInteger(row.condition_id) || row.condition_id < 1 || row.condition_id > 6 || row.condition !== Object.values(conditions)[row.condition_id - 1] || typeof row.finish !== 'string' || typeof row.language !== 'string'))) { invalid('invalid_sku'); return; }",
+          "    const exact = entries.filter(([key, row]) => publicRequest ? row.cnd === target.condition && row.var === target.printing && row.lng === target.language :",
+          "        row.condition_id === conditionIDs[target.condition] && row.condition === conditions[target.condition] && row.finish === target.printing && row.language === languages[target.language]);",
+          "    result.exact_variant_match_count = exact.length;",
+          "    result.available_sku_sample = entries.slice(0, 20).map(([key, row]) => ({sku_id: key, ...pick(row, publicRequest ? ['cnd', 'var', 'lng'] : ['condition_id', 'condition', 'finish', 'language'])}));",
+          "    let chosen;",
+          "    if (!publicRequest && summary.public.status === 'available') {",
+          "        chosen = exact.find(([key]) => key === summary.public.sku_id);",
+          "        result.selection = 'same_public_sku_and_full_variant';",
+          "        if (!chosen) { result.status = 'sku_missing'; fail('Exact public SKU and full variant are covered by Beta', false); finish(); return; }",
+          "    } else {",
+          "        if (exact.length !== 1) { result.status = exact.length ? 'sku_ambiguous' : 'sku_missing'; fail('Exactly one full variant SKU exists', false); finish(); return; }",
+          "        chosen = exact[0]; result.selection = 'unique_full_variant';",
+          "    }",
+          "    fail('Exact product ' + target.product_id + ' and unique selected SKU are present', true);",
+          "    result.status = 'available'; result.sku_id = chosen[0];",
+          "    const row = chosen[1];",
+          "    result.variant = pick(row, publicRequest ? ['cnd', 'var', 'lng'] : ['condition_id', 'condition', 'finish', 'language']);",
+          "    if (publicRequest) {",
+          "        if (!numericFields(row, ['mkt', 'low', 'hi', 'cnt', 'mp'])) { invalid(); return; }",
+          "        result.price_context = pick(row, ['mkt', 'low', 'hi', 'cnt', 'mp']);",
+          "        result.price_status = row.mkt === null || row.mkt === undefined ? 'unavailable' : 'returned_value';",
+          "    } else {",
+          "        for (const key of ['pricing', 'timestamps', 'marketplaces', 'trends']) if (row[key] !== undefined && row[key] !== null && !record(row[key])) { invalid(); return; }",
+          "        if (row.timestamps === null) result.timestamps = null;",
+          "        else if (row.timestamps) result.timestamps = pick(row.timestamps, ['opp_computed_at', 'tcgp_live_updated_at', 'last_verified_at', 'tcgp_sales_updated_at', 'mp_sales_updated_at', 'product_scrape_fetched_at']);",
+          "        if (row.pricing === null) result.pricing = null;",
+          "        else if (row.pricing) {",
+          "            const keys = ['market_product', 'market_sku', 'live_market', 'avg_30d', 'listed_low_card', 'listed_low_ship', 'listed_low_total', 'direct_low_card'];",
+          "            if (!numericFields(row.pricing, keys)) { invalid(); return; }",
+          "            result.pricing = pick(row.pricing, keys);",
+          "        }",
+          "        if (row.marketplaces === null) result.marketplaces = null;",
+          "        else if (row.marketplaces) {",
+          "            result.marketplaces = {};",
+          "            for (const source of ['tcgplayer', 'manapool']) {",
+          "                const market = row.marketplaces[source];",
+          "                if (market === null) { result.marketplaces[source] = null; continue; }",
+          "                if (market === undefined) continue;",
+          "                if (!record(market) || (market.listings !== undefined && market.listings !== null && (!Array.isArray(market.listings) || market.listings.length > 20 || market.listings.some(item => !record(item))))) { invalid(); return; }",
+          "                const safe = pick(market, ['available', 'seller_detail_status', 'updated_at', 'low_price', 'fee_amount', 'estimated_ship_1x', 'landed_1x', 'direct_low_card', 'total_qty_available']);",
+          "                if (market.listings === null) safe.listings = null;",
+          "                else if (market.listings) safe.listings = market.listings.map(item => pick(item, ['rank', 'price', 'ship_price', 'fee_amount', 'landed_price', 'seller_name', 'seller_qty', 'origin_country', 'updated_at']));",
+          "                result.marketplaces[source] = safe;",
+          "            }",
+          "        }",
+          "        if (row.trends === null) result.trends = null;",
+          "        else if (row.trends) {",
+          "            result.trends = pick(row.trends, ['updated_at', 'trend_30d_vs_90d_pct', 'trend_90d_pct', 'tcg_mp_trend_30d_pct', 'triple_trend_pass']);",
+          "            const windows = row.trends.windows;",
+          "            if (windows === null) result.trends.windows = null;",
+          "            else if (windows !== undefined) {",
+          "                if (!record(windows)) { invalid(); return; }",
+          "                result.trends.windows = {};",
+          "                for (const name of ['30d', '90d', '365d']) {",
+          "                    if (windows[name] === null) result.trends.windows[name] = null;",
+          "                    else if (windows[name] !== undefined) {",
+          "                        if (!record(windows[name])) { invalid(); return; }",
+          "                        const keys = ['tcg_qty', 'tcg_market_avg', 'tcg_sold_avg', 'tcg_sold_avg_with_sh', 'mp_qty', 'mp_avg', 'combined_qty'];",
+          "                        if (!numericFields(windows[name], keys)) { invalid(); return; }",
+          "                        result.trends.windows[name] = pick(windows[name], keys);",
+          "                    }",
+          "                }",
+          "            }",
+          "        }",
+          "    }",
+          "    finish();",
+          "}());"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "01 - Public exact SKU price and listing context",
+      "request": {
+        "method": "GET",
+        "auth": {
+          "type": "noauth"
+        },
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": "https://openapi.tcgtracking.com/v1/{{tcgt_market_category_id}}/sets/{{tcgt_market_group_id}}/skus",
+        "description": "Public, credential-free condition/printing/language pricing. Clears prior results when starting a new collection run."
+      },
+      "protocolProfileBehavior": {
+        "followRedirects": false
+      }
+    },
+    {
+      "name": "02 - Beta opportunities index, optional set check",
+      "request": {
+        "method": "GET",
+        "auth": {
+          "type": "noauth"
+        },
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": "https://beta.tcgtracking.com/v1/meta",
+        "description": "Reports exact set-name/index coverage only. Never changes the configured group or gates requests 01/03. No Research endpoint is used."
+      },
+      "protocolProfileBehavior": {
+        "followRedirects": false
+      }
+    },
+    {
+      "name": "03 - Beta exact SKU pricing, listings and sales windows",
+      "request": {
+        "method": "GET",
+        "auth": {
+          "type": "noauth"
+        },
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": "https://beta.tcgtracking.com/v1/{{tcgt_market_category_id}}/sets/{{tcgt_market_group_id}}",
+        "description": "Validates exact set/product/SKU and full variant. Writes tcgt_market_summary; open Visualize for a shareable formatted summary. Null/missing values are unavailable; zero is preserved."
+      },
+      "protocolProfileBehavior": {
+        "followRedirects": false
+      }
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { request as httpRequest } from 'node:http';
+import { resolve } from 'node:path';
 import { createResearchServer, configurationFromEnvironment } from '../src/server.mjs';
 
 // Local synthetic credentials only. These tests never contact an upstream API.
@@ -25,7 +26,7 @@ async function withServer(run) {
 
 test('server configuration refuses an unprotected device API and invalid listen endpoints', () => {
   assert.throws(() => createResearchServer({ deviceToken: '' }));
-  assert.deepEqual(configurationFromEnvironment({}), { host: '127.0.0.1', port: 8787, shipperID: undefined, apiKey: undefined, deviceToken: undefined, certURLTemplate: undefined, certToken: undefined });
+  assert.deepEqual(configurationFromEnvironment({}), { host: '127.0.0.1', port: 8787, shipperID: undefined, apiKey: undefined, deviceToken: undefined, cacheDirectory: resolve('.cache/tcg-beta'), certURLTemplate: undefined, certToken: undefined });
   for (const environment of [{ PORT: '0' }, { PORT: '65536' }, { PORT: 'bad' }, { HOST: 'not-a-listen-ip.example' }]) assert.throws(() => configurationFromEnvironment(environment));
 });
 

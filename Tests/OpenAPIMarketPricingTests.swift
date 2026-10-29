@@ -19,13 +19,45 @@ import XCTest
         let data = body(exactRows)
         let normal = try OpenAPIMarketPricing.parseDetails(data, for: card())
         XCTAssertEqual(normal.quote, MarketQuote(marketPrice: Decimal(string: "0.34"), skuID: "4639"))
+        XCTAssertEqual(normal.context, MarketPriceContext(lowPrice: Decimal(string: "0.25"), highPrice: nil, listingCount: nil))
         XCTAssertEqual(try OpenAPIMarketPricing.parseDetails(data, for: card(condition: "Lightly Played")).quote,
                        MarketQuote(marketPrice: Decimal(string: "0.27"), skuID: "4640"))
         XCTAssertEqual(try OpenAPIMarketPricing.parseDetails(data, for: card(printing: "  FOIL  ")).quote?.skuID, "4641")
         XCTAssertEqual(try OpenAPIMarketPricing.parseDetails(data, for: card(language: "Japanese")).quote?.skuID, "4642")
         for unsupported in [card(printing: "N"), card(printing: "Holofoil"), card(condition: "Moderately Played"), card(language: "German"), card(language: "Chinese")] {
-            XCTAssertNil(try OpenAPIMarketPricing.parseDetails(data, for: unsupported).quote)
+            let details = try OpenAPIMarketPricing.parseDetails(data, for: unsupported)
+            XCTAssertNil(details.quote)
+            XCTAssertNil(details.context)
         }
+    }
+    func testComparableContextUsesOnlyTheExactSKURowAndPreservesZero() async throws {
+        let rows = #""4639":{"cnd":"NM","var":"Normal","lng":"EN","mkt":null,"low":0,"hi":"0.50","cnt":0},"4640":{"cnd":"LP","var":"Normal","lng":"EN","mkt":4,"low":9,"hi":10,"cnt":99}"#
+        let details = try OpenAPIMarketPricing.parseDetails(body(rows), for: card())
+        XCTAssertEqual(details.quote, MarketQuote(marketPrice: nil, skuID: "4639"))
+        XCTAssertEqual(details.context, MarketPriceContext(lowPrice: 0, highPrice: Decimal(string: "0.50"), listingCount: 0))
+        let played = try OpenAPIMarketPricing.parseDetails(body(rows), for: card(condition: "Lightly Played"))
+        XCTAssertEqual(played.context, MarketPriceContext(lowPrice: 9, highPrice: 10, listingCount: 99))
+        let ambiguous = rows + #", "9999":{"cnd":"NM","var":"Normal","lng":"EN","mkt":null,"low":0,"hi":"0.50","cnt":0}"#
+        let duplicate = try OpenAPIMarketPricing.parseDetails(body(ambiguous), for: card())
+        XCTAssertNil(duplicate.quote); XCTAssertNil(duplicate.context)
+    }
+    func testInvalidOptionalComparablesAreMissingWithoutInvalidatingMarketPrice() async throws {
+        let invalid = ["null", "true", "-1", "\"-1\"", "\"NaN\"", "\"Infinity\"", "{}", "[]"]
+        for value in invalid {
+            let rows = "\"4639\":{\"cnd\":\"NM\",\"var\":\"Normal\",\"lng\":\"EN\",\"mkt\":1.25,\"low\":\(value),\"hi\":\(value),\"cnt\":\(value)}"
+            let details = try OpenAPIMarketPricing.parseDetails(body(rows), for: card())
+            XCTAssertEqual(details.quote, MarketQuote(marketPrice: Decimal(string: "1.25"), skuID: "4639"), value)
+            XCTAssertNil(details.context, value)
+        }
+        for value in ["1.25", "\"1.25\"", "\"9223372036854775808\""] {
+            let rows = "\"4639\":{\"cnd\":\"NM\",\"var\":\"Normal\",\"lng\":\"EN\",\"mkt\":1.25,\"low\":0.50,\"cnt\":\(value)}"
+            let details = try OpenAPIMarketPricing.parseDetails(body(rows), for: card())
+            XCTAssertEqual(details.context, MarketPriceContext(lowPrice: Decimal(string: "0.50"), highPrice: nil, listingCount: nil), value)
+        }
+        let missing = try OpenAPIMarketPricing.parseDetails(body(#""4639":{"cnd":"NM","var":"Normal","lng":"EN","mkt":1.25}"#), for: card())
+        XCTAssertNil(missing.context)
+        let stringCount = try OpenAPIMarketPricing.parseDetails(body(#""4639":{"cnd":"NM","var":"Normal","lng":"EN","mkt":1.25,"cnt":"8"}"#), for: card())
+        XCTAssertEqual(stringCount.context?.listingCount, 8)
     }
     func testEveryDocumentedConditionAndLanguageHasAnExactMapping() async throws {
         let conditions = [("Near Mint", "NM"), ("Lightly Played", "LP"), ("Moderately Played", "MP"), ("Heavily Played", "HP"), ("Damaged", "DMG")]
@@ -78,21 +110,21 @@ import XCTest
     func testNamespaceAndGamesAreCheckedBeforeResolvingOrLoading() async throws {
         let loader = PricingHTTPLoader([])
         let resolver = PricingSetResolver(set: 1)
-        let pricing = OpenAPIMarketPricing(resolver: resolver, loader: loader)
+        let pricing = OpenAPIMarketPricing(resolver: resolver, loader: loader, cacheDirectory: nil)
         for selected in [card("t:15038"), card("ts:15038"), card("u:15038"), card("p:15038?x"), card("p:15038\n"), card(game: "Other")] {
             do { _ = try await pricing.quote(for: selected); XCTFail("Unsupported identity should throw") }
             catch { XCTAssertEqual(error as? OpenAPIPricingFailure, .unsupportedCard) }
         }
         let calls = await loader.requests.count; let resolutions = await resolver.calls
         XCTAssertEqual(calls, 0); XCTAssertEqual(resolutions, 0)
-        let unmapped = OpenAPIMarketPricing(resolver: PricingSetResolver(set: nil), loader: loader)
+        let unmapped = OpenAPIMarketPricing(resolver: PricingSetResolver(set: nil), loader: loader, cacheDirectory: nil)
         do { _ = try await unmapped.quote(for: card()); XCTFail("Missing set must be explicit") }
         catch { XCTAssertEqual(error as? OpenAPIPricingFailure, .catalogUnavailable) }
     }
     func testCacheReusesAllConditionsThenForcesConditional304WithoutChangingDailyTimestamp() async throws {
         let clock = PricingClock(Date(timeIntervalSince1970: 1_800_000_000))
         let loader = PricingHTTPLoader([.init(status: 200, data: body(exactRows), etag: "\"daily-1\""), .init(status: 304)])
-        let pricing = OpenAPIMarketPricing(resolver: PricingSetResolver(set: 1), loader: loader, now: { clock.read() })
+        let pricing = OpenAPIMarketPricing(resolver: PricingSetResolver(set: 1), loader: loader, now: { clock.read() }, cacheDirectory: nil)
         let first = try await pricing.details(for: card(), candidates: [], forceRefresh: false)
         let played = try await pricing.quote(for: card(condition: "Lightly Played"))
         XCTAssertEqual(played?.skuID, "4640")
@@ -114,7 +146,7 @@ import XCTest
             PricingHTTPLoader.Reply(status: 200, data: Data(String(decoding: body(exactRows), as: UTF8.self).replacingOccurrences(of: "\"set_id\":1", with: "\"set_id\":\(set)").utf8))
         }
         let loader = PricingHTTPLoader(replies)
-        let pricing = OpenAPIMarketPricing(resolver: CardSetPricingResolver(), loader: loader, now: { clock.read() })
+        let pricing = OpenAPIMarketPricing(resolver: CardSetPricingResolver(), loader: loader, now: { clock.read() }, cacheDirectory: nil)
         for set in Array(1...5) + [1] {
             var selected = card(); selected.set = String(set)
             _ = try await pricing.quote(for: selected)
@@ -126,8 +158,8 @@ import XCTest
     func testExpiredAndFailedForcedRefreshNeverReturnStaleQuote() async throws {
         let clock = PricingClock(Date())
         let loader = PricingHTTPLoader([.init(status: 200, data: body(exactRows)), .init(status: 503), .init(status: 403), .init(status: 503)])
-        let pricing = OpenAPIMarketPricing(resolver: PricingSetResolver(set: 1), loader: loader, now: { clock.read() })
-        _ = try await pricing.quote(for: card()); clock.advance(901)
+        let pricing = OpenAPIMarketPricing(resolver: PricingSetResolver(set: 1), loader: loader, now: { clock.read() }, cacheDirectory: nil)
+        _ = try await pricing.quote(for: card()); clock.advance(86_401)
         for (force, status) in [(false, 503), (true, 403), (false, 503)] {
             do { _ = try await pricing.details(for: card(), candidates: [], forceRefresh: force); XCTFail("Stale body must not be a fallback") }
             catch { XCTAssertEqual(error as? OpenAPIPricingFailure, .httpStatus(status)) }
@@ -144,22 +176,25 @@ import XCTest
             (.init(status: 200, data: Data(repeating: 32, count: NativeOpenAPIHTTPDataLoader.maximumBytes + 1)), .responseTooLarge)
         ]
         for (reply, failure) in cases {
-            let pricing = OpenAPIMarketPricing(resolver: PricingSetResolver(set: 1), loader: PricingHTTPLoader([reply]))
+            let pricing = OpenAPIMarketPricing(resolver: PricingSetResolver(set: 1), loader: PricingHTTPLoader([reply]), cacheDirectory: nil)
             do { _ = try await pricing.quote(for: card()); XCTFail("Invalid response should throw") }
             catch { XCTAssertEqual(error as? OpenAPIPricingFailure, failure) }
         }
     }
     func testNativeURLPolicyRejectsCredentialsQueriesFragmentsAndOtherPaths() async {
         XCTAssertTrue(NativeOpenAPIHTTPDataLoader.allows(URL(string: "https://openapi.tcgtracking.com/v1/3/sets/1/skus")))
+        XCTAssertTrue(NativeOpenAPIHTTPDataLoader.allows(URL(string: "https://openapi.tcgtracking.com/v1/products/512035")))
         for url in ["http://openapi.tcgtracking.com/v1/3/sets/1/skus", "https://openapi.tcgtracking.com.evil/v1/3/sets/1/skus",
                     "https://user:secret@openapi.tcgtracking.com/v1/3/sets/1/skus", "https://openapi.tcgtracking.com/v1/3/sets/1/pricing",
-                    "https://openapi.tcgtracking.com/v1/3/sets/1/skus?token=secret", "https://openapi.tcgtracking.com/v1/3/sets/1/skus#x"] {
+                    "https://openapi.tcgtracking.com/v1/3/sets/1/skus?token=secret", "https://openapi.tcgtracking.com/v1/3/sets/1/skus#x",
+                    "https://openapi.tcgtracking.com/v1/products/0", "https://openapi.tcgtracking.com/v1/products/512035/skus",
+                    "https://openapi.tcgtracking.com/v1/products/512035?token=secret", "https://openapi.tcgtracking.com/v1/products/512035#x"] {
             XCTAssertFalse(NativeOpenAPIHTTPDataLoader.allows(URL(string: url)))
         }
     }
     func testOrdinaryOverlappingLookupsShareTheSetRequest() async throws {
         let loader = ControlledPricingLoader()
-        let pricing = OpenAPIMarketPricing(resolver: PricingSetResolver(set: 1), loader: loader)
+        let pricing = OpenAPIMarketPricing(resolver: PricingSetResolver(set: 1), loader: loader, cacheDirectory: nil)
         let normal = card(), foil = card(printing: "Foil")
         let first = Task { try await pricing.quote(for: normal) }
         try await loader.waitForCalls(1)
@@ -174,7 +209,7 @@ import XCTest
     }
     func testCancellingJoinedConsumerReturnsBeforeTheOwnerFinishes() async throws {
         let loader = ControlledPricingLoader()
-        let pricing = OpenAPIMarketPricing(resolver: PricingSetResolver(set: 1), loader: loader)
+        let pricing = OpenAPIMarketPricing(resolver: PricingSetResolver(set: 1), loader: loader, cacheDirectory: nil)
         let selected = card()
         let owner = Task { try await pricing.quote(for: selected) }
         try await loader.waitForCalls(1)
@@ -195,7 +230,7 @@ import XCTest
     }
     func testCancellingRequestOwnerAllowsAnActiveJoinedConsumerToRetry() async throws {
         let loader = ControlledPricingLoader()
-        let pricing = OpenAPIMarketPricing(resolver: PricingSetResolver(set: 1), loader: loader)
+        let pricing = OpenAPIMarketPricing(resolver: PricingSetResolver(set: 1), loader: loader, cacheDirectory: nil)
         let selected = card()
         let owner = Task { try await pricing.quote(for: selected) }
         try await loader.waitForCalls(1)
@@ -210,7 +245,7 @@ import XCTest
     }
     func testLaterForcedResponseWinsAndCancelledResponseNeverEntersCache() async throws {
         let loader = ControlledPricingLoader()
-        let pricing = OpenAPIMarketPricing(resolver: PricingSetResolver(set: 1), loader: loader)
+        let pricing = OpenAPIMarketPricing(resolver: PricingSetResolver(set: 1), loader: loader, cacheDirectory: nil)
         let selected = card()
         let first = Task { try await pricing.details(for: selected, candidates: [], forceRefresh: true) }
         try await loader.waitForCalls(1)

@@ -20,6 +20,7 @@ jobs:
           node-version: '22'
       - run: node --experimental-vm-modules --test Tests/JavaScript/*.cjs
       - run: node --test server/research/tests/*.test.mjs
+      - run: node --test postman/test_*.mjs
       - run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - run: python3 scripts/check_xcode_sources.py
       - run: python3 scripts/check_scanner_runtime.py

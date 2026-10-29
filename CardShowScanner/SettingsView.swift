@@ -34,12 +34,21 @@ struct SettingsView: View {
                 PricingSourcePicker(accessibilityID: "settings.pricingSource")
                 Text("Existing TCGTracking uses the current website connection. Open API requests condition, printing and language prices directly, without website sign-in. You can switch back at any time.").font(.caption)
                 Text("Open API prices are published daily. The displayed update time describes the provider's data, not a new sale. This setting does not change the weekly recognition-database schedule or saved offers.").font(.caption).foregroundStyle(.secondary)
+                Text("Open API keeps downloaded quotes for up to four recent sets across app launches and checks them once every 24 hours. Refresh Market Price checks sooner. Cached prices show their original update time; during a connectivity failure, previously downloaded quotes can be used offline. Missing conditions, printings and languages stay unpriced.").font(.caption).foregroundStyle(.secondary)
             }
-            Section("Research & demand") {
+            Section("TCGTracking API Connection") {
                 NavigationLink { ResearchConnectionView() } label: {
-                    Label("Research Connection", systemImage: "chart.bar.xaxis")
+                    Label("TCGTracking API Connection", systemImage: "chart.bar.xaxis")
                 }.accessibilityIdentifier("settings.researchConnection")
-                Text("Use Direct TCGTracking with your Research credentials in this iPhone’s Keychain, or connect your own server. Research shows catalog-linked sales, grading population and valuation estimates.")
+                Text("Use Direct TCGTracking with your Beta API credentials in this iPhone’s Keychain, or connect your own server. Raw market activity and graded research test access independently.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Raw market activity (OppsV2)") {
+                Text("Market Details shows public prices and optional exact-condition reported sales and comparable listings. OppsV2 covers active opportunities, so some cards have no activity coverage.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Graded Research (experimental)") {
+                Text("Research shows catalog-linked sales, grading population and valuation estimates. Coverage varies by product, printing, language and grade. Research remains experimental and preserves saved prices and offers.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Defaults") {
@@ -109,7 +118,7 @@ struct SettingsView: View {
                 if DiagnosticLog.shared.storageFailed { Text("Diagnostics could not be written to local storage.").foregroundStyle(.orange) }
                 Text("Keeps up to about 512 KB of recent local events across app launches. Includes scanner stages, timings, confidence, add decisions and save errors. Excludes card/list contents, credentials and camera images. Logs leave this device only when you share them.").font(.caption)
             }
-            Section("Privacy") { Text("Lists, sessions and diagnostic logs stay on this iPhone unless you export them. Camera frames are processed on this phone. Game databases download from TCGTracking; card images and market quotes use internet requests. Research sends selected catalog identifiers directly to TCGTracking or through your configured server. Direct Research credentials are stored in device-only Keychain and sent only to TCGTracking’s Beta service. PSA lookup sends the certification number to your configured server and its certification service; barcode images stay on this phone. CSV sharing sends the selected list through the iOS share sheet.") }
+            Section("Privacy") { Text("Lists, sessions and diagnostic logs stay on this iPhone unless you export them. Camera frames are processed on this phone. Game databases download from TCGTracking; card images and market quotes use internet requests. Raw market activity and graded research send selected catalog identifiers directly to TCGTracking or through your configured server. Direct Beta API credentials are stored in device-only Keychain and sent only to TCGTracking’s Beta service. PSA lookup sends the certification number to your configured server and its certification service; barcode images stay on this phone. CSV sharing sends the selected list through the iOS share sheet.") }
         }.navigationTitle("Settings")
             .onAppear {
                 databaseUpdater.setForeground(scenePhase == .active)

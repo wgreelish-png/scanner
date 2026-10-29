@@ -2,6 +2,22 @@ import XCTest
 @testable import CardShowScanner
 
 @MainActor final class ScannerDiagnosticsTests: XCTestCase {
+    func testOpportunitiesDiagnosticFailuresRemainDistinctFromExperimentalResearch() async throws {
+        XCTAssertEqual(ServiceDiagnosticFields.failure(OpportunitiesFailure.notCovered), ["domain": "opportunities", "reason": "product_not_covered"])
+        XCTAssertEqual(ServiceDiagnosticFields.failure(OpportunitiesFailure.skuNotCovered), ["domain": "opportunities", "reason": "exact_sku_not_covered"])
+        XCTAssertEqual(ServiceDiagnosticFields.failure(OpportunitiesFailure.directAuthorizationRequired),
+                       ["domain": "opportunities", "reason": "beta_credentials_rejected", "code": "401"])
+        XCTAssertEqual(ServiceDiagnosticFields.failure(OpportunitiesFailure.rateLimited)["code"], "429")
+        XCTAssertNil(ServiceDiagnosticFields.failure(OpportunitiesFailure.serviceUnavailable(600))["code"])
+        XCTAssertEqual(ServiceDiagnosticFields.Phase.opportunitiesProduct.rawValue, "opportunities_product")
+        XCTAssertEqual(ServiceDiagnosticFields.failure(OpenAPIPricingFailure.catalogUnavailable),
+                       ["domain": "openapi", "reason": "catalog_mapping_missing"])
+        XCTAssertEqual(ServiceDiagnosticFields.failure(OpenAPIPricingFailure.httpStatus(503))["code"], "503")
+        XCTAssertEqual(ServiceDiagnosticFields.failure(BetaAPICadenceFailure.httpStatus(429)),
+                       ["domain": "beta", "reason": "http_failure", "code": "429"])
+        XCTAssertNil(ServiceDiagnosticFields.failure(BetaAPICadenceFailure.httpStatus(600))["code"])
+    }
+
     func testResearchDiagnosticExportKeepsMethodAndStatusWithoutCredentialContent() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
