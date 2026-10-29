@@ -1,16 +1,18 @@
 import Foundation
 
 enum ResearchFailure: LocalizedError, Equatable {
-    case notConfigured, unsupportedCard, catalogUnavailable, authorizationRequired, accessDenied
+    case notConfigured, directNotConfigured, unsupportedCard, catalogUnavailable, authorizationRequired, directAuthorizationRequired, accessDenied
     case notCovered, invalidResponse, responseTooLarge, networkUnavailable, serviceUnavailable(Int)
 
     var errorDescription: String? {
         switch self {
-        case .notConfigured: return "Connect your research server in Settings to look up research."
+        case .notConfigured: return "Configure Research Connection in Settings to look up research."
+        case .directNotConfigured: return "Enter your TCGTracking Research shipper ID and API key in Research Connection."
         case .unsupportedCard: return "Research requires a catalog-matched TCGplayer card in a supported game."
         case .catalogUnavailable: return "The saved catalog cannot locate this card’s set. Refresh the card database, then retry research."
         case .authorizationRequired: return "The research server requires a valid device access token. Check Research Connection in Settings."
-        case .accessDenied: return "The research server denied access. Check the server’s Research API credentials and IP allowlist."
+        case .directAuthorizationRequired: return "TCGTracking rejected the Research credentials. Check your shipper ID and API key in Research Connection."
+        case .accessDenied: return "Research access was denied. Check Research API access, credentials and the provider’s IP allowlist. Direct access uses this phone’s public network IP; server access uses the server’s outbound IP."
         case .notCovered: return "Research is not available for this catalog card or set."
         case .invalidResponse: return "The research server returned an unsupported response. Your saved card and price are unchanged."
         case .responseTooLarge: return "This research response is too large to display."

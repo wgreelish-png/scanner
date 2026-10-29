@@ -70,7 +70,9 @@ struct ResearchClient: ResearchProviding {
 final class NativeResearchHTTPDataLoader: ResearchHTTPDataLoading, @unchecked Sendable {
     static let maximumBytes = 2 * 1_024 * 1_024
     private let session: URLSession
-    init() {
+    private let maximumResponseBytes: Int
+    init(maximumBytes: Int = NativeResearchHTTPDataLoader.maximumBytes) {
+        maximumResponseBytes = max(1, min(maximumBytes, 8 * 1_024 * 1_024))
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil; configuration.httpShouldSetCookies = false
         configuration.urlCredentialStorage = nil; configuration.urlCache = nil
@@ -84,10 +86,10 @@ final class NativeResearchHTTPDataLoader: ResearchHTTPDataLoading, @unchecked Se
               url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else { throw ResearchFailure.notConfigured }
         let (bytes, response) = try await session.bytes(for: request)
         guard let response = response as? HTTPURLResponse, response.url == url else { throw ResearchFailure.invalidResponse }
-        guard response.expectedContentLength <= Int64(Self.maximumBytes) else { throw ResearchFailure.responseTooLarge }
+        guard response.expectedContentLength <= Int64(maximumResponseBytes) else { throw ResearchFailure.responseTooLarge }
         var data = Data()
         for try await byte in bytes {
-            guard data.count < Self.maximumBytes else { throw ResearchFailure.responseTooLarge }
+            guard data.count < maximumResponseBytes else { throw ResearchFailure.responseTooLarge }
             data.append(byte)
         }
         return (data, response)

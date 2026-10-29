@@ -13,12 +13,30 @@ import XCTest
         }
         XCTAssertTrue(connection.waitForExistence(timeout: 5)); connection.tap()
         XCTAssertTrue(app.navigationBars["Research Connection"].waitForExistence(timeout: 5))
+        app.buttons["researchConnection.method"].tap()
+        app.buttons["My Server"].tap()
         let address = app.textFields["researchConnection.address"]
-        XCTAssertTrue(address.waitForExistence(timeout: 5)); address.tap(); address.typeText("http://invalid.example.com\n")
-        app.buttons["researchConnection.save"].tap()
+        XCTAssertTrue(address.waitForExistence(timeout: 5)); address.tap(); address.typeText("http://invalid.example.com")
+        let done = app.buttons["researchConnection.keyboardDone"]
+        XCTAssertTrue(done.waitForExistence(timeout: 5)); done.tap()
+        tapVisible(app.buttons["researchConnection.save"], in: app)
         let status = app.staticTexts["researchConnection.status"]
         XCTAssertTrue(status.waitForExistence(timeout: 5))
         XCTAssertTrue(status.label.contains("HTTPS"))
+    }
+
+    func testDirectResearchFieldsAreAvailableAndEmptyCredentialsAreRejected() async throws {
+        continueAfterFailure = false
+        let app = launch()
+        defer { app.terminate() }
+        app.buttons["home.settings"].tap()
+        tapVisible(app.buttons["settings.researchConnection"], in: app)
+        XCTAssertTrue(app.textFields["researchConnection.shipperID"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.secureTextFields["researchConnection.apiKey"].exists)
+        tapVisible(app.buttons["researchConnection.save"], in: app)
+        let status = app.staticTexts["researchConnection.status"]
+        XCTAssertTrue(status.waitForExistence(timeout: 5))
+        XCTAssertTrue(status.label.contains("shipper ID"))
     }
 
     func testPSAResearchHasTypedCertificateAndCatalogFallbackWithoutCamera() async throws {
@@ -43,8 +61,18 @@ import XCTest
         if let path = ProcessInfo.processInfo.environment["DYLD_FALLBACK_LIBRARY_PATH"] {
             app.launchEnvironment["DYLD_FALLBACK_LIBRARY_PATH"] = path
         }
-        app.launchArguments = ["-autoDatabaseUpdates", "NO"]
+        app.launchArguments = ["-autoDatabaseUpdates", "NO", "-researchAccessMethod", "direct"]
         app.launch(); XCTAssertTrue(app.buttons["home.openExistingLists"].waitForExistence(timeout: 10))
         return app
+    }
+
+    private func tapVisible(_ element: XCUIElement, in app: XCUIApplication) {
+        for _ in 0..<5 {
+            if element.exists && element.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(element.waitForExistence(timeout: 5))
+        XCTAssertTrue(element.isHittable)
+        element.tap()
     }
 }

@@ -2,13 +2,15 @@
 
 This Node.js 22 service keeps TCGTracking Beta credentials on your server. The iPhone sends a separate device token. It retrieves the documented set-level Research API and returns only the requested catalog product. It also accepts an optional **authorized normalized certificate service** for PSA metadata. It does not guess an official PSA endpoint or scrape certificate pages.
 
+The iPhone also offers **Direct TCGTracking** Research requests using user-entered device-only Keychain credentials. This Node component runs only on a server; it is optional for that direct Research mode and remains useful for a stable allowlisted outbound IP. Direct mode does not resolve PSA certificates. A saved server connection can continue to supply the authorized certificate bridge independently of the selected Research method.
+
 The package is dependency-free. From this directory, run `npm test` for the mocked contract tests. Those fixtures are explicitly synthetic; passing tests do not establish live Research coverage, an actual sale, or successful PSA access.
 
 ## Configure and run
 
 1. Install Node.js 22 or later on the server, or use the supplied Dockerfile.
 2. Copy `.env.example` to a private `.env` outside version control. Generate a new device token, for example with `openssl rand -hex 32`. Set:
-   - `RESEARCH_DEVICE_TOKEN`: a unique 32–512 character printable token. This goes in the app's Research connection settings; it is **not** a TCGTracking API key.
+   - `RESEARCH_DEVICE_TOKEN`: a unique 32–512 character printable token. This goes in the app's **My Server** Research connection settings; it is **not** a TCGTracking API key.
    - `TCG_BETA_SHIPPER_ID`: your BetaSupporter shipper ID.
    - `TCG_BETA_API_KEY`: your Research API key.
 3. Add this server's public outbound IP to the TCGTracking Beta IP allowlist. The phone's changing IP is not the upstream caller.
@@ -21,7 +23,7 @@ The package is dependency-free. From this directory, run `npm test` for the mock
    }
    ```
 
-6. Enter that HTTPS origin and the device token in the app. Do not enter Beta or PSA provider credentials in the app. A connection check confirms your app-to-server connection and configuration flags; the first real research request verifies upstream authorization and coverage.
+6. In the app's Research Connection settings, choose **My Server** and enter that HTTPS origin and device token. Do not enter Beta or PSA provider credentials in the server device-token field. A connection check confirms your app-to-server connection and configuration flags; the first real research request verifies upstream authorization and coverage. The separate Direct TCGTracking method accepts Beta credentials in its own fields and does not use this server for Research.
 
 The service accepts only GET, with no request body or query parameters. Headers, client rates, connections, pending upstream requests, bodies and caches are bounded. The HTTP wrapper uses the actual socket peer for rate limits and ignores untrusted `X-Forwarded-For`; devices behind one reverse proxy share the rate bucket. Ensure proxy access logs do not record Authorization values. Keep `.env` readable only to the server account. Certificate identifiers appear in request paths, so configure access-log retention appropriately for this personal service.
 

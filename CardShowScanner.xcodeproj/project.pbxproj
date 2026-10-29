@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        D17A1F0A7B6E4A8395D1001F /* DirectResearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A1F0A7B6E4A8395D10020; };
+        D17A1F0A7B6E4A8395D1001D /* DirectResearchClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A1F0A7B6E4A8395D1001E; };
         D17A1F0A7B6E4A8395D10001 /* PSABarcode.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A1F0A7B6E4A8395D10002; };
         D17A1F0A7B6E4A8395D10003 /* PSABarcodeScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A1F0A7B6E4A8395D10004; };
         D17A1F0A7B6E4A8395D10005 /* PSACertClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A1F0A7B6E4A8395D10006; };
@@ -103,6 +105,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        D17A1F0A7B6E4A8395D10020 /* DirectResearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectResearchTests.swift; sourceTree = "<group>"; };
+        D17A1F0A7B6E4A8395D1001E /* DirectResearchClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectResearchClient.swift; sourceTree = "<group>"; };
         D17A1F0A7B6E4A8395D10002 /* PSABarcode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PSABarcode.swift; sourceTree = "<group>"; };
         D17A1F0A7B6E4A8395D10004 /* PSABarcodeScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PSABarcodeScannerView.swift; sourceTree = "<group>"; };
         D17A1F0A7B6E4A8395D10006 /* PSACertClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PSACertClient.swift; sourceTree = "<group>"; };
@@ -230,6 +234,7 @@
 		59830EBC3A4184110566BF1A /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+                D17A1F0A7B6E4A8395D10020 /* DirectResearchTests.swift */,
                 D17A1F0A7B6E4A8395D10014 /* PSABarcodeTests.swift */,
                 D17A1F0A7B6E4A8395D10016 /* PSAResearchTests.swift */,
                 D17A1F0A7B6E4A8395D10018 /* ResearchConnectionTests.swift */,
@@ -263,6 +268,7 @@
 		878A52FC5FF6A57D50B7B870 /* CardShowScanner */ = {
 			isa = PBXGroup;
 			children = (
+                D17A1F0A7B6E4A8395D1001E /* DirectResearchClient.swift */,
                 D17A1F0A7B6E4A8395D10002 /* PSABarcode.swift */,
                 D17A1F0A7B6E4A8395D10004 /* PSABarcodeScannerView.swift */,
                 D17A1F0A7B6E4A8395D10006 /* PSACertClient.swift */,
@@ -461,6 +467,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                D17A1F0A7B6E4A8395D1001F /* DirectResearchTests.swift in Sources */,
                 D17A1F0A7B6E4A8395D10013 /* PSABarcodeTests.swift in Sources */,
                 D17A1F0A7B6E4A8395D10015 /* PSAResearchTests.swift in Sources */,
                 D17A1F0A7B6E4A8395D10017 /* ResearchConnectionTests.swift in Sources */,
@@ -493,6 +500,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                D17A1F0A7B6E4A8395D1001D /* DirectResearchClient.swift in Sources */,
                 D17A1F0A7B6E4A8395D10001 /* PSABarcode.swift in Sources */,
                 D17A1F0A7B6E4A8395D10003 /* PSABarcodeScannerView.swift in Sources */,
                 D17A1F0A7B6E4A8395D10005 /* PSACertClient.swift in Sources */,

@@ -48,4 +48,45 @@ import Security
             XCTAssertFalse(error.localizedDescription.contains("broken-secret-record"))
         }
     }
+
+    func testDirectCredentialsAreStoredAndForgottenIndependentlyOfServer() async throws {
+        let store = ResearchConnectionStore(service: "ResearchConnectionTests." + UUID().uuidString)
+        defer { try? store.delete(); try? store.deleteDirect() }
+        let server = try ResearchServerConfiguration.validated(address: "https://first.example.com", token: token)
+        let direct = try DirectResearchCredentials.validated(shipperID: "123", apiKey: "fixture-key-one")
+        try store.save(server); try store.saveDirect(direct)
+        XCTAssertEqual(try store.load(), server); XCTAssertEqual(try store.loadDirect(), direct)
+        let replacement = try DirectResearchCredentials.validated(shipperID: "456", apiKey: "fixture-key-two")
+        try store.saveDirect(replacement); XCTAssertEqual(try store.loadDirect(), replacement)
+        try store.deleteDirect(); XCTAssertNil(try store.loadDirect())
+        XCTAssertEqual(try store.load(), server)
+        XCTAssertNoThrow(try store.deleteDirect())
+    }
+
+    func testAccessMethodDefaultsToDirectAndRetainsAnExistingServer() async throws {
+        let suite = "ResearchConnectionTests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let store = ResearchConnectionStore(service: suite)
+        defer { defaults.removePersistentDomain(forName: suite); try? store.delete() }
+        XCTAssertEqual(try ResearchAccessMethod.selected(defaults: defaults, store: store), .direct)
+        try store.save(.validated(address: "https://first.example.com", token: token))
+        XCTAssertEqual(try ResearchAccessMethod.selected(defaults: defaults, store: store), .server)
+        defaults.set(ResearchAccessMethod.direct.rawValue, forKey: ResearchAccessMethod.defaultsKey)
+        XCTAssertEqual(try ResearchAccessMethod.selected(defaults: defaults, store: store), .direct)
+        XCTAssertNotNil(try store.load())
+    }
+
+    func testMalformedDirectKeychainRecordDoesNotReplaceServerSettings() async throws {
+        let service = "ResearchConnectionTests." + UUID().uuidString
+        let store = ResearchConnectionStore(service: service)
+        defer { try? store.delete(); try? store.deleteDirect() }
+        let server = try ResearchServerConfiguration.validated(address: "https://first.example.com", token: token)
+        try store.save(server)
+        let item: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service, kSecAttrAccount as String: "ResearchDirect",
+            kSecAttrSynchronizable as String: false, kSecValueData as String: Data("broken-direct-secret".utf8)]
+        XCTAssertEqual(SecItemAdd(item as CFDictionary, nil), errSecSuccess)
+        XCTAssertThrowsError(try store.loadDirect()) { XCTAssertFalse($0.localizedDescription.contains("broken-direct-secret")) }
+        XCTAssertEqual(try store.load(), server)
+    }
 }

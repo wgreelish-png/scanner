@@ -39,7 +39,7 @@ struct SettingsView: View {
                 NavigationLink { ResearchConnectionView() } label: {
                     Label("Research Connection", systemImage: "chart.bar.xaxis")
                 }.accessibilityIdentifier("settings.researchConnection")
-                Text("Connect your server to view catalog-linked sales, grading population and valuation estimates. Its TCGTracking and PSA account keys stay on the server.")
+                Text("Use Direct TCGTracking with your Research credentials in this iPhone’s Keychain, or connect your own server. Research shows catalog-linked sales, grading population and valuation estimates.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Defaults") {
@@ -109,7 +109,7 @@ struct SettingsView: View {
                 if DiagnosticLog.shared.storageFailed { Text("Diagnostics could not be written to local storage.").foregroundStyle(.orange) }
                 Text("Keeps up to about 512 KB of recent local events across app launches. Includes scanner stages, timings, confidence, add decisions and save errors. Excludes card/list contents, credentials and camera images. Logs leave this device only when you share them.").font(.caption)
             }
-            Section("Privacy") { Text("Lists, sessions and diagnostic logs stay on this iPhone unless you export them. Camera frames are processed on this phone. Game databases download from TCGTracking; card images and market quotes use internet requests. Research sends the selected card’s catalog identifiers to your configured server. PSA lookup sends the certification number to that server and its certification service; barcode images stay on this phone. CSV sharing sends the selected list through the iOS share sheet.") }
+            Section("Privacy") { Text("Lists, sessions and diagnostic logs stay on this iPhone unless you export them. Camera frames are processed on this phone. Game databases download from TCGTracking; card images and market quotes use internet requests. Research sends selected catalog identifiers directly to TCGTracking or through your configured server. Direct Research credentials are stored in device-only Keychain and sent only to TCGTracking’s Beta service. PSA lookup sends the certification number to your configured server and its certification service; barcode images stay on this phone. CSV sharing sends the selected list through the iOS share sheet.") }
         }.navigationTitle("Settings")
             .onAppear {
                 databaseUpdater.setForeground(scenePhase == .active)

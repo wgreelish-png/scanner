@@ -2,6 +2,17 @@ import Foundation
 import Security
 import SwiftUI
 
+enum ResearchAccessMethod: String, CaseIterable, Identifiable, Sendable {
+    case direct, server
+    static let defaultsKey = "researchAccessMethod"
+    var id: Self { self }
+    var label: String { self == .direct ? "Direct TCGTracking" : "My Server" }
+    static func selected(defaults: UserDefaults = .standard, store: ResearchConnectionStore = .init()) throws -> Self {
+        if let value = defaults.string(forKey: defaultsKey), let method = Self(rawValue: value) { return method }
+        return try store.load() == nil ? .direct : .server
+    }
+}
+
 struct ResearchServerConfiguration: Codable, Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible {
     let baseURL: URL
     let deviceToken: String
@@ -73,13 +84,50 @@ struct ResearchConnectionStore: Sendable {
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw ResearchConnectionFailure.storage }
     }
+
+    private var directQuery: [String: Any] {
+        var value = query; value[kSecAttrAccount as String] = "ResearchDirect"; return value
+    }
+    func loadDirect() throws -> DirectResearchCredentials? {
+        var request = directQuery
+        request[kSecReturnData as String] = true; request[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(request as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let data = result as? Data,
+              let decoded = try? JSONDecoder().decode(DirectResearchCredentials.self, from: data) else {
+            throw ResearchConnectionFailure.storage
+        }
+        return try .validated(shipperID: decoded.shipperID, apiKey: decoded.apiKey)
+    }
+    func saveDirect(_ credentials: DirectResearchCredentials) throws {
+        let checked = try DirectResearchCredentials.validated(shipperID: credentials.shipperID, apiKey: credentials.apiKey)
+        let attributes: [String: Any] = [kSecValueData as String: try JSONEncoder().encode(checked),
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly]
+        let status = SecItemUpdate(directQuery as CFDictionary, attributes as CFDictionary)
+        if status == errSecSuccess { return }
+        guard status == errSecItemNotFound else { throw ResearchConnectionFailure.storage }
+        var item = directQuery; item.merge(attributes) { _, value in value }
+        guard SecItemAdd(item as CFDictionary, nil) == errSecSuccess else { throw ResearchConnectionFailure.storage }
+    }
+    func deleteDirect() throws {
+        let status = SecItemDelete(directQuery as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw ResearchConnectionFailure.storage }
+    }
 }
 
 struct ConfiguredResearchProvider: ResearchProviding {
     func research(for card: CardCandidate, forceRefresh: Bool) async throws -> ResearchProductDetails {
-        guard let connection = try ResearchConnectionStore().load() else { throw ResearchFailure.notConfigured }
-        return try await ResearchClient(baseURL: connection.baseURL, token: connection.deviceToken)
-            .research(for: card, forceRefresh: forceRefresh)
+        let store = ResearchConnectionStore()
+        switch try ResearchAccessMethod.selected(store: store) {
+        case .direct:
+            guard let credentials = try store.loadDirect() else { throw ResearchFailure.directNotConfigured }
+            return try await DirectResearchClient(credentials: credentials).research(for: card, forceRefresh: forceRefresh)
+        case .server:
+            guard let connection = try store.load() else { throw ResearchFailure.notConfigured }
+            return try await ResearchClient(baseURL: connection.baseURL, token: connection.deviceToken)
+                .research(for: card, forceRefresh: forceRefresh)
+        }
     }
 }
 
@@ -90,6 +138,11 @@ struct ResearchServerHealth: Decodable, Sendable {
 }
 
 struct ResearchConnectionView: View {
+    private enum Field: Hashable { case shipperID, apiKey, address, token }
+    @FocusState private var focusedField: Field?
+    @State private var method: ResearchAccessMethod = .direct
+    @State private var shipperID = ""
+    @State private var apiKey = ""
     @State private var address = ""
     @State private var token = ""
     @State private var message: String?
@@ -101,36 +154,65 @@ struct ResearchConnectionView: View {
 
     var body: some View {
         Form {
-            Section("Research server") {
-                TextField("HTTPS server address", text: $address)
-                    .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .disabled(busy)
-                    .accessibilityIdentifier("researchConnection.address")
-                SecureField("Device access token", text: $token)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .disabled(busy)
-                    .accessibilityIdentifier("researchConnection.token")
-                Text("Use the device token issued by your own server. TCGTracking and PSA account keys stay on that server.")
+            Section("Access method") {
+                Picker("Research requests", selection: $method) {
+                    ForEach(ResearchAccessMethod.allCases) { Text($0.label).tag($0) }
+                }.pickerStyle(.menu).disabled(busy).accessibilityIdentifier("researchConnection.method")
+                Text("Save Connection applies your selected access method. Switching research access does not change market pricing or saved offers.")
                     .font(.caption).foregroundStyle(.secondary)
-                Button("Save Connection") { save() }.disabled(busy)
-                    .accessibilityIdentifier("researchConnection.save")
-                Button(busy ? "Checking…" : "Test Connection") { test() }.disabled(busy)
-                    .accessibilityIdentifier("researchConnection.test")
-                Button("Forget Connection", role: .destructive) {
-                    probe?.cancel()
-                    do { try store.delete(); address = ""; token = ""; message = "Research connection removed." }
-                    catch { message = error.localizedDescription }
-                }.disabled(busy)
+            }
+            if method == .direct {
+                Section("TCGTracking Research API") {
+                    TextField("Shipper ID", text: $shipperID)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().disabled(busy)
+                        .focused($focusedField, equals: .shipperID)
+                        .accessibilityIdentifier("researchConnection.shipperID")
+                    SecureField("Research API key", text: $apiKey)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().disabled(busy)
+                        .focused($focusedField, equals: .apiKey)
+                        .accessibilityIdentifier("researchConnection.apiKey")
+                    Text("Requests go directly to beta.tcgtracking.com. Your entered credentials stay in this iPhone’s device-only Keychain and are sent only to that service.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("Your Research subscription must be active and this phone’s public network IP must be on TCGTracking’s allowlist. Changing Wi-Fi or cellular networks may require updating that allowlist.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } else {
+                Section("Research server") {
+                    TextField("HTTPS server address", text: $address)
+                        .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled().disabled(busy)
+                        .focused($focusedField, equals: .address)
+                        .accessibilityIdentifier("researchConnection.address")
+                    SecureField("Device access token", text: $token)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().disabled(busy)
+                        .focused($focusedField, equals: .token)
+                        .accessibilityIdentifier("researchConnection.token")
+                    Text("Use the device token issued by your own server. The server stores your TCGTracking and PSA provider keys and uses its allowlisted outbound IP.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Section {
+                Button("Save Connection") { save() }.disabled(busy).accessibilityIdentifier("researchConnection.save")
+                Button(busy ? "Checking…" : "Test Connection") { test() }.disabled(busy).accessibilityIdentifier("researchConnection.test")
+                Button("Forget This Connection", role: .destructive) { forget() }.disabled(busy)
+                Text("Test Connection checks access with the entered settings. A successful check does not guarantee research coverage for a particular card, printing or grade.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             if let message { Section { Text(message).accessibilityIdentifier("researchConnection.status") } }
             Section("Research and PSA slabs") {
                 Text("Research shows catalog-linked sales, population and valuation estimates. Coverage varies by product, printing, language and grade.")
-                Text("PSA barcode lookup also requires your server’s authorized certification lookup adapter. When that is unavailable, enter the card’s metadata and confirm a catalog match manually.")
+                Text("Automatic PSA certificate lookup uses your saved server connection and its authorized certification adapter, even if research requests use Direct TCGTracking. Without that adapter, find the card and select its grade manually.")
                 Text("Research is separate from inventory market pricing and saved offers.")
             }
         }.navigationTitle("Research Connection").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { focusedField = nil }.accessibilityIdentifier("researchConnection.keyboardDone")
+                }
+            }
             .onAppear { load() }
-            .onDisappear { probeID = UUID(); probe?.cancel(); probe = nil; busy = false }
+            .onDisappear { cancelProbe() }
+            .onChange(of: method) { _, _ in cancelProbe(); message = nil }
             .onChange(of: address) { _, value in
                 if let tokenOrigin, value != tokenOrigin {
                     token = ""; self.tokenOrigin = nil
@@ -141,49 +223,93 @@ struct ResearchConnectionView: View {
 
     private func load() {
         do {
+            method = try ResearchAccessMethod.selected(store: store)
             if let connection = try store.load() {
                 tokenOrigin = connection.baseURL.absoluteString
                 address = connection.baseURL.absoluteString; token = connection.deviceToken
             }
+            if let credentials = try store.loadDirect() { shipperID = credentials.shipperID; apiKey = credentials.apiKey }
         } catch { message = error.localizedDescription }
     }
     private func save() {
+        focusedField = nil
         do {
-            let configuration = try ResearchServerConfiguration.validated(address: address, token: token)
-            try store.save(configuration)
-            tokenOrigin = configuration.baseURL.absoluteString; address = configuration.baseURL.absoluteString
-            message = "Research connection saved on this iPhone."
-            DiagnosticLog.shared.record("research.connection_saved")
+            switch method {
+            case .direct:
+                try store.saveDirect(.validated(shipperID: shipperID, apiKey: apiKey))
+                Task { await DirectResearchSetCache.shared.clear() }
+            case .server:
+                let configuration = try ResearchServerConfiguration.validated(address: address, token: token)
+                try store.save(configuration)
+                tokenOrigin = configuration.baseURL.absoluteString; address = configuration.baseURL.absoluteString
+            }
+            UserDefaults.standard.set(method.rawValue, forKey: ResearchAccessMethod.defaultsKey)
+            message = method.label + " connection saved on this iPhone."
+            DiagnosticLog.shared.record("research.connection_saved", ["method": method.rawValue])
         } catch { message = error.localizedDescription }
     }
+    private func forget() {
+        cancelProbe()
+        do {
+            switch method {
+            case .direct:
+                try store.deleteDirect(); shipperID = ""; apiKey = ""
+                Task { await DirectResearchSetCache.shared.clear() }
+            case .server:
+                try store.delete(); tokenOrigin = nil; address = ""; token = ""
+            }
+            message = method.label + " connection removed."
+        } catch { message = error.localizedDescription }
+    }
+    private func cancelProbe() { probeID = UUID(); probe?.cancel(); probe = nil; busy = false }
     private func test() {
-        let connection: ResearchServerConfiguration
-        do { connection = try .validated(address: address, token: token) }
-        catch { message = error.localizedDescription; return }
-        probe?.cancel()
+        focusedField = nil
+        let target: ResearchConnectionProbe
+        do {
+            switch method {
+            case .direct: target = .direct(try .validated(shipperID: shipperID, apiKey: apiKey))
+            case .server: target = .server(try .validated(address: address, token: token))
+            }
+        } catch { message = error.localizedDescription; return }
+        cancelProbe()
         let requestID = UUID(); probeID = requestID
         busy = true; message = nil
         probe = Task { @MainActor in
             defer { if probeID == requestID { busy = false; probe = nil } }
             do {
-                var request = URLRequest(url: connection.baseURL.appendingPathComponent("api/v1/health"), timeoutInterval: 25)
-                request.setValue("Bearer " + connection.deviceToken, forHTTPHeaderField: "Authorization")
-                request.setValue("application/json", forHTTPHeaderField: "Accept")
-                let (data, response) = try await NativeResearchHTTPDataLoader().data(for: request)
+                let result = try await target.check()
                 try Task.checkCancellation()
                 guard probeID == requestID else { return }
-                guard response.url == request.url else { throw ResearchConnectionFailure.invalidResponse }
-                if response.statusCode == 401 { throw ResearchFailure.authorizationRequired }
-                guard response.statusCode == 200, let health = try? JSONDecoder().decode(ResearchServerHealth.self, from: data), health.status == "ok" else {
-                    throw ResearchConnectionFailure.invalidResponse
-                }
-                message = "Connected. Research: \(health.researchConfigured ? "configured" : "needs server credentials"). PSA lookup: \(health.psaConfigured ? "configured" : "not configured"). Save Connection to use these settings."
-                DiagnosticLog.shared.record("research.connection_checked", ["research_configured": String(health.researchConfigured), "psa_configured": String(health.psaConfigured)])
+                message = result
+                DiagnosticLog.shared.record("research.connection_checked", ["method": method.rawValue])
             } catch {
                 guard !Task.isCancelled, probeID == requestID else { return }
-                message = (error as? LocalizedError)?.errorDescription ?? "The research server could not be reached."
-                DiagnosticLog.shared.record("research.connection_check_failed")
+                message = (error as? LocalizedError)?.errorDescription ?? "Research could not connect. Check your connection and retry."
+                DiagnosticLog.shared.record("research.connection_check_failed", ["method": method.rawValue])
             }
+        }
+    }
+}
+
+private enum ResearchConnectionProbe: Sendable {
+    case direct(DirectResearchCredentials), server(ResearchServerConfiguration)
+    func check() async throws -> String {
+        switch self {
+        case .direct(let credentials):
+            try await DirectResearchClient(credentials: credentials).testConnection()
+            return "Connected directly to TCGTracking Research from this network. Save Connection to use these settings. Card coverage is checked when you open research."
+        case .server(let connection):
+            var request = URLRequest(url: connection.baseURL.appendingPathComponent("api/v1/health"), timeoutInterval: 25)
+            request.setValue("Bearer " + connection.deviceToken, forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            let (data, response) = try await NativeResearchHTTPDataLoader().data(for: request)
+            try Task.checkCancellation()
+            guard response.url == request.url else { throw ResearchConnectionFailure.invalidResponse }
+            if response.statusCode == 401 { throw ResearchFailure.authorizationRequired }
+            guard response.statusCode == 200, let health = try? JSONDecoder().decode(ResearchServerHealth.self, from: data), health.status == "ok" else {
+                throw ResearchConnectionFailure.invalidResponse
+            }
+            return "Connected. Research: \(health.researchConfigured ? "configured" : "needs server credentials"). PSA lookup: \(health.psaConfigured ? "configured" : "not configured"). Save Connection to use these settings."
         }
     }
 }
