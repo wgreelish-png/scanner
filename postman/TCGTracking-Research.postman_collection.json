@@ -1,0 +1,422 @@
+{
+  "info": {
+    "_postman_id": "5ee528d1-7e1b-4ac8-bbf6-a9128d046e77",
+    "name": "Card Show Scanner - TCGTracking Research Diagnostics",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Read-only Direct Research diagnostics. Import the companion environment, enter local shipper ID/API key values, select that environment, then Run collection once in order. Defaults target Charmander SV Promo 044, TCGplayer product 512035, English Holofoil PSA 9. Request 01 resolves the exact set ID automatically from the Research index. Request 02 captures the independent public catalog set list. Request 03 verifies the exact product, variant and grader/grade and writes tcgt_research_summary. Edit collection variables to test another card. Use the Postman desktop app or Desktop Agent on an allowlisted public network IP. No PSA certificate lookup is performed. No credentials are included in these files or the generated summary; do not share populated environments or request headers."
+  },
+  "auth": {
+    "type": "noauth"
+  },
+  "variable": [
+    {
+      "key": "tcgt_category_id",
+      "value": "3",
+      "type": "string"
+    },
+    {
+      "key": "tcgt_set_name",
+      "value": "SV: Scarlet & Violet Promo Cards",
+      "type": "string"
+    },
+    {
+      "key": "tcgt_card_name",
+      "value": "Charmander",
+      "type": "string"
+    },
+    {
+      "key": "tcgt_product_id",
+      "value": "512035",
+      "type": "string"
+    },
+    {
+      "key": "tcgt_language",
+      "value": "EN",
+      "type": "string"
+    },
+    {
+      "key": "tcgt_printing",
+      "value": "Holofoil",
+      "type": "string"
+    },
+    {
+      "key": "tcgt_grader",
+      "value": "PSA",
+      "type": "string"
+    },
+    {
+      "key": "tcgt_grade",
+      "value": "9",
+      "type": "string"
+    },
+    {
+      "key": "tcgt_resolved_group_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "tcgt_resolved_set_name",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "tcgt_resolved_category_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "tcgt_index_product_count",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "tcgt_index_grade_row_count",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "tcgt_public_sets_status",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "tcgt_research_summary",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "(function () {",
+          "    function stop(message) {",
+          "        pm.execution.setNextRequest(null);",
+          "        pm.execution.skipRequest();",
+          "        throw new Error(message);",
+          "    }",
+          "    const first = pm.info.requestName === '01 - Research index and automatic set discovery';",
+          "    if (first) {",
+          "        ['tcgt_resolved_group_id', 'tcgt_resolved_set_name', 'tcgt_resolved_category_id', 'tcgt_index_product_count',",
+          "         'tcgt_index_grade_row_count', 'tcgt_public_sets_status', 'tcgt_research_summary']",
+          "            .forEach(key => pm.collectionVariables.unset(key));",
+          "    }",
+          "    if (pm.info.requestName === '03 - Exact card, printing and grade Research') {",
+          "        pm.collectionVariables.unset('tcgt_research_summary');",
+          "    }",
+          "    pm.request.headers.remove('X-Shipper-Id');",
+          "    pm.request.headers.remove('X-Api-Key');",
+          "    pm.request.headers.remove('Authorization');",
+          "    pm.request.headers.remove('If-None-Match');",
+          "    const category = String(pm.variables.get('tcgt_category_id') || '');",
+          "    const product = String(pm.variables.get('tcgt_product_id') || '');",
+          "    const group = String(pm.collectionVariables.get('tcgt_resolved_group_id') || '');",
+          "    if (!/^[1-9][0-9]{0,11}$/.test(category) || !/^[1-9][0-9]{0,11}$/.test(product)) {",
+          "        stop('Category and product IDs must be positive numeric IDs. Use 512035, without the p: prefix.');",
+          "    }",
+          "    const publicURL = 'https://openapi.tcgtracking.com/v1/' + category + '/sets';",
+          "    const metaURL = 'https://beta.tcgtracking.com/v1/research/meta';",
+          "    const researchURL = 'https://beta.tcgtracking.com/v1/' + category + '/sets/' + group + '/research';",
+          "    if (pm.info.requestName === '03 - Exact card, printing and grade Research') {",
+          "        if (!/^[1-9][0-9]{0,11}$/.test(group)) {",
+          "            stop('Run request 01 first to resolve the set from the Research index.');",
+          "        }",
+          "        const normalize = value => String(value || '').trim().replace(/\\s+/g, ' ').toLowerCase();",
+          "        if (category !== pm.collectionVariables.get('tcgt_resolved_category_id') ||",
+          "            normalize(pm.variables.get('tcgt_set_name')) !== normalize(pm.collectionVariables.get('tcgt_resolved_set_name'))) {",
+          "            stop('The target category or set changed. Run request 01 again before requesting card Research.');",
+          "        }",
+          "        // A local variable binds the request to the derived collection value,",
+          "        // even if another active scope contains an old group ID.",
+          "        pm.variables.set('tcgt_resolved_group_id', group);",
+          "    }",
+          "    const url = pm.variables.replaceIn(pm.request.url.toString());",
+          "    if (![publicURL, metaURL, researchURL].includes(url)) {",
+          "        stop('Unexpected endpoint. Credentials are only sent to the fixed Beta Research endpoints.');",
+          "    }",
+          "    if (url !== publicURL) {",
+          "        const shipper = String(pm.environment.get('tcgt_shipper_id') || '').trim();",
+          "        const key = String(pm.environment.get('tcgt_beta_key') || '').trim();",
+          "        if (!/^[\\x21-\\x7e]{1,128}$/.test(shipper) || !/^[\\x21-\\x7e]{1,512}$/.test(key)) {",
+          "            stop('Select the supplied environment and enter local values for tcgt_shipper_id and tcgt_beta_key.');",
+          "        }",
+          "        pm.request.headers.upsert({key: 'X-Shipper-Id', value: shipper});",
+          "        pm.request.headers.upsert({key: 'X-Api-Key', value: key});",
+          "    }",
+          "}());"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "01 - Research index and automatic set discovery",
+      "request": {
+        "method": "GET",
+        "auth": {
+          "type": "noauth"
+        },
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": "https://beta.tcgtracking.com/v1/research/meta",
+        "description": "Tests real Research access and resolves the exact set name to its numeric group ID. Always start here; stale derived variables are cleared. Set totals do not prove coverage for the target product."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);",
+              "function check(name, accepted, message) {",
+              "    pm.test(name, function () { if (!accepted) { throw new Error(message || name); } });",
+              "    return accepted;",
+              "}",
+              "function show(summary) {",
+              "    const text = JSON.stringify(summary, null, 2);",
+              "    pm.collectionVariables.set('tcgt_research_summary', text);",
+              "    console.log('TCGTracking diagnostic summary (no credentials)', text);",
+              "    pm.visualizer.set(\"<style>body{font:15px system-ui;padding:18px;color:#18202b;background:#f5f7fa}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:white;padding:16px;border-radius:10px}p{line-height:1.5}</style><h2>TCGTracking Research diagnostic</h2><p>{{message}}</p><pre>{{summary}}</pre>\", {message: summary.message, summary: text});",
+              "}",
+              "function readJSON() {",
+              "    try { return pm.response.json(); } catch (_) { return null; }",
+              "}",
+              "function httpMessage(code) {",
+              "    if (code === 401) { return 'Credentials were rejected. Check the shipper ID and API key.'; }",
+              "    if (code === 403) { return 'Access was denied. Check Research entitlement and the public IP allowlist.'; }",
+              "    if (code === 404 || code === 204) { return 'This endpoint has no currently available Research response.'; }",
+              "    if (code === 429) { return 'Rate limited. Wait for the provider Retry-After interval.'; }",
+              "    if (code === 304) { return 'No response body was returned. Remove conditional headers and retry.'; }",
+              "    return 'The API returned HTTP ' + code + '. Inspect the response body in Postman.';",
+              "}",
+              "",
+              "(function () {",
+              "    const category = String(pm.variables.get('tcgt_category_id'));",
+              "    const target = String(pm.variables.get('tcgt_set_name') || '').trim();",
+              "    const normalize = value => String(value || '').trim().replace(/\\s+/g, ' ').toLowerCase();",
+              "    const result = {phase: 'research_index', http_status: pm.response.code,",
+              "        target_category_id: Number(category), target_set_name: target};",
+              "    function fail(status, message) {",
+              "        show(Object.assign(result, {status, message}));",
+              "        pm.execution.setNextRequest(null);",
+              "    }",
+              "    if (!check('Research index HTTP 200', pm.response.code === 200, httpMessage(pm.response.code))) {",
+              "        fail('connection_error', httpMessage(pm.response.code)); return;",
+              "    }",
+              "    const body = readJSON();",
+              "    if (!check('Research index has a categories object', object(body) && object(body.categories))) {",
+              "        fail('invalid_response', 'The Research index does not have the documented categories object.'); return;",
+              "    }",
+              "    const game = body.categories[category];",
+              "    if (!check('Selected category has indexed Research sets', object(game) && object(game.sets))) {",
+              "        fail('category_not_indexed', 'This category has no indexed Research sets.'); return;",
+              "    }",
+              "    const matches = Object.entries(game.sets).filter(([id, row]) => object(row) &&",
+              "        /^[1-9][0-9]{0,11}$/.test(id) && row.category_id === Number(category) &&",
+              "        row.group_id === Number(id) && normalize(row.set_name) === normalize(target));",
+              "    if (!check('One exact set name resolves to a set/group ID', matches.length === 1)) {",
+              "        result.match_count = matches.length;",
+              "        fail(matches.length ? 'ambiguous_set' : 'set_not_indexed',",
+              "            'Expected one exact set name. Edit tcgt_set_name using the provider index; no guessed set is requested.'); return;",
+              "    }",
+              "    const [id, row] = matches[0];",
+              "    pm.collectionVariables.set('tcgt_resolved_group_id', id);",
+              "    pm.collectionVariables.set('tcgt_resolved_set_name', row.set_name);",
+              "    pm.collectionVariables.set('tcgt_resolved_category_id', category);",
+              "    pm.collectionVariables.set('tcgt_index_product_count', row.product_count == null ? '' : String(row.product_count));",
+              "    pm.collectionVariables.set('tcgt_index_grade_row_count', row.grade_row_count == null ? '' : String(row.grade_row_count));",
+              "    show(Object.assign(result, {status: 'set_resolved', resolved_group_id: Number(id),",
+              "        set_name: row.set_name, indexed_product_count: row.product_count == null ? null : row.product_count,",
+              "        indexed_grade_row_count: row.grade_row_count == null ? null : row.grade_row_count,",
+              "        index_generated_at: body.generated_at || null,",
+              "        message: 'Connection succeeded and the set was resolved. Run the remaining requests to check the exact card and grade.'}));",
+              "}());"
+            ]
+          }
+        }
+      ],
+      "protocolProfileBehavior": {
+        "followRedirects": false,
+        "disableCookies": true
+      },
+      "response": []
+    },
+    {
+      "name": "02 - Public Pokemon set list",
+      "request": {
+        "method": "GET",
+        "auth": {
+          "type": "noauth"
+        },
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": "https://openapi.tcgtracking.com/v1/{{tcgt_category_id}}/sets",
+        "description": "Independent public catalog check, without Beta credentials. This response is not used as proof of Research coverage or parsed using a guessed wrapper."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.collectionVariables.set('tcgt_public_sets_status', String(pm.response.code));",
+              "pm.test('Public set list HTTP 200', function () {",
+              "    if (pm.response.code !== 200) { throw new Error('Public set list returned HTTP ' + pm.response.code); }",
+              "});",
+              "pm.test('Public set list is JSON', function () { pm.response.json(); });",
+              "// The public catalog and Research index have different coverage and response",
+              "// contracts. Keep this response for comparison without guessing its wrapper or",
+              "// using a catalog set as proof of Research coverage."
+            ]
+          }
+        }
+      ],
+      "protocolProfileBehavior": {
+        "followRedirects": false,
+        "disableCookies": true
+      },
+      "response": []
+    },
+    {
+      "name": "03 - Exact card, printing and grade Research",
+      "request": {
+        "method": "GET",
+        "auth": {
+          "type": "noauth"
+        },
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": "https://beta.tcgtracking.com/v1/{{tcgt_category_id}}/sets/{{tcgt_resolved_group_id}}/research",
+        "description": "Uses the group ID resolved by request 01. Sends a fresh unconditional request, validates response identity and checks exact product/variant/grader/grade. Read tcgt_research_summary in collection variables or the Postman Console. When sending this request individually, the Visualize tab also displays the summary. Expected coverage failures appear as failed tests, independently of HTTP/authentication success."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);",
+              "function check(name, accepted, message) {",
+              "    pm.test(name, function () { if (!accepted) { throw new Error(message || name); } });",
+              "    return accepted;",
+              "}",
+              "function show(summary) {",
+              "    const text = JSON.stringify(summary, null, 2);",
+              "    pm.collectionVariables.set('tcgt_research_summary', text);",
+              "    console.log('TCGTracking diagnostic summary (no credentials)', text);",
+              "    pm.visualizer.set(\"<style>body{font:15px system-ui;padding:18px;color:#18202b;background:#f5f7fa}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:white;padding:16px;border-radius:10px}p{line-height:1.5}</style><h2>TCGTracking Research diagnostic</h2><p>{{message}}</p><pre>{{summary}}</pre>\", {message: summary.message, summary: text});",
+              "}",
+              "function readJSON() {",
+              "    try { return pm.response.json(); } catch (_) { return null; }",
+              "}",
+              "function httpMessage(code) {",
+              "    if (code === 401) { return 'Credentials were rejected. Check the shipper ID and API key.'; }",
+              "    if (code === 403) { return 'Access was denied. Check Research entitlement and the public IP allowlist.'; }",
+              "    if (code === 404 || code === 204) { return 'This endpoint has no currently available Research response.'; }",
+              "    if (code === 429) { return 'Rate limited. Wait for the provider Retry-After interval.'; }",
+              "    if (code === 304) { return 'No response body was returned. Remove conditional headers and retry.'; }",
+              "    return 'The API returned HTTP ' + code + '. Inspect the response body in Postman.';",
+              "}",
+              "",
+              "(function () {",
+              "    const category = Number(pm.variables.get('tcgt_category_id'));",
+              "    const group = Number(pm.collectionVariables.get('tcgt_resolved_group_id'));",
+              "    const productID = Number(pm.variables.get('tcgt_product_id'));",
+              "    const language = String(pm.variables.get('tcgt_language'));",
+              "    const printing = String(pm.variables.get('tcgt_printing'));",
+              "    const grader = String(pm.variables.get('tcgt_grader'));",
+              "    const grade = String(pm.variables.get('tcgt_grade'));",
+              "    const variantKey = language + ':' + printing;",
+              "    const result = {phase: 'card_research', http_status: pm.response.code,",
+              "        target: {category_id: category, group_id: group, product_id: productID,",
+              "            card_name: String(pm.variables.get('tcgt_card_name')), variant: variantKey, grader, grade},",
+              "        resolved_set_name: pm.collectionVariables.get('tcgt_resolved_set_name') || null,",
+              "        public_set_list_http_status: pm.collectionVariables.get('tcgt_public_sets_status') || null};",
+              "    function finish(status, message) { show(Object.assign(result, {status, message})); }",
+              "    if (!check('Card Research HTTP 200', pm.response.code === 200, httpMessage(pm.response.code))) {",
+              "        finish('http_error', httpMessage(pm.response.code)); return;",
+              "    }",
+              "    const body = readJSON();",
+              "    if (!check('Research response has documented metadata and products objects',",
+              "        object(body) && object(body.meta) && object(body.products))) {",
+              "        finish('invalid_response', 'The response shape differs from the documented Research schema.'); return;",
+              "    }",
+              "    if (!check('Response belongs to the exact requested category and set',",
+              "        body.meta.category_id === category && body.meta.group_id === group)) {",
+              "        result.returned_category_id = body.meta.category_id;",
+              "        result.returned_group_id = body.meta.group_id;",
+              "        finish('identity_mismatch', 'The response metadata belongs to a different category or set.'); return;",
+              "    }",
+              "    const products = body.products;",
+              "    const keys = Object.keys(products);",
+              "    result.returned_product_count = keys.length;",
+              "    result.provider_generated_at = body.meta.generated_at || null;",
+              "    result.returned_product_sample = keys.slice(0, 20).map(key => ({key,",
+              "        product_id: object(products[key]) ? products[key].product_id : null,",
+              "        name: object(products[key]) ? products[key].name : null,",
+              "        number: object(products[key]) ? products[key].ext_number : null}));",
+              "    check('Research product keys are numeric catalog IDs', keys.every(key => /^[1-9][0-9]*$/.test(key)),",
+              "        'Unexpected product keys may explain why the app cannot find the card.');",
+              "    const hasProduct = Object.prototype.hasOwnProperty.call(products, String(productID));",
+              "    if (!check('Exact product ' + productID + ' is present', hasProduct)) {",
+              "        const alternateKeys = keys.filter(key => key === 'p:' + productID || key === 'p' + productID);",
+              "        result.alternate_product_keys = alternateKeys;",
+              "        finish(alternateKeys.length ? 'unexpected_product_keys' : 'product_missing',",
+              "            alternateKeys.length ? 'A prefixed key was returned instead of the documented numeric product key.' :",
+              "            'The set request succeeded, but the exact product key is absent. Check provider coverage and the selected set; do not change credentials for this result.');",
+              "        return;",
+              "    }",
+              "    const product = products[String(productID)];",
+              "    if (!check('Returned product identity and variants are valid', object(product) &&",
+              "        product.product_id === productID && object(product.variants))) {",
+              "        finish('invalid_product', 'The matching key contains a different product ID or an unsupported product shape.'); return;",
+              "    }",
+              "    result.card = {product_id: product.product_id, name: product.name, number: product.ext_number};",
+              "    result.available_variants = Object.keys(product.variants);",
+              "    const variant = product.variants[variantKey];",
+              "    if (!check('Exact language and printing ' + variantKey + ' are present', object(variant))) {",
+              "        finish('variant_missing', 'This card has no Research row for the selected language and full printing. See available_variants.'); return;",
+              "    }",
+              "    if (!check('Variant identity and grade rows match the documented schema',",
+              "        variant.language === language && variant.finish === printing && Array.isArray(variant.grades))) {",
+              "        finish('invalid_variant', 'The variant identity or grades array does not match the documented schema.'); return;",
+              "    }",
+              "    result.available_grades = variant.grades.filter(object).slice(0, 100).map(row => ({grader: row.grader, grade: row.grade}));",
+              "    const matches = variant.grades.filter(row => object(row) && row.grader === grader && row.grade === grade);",
+              "    if (!check('One exact ' + grader + ' ' + grade + ' row is present', matches.length === 1)) {",
+              "        finish(matches.length ? 'grade_ambiguous' : 'grade_missing',",
+              "            'Expected one exact grader/grade row. Another grade or RAW is not substituted. See available_grades.'); return;",
+              "    }",
+              "    const row = matches[0];",
+              "    result.selected_grade = {};",
+              "    ['grader', 'grade', 'pop', 'sales', 'guide_value', 'market_value', 'confidence', 'last_sold_at', 'synced_on']",
+              "        .forEach(key => { result.selected_grade[key] = row[key] == null ? null : row[key]; });",
+              "    result.selected_grade.daily_history_stats = object(row.daily_history) && object(row.daily_history.stats) ? row.daily_history.stats : null;",
+              "    finish('available', 'Exact card, language, printing and grader/grade were found. Null values remain unavailable; zero values remain zero.');",
+              "}());"
+            ]
+          }
+        }
+      ],
+      "protocolProfileBehavior": {
+        "followRedirects": false,
+        "disableCookies": true
+      },
+      "response": []
+    }
+  ]
+}
