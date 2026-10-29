@@ -6,6 +6,7 @@ import OSLog
 /// enum-only even if another caller accidentally supplies arbitrary text.
 enum DiagnosticScanFields {
     static func accepts(_ key: String, _ value: String) -> Bool {
+        if key == "method" { return ["direct", "server"].contains(value) }
         if ["solid", "tracked", "border_retry", "border_retained"].contains(key) { return value == "true" || value == "false" }
         if key == "scan_stage" { return ["none", "one", "quick", "full"].contains(value) }
         if key == "quad_source" { return ["none", "detected", "selected"].contains(value) }
@@ -15,6 +16,75 @@ enum DiagnosticScanFields {
         guard integers.contains(key) || maxima[key] != nil else { return true }
         guard let number = Double(value), number.isFinite, (0...(maxima[key] ?? 1_000_000)).contains(number) else { return false }
         return !integers.contains(key) || number.rounded(.towardZero) == number
+    }
+}
+
+/// Only fixed classifications and numeric status/timing values leave a service
+/// client. Never copy response messages, request URLs or credential values here.
+enum ServiceDiagnosticFields {
+    enum Phase: String, Sendable {
+        case setup, researchMeta = "research_meta", serverHealth = "server_health", researchProduct = "research_product"
+    }
+    static func failure(_ error: Error) -> [String: String] {
+        if let error = error as? PSACertificateFailure {
+            let reason: String
+            switch error {
+            case .invalidCertificate: reason = "invalid_certificate"
+            case .notConfigured: reason = "adapter_not_configured"
+            case .notFound: reason = "certificate_not_found"
+            case .invalidResponse: reason = "invalid_certificate_response"
+            case .unavailable: reason = "certificate_unavailable"
+            }
+            return ["domain": "psa", "reason": reason]
+        }
+        if let error = error as? ResearchFailure {
+            let reason: String
+            var status: Int?
+            switch error {
+            case .notConfigured: reason = "server_not_configured"
+            case .directNotConfigured: reason = "direct_credentials_missing"
+            case .unsupportedCard: reason = "unsupported_card"
+            case .catalogUnavailable: reason = "catalog_mapping_missing"
+            case .authorizationRequired: reason = "device_token_rejected"; status = 401
+            case .directAuthorizationRequired: reason = "research_credentials_rejected"; status = 401
+            case .accessDenied: reason = "access_denied"; status = 403
+            case .notCovered: reason = "not_covered"
+            case .invalidResponse: reason = "invalid_response"
+            case .responseTooLarge: reason = "response_too_large"
+            case .networkUnavailable: reason = "network_unavailable"
+            case .serviceUnavailable(let code): reason = "service_unavailable"; status = code
+            }
+            var fields = ["domain": "research", "reason": reason]
+            if let status, (100...599).contains(status) { fields["code"] = String(status) }
+            return fields
+        }
+        if let error = error as? ResearchConnectionFailure {
+            let reason: String
+            switch error {
+            case .invalidConfiguration: reason = "invalid_connection_settings"
+            case .storage: reason = "keychain_unavailable"
+            case .invalidResponse: reason = "invalid_connection_response"
+            }
+            return ["domain": "research_connection", "reason": reason]
+        }
+        if error is CancellationError { return ["domain": "request", "reason": "cancelled"] }
+        let ns = error as NSError
+        if ns.domain == NSURLErrorDomain { return ["domain": "network", "reason": "transport_error", "code": String(ns.code)] }
+        return ["domain": "request", "reason": "unclassified_failure"]
+    }
+
+    static func record(_ event: String, method: ResearchAccessMethod, phase: Phase,
+                       status: Int? = nil, started: Date? = nil, error: Error? = nil) async {
+        guard !Task.isCancelled else { return }
+        var fields = error.map(failure) ?? [:]
+        fields["method"] = method.rawValue; fields["phase"] = phase.rawValue
+        if let status, (100...599).contains(status) { fields["code"] = String(status) }
+        if let started { fields["elapsed_ms"] = String(Int(max(0, min(3_600_000, Date().timeIntervalSince(started) * 1_000)))) }
+        let safeFields = fields
+        await MainActor.run {
+            guard !Task.isCancelled else { return }
+            DiagnosticLog.shared.record(event, safeFields)
+        }
     }
 }
 
@@ -33,7 +103,7 @@ enum DiagnosticScanFields {
     private let keys: Set<String> = ["provider", "game", "episode", "same", "accepted", "confidence", "candidates",
         "printing_required", "priced", "merged", "automatic", "quantity", "reason", "stage", "backend", "elapsed_ms",
         "scan_ms", "capture_ms", "frames", "domain", "code", "records", "rejected_records", "phase", "candidate_index", "app_version", "build", "downloaded_bytes", "cached_shards", "cache", "source", "persisted", "cache_backend", "revision",
-        "solid", "tracked", "border_retry", "border_retained", "scan_stage", "raw_quads", "rejected_quads", "candidate_quads", "selected_base", "quad_source",
+        "method", "solid", "tracked", "border_retry", "border_retained", "scan_stage", "raw_quads", "rejected_quads", "candidate_quads", "selected_base", "quad_source",
         "quad_aspect", "quad_area", "quad_support", "mean_luma", "luma_std", "match_distance", "match_gap", "sample_age_ms"]
     private var current: URL { directory.appendingPathComponent("current.jsonl") }
     private var previous: URL { directory.appendingPathComponent("previous.jsonl") }

@@ -90,12 +90,19 @@ struct DirectResearchClient: ResearchProviding {
 
     private func fetch(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         try Task.checkCancellation()
+        let started = Date()
+        let phase: ServiceDiagnosticFields.Phase = request.url?.path == "/v1/research/meta" ? .researchMeta : .researchProduct
+        await ServiceDiagnosticFields.record("research.http_started", method: .direct, phase: phase)
+        try Task.checkCancellation()
         let data: Data, response: HTTPURLResponse
         do { (data, response) = try await loader.data(for: request) }
         catch {
             try Task.checkCancellation()
+            await ServiceDiagnosticFields.record("research.http_failed", method: .direct, phase: phase, started: started, error: error)
             throw (error as? ResearchFailure) ?? ResearchFailure.networkUnavailable
         }
+        try Task.checkCancellation()
+        await ServiceDiagnosticFields.record("research.http_response", method: .direct, phase: phase, status: response.statusCode, started: started)
         try Task.checkCancellation()
         guard response.url == request.url else { throw ResearchFailure.invalidResponse }
         guard data.count <= Self.maximumSetBytes else { throw ResearchFailure.responseTooLarge }

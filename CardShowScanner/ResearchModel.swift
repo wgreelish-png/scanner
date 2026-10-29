@@ -44,6 +44,7 @@ import Observation
 
     func refresh(forceRefresh: Bool = true) {
         cancel(); details = nil; message = nil; loading = true
+        DiagnosticLog.shared.record("research.lookup_started", ["phase": "product"])
         let requested = card, request = requestID
         lookup = Task { [weak self, provider] in
             do {
@@ -54,10 +55,13 @@ import Observation
                     // Preserve an explicit valid variant choice on refresh.
                 } else { self.selectedVariantKey = Self.matchingVariant(in: result, for: requested.identity) }
                 self.loading = false
+                DiagnosticLog.shared.record("research.lookup_finished", ["phase": "product"])
+                self.recordSelection()
             } catch {
                 guard let self, !Task.isCancelled, self.requestID == request else { return }
                 self.loading = false
                 self.message = (error as? ResearchFailure)?.errorDescription ?? ResearchFailure.networkUnavailable.errorDescription
+                DiagnosticLog.shared.record("research.lookup_failed", ServiceDiagnosticFields.failure(error).merging(["phase": "product"]) { _, value in value })
             }
         }
     }
@@ -65,9 +69,19 @@ import Observation
         cancel(); self.card = card; selectedVariantKey = nil; details = nil
         refresh(forceRefresh: false)
     }
-    func selectVariant(_ key: String) { selectedVariantKey = key }
-    func selectGrade(grader: String, grade: String) { selectedGrader = grader; selectedGradeLabel = grade }
+    func selectVariant(_ key: String) { selectedVariantKey = key; recordSelection() }
+    func selectGrade(grader: String, grade: String) { selectedGrader = grader; selectedGradeLabel = grade; recordSelection() }
     func cancel() { lookup?.cancel(); lookup = nil; requestID = UUID(); loading = false }
+
+    private func recordSelection() {
+        guard details != nil else { return }
+        let reason: String
+        if selectedVariant == nil { reason = "exact_variant_unavailable" }
+        else if selectedGradeLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { reason = "grade_not_selected" }
+        else if selectedGrade == nil { reason = "exact_grade_unavailable_or_ambiguous" }
+        else { reason = "available" }
+        DiagnosticLog.shared.record("research.selection_checked", ["phase": "selection", "reason": reason, "accepted": String(selectedGrade != nil)])
+    }
 
     private static func matchingVariant(in details: ResearchProductDetails, for identity: CardIdentity) -> String? {
         let languages = ["English": "EN", "Japanese": "JP", "French": "FR", "German": "DE", "Italian": "IT", "Spanish": "ES",
