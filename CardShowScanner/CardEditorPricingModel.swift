@@ -13,7 +13,7 @@ import Observation
     private var lookup: Task<Void, Never>?
     private var requestID = UUID()
 
-    init(card: CardCandidate, pricing: any MarketPricing = OnlineMarketPricing(), manualPriceAllowed: Bool = true) {
+    init(card: CardCandidate, pricing: any MarketPricing = SelectedMarketPricing(), manualPriceAllowed: Bool = true) {
         self.card = card
         self.price = CSVExportService.number(card.marketPrice)
         self.pricing = pricing
@@ -27,10 +27,11 @@ import Observation
     }
 
     func refreshPrice() { fetchPrice(forceRefresh: true) }
+    func pricingSourceChanged() { fetchPrice(forceRefresh: true) }
 
     private func fetchPrice(forceRefresh: Bool) {
         cancelLookup()
-        card.marketPrice = nil; card.identity.skuID = nil; price = ""
+        card.marketPrice = nil; card.identity.skuID = nil; card.marketPriceMetadata = nil; price = ""
         priceMessage = nil; priceConnectionRequired = false; priceLoading = true
         let request = requestID
         let requestedCard = card
@@ -44,6 +45,7 @@ import Observation
                 if !details.printings.isEmpty { self.card.printings = details.printings }
                 self.card.marketPrice = quote?.marketPrice
                 self.card.identity.skuID = quote?.skuID
+                self.card.marketPriceMetadata = quote?.marketPrice == nil ? nil : details.metadata
                 self.price = CSVExportService.number(quote?.marketPrice)
                 self.priceLoading = false
                 self.priceMessage = quote?.marketPrice == nil ? "Market value unavailable for this printing and condition." : nil
@@ -52,7 +54,8 @@ import Observation
                 guard let self, !Task.isCancelled, self.requestID == request,
                       Self.priceIdentity(self.card.identity) == Self.priceIdentity(requestedCard.identity) else { return }
                 self.priceLoading = false
-                self.priceMessage = (error as? MarketPricingFailure)?.errorDescription ?? (self.manualPriceAllowed
+                self.priceMessage = (error as? MarketPricingFailure)?.errorDescription
+                    ?? (error as? OpenAPIPricingFailure)?.errorDescription ?? (self.manualPriceAllowed
                     ? "Price unavailable. Retry Market Price or enter a price manually."
                     : "Price unavailable. Retry Market Price, or add this card without a market value.")
                 var fields = ["phase": "editor", "reason": "lookup_failed"]
@@ -93,6 +96,7 @@ import Observation
 
     func setPrice(_ text: String) {
         cancelLookup()
+        card.marketPriceMetadata = nil
         price = text
         let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let parsed = Decimal(string: normalized, locale: Locale(identifier: "en_US_POSIX"))
@@ -105,6 +109,7 @@ import Observation
 
     func setSKU(_ text: String) {
         cancelLookup()
+        card.marketPriceMetadata = nil
         card.identity.skuID = text.isEmpty ? nil : text
         priceMessage = nil; priceConnectionRequired = false
     }

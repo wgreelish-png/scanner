@@ -2,6 +2,8 @@ import SwiftUI
 import SwiftData
 
 struct SettingsView: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @ObservedObject private var databaseUpdater = ScannerDatabaseUpdater.shared
     @AppStorage("defaultGame") private var game = "Pokémon"
     @AppStorage("sound") private var sound = false
     @AppStorage("haptics") private var haptics = true
@@ -9,6 +11,7 @@ struct SettingsView: View {
     @AppStorage("tradePercentage") private var tradePercentage = 80.0
     @AppStorage("maximumBuyPercentage") private var maximumBuyPercentage = 75.0
     @AppStorage("diagnosticsEnabled") private var diagnosticsEnabled = true
+    @AppStorage("autoDatabaseUpdates") private var autoDatabaseUpdates = true
     @State private var diagnosticURL: URL?
     @State private var diagnosticError: String?
     @State private var confirmClear = false
@@ -26,6 +29,11 @@ struct SettingsView: View {
                 LabeledContent("Version", value: appVersion)
                 LabeledContent("Build", value: appBuild).accessibilityIdentifier("settings.appBuild")
                 LabeledContent("Release", value: appRevision).accessibilityIdentifier("settings.appRevision")
+            }
+            Section("Market pricing") {
+                PricingSourcePicker(accessibilityID: "settings.pricingSource")
+                Text("Existing TCGTracking uses the current website connection. Open API requests condition, printing and language prices directly, without website sign-in. You can switch back at any time.").font(.caption)
+                Text("Open API prices are published daily. The displayed update time describes the provider's data, not a new sale. This setting does not change the weekly recognition-database schedule or saved offers.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Defaults") {
                 Picker("Game", selection: $game) { ForEach(CatalogOptions.games, id: \.self) { Text($0) } }
@@ -49,10 +57,30 @@ struct SettingsView: View {
                     showingConnection = true
                     DiagnosticLog.shared.record("connection.opened", ["phase": "settings"])
                 }.disabled(returningFromConnection)
-                Text("Enter your sign-in details or use the website. Remember sign-in stores your details in this iPhone's Keychain; remove them with Forget Saved Sign-In. The website session is shared with market pricing. You can scan and save cards without prices.").font(.caption)
+                Text("This connection is used by Existing TCGTracking pricing. Open API pricing does not use website sign-in. Remember sign-in stores your details in this iPhone's Keychain; remove them with Forget Saved Sign-In. You can scan and save cards without prices.").font(.caption)
             }
             Section("Scanner") {
-                Text("Live camera scanning opens by default. Download the selected game database once before scanning. Later camera openings load the saved database. Use Scanner options → Check Database Updates when you want to update it. Market values use an online lookup. Mock scanning is under Developer Testing.")
+                Toggle("Automatic Database Updates", isOn: $autoDatabaseUpdates)
+                    .accessibilityIdentifier("settings.autoDatabaseUpdates")
+                    .onChange(of: autoDatabaseUpdates) { _, enabled in ScannerDatabaseUpdater.shared.setEnabled(enabled) }
+                Text("Automatically checks the selected game's saved database at most once every seven days. Reopening the app during that week keeps using the cache. Refresh manually below whenever you need an update. The first download still happens when you start scanning. Recognition-engine changes come through app updates.").font(.caption)
+                Button(databaseUpdater.isRefreshing ? "Refreshing Database…" : "Refresh Database Now", systemImage: "arrow.clockwise") {
+                    databaseUpdater.refreshNow(game: game)
+                }.buttonStyle(.borderless).frame(minHeight: 44)
+                    .disabled(databaseUpdater.isRefreshing || clearingCache)
+                    .accessibilityIdentifier("settings.refreshDatabase")
+                Text(databaseUpdater.status).font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("settings.databaseRefreshStatus")
+                if let date = databaseUpdater.lastSuccessfulCheck(for: game) {
+                    LabeledContent("Last successful refresh", value: date.formatted(date: .abbreviated, time: .shortened))
+                        .accessibilityIdentifier("settings.lastDatabaseCheck")
+                } else {
+                    Text("No refresh has completed for this game yet.").font(.caption).foregroundStyle(.secondary)
+                }
+                if let date = databaseUpdater.lastAttempt(for: game) {
+                    LabeledContent("Last refresh attempt", value: date.formatted(date: .abbreviated, time: .shortened))
+                }
+                Text("Live camera scanning opens by default. Download the selected game database once before scanning. Later camera openings load the saved database. Scanner options → Check Database Updates remains available for a manual check. Market values use an online lookup. Mock scanning is under Developer Testing.")
                 Text("Finish a batch from its scanner or review screen. Cards and saved estimates are preserved.")
                 Button(clearingCache ? "Clearing…" : "Clear Scanner Cache") {
                     clearingCache = true
@@ -61,7 +89,7 @@ struct SettingsView: View {
                         do { try await TCGTrackingScannerProvider.clearStoredCache(); cacheMessage = true }
                         catch { diagnosticError = "Could not clear the scanner database: " + error.localizedDescription }
                     }
-                }.disabled(clearingCache)
+                }.disabled(clearingCache || databaseUpdater.isRefreshing)
                 Text("Removes the downloaded scanner database from this app and clears its web resource caches. Lists, sessions, and sign-in cookies are preserved. Close the scanner first.").font(.caption)
             }
             Section("Diagnostics") {
@@ -76,6 +104,13 @@ struct SettingsView: View {
             }
             Section("Privacy") { Text("Lists, sessions and diagnostic logs stay on this iPhone unless you export them. Camera frames are processed by the bundled recognition engine on this phone. Game databases download from TCGTracking; card images and market quotes use internet requests. CSV sharing sends the selected list through the iOS share sheet.") }
         }.navigationTitle("Settings")
+            .onAppear {
+                databaseUpdater.setForeground(scenePhase == .active)
+                databaseUpdater.setSettingsVisible(true, game: game)
+            }
+            .onDisappear { databaseUpdater.setSettingsVisible(false, game: game) }
+            .onChange(of: game) { _, game in databaseUpdater.setSettingsVisible(true, game: game) }
+            .onChange(of: scenePhase) { _, phase in databaseUpdater.setForeground(phase == .active) }
             .fullScreenCover(isPresented: $showingConnection, onDismiss: {
                 returningFromConnection = false
                 DiagnosticLog.shared.record("connection.closed", ["phase": "settings"])

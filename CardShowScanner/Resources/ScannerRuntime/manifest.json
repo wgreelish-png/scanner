@@ -71,9 +71,9 @@
     {
       "path": "/newscanplus/assets/js/core/pack.js",
       "url": "https://tcgtracking.com/newscanplus/assets/js/core/pack.js?v=1792508181",
-      "sha256": "8401125e0ae0ad9abd793dbd7736db0113e93a2bff822c9a4fdc34bb7200e649",
-      "bytes": 30164,
-      "adaptation": "App-native Application Support cache through authenticated bounded loopback binary storage; preserve IndexedDB migration and cache key schema; await complete markers before pruning; retain format/keysum validation and repair corrupt entries.",
+      "sha256": "66272b2423abe283a2df3474cd4f42c27d0f7381fbb03f01ac86c4bfeeffe0c4",
+      "bytes": 35202,
+      "adaptation": "App-native Application Support cache through authenticated bounded loopback binary storage; preserve IndexedDB migration and cache key schema; await complete markers before pruning; retain format/keysum validation and repair corrupt entries. App-only automatic maintenance stages already-cached V2 replacements using a fresh read-only index, verifies every required durable native record, and never publishes markers or prunes; ordinary loads retain their scanning behavior. Native V2 complete-marker publication compares the selection captured before loading, and pruning uses an explicit guarded cleanup request, so stale scanner pages cannot replace a newer selection or remove its referenced data.",
       "upstream_sha256": "781d6439117d99b3a83ef6e8284d6580911ab74d2b9842b1a01a7f3ead3bb42e"
     },
     {

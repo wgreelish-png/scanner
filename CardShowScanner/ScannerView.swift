@@ -11,6 +11,7 @@ struct ScannerView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("tcgTrackingConnectionIntroduced") private var connectionIntroduced = false
     @AppStorage("steadyCardBorder") private var steadyCardBorder = true
+    @AppStorage(PricingSource.defaultsKey) private var pricingSource = PricingSource.tcgTracking.rawValue
     @Query private var sessions: [ScanSession]
     @State private var game: String
     @State private var pendingGame: String?
@@ -126,6 +127,7 @@ struct ScannerView: View {
         }
         .onChange(of: mode) { _, _ in restart() }
         .onChange(of: steadyCardBorder) { _, enabled in model.liveProvider?.setSteadyCardBorder(enabled) }
+        .onChange(of: pricingSource) { _, _ in model.pricingSourceChanged() }
         .failureAlert(Binding(get: { model.selected == nil ? model.error : nil }, set: { model.error = $0 }))
     }
     private var cameraHeader: some View {
@@ -147,6 +149,8 @@ struct ScannerView: View {
                 }.accessibilityLabel(model.paused ? "Resume camera" : "Pause camera")
                 Menu {
                     Picker("Game", selection: $game) { ForEach(CatalogOptions.games, id: \.self) { Text($0) } }
+                    PricingSourcePicker(accessibilityID: "scanner.pricingSource")
+                        .disabled(model.selectionInProgress || model.saving)
                     Button("Retry Live Scanner") {
                         model.stop(); model.paused = false
                         startIfReady()
@@ -269,6 +273,12 @@ struct ScannerView: View {
                             Image(uiImage: image).resizable().scaledToFit().frame(height: 100)
                                 .accessibilityLabel("Captured card")
                         }
+                        PricingSourcePicker(accessibilityID: "scanReview.pricingSource")
+                            .disabled(model.selectionInProgress || model.saving)
+                        if let metadata = card.marketPriceMetadata {
+                            Text(metadata.summary).font(.caption).foregroundStyle(.secondary)
+                                .accessibilityIdentifier("scanReview.priceMetadata")
+                        }
                         Text("Tap the correct match to add it, then scan the next card.")
                             .font(.subheadline).foregroundStyle(.secondary)
                         if let message = model.priceMessage {
@@ -370,7 +380,7 @@ struct ScannerView: View {
     private func startIfReady() {
         guard visible, session.isActive, !model.paused, !showingConnection, !showingReviewConnection, !showingListReview,
               !returningFromConnection, !showingManualSearchPrompt, !showingManualSearch else { return }
-        if model.liveProvider != nil && !connectionIntroduced && !acknowledgedConnectionInView { openConnection(); return }
+        if PricingSource.current == .tcgTracking && model.liveProvider != nil && !connectionIntroduced && !acknowledgedConnectionInView { openConnection(); return }
         model.start(game: session.game ?? game, list: list, context: context, session: session)
     }
 

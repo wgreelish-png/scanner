@@ -8,7 +8,7 @@
 		<true/>
 	</dict>
 	<key>ScannerWorkflowRevision</key>
-	<string>list-transaction-outcomes</string>
+	<string>selectable-openapi-pricing</string>
 	<key>UIRequiresFullScreen</key>
 	<true/>
 	<key>UISupportedInterfaceOrientations</key>

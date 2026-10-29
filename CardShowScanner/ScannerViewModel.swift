@@ -22,6 +22,7 @@ import AudioToolbox
     private var candidatePrintings: [String: [String]] = [:]
     private var consumer: Task<Void, Never>?
     private var priceTask: Task<Void, Never>?
+    private var printingOptionsTask: Task<Void, Never>?
     private var confirmationDeadline: Task<Void, Never>?
     private let confirmationTimeout: Duration
     private let quickActionCooldown: Duration
@@ -54,7 +55,7 @@ import AudioToolbox
         selected == nil && !saving && !selectionInProgress && !quickActionCoolingDown && currentAddition != nil
     }
     var canAddAnotherCopy: Bool { canUndoLastAdd }
-    init(provider: (any ScannerProvider)? = nil, pricing: any MarketPricing = OnlineMarketPricing(),
+    init(provider: (any ScannerProvider)? = nil, pricing: any MarketPricing = SelectedMarketPricing(),
          confirmationTimeout: Duration = .seconds(4),
          quickActionCooldown: Duration = .milliseconds(500),
          saveCard: @escaping @MainActor (CardCandidate, ScanSession, CardList, ModelContext, String?) throws -> Void = {
@@ -153,7 +154,7 @@ import AudioToolbox
                 do { try await Task.sleep(for: timeout) } catch { return }
                 guard let self, !Task.isCancelled, self.pendingConfirmation != nil else { return }
                 self.priceTask?.cancel(); self.priceRequestID = UUID(); self.priceLoading = false
-                self.selected?.marketPrice = nil; self.selected?.identity.skuID = nil
+                self.selected?.marketPrice = nil; self.selected?.identity.skuID = nil; self.selected?.marketPriceMetadata = nil
                 self.priceMessage = "Price unavailable."
                 DiagnosticLog.shared.record("pricing.confirmation_timeout")
                 self.finishPendingConfirmation()
@@ -194,12 +195,25 @@ import AudioToolbox
         selected?.identity.condition = condition
         refreshPrice(forceRefresh: false)
     }
+    /// A source change keeps the frozen physical card and selections, but the
+    /// previous provider's quote and any queued confirmation must be retired.
+    func pricingSourceChanged() {
+        guard !saving else { return }
+        pendingConfirmation = nil; confirmationDeadline?.cancel(); confirmationDeadline = nil
+        selectionInProgress = false; candidatePrintings = [:]
+        if selected != nil { refreshPrice(forceRefresh: true) }
+        else {
+            priceTask?.cancel(); priceRequestID = UUID(); priceLoading = false
+            printingOptionsTask?.cancel(); printingOptionsTask = nil; priceConnectionRequired = false
+        }
+    }
     func refreshPrice(forceRefresh: Bool = true) {
+        printingOptionsTask?.cancel(); printingOptionsTask = nil
         priceTask?.cancel(); priceRequestID = UUID()
         priceConnectionRequired = false
         guard var card = selected else { return }
         // Never retain a quote for a previous printing or condition.
-        card.marketPrice = nil; card.identity.skuID = nil; selected = card
+        card.marketPrice = nil; card.identity.skuID = nil; card.marketPriceMetadata = nil; selected = card
         let requestID = priceRequestID
         let requestCard = card
         let frozenCandidates = result?.candidates ?? [requestCard]
@@ -217,15 +231,22 @@ import AudioToolbox
                 if !details.printings.isEmpty { self.selected?.printings = details.printings }
                 self.selected?.marketPrice = quote?.marketPrice
                 self.selected?.identity.skuID = quote?.skuID
+                self.selected?.marketPriceMetadata = quote?.marketPrice == nil ? nil : details.metadata
                 self.priceLoading = false
-                DiagnosticLog.shared.record("pricing.finished", ["priced": String(quote?.marketPrice != nil)])
+                DiagnosticLog.shared.record("pricing.finished", ["priced": String(quote?.marketPrice != nil),
+                    "source": details.metadata?.source.rawValue ?? "unspecified"])
                 self.priceMessage = quote?.marketPrice == nil ? "Market value unavailable for this printing and condition." : nil
                 self.finishPendingConfirmation()
+                if details.metadata?.source == .openAPI {
+                    self.prefetchPrintingOptions(for: frozenCandidates, requestID: requestID)
+                }
             } catch {
                 guard let self, !Task.isCancelled, self.priceRequestID == requestID else { return }
                 self.priceLoading = false
                 DiagnosticLog.shared.failure("pricing.failed", error)
-                self.priceMessage = (error as? MarketPricingFailure)?.errorDescription ?? "Price unavailable. You can still add the card."
+                self.priceMessage = (error as? MarketPricingFailure)?.errorDescription
+                    ?? (error as? OpenAPIPricingFailure)?.errorDescription
+                    ?? "Price unavailable. You can still add the card."
                 if let failure = error as? MarketPricingFailure, case .accessRejected = failure {
                     self.priceConnectionRequired = true
                 }
@@ -233,11 +254,36 @@ import AudioToolbox
             }
         }
     }
+    /// Other reprints can belong to different sets. Their printing menus load
+    /// independently after the selected price so they never delay confirmation.
+    private func prefetchPrintingOptions(for candidates: [CardCandidate], requestID: UUID) {
+        guard selected != nil, let reviewID = result?.id else { return }
+        let missing = candidates.prefix(5).filter {
+            $0.identity.productID != selected?.identity.productID && candidatePrintings[$0.identity.productID] == nil
+        }
+        guard !missing.isEmpty else { return }
+        printingOptionsTask = Task { [weak self, pricing] in
+            for candidate in missing {
+                guard !Task.isCancelled, let self, self.priceRequestID == requestID,
+                      self.result?.id == reviewID, self.selected != nil else { return }
+                do {
+                    let details = try await pricing.details(for: candidate, candidates: [candidate], forceRefresh: false)
+                    guard !Task.isCancelled, self.priceRequestID == requestID,
+                          self.result?.id == reviewID, self.selected != nil else { return }
+                    if !details.printings.isEmpty { self.candidatePrintings[candidate.identity.productID] = details.printings }
+                } catch {
+                    guard !Task.isCancelled, self.priceRequestID == requestID else { return }
+                    DiagnosticLog.shared.record("pricing.printing_options_failed", ["provider": "openapi"])
+                }
+            }
+        }
+    }
     /// Visiting the website keeps the physical-card review and invalidates old quotes.
     @discardableResult func suspendForPricingConnection() -> Bool {
         guard !selectionInProgress, !saving else { return false }
         priceTask?.cancel(); priceRequestID = UUID(); priceLoading = false
-        selected?.marketPrice = nil; selected?.identity.skuID = nil
+        printingOptionsTask?.cancel(); printingOptionsTask = nil
+        selected?.marketPrice = nil; selected?.identity.skuID = nil; selected?.marketPriceMetadata = nil
         stop()
         return true
     }
@@ -344,6 +390,7 @@ import AudioToolbox
         pendingConfirmation = nil; selectionInProgress = false
         // Intentional re-arm allows a second identical physical copy without identity merging.
         priceTask?.cancel(); priceRequestID = UUID(); priceLoading = false
+        printingOptionsTask?.cancel(); printingOptionsTask = nil
         result = nil; candidatePrintings = [:]; selected = nil; confirmed = false; waitingForRemoval = false; savedRecognitionRef = nil; savedRecognitionEpisode = nil; priceMessage = nil; priceConnectionRequired = false; error = nil
         liveProvider?.resetRecognition()
         DiagnosticLog.shared.record("recognition.rearmed")
