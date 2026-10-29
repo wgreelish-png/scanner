@@ -64,11 +64,13 @@ struct OpenAPIMarketPricing: MarketPricing {
     private let resolver: any OpenAPISetResolving
     private let loader: any OpenAPIHTTPDataLoading
     private let now: @Sendable () -> Date
-    private let cache = OpenAPISetPriceCache()
+    private let cache: OpenAPISetPriceCache
     init(resolver: any OpenAPISetResolving = NativeOpenAPISetResolver.shared,
          loader: any OpenAPIHTTPDataLoading = NativeOpenAPIHTTPDataLoader(),
-         now: @escaping @Sendable () -> Date = { Date() }) {
+         now: @escaping @Sendable () -> Date = { Date() },
+         cacheDirectory: URL? = OpenAPIPriceDiskCache.defaultDirectory) {
         self.resolver = resolver; self.loader = loader; self.now = now
+        self.cache = OpenAPISetPriceCache(directory: cacheDirectory)
     }
     func quote(for card: CardCandidate) async throws -> MarketQuote? { try await quote(for: card, candidates: [card]) }
     func quote(for card: CardCandidate, candidates: [CardCandidate]) async throws -> MarketQuote? {
@@ -81,7 +83,7 @@ struct OpenAPIMarketPricing: MarketPricing {
         let url = URL(string: "https://openapi.tcgtracking.com/v1/\(category)/sets/\(set)/skus")!
         let entry = try await cache.entry(for: url, forceRefresh: forceRefresh, loader: loader, now: now, expectedSetID: set)
         try Task.checkCancellation()
-        return try Self.parseDetails(entry.data, for: card, candidates: candidates, fetchedAt: entry.fetchedAt, expectedSetID: set)
+        return try Self.parseDetails(entry.data, for: card, candidates: candidates, fetchedAt: entry.fetchedAt, expectedSetID: set, isOffline: entry.isOffline)
     }
     static func categoryID(_ game: String) -> Int? {
         switch game { case "Pokémon": return 3; case "Magic: The Gathering": return 1; case "Yu-Gi-Oh!": return 2; default: return nil }
@@ -99,7 +101,7 @@ struct OpenAPIMarketPricing: MarketPricing {
         text.split(whereSeparator: \.isWhitespace).joined(separator: " ").lowercased()
     }
     static func parseDetails(_ data: Data, for card: CardCandidate, candidates: [CardCandidate] = [],
-                             fetchedAt: Date = Date(), expectedSetID: Int? = nil) throws -> MarketDetails {
+                             fetchedAt: Date = Date(), expectedSetID: Int? = nil, isOffline: Bool = false) throws -> MarketDetails {
         let body: SKUSet
         do { body = try JSONDecoder().decode(SKUSet.self, from: data) }
         catch { throw OpenAPIPricingFailure.invalidResponse }
@@ -112,7 +114,7 @@ struct OpenAPIMarketPricing: MarketPricing {
         }
         let printings = choices[card.identity.productID] ?? []
         guard let rows = body.products[product] else { return MarketDetails(quote: nil, printingsByProduct: choices) }
-        let metadata = MarketPriceMetadata(source: .openAPI, updatedAt: timestamp(body.updated), fetchedAt: fetchedAt)
+        let metadata = MarketPriceMetadata(source: .openAPI, updatedAt: timestamp(body.updated), fetchedAt: fetchedAt, isOffline: isOffline ? true : nil)
         var result = MarketDetails(quote: nil, printings: printings, printingsByProduct: choices, metadata: metadata)
         let languages = ["english": "EN", "japanese": "JP", "french": "FR", "german": "DE", "italian": "IT", "spanish": "ES",
                          "portuguese": "PT", "russian": "RU", "korean": "KO", "simplified chinese": "CS", "traditional chinese": "CT"]
@@ -128,10 +130,15 @@ struct OpenAPIMarketPricing: MarketPricing {
         // Even equal prices do not make two different SKU identities interchangeable.
         guard matches.count == 1, let match = matches.first else { return result }
         result.quote = MarketQuote(marketPrice: match.value.market.value, skuID: match.key)
+        let row = match.value
+        if row.low.value != nil || row.high.value != nil || row.count.value != nil {
+            result.context = MarketPriceContext(lowPrice: row.low.value, highPrice: row.high.value, listingCount: row.count.value)
+        }
         return result
     }
-    fileprivate static func validate(_ data: Data, expectedSetID: Int) throws {
+    static func validate(_ data: Data, expectedSetID: Int, now: Date? = nil) throws {
         guard let body = try? JSONDecoder().decode(SKUSet.self, from: data), body.set_id == expectedSetID else { throw OpenAPIPricingFailure.invalidResponse }
+        if let now, let updated = timestamp(body.updated), updated > now { throw OpenAPIPricingFailure.invalidResponse }
     }
     private static func timestamp(_ text: String?) -> Date? {
         guard let text else { return nil }
@@ -143,12 +150,30 @@ struct OpenAPIMarketPricing: MarketPricing {
     private struct SKUSet: Decodable { var set_id: Int; var updated: String?; var products: [String: [String: Row]] }
     private struct Row: Decodable {
         var condition: String; var variant: String; var language: String; var market: Price
-        enum CodingKeys: String, CodingKey { case condition = "cnd", variant = "var", language = "lng", market = "mkt" }
+        var low: Price; var high: Price; var count: ListingCount
+        enum CodingKeys: String, CodingKey {
+            case condition = "cnd", variant = "var", language = "lng", market = "mkt"
+            case low, high = "hi", count = "cnt"
+        }
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             condition = try c.decode(String.self, forKey: .condition); variant = try c.decode(String.self, forKey: .variant)
             language = try c.decode(String.self, forKey: .language)
             market = try c.decodeIfPresent(Price.self, forKey: .market) ?? Price(value: nil)
+            low = (try? c.decodeIfPresent(Price.self, forKey: .low)) ?? Price(value: nil)
+            high = (try? c.decodeIfPresent(Price.self, forKey: .high)) ?? Price(value: nil)
+            count = (try? c.decodeIfPresent(ListingCount.self, forKey: .count)) ?? ListingCount(value: nil)
+        }
+    }
+    private struct ListingCount: Decodable {
+        var value: Int?
+        init(value: Int?) { self.value = value }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.singleValueContainer()
+            if c.decodeNil() || (try? c.decode(Bool.self)) != nil { value = nil; return }
+            if let text = try? c.decode(String.self), text.range(of: #"^[0-9]+\z"#, options: .regularExpression) != nil { value = Int(text) }
+            else { value = try? c.decode(Int.self) }
+            if value.map({ $0 < 0 }) == true { value = nil }
         }
     }
     private struct Price: Decodable {
@@ -166,18 +191,28 @@ struct OpenAPIMarketPricing: MarketPricing {
     }
 }
 
-/// Retains at most four bounded set bodies. Expired bodies are validators only,
-/// never an offline price fallback. A newer request supersedes older responses.
+/// A brief memory cache backed by four bounded public set bodies on disk.
+/// Connectivity fallback keeps the original fetch and provider timestamps.
+/// A newer request or cancellation always supersedes an older response.
 private actor OpenAPISetPriceCache {
-    struct Entry: Sendable { var data: Data; var etag: String?; var fetchedAt: Date; var validatedAt: Date }
+    struct Entry: Sendable {
+        var data: Data; var etag: String?; var fetchedAt: Date; var validatedAt: Date
+        var isOffline = false
+        var saved: OpenAPIPriceDiskCache.Entry {
+            .init(data: data, etag: etag, fetchedAt: fetchedAt, validatedAt: validatedAt)
+        }
+    }
+    private let disk: OpenAPIPriceDiskCache
     private var entries: [URL: Entry] = [:]
     private var requests: [URL: UUID] = [:]
     private var waiters: [URL: [UUID: CheckedContinuation<Entry, Error>]] = [:]
+    init(directory: URL?) { disk = OpenAPIPriceDiskCache(directory: directory) }
+
     func entry(for url: URL, forceRefresh: Bool, loader: any OpenAPIHTTPDataLoading,
                now: @Sendable () -> Date, expectedSetID: Int) async throws -> Entry {
         try Task.checkCancellation()
         let current = now()
-        if !forceRefresh, let entry = entries[url], current >= entry.validatedAt, current < entry.validatedAt.addingTimeInterval(15 * 60) { return entry }
+        if !forceRefresh, let entry = entries[url], fresh(entry, at: current) { return entry }
         if !forceRefresh, requests[url] != nil {
             do {
                 let result = try await joinRequest(for: url)
@@ -188,14 +223,24 @@ private actor OpenAPISetPriceCache {
                 return try await entry(for: url, forceRefresh: false, loader: loader, now: now, expectedSetID: expectedSetID)
             }
         }
-        let previous = entries[url]
-        if previous != nil { entries[url]?.validatedAt = .distantPast }
         let requestID = UUID(); requests[url] = requestID
         defer { if requests[url] == requestID { requests[url] = nil } }
-        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        if let etag = previous?.etag { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
+        var previous = entries[url]
+        if previous != nil { entries[url]?.validatedAt = .distantPast }
         do {
+            if previous == nil, let saved = disk.entry(for: url, now: current) {
+                try Task.checkCancellation()
+                guard requests[url] == requestID else { throw CancellationError() }
+                let restored = Entry(data: saved.data, etag: saved.etag, fetchedAt: saved.fetchedAt, validatedAt: saved.validatedAt)
+                previous = restored
+                // A process restart revalidates even a recent disk body. Only
+                // a connectivity failure can turn disk data into an offline reply.
+            }
+            try Task.checkCancellation()
+            guard requests[url] == requestID else { throw CancellationError() }
+            var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            if let etag = previous?.etag { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
             let (data, response) = try await loader.data(for: request)
             try Task.checkCancellation()
             guard requests[url] == requestID else { throw CancellationError() }
@@ -205,23 +250,44 @@ private actor OpenAPISetPriceCache {
             let result: Entry
             switch response.statusCode {
             case 200:
-                // Invalid JSON must not turn into a reusable successful response.
-                try OpenAPIMarketPricing.validate(data, expectedSetID: expectedSetID)
+                // Invalid JSON and future provider dates cannot become reusable responses.
+                try OpenAPIMarketPricing.validate(data, expectedSetID: expectedSetID, now: fetchedAt)
                 result = Entry(data: data, etag: response.value(forHTTPHeaderField: "ETag"), fetchedAt: fetchedAt, validatedAt: fetchedAt)
             case 304:
                 guard var previous else { throw OpenAPIPricingFailure.invalidResponse }
-                previous.fetchedAt = fetchedAt; previous.validatedAt = fetchedAt; result = previous
+                previous.fetchedAt = fetchedAt; previous.validatedAt = fetchedAt; previous.isOffline = false; result = previous
             default: throw OpenAPIPricingFailure.httpStatus(response.statusCode)
             }
-            if entries[url] == nil, entries.count >= 4, let oldest = entries.min(by: { $0.value.validatedAt < $1.value.validatedAt })?.key { entries[oldest] = nil }
-            entries[url] = result
+            // Synchronous persistence keeps the generation check and cache
+            // publication together; a forced request cannot supersede mid-write.
+            disk.store(result.saved, for: url, now: fetchedAt)
+            try Task.checkCancellation()
+            guard requests[url] == requestID else { throw CancellationError() }
+            retain(result, for: url)
             finishWaiters(for: url, with: .success(result))
             return result
         } catch {
             let failure: Error = Task.isCancelled ? CancellationError() : error
-            if requests[url] == requestID { finishWaiters(for: url, with: .failure(failure)) }
+            guard requests[url] == requestID else { throw CancellationError() }
+            if OpenAPIConnectivityFailure.allowsOfflineFallback(failure), var previous,
+               previous.fetchedAt <= current,
+               (try? OpenAPIMarketPricing.validate(previous.data, expectedSetID: expectedSetID, now: current)) != nil {
+                // Do not mark this as newly fetched/validated: retry online next time.
+                previous.isOffline = true
+                retain(previous, for: url)
+                finishWaiters(for: url, with: .success(previous))
+                return previous
+            }
+            finishWaiters(for: url, with: .failure(failure))
             throw failure
         }
+    }
+    private func fresh(_ entry: Entry, at date: Date) -> Bool {
+        !entry.isOffline && date >= entry.fetchedAt && date >= entry.validatedAt && date < entry.validatedAt.addingTimeInterval(15 * 60)
+    }
+    private func retain(_ entry: Entry, for url: URL) {
+        if entries[url] == nil, entries.count >= 4, let oldest = entries.min(by: { $0.value.validatedAt < $1.value.validatedAt })?.key { entries[oldest] = nil }
+        entries[url] = entry
     }
     private func joinRequest(for url: URL) async throws -> Entry {
         let id = UUID()

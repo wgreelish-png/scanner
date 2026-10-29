@@ -63,11 +63,18 @@ struct MarketQuote: Equatable, Sendable {
     var skuID: String?
 }
 
+struct MarketPriceContext: Equatable, Sendable {
+    var lowPrice: Decimal? = nil
+    var highPrice: Decimal? = nil
+    var listingCount: Int? = nil
+}
+
 struct MarketDetails: Sendable {
     var quote: MarketQuote?
     var printings: [String] = []
     var printingsByProduct: [String: [String]] = [:]
     var metadata: MarketPriceMetadata? = nil
+    var context: MarketPriceContext? = nil
 }
 
 protocol MarketPricing: Sendable {

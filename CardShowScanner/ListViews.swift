@@ -414,9 +414,16 @@ struct CardEditorView: View {
                     TextField("Language", text: identityBinding(\.language))
                     TextField("Image URL (optional)", text: Binding(get: { pricing.card.imageURL?.absoluteString ?? "" }, set: { pricing.card.imageURL = URL(string: $0) })).keyboardType(.URL).textInputAutocapitalization(.never)
                 }
-                Section("Research & demand") {
+                Section("Market details") {
+                    NavigationLink { MarketInsightsView(card: pricing.card) } label: {
+                        Label("Market Details", systemImage: "chart.line.uptrend.xyaxis")
+                    }.accessibilityIdentifier("cardEditor.marketDetails")
+                    Text("View public prices and optional exact-condition market activity for this card.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Graded Research (experimental)") {
                     NavigationLink { ResearchView(card: pricing.card) } label: {
-                        Label("View Research & Sales", systemImage: "chart.bar.xaxis")
+                        Label("View Graded Research", systemImage: "chart.bar.xaxis")
                     }.disabled(pricing.priceLoading)
                         .accessibilityIdentifier("cardEditor.research")
                     Text("View reported sales and grading estimates for this catalog card. Research does not apply a new inventory price or change saved offers.")

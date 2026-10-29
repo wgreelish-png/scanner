@@ -12,7 +12,7 @@ import XCTest
             app.swipeUp()
         }
         XCTAssertTrue(connection.waitForExistence(timeout: 5)); connection.tap()
-        XCTAssertTrue(app.navigationBars["Research Connection"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["TCGTracking API Connection"].waitForExistence(timeout: 5))
         app.buttons["researchConnection.method"].tap()
         app.buttons["My Server"].tap()
         let address = app.textFields["researchConnection.address"]
@@ -37,6 +37,29 @@ import XCTest
         let status = app.staticTexts["researchConnection.status"]
         XCTAssertTrue(status.waitForExistence(timeout: 5))
         XCTAssertTrue(status.label.contains("shipper ID"))
+    }
+
+    func testMarketActivityTestRejectsEmptyCredentialsWithoutNetwork() async throws {
+        continueAfterFailure = false
+        let app = launch()
+        defer { app.terminate() }
+        app.buttons["home.settings"].tap()
+        tapVisible(app.buttons["settings.researchConnection"], in: app)
+        XCTAssertTrue(app.navigationBars["TCGTracking API Connection"].waitForExistence(timeout: 5))
+        let shipper = app.textFields["researchConnection.shipperID"]
+        XCTAssertTrue(shipper.waitForExistence(timeout: 5))
+        shipper.tap()
+        shipper.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: max(1, (shipper.value as? String)?.count ?? 0)))
+        let apiKey = app.secureTextFields["researchConnection.apiKey"]
+        apiKey.tap()
+        apiKey.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: max(1, (apiKey.value as? String)?.count ?? 0)))
+        app.buttons["researchConnection.keyboardDone"].tap()
+        tapVisible(app.buttons["researchConnection.testMarketActivity"], in: app)
+        let status = app.staticTexts["researchConnection.status"]
+        XCTAssertTrue(status.waitForExistence(timeout: 5))
+        XCTAssertTrue(status.label.contains("shipper ID"))
+        XCTAssertTrue(app.buttons["researchConnection.save"].isEnabled)
+        XCTAssertTrue(app.buttons["researchConnection.test"].exists)
     }
 
     func testPSAResearchHasTypedCertificateAndCatalogFallbackWithoutCamera() async throws {
