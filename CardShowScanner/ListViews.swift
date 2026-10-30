@@ -39,6 +39,7 @@ struct SavedListsView: View {
 
     var body: some View {
         List {
+            Section { ShowBudgetSummaryCard() }
             Section {
                 let layout = dynamicTypeSize.isAccessibilitySize
                     ? AnyLayout(VStackLayout(alignment: .leading, spacing: 14))
@@ -414,6 +415,11 @@ struct CardListView: View {
                 .accessibilityIdentifier("list.nothingHappened")
                 .accessibilityHint("Record that this deal did not go ahead.")
             Text("The outcome stays with this saved list until you change or clear it.")
+                .font(.caption).foregroundStyle(.secondary)
+            RecordListBudgetButton(listID: list.id, listName: list.name,
+                                   suggestedKind: recordedTransaction == .trade || recordedTransaction == .tradeAndPurchase ? .trade : .purchase,
+                                   startsWithCashPaid: recordedTransaction == .tradeAndPurchase)
+            Text("Confirm the actual cash amount to update your show budget.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

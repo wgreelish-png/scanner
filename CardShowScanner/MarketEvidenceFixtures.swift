@@ -107,4 +107,17 @@ private struct EvidenceFixtureResearch: ResearchProviding {
         return try EvidenceFixtureData.research()
     }
 }
+/// Uses a separate, UUID-named real file so the financial UI can exercise a
+/// relaunch without reading or replacing the user's actual show budget.
+@MainActor struct ShowBudgetFixtureScreen: View {
+    @State private var store: ShowBudgetStore
+    init(id: UUID) {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let url = support.appendingPathComponent("uitest-budget-" + id.uuidString + ".json")
+        _store = State(initialValue: ShowBudgetStore(url: url))
+    }
+    var body: some View {
+        NavigationStack { ShowBudgetView(store: store) }
+    }
+}
 #endif

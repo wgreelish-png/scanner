@@ -123,6 +123,32 @@ jobs:
             TestResults.xcresult
             NativeTests.log
             NativeCrashSummary.log
+  budget_ui:
+    runs-on: macos-15-intel
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run show budget UI check independently
+        id: budget_ui_tests
+        run: bash scripts/run_ios_tests.sh CardShowScannerUITests/ShowBudgetUITests
+      - name: Publish show budget UI summary
+        if: ${{ always() && steps.budget_ui_tests.outcome != 'skipped' }}
+        run: python3 scripts/report_xcode_test_summary.py NativeTests.log
+      - name: Report show budget UI failures
+        if: ${{ always() && steps.budget_ui_tests.outcome != 'success' && steps.budget_ui_tests.outcome != 'skipped' }}
+        shell: bash
+        run: |
+          python3 scripts/annotate_xcode_errors.py NativeTests.log --fallback 'Show budget UI check failed; see the budget-ui-test-results artifact.'
+          xcrun xcresulttool export diagnostics --path TestResults.xcresult --output-path NativeDiagnostics || true
+          python3 scripts/report_simulator_crash.py NativeDiagnostics "$HOME/Library/Logs/DiagnosticReports" | tee NativeCrashSummary.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: budget-ui-test-results
+          path: |
+            TestResults.xcresult
+            NativeTests.log
+            NativeCrashSummary.log
   release:
     runs-on: macos-15-intel
     timeout-minutes: 15

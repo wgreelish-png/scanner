@@ -7,6 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        47547ECCAE7611356359E7FC /* ShowBudgetUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A418D9B7A3E4BA5F6D1CC438; };
+        08027458CC10BA23FF4E66BC /* ShowBudgetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6B3C1A5DCC829E4B8A91B4B; };
+        D7E5FC52BC9F312725FA5CE5 /* ShowBudgetStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C87DEF57A956046DCBD0CB3; };
+        4123ABB66F60CEDC020DFDA4 /* ShowBudgetViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C90360ADA3CC9CB1AAFAE574; };
+        197F2C69C9960EBD06234AA6 /* ShowBudgetStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EB62BD6347477380058F51B; };
+        8E1DA2E820F7CF00075EFABE /* ShowBudget.swift in Sources */ = {isa = PBXBuildFile; fileRef = E60E598005CB80B34D04BBAF; };
         F176FBDC753D27E4B0EFEFDB /* AppNavigationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31F4E1795737798B2B1C527F; };
         769B0F24DA96976B058E642C /* ResearchHubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A93A91CD4BB0AC3172A0DAA8; };
         5791D9E193E81109AC7390CA /* AppNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F00A31F71122598E6D422DB; };
@@ -129,6 +135,12 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        A418D9B7A3E4BA5F6D1CC438 /* ShowBudgetUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowBudgetUITests.swift; sourceTree = "<group>"; };
+        E6B3C1A5DCC829E4B8A91B4B /* ShowBudgetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowBudgetTests.swift; sourceTree = "<group>"; };
+        6C87DEF57A956046DCBD0CB3 /* ShowBudgetStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowBudgetStoreTests.swift; sourceTree = "<group>"; };
+        C90360ADA3CC9CB1AAFAE574 /* ShowBudgetViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowBudgetViews.swift; sourceTree = "<group>"; };
+        7EB62BD6347477380058F51B /* ShowBudgetStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowBudgetStore.swift; sourceTree = "<group>"; };
+        E60E598005CB80B34D04BBAF /* ShowBudget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowBudget.swift; sourceTree = "<group>"; };
         31F4E1795737798B2B1C527F /* AppNavigationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppNavigationUITests.swift; sourceTree = "<group>"; };
         A93A91CD4BB0AC3172A0DAA8 /* ResearchHubView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchHubView.swift; sourceTree = "<group>"; };
         8F00A31F71122598E6D422DB /* AppNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppNavigation.swift; sourceTree = "<group>"; };
@@ -264,6 +276,7 @@
         C4D311E710AB4F79A8B00003 /* UITests */ = {
             isa = PBXGroup;
             children = (
+                A418D9B7A3E4BA5F6D1CC438 /* ShowBudgetUITests.swift */,
                 31F4E1795737798B2B1C527F /* AppNavigationUITests.swift */,
                 EED30A256E53674E34B5D154 /* MarketEvidenceUITests.swift */,
                 D17A1F0A7B6E4A8395D1001C /* ResearchUITests.swift */,
@@ -284,6 +297,8 @@
 		59830EBC3A4184110566BF1A /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+                E6B3C1A5DCC829E4B8A91B4B /* ShowBudgetTests.swift */,
+                6C87DEF57A956046DCBD0CB3 /* ShowBudgetStoreTests.swift */,
                 7B39FC9A1215D9690EA1A0B8 /* ResearchEvidenceTests.swift */,
                 B56E2592783CBD081634725E /* MarketEvidenceTests.swift */,
                 E8D7863F83D8465351776EE3 /* BetaAPICadenceTests.swift */,
@@ -325,6 +340,9 @@
 		878A52FC5FF6A57D50B7B870 /* CardShowScanner */ = {
 			isa = PBXGroup;
 			children = (
+                C90360ADA3CC9CB1AAFAE574 /* ShowBudgetViews.swift */,
+                7EB62BD6347477380058F51B /* ShowBudgetStore.swift */,
+                E60E598005CB80B34D04BBAF /* ShowBudget.swift */,
                 A93A91CD4BB0AC3172A0DAA8 /* ResearchHubView.swift */,
                 8F00A31F71122598E6D422DB /* AppNavigation.swift */,
                 0DFDE604B5B629EC60142B1B /* ResearchEvidenceView.swift */,
@@ -531,6 +549,7 @@
             isa = PBXSourcesBuildPhase;
             buildActionMask = 2147483647;
             files = (
+                47547ECCAE7611356359E7FC /* ShowBudgetUITests.swift in Sources */,
                 F176FBDC753D27E4B0EFEFDB /* AppNavigationUITests.swift in Sources */,
                 130B3E6752948EB7194DB6A1 /* MarketEvidenceUITests.swift in Sources */,
                 D17A1F0A7B6E4A8395D1001B /* ResearchUITests.swift in Sources */,
@@ -541,6 +560,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                08027458CC10BA23FF4E66BC /* ShowBudgetTests.swift in Sources */,
+                D7E5FC52BC9F312725FA5CE5 /* ShowBudgetStoreTests.swift in Sources */,
                 89B4779AB14D9FA0CD1E1F95 /* ResearchEvidenceTests.swift in Sources */,
                 4E8922FB6173D0D16BB86D1E /* MarketEvidenceTests.swift in Sources */,
                 DDDB2F4EB4BF02BCCAF10BB9 /* BetaAPICadenceTests.swift in Sources */,
@@ -581,6 +602,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                4123ABB66F60CEDC020DFDA4 /* ShowBudgetViews.swift in Sources */,
+                197F2C69C9960EBD06234AA6 /* ShowBudgetStore.swift in Sources */,
+                8E1DA2E820F7CF00075EFABE /* ShowBudget.swift in Sources */,
                 769B0F24DA96976B058E642C /* ResearchHubView.swift in Sources */,
                 5791D9E193E81109AC7390CA /* AppNavigation.swift in Sources */,
                 6573520F67AD523945A4EB59 /* ResearchEvidenceView.swift in Sources */,
@@ -700,7 +724,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 23;
+				CURRENT_PROJECT_VERSION = 24;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -736,7 +760,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 23;
+				CURRENT_PROJECT_VERSION = 24;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";

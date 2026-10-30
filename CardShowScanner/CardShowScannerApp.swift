@@ -26,6 +26,8 @@ import SwiftData
             MarketEvidenceFixtureScreen(research: false)
         } else if ProcessInfo.processInfo.arguments.contains("--uitest-research-evidence") {
             MarketEvidenceFixtureScreen(research: true)
+        } else if let budgetTestID = Self.budgetUITestID {
+            ShowBudgetFixtureScreen(id: budgetTestID)
         } else {
             standardView
         }
@@ -33,6 +35,15 @@ import SwiftData
         standardView
 #endif
     }
+
+#if DEBUG
+    private static var budgetUITestID: UUID? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard arguments.contains("--uitest-show-budget"),
+              let index = arguments.firstIndex(of: "--budget-test-id"), index + 1 < arguments.count else { return nil }
+        return UUID(uuidString: arguments[index + 1])
+    }
+#endif
 
     @ViewBuilder private var standardView: some View {
         if let container { HomeView().modelContainer(container) }

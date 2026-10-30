@@ -24,6 +24,8 @@ Build 22 adds [market evidence summaries and native charts](docs/EvidenceVisuali
 
 ## Build and tests
 
+Build 24 adds a [persistent show cash budget](docs/ShowBudget.md): record purchases, sales and cash trades, reinvest 65% of gross receipts, and reserve 35% for yourself. Fees reduce buying funds separately. Open Show Budget from Lists or Scan, or record cash linked to a list from its review screen.
+
 Open `CardShowScanner.xcodeproj` in Xcode 16+, select **CardShowScanner**, and Run. Set personal signing using the local configuration instructions below. Use a physical iPhone for live camera verification.
 
 For the final personal-use installation, select **CardShowScanner Personal**: Run uses Release without attaching a debugger, with the same bundle ID and your ignored signing configuration. [Final phone test and weekly Personal Team refresh](docs/PersonalIPhone.md) explains how to keep the app/data installed; free signing normally expires after seven days.

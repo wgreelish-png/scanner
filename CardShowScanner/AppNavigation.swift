@@ -64,6 +64,7 @@ private struct ScanHomeView: View {
                         .font(.subheadline).foregroundStyle(.secondary)
                 }.padding(.top, 8)
 
+                ShowBudgetSummaryCard()
                 newScanCard
                 if let active, let activeList { continueCard(session: active, list: activeList) }
 
