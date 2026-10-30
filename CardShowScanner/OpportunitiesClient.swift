@@ -14,6 +14,8 @@ struct ConfiguredOpportunitiesProvider: OpportunitiesProviding {
         switch method {
         case .direct:
             guard let credentials = try store.loadDirect() else { throw OpportunitiesFailure.directNotConfigured }
+            await BetaIPAllowlistSync.shared.prepareForDirectRequest()
+            try Task.checkCancellation()
             return try await DirectOpportunitiesClient(credentials: credentials).opportunities(for: card, forceRefresh: forceRefresh)
         case .server:
             guard let connection = try store.load() else { throw OpportunitiesFailure.notConfigured }

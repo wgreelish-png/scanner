@@ -6,6 +6,7 @@ import UIKit
 struct HomeView: View {
     private enum Section: Hashable { case lists, scan, research, settings }
     @State private var section: Section = .scan
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         TabView(selection: $section) {
@@ -33,6 +34,9 @@ struct HomeView: View {
         }
         .tint(.indigo)
         .toolbarBackground(.visible, for: .tabBar)
+        .onAppear { BetaAllowlistForegroundObserver.shared.setForeground(scenePhase == .active) }
+        .onChange(of: scenePhase) { _, phase in BetaAllowlistForegroundObserver.shared.setForeground(phase == .active) }
+        .onDisappear { BetaAllowlistForegroundObserver.shared.setForeground(false) }
     }
 }
 

@@ -94,7 +94,7 @@ struct TCGTrackingConnectionPolicy {
         }
         .interactiveDismissDisabled()
         .onAppear { browser.startIfNeeded(); if browser.hasSavedCredentials { showingSignIn = false } }
-        .onDisappear { browser.stop() }
+        .onDisappear { browser.stop(); BetaIPAllowlistSync.shared.connectionChanged() }
     }
     private func signIn() {
         guard browser.canSignIn else { return }
