@@ -97,6 +97,32 @@ jobs:
             TestResults.xcresult
             NativeTests.log
             NativeCrashSummary.log
+  evidence_ui:
+    runs-on: macos-15-intel
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run evidence chart UI checks independently
+        id: evidence_ui_tests
+        run: bash scripts/run_ios_tests.sh CardShowScannerUITests/MarketEvidenceUITests
+      - name: Publish evidence UI summary
+        if: ${{ always() && steps.evidence_ui_tests.outcome != 'skipped' }}
+        run: python3 scripts/report_xcode_test_summary.py NativeTests.log
+      - name: Report evidence UI failures
+        if: ${{ always() && steps.evidence_ui_tests.outcome != 'success' && steps.evidence_ui_tests.outcome != 'skipped' }}
+        shell: bash
+        run: |
+          python3 scripts/annotate_xcode_errors.py NativeTests.log --fallback 'Evidence UI tests failed; see the evidence-ui-test-results artifact.'
+          xcrun xcresulttool export diagnostics --path TestResults.xcresult --output-path NativeDiagnostics || true
+          python3 scripts/report_simulator_crash.py NativeDiagnostics "$HOME/Library/Logs/DiagnosticReports" | tee NativeCrashSummary.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: evidence-ui-test-results
+          path: |
+            TestResults.xcresult
+            NativeTests.log
+            NativeCrashSummary.log
   release:
     runs-on: macos-15-intel
     timeout-minutes: 15

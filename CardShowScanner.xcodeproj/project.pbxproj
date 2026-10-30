@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        130B3E6752948EB7194DB6A1 /* MarketEvidenceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EED30A256E53674E34B5D154; };
         89B4779AB14D9FA0CD1E1F95 /* ResearchEvidenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B39FC9A1215D9690EA1A0B8; };
         4E8922FB6173D0D16BB86D1E /* MarketEvidenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B56E2592783CBD081634725E; };
         6573520F67AD523945A4EB59 /* ResearchEvidenceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DFDE604B5B629EC60142B1B; };
@@ -125,6 +126,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        EED30A256E53674E34B5D154 /* MarketEvidenceUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketEvidenceUITests.swift; sourceTree = "<group>"; };
         7B39FC9A1215D9690EA1A0B8 /* ResearchEvidenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchEvidenceTests.swift; sourceTree = "<group>"; };
         B56E2592783CBD081634725E /* MarketEvidenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketEvidenceTests.swift; sourceTree = "<group>"; };
         0DFDE604B5B629EC60142B1B /* ResearchEvidenceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchEvidenceView.swift; sourceTree = "<group>"; };
@@ -256,6 +258,7 @@
         C4D311E710AB4F79A8B00003 /* UITests */ = {
             isa = PBXGroup;
             children = (
+                EED30A256E53674E34B5D154 /* MarketEvidenceUITests.swift */,
                 D17A1F0A7B6E4A8395D1001C /* ResearchUITests.swift */,
                 D16A1F0A7B6E4A8395D10012 /* PricingSourceUITests.swift */,C4D311E710AB4F79A8B0000C /* ListDeletionUITests.swift */, D12C0F1A7B6E4A8395D10002 /* ScanConfirmationUITests.swift */, D14A1F0A7B6E4A8395D10006 /* ListOutcomeUITests.swift */,);
             path = UITests;
@@ -519,6 +522,7 @@
             isa = PBXSourcesBuildPhase;
             buildActionMask = 2147483647;
             files = (
+                130B3E6752948EB7194DB6A1 /* MarketEvidenceUITests.swift in Sources */,
                 D17A1F0A7B6E4A8395D1001B /* ResearchUITests.swift in Sources */,
                 D16A1F0A7B6E4A8395D10011 /* PricingSourceUITests.swift in Sources */,C4D311E710AB4F79A8B0000D /* ListDeletionUITests.swift in Sources */, D12C0F1A7B6E4A8395D10001 /* ScanConfirmationUITests.swift in Sources */, D14A1F0A7B6E4A8395D10005 /* ListOutcomeUITests.swift in Sources */,);
             runOnlyForDeploymentPostprocessing = 0;
