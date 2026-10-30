@@ -48,12 +48,14 @@ import XCTest
     }
 
     private func openLists(in app: XCUIApplication) {
-        let open = app.buttons["home.openExistingLists"]
+        let open = app.tabBars.buttons["Lists"]
         XCTAssertTrue(open.waitForExistence(timeout: 10)); open.tap()
-        XCTAssertTrue(app.textFields["savedLists.newName"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["My Lists"].waitForExistence(timeout: 5))
     }
     private func createList(_ name: String, in app: XCUIApplication) {
+        app.buttons["savedLists.newList"].tap()
         let input = app.textFields["savedLists.newName"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
         input.tap(); input.typeText(name + "\n")
         app.buttons["savedLists.create"].tap()
         XCTAssertTrue(row(name, in: app).waitForExistence(timeout: 5))

@@ -5,7 +5,7 @@ import XCTest
         continueAfterFailure = false
         let app = launch()
         defer { app.terminate() }
-        app.buttons["home.settings"].tap()
+        app.tabBars.buttons["Settings"].tap()
         let connection = app.buttons["settings.researchConnection"]
         for _ in 0..<4 {
             if connection.exists && connection.isHittable { break }
@@ -29,7 +29,7 @@ import XCTest
         continueAfterFailure = false
         let app = launch()
         defer { app.terminate() }
-        app.buttons["home.settings"].tap()
+        app.tabBars.buttons["Settings"].tap()
         tapVisible(app.buttons["settings.researchConnection"], in: app)
         XCTAssertTrue(app.textFields["researchConnection.shipperID"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.secureTextFields["researchConnection.apiKey"].exists)
@@ -43,7 +43,7 @@ import XCTest
         continueAfterFailure = false
         let app = launch()
         defer { app.terminate() }
-        app.buttons["home.settings"].tap()
+        app.tabBars.buttons["Settings"].tap()
         tapVisible(app.buttons["settings.researchConnection"], in: app)
         XCTAssertTrue(app.navigationBars["TCGTracking API Connection"].waitForExistence(timeout: 5))
         let shipper = app.textFields["researchConnection.shipperID"]
@@ -66,6 +66,7 @@ import XCTest
         continueAfterFailure = false
         let app = launch()
         defer { app.terminate() }
+        app.tabBars.buttons["Research"].tap()
         let research = app.buttons["home.psaResearch"]
         for _ in 0..<4 {
             if research.exists && research.isHittable { break }
@@ -85,7 +86,7 @@ import XCTest
             app.launchEnvironment["DYLD_FALLBACK_LIBRARY_PATH"] = path
         }
         app.launchArguments = ["-autoDatabaseUpdates", "NO", "-researchAccessMethod", "direct"]
-        app.launch(); XCTAssertTrue(app.buttons["home.openExistingLists"].waitForExistence(timeout: 10))
+        app.launch(); XCTAssertTrue(app.tabBars.buttons["Scan"].waitForExistence(timeout: 10))
         return app
     }
 

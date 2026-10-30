@@ -99,12 +99,12 @@ jobs:
             NativeCrashSummary.log
   evidence_ui:
     runs-on: macos-15-intel
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Build and run evidence chart UI checks independently
+      - name: Build and run navigation and chart UI checks independently
         id: evidence_ui_tests
-        run: bash scripts/run_ios_tests.sh CardShowScannerUITests/MarketEvidenceUITests
+        run: bash scripts/run_ios_tests.sh CardShowScannerUITests/MarketEvidenceUITests CardShowScannerUITests/AppNavigationUITests
       - name: Publish evidence UI summary
         if: ${{ always() && steps.evidence_ui_tests.outcome != 'skipped' }}
         run: python3 scripts/report_xcode_test_summary.py NativeTests.log

@@ -73,6 +73,7 @@ struct ScannerView: View {
             }.padding(.horizontal, 16).padding(.vertical, 8)
         }
         .toolbar(.hidden, for: .navigationBar)
+        .toolbar(.hidden, for: .tabBar)
         .statusBarHidden()
         .sheet(isPresented: Binding(get: { model.selected != nil }, set: { _ in })) {
             confirmationReview
@@ -121,6 +122,7 @@ struct ScannerView: View {
                 model.paused = false
                 showingListReview = false
             }).toolbar(.visible, for: .navigationBar)
+                .toolbar(.visible, for: .tabBar)
         }
         .onChange(of: showingListReview) { _, showing in
             if !showing { startIfReady() }
@@ -135,7 +137,7 @@ struct ScannerView: View {
             HStack(spacing: 12) {
                 Button { model.stop(); dismiss() } label: {
                     Image(systemName: "chevron.left").frame(width: 44, height: 44)
-                }.accessibilityLabel("Back to lists")
+                }.accessibilityLabel("Close scanner").accessibilityIdentifier("scanner.close")
                 VStack(alignment: .leading, spacing: 2) {
                     Text(session.game ?? game).font(.headline)
                     Text(mode == "Live" ? "LIVE CAMERA" : "MOCK • TESTING ONLY")

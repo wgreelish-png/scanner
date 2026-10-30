@@ -19,38 +19,83 @@ struct CSVDocument: FileDocument {
 }
 
 struct SavedListsView: View {
+    var onOpenScan: (() -> Void)? = nil
     @Environment(\.modelContext) private var context
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Query(sort: \CardList.createdAt, order: .reverse) private var lists: [CardList]
-    @State private var newName = ""
-    @State private var error: String?
-    @State private var pendingDeletion: ListDeletionRequest?
     @Query private var sessions: [ScanSession]
+    @State private var search = ""
+    @State private var newName = ""
+    @State private var showingNewList = false
+    @State private var error: String?
+    @State private var creationError: String?
+    @State private var pendingDeletion: ListDeletionRequest?
+    @FocusState private var nameFocused: Bool
+
+    private var filtered: [CardList] {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        return lists.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.outcomeTitle.localizedCaseInsensitiveContains(query) }
+    }
+
     var body: some View {
         List {
-            Section("New list") {
-                TextField("List name", text: $newName).accessibilityIdentifier("savedLists.newName")
-                Button("Create") {
-                    context.insert(CardList(name: newName.trimmingCharacters(in: .whitespacesAndNewlines)))
-                    save(); newName = ""
-                }.disabled(newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .accessibilityIdentifier("savedLists.create")
+            Section {
+                let layout = dynamicTypeSize.isAccessibilitySize
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 14))
+                    : AnyLayout(HStackLayout(alignment: .top, spacing: 20))
+                layout {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Lists").font(.caption).foregroundStyle(.secondary)
+                        Text(lists.count.formatted()).font(.title2.bold()).accessibilityIdentifier("savedLists.count")
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Cards").font(.caption).foregroundStyle(.secondary)
+                        Text(lists.reduce(0) { $0 + $1.quantity }.formatted()).font(.title2.bold())
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Known value").font(.caption).foregroundStyle(.secondary)
+                        Text(lists.reduce(Decimal.zero) { $0 + $1.knownValue }.money)
+                            .font(.headline).monospacedDigit()
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }.padding(.vertical, 8)
             }
-            Section("Saved lists") {
-                ForEach(lists) { list in
+            Section("Your lists") {
+                if lists.isEmpty {
+                    ContentUnavailableView {
+                        Label("Your collection starts here", systemImage: "rectangle.stack")
+                    } description: {
+                        Text("Scan cards into a new list or create an empty one with the + button.")
+                    } actions: {
+                        if let onOpenScan { Button("Scan Cards", action: onOpenScan).buttonStyle(.borderedProminent) }
+                    }
+                } else if filtered.isEmpty {
+                    ContentUnavailableView.search(text: search)
+                }
+                ForEach(filtered) { list in
                     NavigationLink {
                         CardListView(list: list, session: sessions.first { $0.listID == list.id })
                     } label: {
-                        VStack(alignment: .leading) {
-                            Text(list.name).font(.headline)
-                            Text("\(list.quantity) cards • \(list.knownValue.money) known subtotal").font(.caption)
-                            Text(list.outcomeTitle).font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                                .accessibilityIdentifier("savedList.outcome." + list.id.uuidString)
+                        HStack(alignment: .top, spacing: 14) {
+                            Image(systemName: "rectangle.stack.fill")
+                                .font(.title2).foregroundStyle(.indigo)
+                                .frame(width: 44, height: 52)
+                                .background(Color.indigo.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                                .accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 7) {
+                                Text(list.name).font(.headline)
+                                Text("\(list.quantity) cards • \(list.knownValue.money) known subtotal")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                HStack(spacing: 8) {
+                                    Text(list.outcomeTitle).font(.caption.weight(.medium))
+                                        .accessibilityIdentifier("savedList.outcome." + list.id.uuidString)
+                                    Text("·")
+                                    Text(list.createdAt.formatted(date: .abbreviated, time: .omitted))
+                                        .font(.caption)
+                                }.foregroundStyle(.secondary)
+                            }.padding(.vertical, 3)
                         }
                     }
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        // A destructive swipe role removes the row visually
-                        // before confirmation. Keep the gesture, and delete
-                        // only from the independently presented sheet.
                         Button("Delete") {
                             guard pendingDeletion == nil else { return }
                             pendingDeletion = ListDeletionRequest(list: list)
@@ -63,12 +108,59 @@ struct SavedListsView: View {
                     }
                 }
             }
-        }.navigationTitle("My Lists")
-            .sheet(item: $pendingDeletion) { request in ListDeletionConfirmationView(request: request) }
-            .failureAlert($error)
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("My Lists")
+        .searchable(text: $search, prompt: "Search lists")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    newName = ""; creationError = nil; showingNewList = true
+                } label: { Image(systemName: "plus") }
+                    .accessibilityLabel("New List").accessibilityIdentifier("savedLists.newList")
+            }
+        }
+        .sheet(isPresented: $showingNewList) { newListSheet }
+        .sheet(item: $pendingDeletion) { request in ListDeletionConfirmationView(request: request) }
+        .failureAlert($error)
     }
-    private func save() {
-        do { try CardListService.save(context) } catch { self.error = error.localizedDescription }
+
+    private var newListSheet: some View {
+        NavigationStack {
+            Form {
+                Section("List name") {
+                    TextField("For example, Saturday inventory", text: $newName)
+                        .focused($nameFocused).submitLabel(.done).onSubmit { nameFocused = false }
+                        .accessibilityIdentifier("savedLists.newName")
+                }
+                Text("Add cards by scanning or searching the catalog.").font(.caption).foregroundStyle(.secondary)
+            }
+            .navigationTitle("New List").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showingNewList = false } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create") { createList() }
+                        .disabled(newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .accessibilityIdentifier("savedLists.create")
+                }
+            }
+            .failureAlert($creationError)
+        }.presentationDetents([.medium])
+    }
+
+    private func createList() {
+        let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        let list = CardList(name: name)
+        context.insert(list)
+        do {
+            try CardListService.save(context)
+            showingNewList = false
+            newName = ""
+        } catch {
+            context.delete(list)
+            creationError = error.localizedDescription
+        }
     }
 }
 

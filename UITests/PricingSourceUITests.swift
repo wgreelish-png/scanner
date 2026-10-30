@@ -32,7 +32,7 @@ import XCTest
     }
 
     private func openSettings(in app: XCUIApplication) {
-        let settings = app.buttons["home.settings"]
+        let settings = app.tabBars.buttons["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 10))
         settings.tap()
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))

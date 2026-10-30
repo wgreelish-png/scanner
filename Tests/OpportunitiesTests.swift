@@ -305,16 +305,30 @@ private actor OpportunitiesLoader: ResearchHTTPDataLoading {
 private actor ControlledOpportunitiesLoader: ResearchHTTPDataLoading {
     private var continuation: CheckedContinuation<(Data, HTTPURLResponse), Error>?
     private var url: URL?
+    private let started = AsyncStream<Bool>.makeStream(bufferingPolicy: .bufferingNewest(1))
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         url = request.url
-        return try await withCheckedThrowingContinuation { continuation = $0 }
+        return try await withCheckedThrowingContinuation {
+            continuation = $0
+            started.continuation.yield(true)
+            started.continuation.finish()
+        }
     }
     func waitUntilStarted() async throws {
-        for _ in 0..<200 {
-            if continuation != nil { return }
-            try await Task.sleep(for: .milliseconds(5))
+        if continuation != nil { return }
+        let notification = started.stream
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                for await _ in notification { return }
+                throw CancellationError()
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(10))
+                throw URLError(.timedOut)
+            }
+            defer { group.cancelAll() }
+            _ = try await group.next()
         }
-        throw URLError(.timedOut)
     }
     func complete(with data: Data) {
         continuation?.resume(returning: (data, HTTPURLResponse(url: url!, statusCode: 200, httpVersion: nil, headerFields: nil)!))
