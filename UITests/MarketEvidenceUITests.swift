@@ -12,14 +12,14 @@ import XCTest
         let tcg = app.staticTexts["marketEvidence.tcgQuantity"]
         let manapool = app.staticTexts["marketEvidence.mpQuantity"]
         reveal(manapool, in: app)
-        XCTAssertEqual(tcg.label, "12")
-        XCTAssertEqual(manapool.label, "0", "A returned zero must remain a known zero")
+        assertReportedValue("12", title: "TCGplayer reported units", element: tcg)
+        assertReportedValue("0", title: "Manapool reported units", element: manapool)
         windows.buttons["365 days"].tap()
-        XCTAssertEqual(tcg.label, "120")
-        XCTAssertEqual(manapool.label, "Unavailable", "An absent quantity must never become zero")
+        assertReportedValue("120", title: "TCGplayer reported units", element: tcg)
+        assertReportedValue("Unavailable", title: "Manapool reported units", element: manapool)
         windows.buttons["90 days"].tap()
-        XCTAssertEqual(tcg.label, "30")
-        XCTAssertEqual(manapool.label, "7")
+        assertReportedValue("30", title: "TCGplayer reported units", element: tcg)
+        assertReportedValue("7", title: "Manapool reported units", element: manapool)
         XCTAssertTrue(app.descendants(matching: .any)["marketEvidence.volumeChart"].exists)
     }
 
@@ -32,14 +32,24 @@ import XCTest
         reveal(windows, in: app)
         let days = app.staticTexts["research.evidenceDays"]
         reveal(days, in: app)
-        XCTAssertEqual(days.label, "3", "90 days must select calendar days, not the last 90 rows")
+        assertReportedValue("3", title: "Reported days in this period", element: days)
         windows.buttons["30d"].tap()
-        XCTAssertEqual(days.label, "2")
+        assertReportedValue("2", title: "Reported days in this period", element: days)
         windows.buttons["All"].tap()
-        XCTAssertEqual(days.label, "4")
+        assertReportedValue("4", title: "Reported days in this period", element: days)
         reveal(app.descendants(matching: .any)["research.historyChart"], in: app)
         reveal(app.descendants(matching: .any)["research.salesHistoryChart"], in: app)
         XCTAssertFalse(app.alerts.firstMatch.exists)
+    }
+
+    // LabeledContent can expose its value as an independent text element or
+    // combine it with its title. Both representations must retain the exact
+    // expected value; substring matches would confuse 12 with 120 or 0.
+    private func assertReportedValue(_ expected: String, title: String, element: XCUIElement,
+                                     file: StaticString = #filePath, line: UInt = #line) {
+        let actual = element.label
+        XCTAssertTrue([expected, title + ", " + expected].contains(actual),
+                      "Expected \(title): \(expected); got \(actual)", file: file, line: line)
     }
 
     private func launchEvidence(_ argument: String) -> XCUIApplication {
