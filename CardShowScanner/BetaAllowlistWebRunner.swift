@@ -56,10 +56,9 @@ extension BetaIPAllowlistSync {
     private var expectedShipperID = ""
 
     static func allowsPage(_ url: URL?) -> Bool {
-        guard let url else { return false }
-        return url.scheme == "https" && url.host == "tcgtracking.com" &&
-            url.user == nil && url.password == nil && url.port == nil &&
-            url.path == "/apiforbeta" && url.query == nil && url.fragment == nil
+        // URL.path can normalize a trailing slash on Apple platforms. Match the
+        // complete fixed document URL, just as the bundled script does.
+        url?.absoluteString == pageURL.absoluteString
     }
 
     func run() async throws -> BetaAllowlistSyncResult {

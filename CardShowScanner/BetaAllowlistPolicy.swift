@@ -17,6 +17,19 @@ struct BetaAllowlistAddress {
                       (97...102).contains($0) || $0 == 46 || $0 == 58
               }) else { return nil }
 
+        // Darwin accepts some dotted spellings that other inet_pton versions
+        // reject. Require four plain decimal octets before either IPv4 parsing
+        // or parsing an IPv6 address with an embedded dotted IPv4 suffix.
+        if value.contains(".") {
+            let suffix = value.split(separator: ":", omittingEmptySubsequences: false).last ?? ""
+            let octets = suffix.split(separator: ".", omittingEmptySubsequences: false)
+            guard octets.count == 4, octets.allSatisfy({ octet in
+                !octet.isEmpty && octet.count <= 3 &&
+                    (octet.count == 1 || octet.first != "0") &&
+                    octet.utf8.allSatisfy({ (48...57).contains($0) }) && UInt8(octet) != nil
+            }) else { return nil }
+        }
+
         var ipv4 = in_addr()
         if value.withCString({ inet_pton(AF_INET, $0, &ipv4) }) == 1 {
             let bytes = withUnsafeBytes(of: ipv4) { Array($0) }

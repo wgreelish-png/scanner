@@ -51,7 +51,7 @@ final class BetaAllowlistPolicyTests: XCTestCase {
     }
 
     func testRangesPortsInterfaceScopesHostnamesAndMalformedAddressesAreRejected() {
-        for address in ["", "8.8.8.8/32", "8.8.8.8:443", "[2606:4700:4700::1111]", "fe80::1%en0", "2606:4700:4700::1111%en0", "dns.google", "https://8.8.8.8", "999.1.1.1", "08.8.8.8", "8.8.8", "::ffff:999.1.1.1", "8.8.8.8\u{0}attacker", "８.８.８.８"] {
+        for address in ["", "8.8.8.8/32", "8.8.8.8:443", "[2606:4700:4700::1111]", "fe80::1%en0", "2606:4700:4700::1111%en0", "dns.google", "https://8.8.8.8", "999.1.1.1", "08.8.8.8", "8.8.8", "::ffff:08.8.8.8", "::ffff:999.1.1.1", "8.8.8.8\u{0}attacker", "８.８.８.８"] {
             XCTAssertNil(BetaAllowlistAddress.canonical(address), address)
         }
     }
