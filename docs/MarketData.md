@@ -1,6 +1,6 @@
 # Public pricing and OppsV2 market activity
 
-Build 21 includes **Market Details & Sales Activity** in the saved-card editor and scanner confirmation screen. It uses public OpenAPI prices and the independent OppsV2 market-activity API. Graded Research remains a separate experimental feature with its own product coverage.
+Build 22 includes **Market Details & Sales Activity** in the saved-card editor and scanner confirmation screen, with [evidence summaries and native charts](EvidenceVisualizations.md). It uses public OpenAPI prices and the separate OppsV2 market-activity API. Graded Research remains an experimental feature with its own product coverage. Both services use TCGTracking data and are not independent price checks.
 
 ## Using Market Details
 

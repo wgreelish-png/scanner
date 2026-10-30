@@ -7,6 +7,13 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        89B4779AB14D9FA0CD1E1F95 /* ResearchEvidenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B39FC9A1215D9690EA1A0B8; };
+        4E8922FB6173D0D16BB86D1E /* MarketEvidenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B56E2592783CBD081634725E; };
+        6573520F67AD523945A4EB59 /* ResearchEvidenceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DFDE604B5B629EC60142B1B; };
+        05310EB67146D2FD47D32D56 /* ResearchEvidence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10531D41EEA263E01C9CCD8D; };
+        AC2CBA94F01977A612A3ABF3 /* MarketEvidenceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5874570413827D2816F3D64; };
+        02AA2CA953BB21330A3576C6 /* MarketEvidenceFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFE80D47AE5842C852674F84; };
+        05A5838014C13EA54A7ABAFB /* MarketEvidence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AAB0B0117C0788F9EB37FF6; };
         DDDB2F4EB4BF02BCCAF10BB9 /* BetaAPICadenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8D7863F83D8465351776EE3; };
         745DEEE75356CFFFD0B3FC92 /* BetaAPIDiskCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5CEFDAE66D37A8C2248D8AD; };
         BABD2D5D412DAD7767D1589F /* BetaAPICadence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EF9FD3AA38991E6EF78D3CF; };
@@ -118,6 +125,13 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        7B39FC9A1215D9690EA1A0B8 /* ResearchEvidenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchEvidenceTests.swift; sourceTree = "<group>"; };
+        B56E2592783CBD081634725E /* MarketEvidenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketEvidenceTests.swift; sourceTree = "<group>"; };
+        0DFDE604B5B629EC60142B1B /* ResearchEvidenceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchEvidenceView.swift; sourceTree = "<group>"; };
+        10531D41EEA263E01C9CCD8D /* ResearchEvidence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchEvidence.swift; sourceTree = "<group>"; };
+        E5874570413827D2816F3D64 /* MarketEvidenceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketEvidenceView.swift; sourceTree = "<group>"; };
+        CFE80D47AE5842C852674F84 /* MarketEvidenceFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketEvidenceFixtures.swift; sourceTree = "<group>"; };
+        1AAB0B0117C0788F9EB37FF6 /* MarketEvidence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketEvidence.swift; sourceTree = "<group>"; };
         E8D7863F83D8465351776EE3 /* BetaAPICadenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BetaAPICadenceTests.swift; sourceTree = "<group>"; };
         F5CEFDAE66D37A8C2248D8AD /* BetaAPIDiskCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BetaAPIDiskCache.swift; sourceTree = "<group>"; };
         8EF9FD3AA38991E6EF78D3CF /* BetaAPICadence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BetaAPICadence.swift; sourceTree = "<group>"; };
@@ -260,6 +274,8 @@
 		59830EBC3A4184110566BF1A /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+                7B39FC9A1215D9690EA1A0B8 /* ResearchEvidenceTests.swift */,
+                B56E2592783CBD081634725E /* MarketEvidenceTests.swift */,
                 E8D7863F83D8465351776EE3 /* BetaAPICadenceTests.swift */,
                 45A5D4C11FA4CAFD671CC0A6 /* OpenAPIProductLookupTests.swift */,
                 8953F864B6E1055A7601AA2B /* OpportunitiesTests.swift */,
@@ -299,6 +315,11 @@
 		878A52FC5FF6A57D50B7B870 /* CardShowScanner */ = {
 			isa = PBXGroup;
 			children = (
+                0DFDE604B5B629EC60142B1B /* ResearchEvidenceView.swift */,
+                10531D41EEA263E01C9CCD8D /* ResearchEvidence.swift */,
+                E5874570413827D2816F3D64 /* MarketEvidenceView.swift */,
+                CFE80D47AE5842C852674F84 /* MarketEvidenceFixtures.swift */,
+                1AAB0B0117C0788F9EB37FF6 /* MarketEvidence.swift */,
                 F5CEFDAE66D37A8C2248D8AD /* BetaAPIDiskCache.swift */,
                 8EF9FD3AA38991E6EF78D3CF /* BetaAPICadence.swift */,
                 77F08FF0783D6A737278D49E /* OpenAPIProductLookup.swift */,
@@ -506,6 +527,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                89B4779AB14D9FA0CD1E1F95 /* ResearchEvidenceTests.swift in Sources */,
+                4E8922FB6173D0D16BB86D1E /* MarketEvidenceTests.swift in Sources */,
                 DDDB2F4EB4BF02BCCAF10BB9 /* BetaAPICadenceTests.swift in Sources */,
                 2386A5FFC727F19648D5A85F /* OpenAPIProductLookupTests.swift in Sources */,
                 876E7DF0BC19BF316CBEDA58 /* OpportunitiesTests.swift in Sources */,
@@ -544,6 +567,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                6573520F67AD523945A4EB59 /* ResearchEvidenceView.swift in Sources */,
+                05310EB67146D2FD47D32D56 /* ResearchEvidence.swift in Sources */,
+                AC2CBA94F01977A612A3ABF3 /* MarketEvidenceView.swift in Sources */,
+                02AA2CA953BB21330A3576C6 /* MarketEvidenceFixtures.swift in Sources */,
+                05A5838014C13EA54A7ABAFB /* MarketEvidence.swift in Sources */,
                 745DEEE75356CFFFD0B3FC92 /* BetaAPIDiskCache.swift in Sources */,
                 BABD2D5D412DAD7767D1589F /* BetaAPICadence.swift in Sources */,
                 F0BFD9F9BDA677A3D8355D02 /* OpenAPIProductLookup.swift in Sources */,
@@ -656,7 +684,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 21;
+				CURRENT_PROJECT_VERSION = 22;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -692,7 +720,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 21;
+				CURRENT_PROJECT_VERSION = 22;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";

@@ -16,9 +16,27 @@ import SwiftData
     }
     var body: some Scene {
         WindowGroup {
-            if let container { HomeView().modelContainer(container) }
-            else { StorageFailureView(message: startupError ?? "Unknown storage error") }
+            rootView
         }
+    }
+
+    @ViewBuilder private var rootView: some View {
+#if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--uitest-market-evidence") {
+            MarketEvidenceFixtureScreen(research: false)
+        } else if ProcessInfo.processInfo.arguments.contains("--uitest-research-evidence") {
+            MarketEvidenceFixtureScreen(research: true)
+        } else {
+            standardView
+        }
+#else
+        standardView
+#endif
+    }
+
+    @ViewBuilder private var standardView: some View {
+        if let container { HomeView().modelContainer(container) }
+        else { StorageFailureView(message: startupError ?? "Unknown storage error") }
     }
 }
 

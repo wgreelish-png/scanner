@@ -20,6 +20,8 @@ Every new physical confirmation appends its own quantity-one row: A, B, A remain
 
 From list review, **Search & Add Card** searches the downloaded game catalog as you type. Up to five matches appear with large artwork previews; add a number or set to narrow them (`Darkrai` → `Darkrai 99` → `Darkrai 99 Triumphant`). Select a preview, choose printing and condition, then explicitly **Add to List**. This appends one physical copy without opening the camera. Text lookup uses saved metadata; artwork and exact market quotes may need internet. See [manual catalog search and the later phone check](docs/ManualCardSearch.md).
 
+Build 22 adds [market evidence summaries and native charts](docs/EvidenceVisualizations.md): exact-SKU price comparisons, selectable sales-volume windows, separate graded daily-price/sales charts, and visible coverage/freshness facts. It preserves daily API caching and existing scanning, inventory and offer behavior.
+
 ## Build and tests
 
 Open `CardShowScanner.xcodeproj` in Xcode 16+, select **CardShowScanner**, and Run. Set personal signing using the local configuration instructions below. Use a physical iPhone for live camera verification.

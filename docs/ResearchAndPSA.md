@@ -23,7 +23,7 @@ The screen reports returned data rather than deriving a demand score:
 - Historical sales, the documented 30-day sales count/average/low/high, and last sale/date.
 - Grading-company population and the provider's confidence level, when available.
 - Separately labeled guide estimate and market value, with provider timestamps and the API's **in testing** status.
-- An interactive chart of returned daily sales counts and sold-price averages. These are daily aggregates; gaps are not filled with invented zero sales, and the line does not bridge missing days.
+- Separate interactive charts of returned daily sales counts and sold-price averages, with calendar 30/90/365-day and All filters. The [evidence summary](EvidenceVisualizations.md) shows reported-day coverage and known sales counts. These are daily aggregates; gaps are not filled with invented zero sales, and the line does not bridge missing days.
 
 Missing prices and counts differ from returned zeroes. A guide estimate is not an actual sale. Population is not the total surviving supply, historical sales are not active demand, and confidence is not an authenticity guarantee. Research does not have condition-specific RAW pricing semantics. Saved prices, quantities, transaction labels and offer snapshots are not changed by browsing it.
 
