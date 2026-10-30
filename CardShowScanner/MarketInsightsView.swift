@@ -14,6 +14,8 @@ struct MarketInsightsView: View {
     var body: some View {
         List {
             identitySection
+            MarketEvidenceView(publicDetails: model.publicDetails, activity: model.activityDetails,
+                               publicLoading: model.publicLoading, activityLoading: model.activityLoading)
             publicSection
             activitySection
             if let details = model.activityDetails {
@@ -54,15 +56,27 @@ struct MarketInsightsView: View {
 
     private var identitySection: some View {
         Section("Exact card") {
-            Text(model.card.name).font(.headline)
-            Text(model.card.set + (model.card.number.isEmpty ? "" : " • " + model.card.number))
-                .foregroundStyle(.secondary)
-            LabeledContent("Game", value: model.card.identity.game)
-            LabeledContent("Product ID", value: model.card.identity.productID)
-            LabeledContent("Saved SKU ID", value: model.card.identity.skuID ?? "Unavailable")
-            LabeledContent("Printing", value: model.card.identity.printing)
-            LabeledContent("Condition", value: model.card.identity.condition)
-            LabeledContent("Language", value: model.card.identity.language)
+            HStack(alignment: .top, spacing: 12) {
+                AsyncImage(url: model.card.imageURL) { image in
+                    image.resizable().scaledToFit()
+                } placeholder: {
+                    RoundedRectangle(cornerRadius: 6).fill(.quaternary)
+                        .overlay { Image(systemName: "rectangle.portrait").foregroundStyle(.secondary) }
+                }.frame(width: 72, height: 100).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(model.card.name).font(.headline)
+                    Text(model.card.set + (model.card.number.isEmpty ? "" : " • " + model.card.number))
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    Text(model.card.identity.printing + " • " + model.card.identity.condition)
+                        .font(.caption)
+                    Text(model.card.identity.language).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            DisclosureGroup("Verify card identifiers") {
+                LabeledContent("Game", value: model.card.identity.game)
+                LabeledContent("Product ID", value: model.card.identity.productID)
+                LabeledContent("Saved SKU ID", value: model.card.identity.skuID ?? "Unavailable")
+            }
             Text("Browsing market details leaves the inventory price, card identity and saved offers unchanged. All amounts are USD.")
                 .font(.caption).foregroundStyle(.secondary)
         }.accessibilityIdentifier("marketDetails.card")

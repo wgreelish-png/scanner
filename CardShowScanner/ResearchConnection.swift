@@ -124,6 +124,8 @@ struct ConfiguredResearchProvider: ResearchProviding {
         switch method {
         case .direct:
             guard let credentials = try store.loadDirect() else { throw ResearchFailure.directNotConfigured }
+            await BetaIPAllowlistSync.shared.prepareForDirectRequest()
+            try Task.checkCancellation()
             return try await DirectResearchClient(credentials: credentials).research(for: card, forceRefresh: forceRefresh)
         case .server:
             guard let connection = try store.load() else { throw ResearchFailure.notConfigured }
@@ -184,9 +186,10 @@ struct ResearchConnectionView: View {
                         .accessibilityIdentifier("researchConnection.apiKey")
                     Text("Requests go directly to beta.tcgtracking.com. Your entered credentials stay in this iPhone’s device-only Keychain and are sent only to that service.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Text("Your subscription must permit the requested Beta API and this phone’s public network IP must be on TCGTracking’s allowlist. Changing Wi-Fi or cellular networks may require updating that allowlist.")
+                    Text("Your subscription must permit the requested Beta API. Automatic IP access below can keep this phone’s public address on TCGTracking’s allowlist while the app is open.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                BetaAllowlistSettingsSection()
             } else {
                 Section("My API server") {
                     TextField("HTTPS server address", text: $address)
@@ -268,6 +271,7 @@ struct ResearchConnectionView: View {
                 await BetaAPICadence.shared.clear()
             }
             UserDefaults.standard.set(method.rawValue, forKey: ResearchAccessMethod.defaultsKey)
+            BetaIPAllowlistSync.shared.connectionChanged()
             message = method.label + " connection saved on this iPhone."
             DiagnosticLog.shared.record("research.connection_saved", ["method": method.rawValue])
         } catch { message = error.localizedDescription }
@@ -287,6 +291,7 @@ struct ResearchConnectionView: View {
                 await BetaAPICadence.shared.clear()
             }
             message = method.label + " connection removed."
+            BetaIPAllowlistSync.shared.connectionChanged()
         } catch { message = error.localizedDescription }
     }
     private func cancelProbe() { probeID = UUID(); probe?.cancel(); probe = nil; busy = false }
@@ -338,6 +343,8 @@ private enum ResearchConnectionProbe: Sendable {
     func check() async throws -> String {
         switch self {
         case .direct(let credentials):
+            await BetaIPAllowlistSync.shared.prepareForDirectRequest()
+            try Task.checkCancellation()
             try await DirectResearchClient(credentials: credentials).testConnection()
             return "Connected directly to TCGTracking Graded Research from this network. Save Connection to use these settings. Card coverage is checked when you open research."
         case .server(let connection):
@@ -349,6 +356,8 @@ private enum ResearchConnectionProbe: Sendable {
     func checkMarketActivity() async throws -> String {
         switch self {
         case .direct(let credentials):
+            await BetaIPAllowlistSync.shared.prepareForDirectRequest()
+            try Task.checkCancellation()
             try await DirectOpportunitiesClient(credentials: credentials).testConnection()
             return "Connected directly to TCGTracking Market Activity from this network. Save Connection to use these settings. OppsV2 covers active opportunities; exact card coverage is checked in Market Details."
         case .server(let connection):

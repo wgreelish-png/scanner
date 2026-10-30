@@ -16,9 +16,38 @@ import SwiftData
     }
     var body: some Scene {
         WindowGroup {
-            if let container { HomeView().modelContainer(container) }
-            else { StorageFailureView(message: startupError ?? "Unknown storage error") }
+            rootView
         }
+    }
+
+    @ViewBuilder private var rootView: some View {
+#if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--uitest-market-evidence") {
+            MarketEvidenceFixtureScreen(research: false)
+        } else if ProcessInfo.processInfo.arguments.contains("--uitest-research-evidence") {
+            MarketEvidenceFixtureScreen(research: true)
+        } else if let budgetTestID = Self.budgetUITestID {
+            ShowBudgetFixtureScreen(id: budgetTestID)
+        } else {
+            standardView
+        }
+#else
+        standardView
+#endif
+    }
+
+#if DEBUG
+    private static var budgetUITestID: UUID? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard arguments.contains("--uitest-show-budget"),
+              let index = arguments.firstIndex(of: "--budget-test-id"), index + 1 < arguments.count else { return nil }
+        return UUID(uuidString: arguments[index + 1])
+    }
+#endif
+
+    @ViewBuilder private var standardView: some View {
+        if let container { HomeView().modelContainer(container) }
+        else { StorageFailureView(message: startupError ?? "Unknown storage error") }
     }
 }
 
@@ -56,87 +85,6 @@ struct FailureAlert: ViewModifier {
 }
 extension View {
     func failureAlert(_ message: Binding<String?>) -> some View { modifier(FailureAlert(message: message)) }
-}
-
-struct HomeView: View {
-    @Environment(\.modelContext) private var context
-    @Environment(\.scenePhase) private var scenePhase
-    @Query(sort: \ScanSession.startedAt, order: .reverse) private var sessions: [ScanSession]
-    @AppStorage("defaultGame") private var game = "Pokémon"
-    @AppStorage("hasChosenBatchGame") private var hasChosenGame = false
-    @AppStorage("autoDatabaseUpdates") private var autoDatabaseUpdates = true
-    @State private var homeVisible = false
-    @State private var destination: UUID?
-    @State private var error: String?
-    private var active: ScanSession? { sessions.first { $0.isActive } }
-    var body: some View {
-        NavigationStack {
-            List {
-                Section("Start New Scan") {
-                    Picker("Game", selection: $game) {
-                        ForEach(CatalogOptions.games, id: \.self) { Text($0) }
-                    }
-                    Button("Start New Scan", systemImage: "viewfinder") {
-                        start()
-                    }.font(.headline).padding(.vertical, 8).accessibilityIdentifier("home.startNewScan")
-                    Text("Starts a new session and list. Previous lists and saved offers stay available.").font(.caption).foregroundStyle(.secondary)
-                }
-                Section {
-                    NavigationLink { SavedListsView() } label: {
-                        Label("Open Existing List", systemImage: "list.bullet.rectangle")
-                    }.font(.headline).padding(.vertical, 8).accessibilityIdentifier("home.openExistingLists")
-                }
-                Section("Research") {
-                    NavigationLink { PSAResearchFlow() } label: {
-                        Label("Research a PSA Slab", systemImage: "barcode.viewfinder")
-                    }.accessibilityIdentifier("home.psaResearch")
-                    Text("Read a PSA certification code, confirm the catalog card, and view research for its grade.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }.navigationTitle("Card Show Scanner")
-                .toolbar {
-                    NavigationLink { SettingsView() } label: { Image(systemName: "gearshape") }
-                        .accessibilityIdentifier("home.settings")
-                }
-                .navigationDestination(item: $destination) { id in
-                    if let session = sessions.first(where: { $0.id == id }) { BatchScannerDestination(session: session) }
-                }
-                .failureAlert($error)
-                .onAppear {
-                    homeVisible = true
-                    ScannerDatabaseUpdater.shared.setEnabled(autoDatabaseUpdates)
-                    ScannerDatabaseUpdater.shared.setForeground(scenePhase == .active)
-                    ScannerDatabaseUpdater.shared.setHomeVisible(true, game: game)
-                }
-                .onDisappear {
-                    homeVisible = false
-                    ScannerDatabaseUpdater.shared.setHomeVisible(false, game: game)
-                }
-                .onChange(of: game) { _, game in
-                    ScannerDatabaseUpdater.shared.setHomeVisible(homeVisible, game: game)
-                }
-                .onChange(of: autoDatabaseUpdates) { _, enabled in
-                    ScannerDatabaseUpdater.shared.setEnabled(enabled)
-                }
-                .onChange(of: scenePhase) { _, phase in
-                    ScannerDatabaseUpdater.shared.setForeground(phase == .active)
-                }
-        }
-    }
-    private func start() {
-        // Stop optional maintenance before routing into live scanning. The
-        // provider also takes a lease for list-resumption and recovery routes.
-        ScannerDatabaseUpdater.shared.setHomeVisible(false, game: game)
-        do {
-            let batch: ScanSession
-            if let active { batch = try SessionService.replace(active, game: game, context: context) }
-            else { batch = try SessionService.start(game: game, context: context) }
-            hasChosenGame = true; destination = batch.id
-        } catch {
-            self.error = error.localizedDescription
-            ScannerDatabaseUpdater.shared.setHomeVisible(homeVisible, game: game)
-        }
-    }
 }
 
 struct ActiveSessionCard: View {

@@ -70,7 +70,7 @@ import XCTest
         // a fresh sample sheet must not race navigation to the already saved list.
         // Reopening also verifies confirmation persisted this physical row.
         app.terminate(); app.launch()
-        let open = app.buttons["home.openExistingLists"]
+        let open = app.tabBars.buttons["Lists"]
         XCTAssertTrue(open.waitForExistence(timeout: 10)); open.tap()
         let saved = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "1 cards • ")).firstMatch
         XCTAssertTrue(saved.waitForExistence(timeout: 5), "The confirmed one-card inventory must survive relaunch")

@@ -2,10 +2,26 @@
 # Shared simulator preparation; native and UI suites run on separate CI hosts.
 set -euo pipefail
 SCANNER_TEST_TARGET="${1:?Expected an allowlisted native or UI suite}"
-case "$SCANNER_TEST_TARGET" in
-  CardShowScannerTests|CardShowScannerUITests|CardShowScannerUITests/ResearchUITests) ;;
-  *) echo "Unknown test target" >&2; exit 2 ;;
-esac
+SCANNER_TEST_SELECTION=(-only-testing:"$SCANNER_TEST_TARGET")
+for SCANNER_ALLOWED_TARGET in "$@"; do
+  case "$SCANNER_ALLOWED_TARGET" in
+    CardShowScannerTests|CardShowScannerUITests|CardShowScannerUITests/ResearchUITests|CardShowScannerUITests/MarketEvidenceUITests|CardShowScannerUITests/AppNavigationUITests|CardShowScannerUITests/ShowBudgetUITests) ;;
+    *) echo "Unknown test target" >&2; exit 2 ;;
+  esac
+done
+if [ "$#" -gt 1 ]; then
+  shift
+  for SCANNER_ADDITIONAL_TARGET in "$@"; do
+    SCANNER_TEST_SELECTION+=(-only-testing:"$SCANNER_ADDITIONAL_TARGET")
+  done
+fi
+# Evidence fixtures run in their own job; the broad UI job retains the existing
+# scanner, list, pricing and connection cases without repeating the new charts.
+if [ "$SCANNER_TEST_TARGET" = CardShowScannerUITests ]; then
+  SCANNER_TEST_SELECTION+=(-skip-testing:CardShowScannerUITests/MarketEvidenceUITests)
+  SCANNER_TEST_SELECTION+=(-skip-testing:CardShowScannerUITests/AppNavigationUITests)
+  SCANNER_TEST_SELECTION+=(-skip-testing:CardShowScannerUITests/ShowBudgetUITests)
+fi
 DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for k,v in d["devices"].items() if "iOS" in k for x in v if x["name"].startswith("iPhone")))')
 # Xcode 16.3/16.4's iOS 18.4/18.5 simulator omits a Swift WebKit symlink.
 # Forward Apple's runtime-only workaround to XCTest; keep the app's iOS minimum.
@@ -38,4 +54,4 @@ with open(sys.argv[1], 'wb') as output:
         'get-task-allow': True,
     }, output)
 PY
-xcodebuild test -only-testing:"$SCANNER_TEST_TARGET" -parallel-testing-enabled NO -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 -project CardShowScanner.xcodeproj -scheme CardShowScanner -destination "platform=iOS Simulator,id=$DEVICE_ID" CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= CODE_SIGN_ENTITLEMENTS="$SCANNER_SIMULATOR_ENTITLEMENTS" -resultBundlePath TestResults.xcresult 2>&1 | tee NativeTests.log
+xcodebuild test "${SCANNER_TEST_SELECTION[@]}" -parallel-testing-enabled NO -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 -project CardShowScanner.xcodeproj -scheme CardShowScanner -destination "platform=iOS Simulator,id=$DEVICE_ID" CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= CODE_SIGN_ENTITLEMENTS="$SCANNER_SIMULATOR_ENTITLEMENTS" -resultBundlePath TestResults.xcresult 2>&1 | tee NativeTests.log

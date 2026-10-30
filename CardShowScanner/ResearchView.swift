@@ -1,5 +1,4 @@
 import SwiftUI
-import Charts
 
 /// Read-only research for an explicitly selected catalog card and grade.
 struct ResearchView: View {
@@ -23,13 +22,12 @@ struct ResearchView: View {
                     Section { Text(message).foregroundStyle(.secondary).accessibilityIdentifier("research.status") }
                 }
                 if let grade = model.selectedGrade {
+                    ResearchEvidenceView(grade: grade)
+                        .id((model.selectedVariantKey ?? "") + "|" + grade.id)
                     activitySection(grade)
                     gradeSection(grade)
                     valuationSection(grade)
                     lastSaleSection(grade)
-                    if let history = grade.dailyHistory, !history.series.isEmpty {
-                        Section("Recorded daily history") { ResearchHistoryChart(points: history.series) }
-                    }
                 }
                 sourceSection
             }
@@ -190,88 +188,4 @@ private struct ResearchGradeChoice: Hashable, Identifiable {
     let grade: String
     var id: Self { self }
     var label: String { grader == "RAW" && grade == "Raw" ? "Raw (ungraded)" : grader + " " + grade }
-}
-
-/// Each mark represents one returned daily aggregate. Gaps are never filled.
-private struct ResearchHistoryChart: View {
-    enum Metric: String, CaseIterable, Identifiable {
-        case sales = "Sales", average = "Sold average"
-        var id: String { rawValue }
-    }
-    let points: [ResearchDailyPoint]
-    @State private var metric: Metric = .sales
-    @State private var selectedDate: Date?
-    private var displayed: [ResearchDailyPoint] { Array(points.suffix(90)) }
-    private var hasValues: Bool {
-        displayed.contains { metric == .sales ? $0.sales != nil : $0.average != nil }
-    }
-    private var selectedPoint: ResearchDailyPoint? {
-        guard let selectedDate else { return nil }
-        return displayed.filter { metric == .sales ? $0.sales != nil : $0.average != nil }
-            .min { abs($0.date.timeIntervalSince(selectedDate)) < abs($1.date.timeIntervalSince(selectedDate)) }
-            .flatMap { abs($0.date.timeIntervalSince(selectedDate)) <= 43_200 ? $0 : nil }
-    }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Picker("History metric", selection: $metric) {
-                ForEach(Metric.allCases) { Text($0.rawValue).tag($0) }
-            }.pickerStyle(.segmented).accessibilityIdentifier("research.historyMetric")
-            if hasValues { historyChart.frame(height: 220) }
-            else { Text("No recorded \(metric == .sales ? "sales counts" : "sold averages") in this history.").foregroundStyle(.secondary) }
-            if let point = selectedPoint {
-                HStack {
-                    Text(point.day)
-                    Spacer()
-                    Text(metric == .sales ? point.sales.map { "\($0.formatted()) recorded sales" } ?? "Unavailable" : point.average?.money ?? "Unavailable")
-                }.font(.caption).accessibilityElement(children: .combine)
-            }
-            Text("Up to 90 reported days. Missing dates are omitted. Tap or drag to inspect a reported day.")
-                .font(.caption).foregroundStyle(.secondary)
-        }
-    }
-    private var historyChart: some View {
-        Chart {
-            if metric == .sales {
-                ForEach(Array(displayed.enumerated()), id: \.offset) { _, point in
-                    if let count = point.sales {
-                        BarMark(x: .value("Recorded day", point.date, unit: .day), y: .value("Recorded sales", count))
-                    }
-                }
-            } else {
-                ForEach(priceMarks) { point in
-                    LineMark(x: .value("Recorded day", point.date), y: .value("Sold average USD", point.value),
-                             series: .value("Reporting segment", point.segment))
-                    PointMark(x: .value("Recorded day", point.date), y: .value("Sold average USD", point.value))
-                        .symbolSize(18)
-                }
-            }
-            if let point = selectedPoint { RuleMark(x: .value("Selected day", point.date)).foregroundStyle(.secondary) }
-        }
-        .chartXSelection(value: $selectedDate)
-        .chartXAxis { AxisMarks(values: .automatic(desiredCount: 4)) }
-        .chartYAxisLabel(metric == .sales ? "Recorded sales" : "Sold average (USD)")
-        .environment(\.timeZone, TimeZone(secondsFromGMT: 0)!)
-        .accessibilityLabel(metric == .sales ? "Daily recorded sales" : "Daily recorded sold average in US dollars")
-        .accessibilityIdentifier("research.historyChart")
-    }
-    private var priceMarks: [ResearchPriceMark] {
-        var result: [ResearchPriceMark] = []
-        var segment = 0
-        var previous: Date?
-        for (offset, point) in displayed.enumerated() {
-            guard let average = point.average else { segment += 1; previous = nil; continue }
-            if let previous, point.date.timeIntervalSince(previous) > 86_401 { segment += 1 }
-            result.append(ResearchPriceMark(id: offset, date: point.date,
-                value: NSDecimalNumber(decimal: average).doubleValue, segment: segment))
-            previous = point.date
-        }
-        return result
-    }
-}
-
-private struct ResearchPriceMark: Identifiable {
-    let id: Int
-    let date: Date
-    let value: Double
-    let segment: Int
 }
