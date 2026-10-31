@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        94BAD283B9BBA68C75A5AE71 /* CardResearchModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AF8C726E99A3114C694099A; };
+        1F8EC7938C0E610301919DB7 /* CardResearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D4237F089096C6CC5E9998C; };
+        8484AC2F917FA67C957A3BAB /* CardResearchModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D607580BE71ED06A952ED95; };
         55E121FF265DE679AF13468B /* BetaAllowlist.js in Resources */ = {isa = PBXBuildFile; fileRef = ECD226DBE841D0CF8AD2F4EC; };
         59E8F2CF9B568205E639855C /* BetaIPAllowlistSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1BE3CF2E546CFEC3C998847; };
         AD222DB5DA0C782B475CE898 /* BetaAllowlistWebRunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F91102029A87A1E2D250E4F; };
@@ -143,6 +146,9 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        1AF8C726E99A3114C694099A /* CardResearchModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardResearchModelTests.swift; sourceTree = "<group>"; };
+        2D4237F089096C6CC5E9998C /* CardResearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardResearchView.swift; sourceTree = "<group>"; };
+        5D607580BE71ED06A952ED95 /* CardResearchModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardResearchModel.swift; sourceTree = "<group>"; };
         ECD226DBE841D0CF8AD2F4EC /* BetaAllowlist.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = Resources/BetaAllowlist.js; sourceTree = "<group>"; };
         F1BE3CF2E546CFEC3C998847 /* BetaIPAllowlistSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BetaIPAllowlistSyncTests.swift; sourceTree = "<group>"; };
         2F91102029A87A1E2D250E4F /* BetaAllowlistWebRunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BetaAllowlistWebRunnerTests.swift; sourceTree = "<group>"; };
@@ -313,6 +319,7 @@
 		59830EBC3A4184110566BF1A /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+                1AF8C726E99A3114C694099A /* CardResearchModelTests.swift */,
                 F1BE3CF2E546CFEC3C998847 /* BetaIPAllowlistSyncTests.swift */,
                 2F91102029A87A1E2D250E4F /* BetaAllowlistWebRunnerTests.swift */,
                 6FF42B6283278223955C51BC /* BetaAllowlistPolicyTests.swift */,
@@ -359,6 +366,8 @@
 		878A52FC5FF6A57D50B7B870 /* CardShowScanner */ = {
 			isa = PBXGroup;
 			children = (
+                2D4237F089096C6CC5E9998C /* CardResearchView.swift */,
+                5D607580BE71ED06A952ED95 /* CardResearchModel.swift */,
                 5303D1D4C0FC1C67E02E1D86 /* BetaIPAllowlistSync.swift */,
                 A6D554C7FDE20C9D9927DA06 /* BetaAllowlistWebRunner.swift */,
                 F5EE26092268B8A7952E3D99 /* BetaAllowlistSettingsView.swift */,
@@ -585,6 +594,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                94BAD283B9BBA68C75A5AE71 /* CardResearchModelTests.swift in Sources */,
                 59E8F2CF9B568205E639855C /* BetaIPAllowlistSyncTests.swift in Sources */,
                 AD222DB5DA0C782B475CE898 /* BetaAllowlistWebRunnerTests.swift in Sources */,
                 1032671898E75F58F466F324 /* BetaAllowlistPolicyTests.swift in Sources */,
@@ -630,6 +640,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                1F8EC7938C0E610301919DB7 /* CardResearchView.swift in Sources */,
+                8484AC2F917FA67C957A3BAB /* CardResearchModel.swift in Sources */,
                 A3C4C936B00CE3EC8383525F /* BetaIPAllowlistSync.swift in Sources */,
                 5A29D95A4ACDB9FE50EDD9F0 /* BetaAllowlistWebRunner.swift in Sources */,
                 7E168CA236C9A665637A5DBE /* BetaAllowlistSettingsView.swift in Sources */,
@@ -756,7 +768,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 27;
+				CURRENT_PROJECT_VERSION = 28;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -792,7 +804,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 27;
+				CURRENT_PROJECT_VERSION = 28;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";

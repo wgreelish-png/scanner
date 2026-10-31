@@ -1,6 +1,6 @@
 # Compact card details
 
-> [Build 27](StandardMarketPricing.md) subsequently standardizes all market quotes on Open API; the source-setting references below describe build 26.
+> [Build 27](StandardMarketPricing.md) standardizes all market quotes on Open API. [Build 28](CombinedCardResearch.md) replaces the separate research destinations with one **Market & Graded Research** link. Source-setting and separate-link references below describe build 26.
 
 Build 26 replaces the long saved-card edit form with a compact Card Details screen. It retains the indigo accents and the existing list sheet, explicit Save/Cancel actions, row identity, scan order, quantities, offer overrides and storage schema.
 

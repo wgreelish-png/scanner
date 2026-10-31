@@ -6,7 +6,7 @@ Build 23 uses a native bottom tab bar with four destinations. Each tab keeps its
 | --- | --- |
 | Lists | Search saved lists, see card counts and known value, create an empty list with +, review inventory/offers, and swipe to delete or duplicate. |
 | Scan | Start a new saved scan, continue the active session, open existing lists, or view session history. |
-| Research | Search the downloaded catalog with artwork previews, open market details or graded research, and look up a PSA slab. |
+| Research | Search the downloaded catalog with artwork previews, open combined Market/Graded Research, and look up a PSA slab. |
 | Settings | Change game, sound and haptics; view standard market pricing; connect accounts; open offer defaults, scanner database, diagnostics or About/Privacy. |
 
 The Scan tab is the initial screen. Selecting any tab does not create a session or open a camera. **Start New Scan** explicitly creates a new saved list and retains the existing behavior of finishing another active session without a confirmation prompt. **Continue Scanning** resumes the existing active list. Closing the scanner keeps that session available for later continuation.
@@ -15,7 +15,7 @@ Live capture stays full-screen with its existing controls; the tab bar is hidden
 
 The Lists screen prioritizes saved inventory. New empty-list creation uses a short sheet with explicit Create/Cancel actions. Failed creation retains the entered name for retry. Swipe deletion still uses the existing independent confirmation sheet and persistence model. Existing list outcomes, manual additions, export, pricing, saved estimates and continued scanning remain in list review.
 
-Research search reuses the local catalog and its cancellation/debounce behavior. Selecting a card creates a read-only Near Mint draft with printing and condition choices. Market and graded research use the existing services; viewing them does not add inventory or change the selected pricing provider. Missing catalog guidance can switch to Scan or Settings without launching capture.
+Research search reuses the local catalog and its cancellation/debounce behavior. Selecting a card opens the [combined Card Research page](CombinedCardResearch.md) directly with a read-only Near Mint draft. Shared printing/language controls, Market condition buttons and the Graded grade menu use existing services. Viewing research does not add inventory or change saved prices; all market quotes use Open API. Missing catalog guidance can switch to Scan or Settings without launching capture.
 
 Settings keeps common preferences and connection actions visible. Offer rates, database maintenance, diagnostics and About/Privacy are one step away. Stored preference keys, weekly recognition refresh, daily API caches, Keychain credentials, signing, persistence schemas and offer calculations are unchanged.
 

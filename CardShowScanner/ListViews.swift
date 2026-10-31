@@ -547,12 +547,9 @@ struct CardEditorView: View {
                     }.accessibilityIdentifier("cardEditor.correctMatch")
                 }
                 Section("Research") {
-                    NavigationLink { MarketInsightsView(card: pricing.card) } label: {
-                        Label("Market Details", systemImage: "chart.line.uptrend.xyaxis")
-                    }.accessibilityIdentifier("cardEditor.marketDetails")
-                    NavigationLink { ResearchView(card: pricing.card) } label: {
-                        Label("Graded Research", systemImage: "rectangle.portrait.on.rectangle.portrait")
-                    }.disabled(pricing.priceLoading).accessibilityIdentifier("cardEditor.research")
+                    NavigationLink { CardResearchView(card: pricing.card) } label: {
+                        Label("Market & Graded Research", systemImage: "magnifyingglass")
+                    }.accessibilityIdentifier("cardEditor.research")
                 }
                 offerSection
             }
@@ -633,7 +630,7 @@ struct CardEditorView: View {
                     .accessibilityLabel("Refresh market price and printings").accessibilityIdentifier("cardEditor.refreshPrice")
             }.padding(.vertical, 4)
 
-            CardDetailsConditionPicker(selection: identityBinding(\.condition))
+            CardConditionPicker(selection: identityBinding(\.condition))
             if let metadata = pricing.card.marketPriceMetadata {
                 Text(compactPriceStatus(metadata)).font(.caption).foregroundStyle(.secondary)
                     .accessibilityIdentifier("cardEditor.priceStatus")
@@ -721,11 +718,15 @@ struct CardEditorView: View {
     }
 }
 
-private struct CardDetailsConditionPicker: View {
+struct CardConditionPicker: View {
     @Binding var selection: String
+    var accessibilityPrefix = "cardEditor.condition"
     @Environment(\.dynamicTypeSize) private var textSize
     private let conditions = [("Near Mint", "NM"), ("Lightly Played", "LP"), ("Moderately Played", "MP"),
                               ("Heavily Played", "HP"), ("Damaged", "DMG")]
+    init(selection: Binding<String>, accessibilityPrefix: String = "cardEditor.condition") {
+        _selection = selection; self.accessibilityPrefix = accessibilityPrefix
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Condition").font(.subheadline).foregroundStyle(.secondary)
@@ -737,7 +738,7 @@ private struct CardDetailsConditionPicker: View {
                             .background(selection == condition ? Color.indigo : Color.indigo.opacity(0.09), in: RoundedRectangle(cornerRadius: 10))
                     }.buttonStyle(.plain).accessibilityLabel(condition)
                         .accessibilityAddTraits(selection == condition ? .isSelected : [])
-                        .accessibilityIdentifier("cardEditor.condition." + short)
+                        .accessibilityIdentifier(accessibilityPrefix + "." + short)
                 }
             }
             if !conditions.contains(where: { $0.0 == selection }) {

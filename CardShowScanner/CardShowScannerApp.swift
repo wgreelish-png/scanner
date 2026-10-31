@@ -26,6 +26,8 @@ import SwiftData
             MarketEvidenceFixtureScreen(research: false)
         } else if ProcessInfo.processInfo.arguments.contains("--uitest-research-evidence") {
             MarketEvidenceFixtureScreen(research: true)
+        } else if ProcessInfo.processInfo.arguments.contains("--uitest-card-research") {
+            CombinedResearchFixtureScreen()
         } else if let budgetTestID = Self.budgetUITestID {
             ShowBudgetFixtureScreen(id: budgetTestID)
         } else {

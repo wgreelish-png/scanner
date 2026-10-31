@@ -4,7 +4,7 @@ Native SwiftUI/SwiftData iPhone app, iOS 17+. Build 23 adds a [bottom tab bar an
 
 Settings → **TCGTracking sign-in** offers native username/password fields or **Use the Website Instead** for account features. Market pricing uses Open API without website sign-in. **Remember sign-in on this iPhone** opts into device-only Keychain storage and a single automatic sign-in attempt on later connection visits. **Forget Saved Sign-In** removes that record. The helper follows the website's actual Login link, fills only a uniquely identified first-party POST login form and submits normally, preserving its verification and hidden fields. Unsupported forms stay on the website; failed logins never loop. The fixed Done/Return button closes the account connection. Form submission never claims successful authentication.
 
-The website session is remembered in WebKit's persistent store. Settings, scanner options and rejected-price review reopen the connection screen. Its fixed, full-width Return button ends editing and closes the presenting cover in one action; scanner startup waits for dismissal. Returning preserves the current list and session; opening an account connection from scanner Options pauses capture until dismissal.
+The website session is remembered in WebKit's persistent store. Settings and scanner options reopen the account connection screen. Its fixed, full-width Return button ends editing and closes the presenting cover in one action; scanner startup waits for dismissal. Returning preserves the current list and session; opening an account connection from scanner Options pauses capture until dismissal.
 
 ## Scan and confirm
 
@@ -20,7 +20,9 @@ Every new physical confirmation appends its own quantity-one row: A, B, A remain
 
 From list review, **Search & Add Card** searches the downloaded game catalog as you type. Up to five matches appear with large artwork previews; add a number or set to narrow them (`Darkrai` → `Darkrai 99` → `Darkrai 99 Triumphant`). Select a preview, choose printing and condition, then explicitly **Add to List**. This appends one physical copy without opening the camera. Text lookup uses saved metadata; artwork and exact market quotes may need internet. See [manual catalog search and the later phone check](docs/ManualCardSearch.md).
 
-Build 22 adds [market evidence summaries and native charts](docs/EvidenceVisualizations.md): exact-SKU price comparisons, selectable sales-volume windows, separate graded daily-price/sales charts, and visible coverage/freshness facts. It preserves daily API caching and existing scanning, inventory and offer behavior.
+Build 22 originally added [market evidence summaries and native charts](docs/EvidenceVisualizations.md): exact-SKU price comparisons, selectable sales-volume windows, separate graded daily-price/sales charts, and visible coverage/freshness facts. It preserves daily API caching and existing scanning, inventory and offer behavior.
+
+Build 28 combines Market and Graded Research in [one card page](docs/CombinedCardResearch.md). Printing and language stay shared, Market adds condition choices, and Graded adds grader/grade choices. A compact update label and information sheet replace the large evidence block. Chart enhancements remain deferred.
 
 ## Build and tests
 

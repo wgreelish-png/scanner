@@ -1,6 +1,8 @@
 # Research, sales activity and PSA slabs
 
-For the current public-pricing and live OppsV2 additions, see [Market Details, API connections and cached prices](MarketData.md). Graded Research remains a separate experimental API and does not block those features.
+Build 28 presents Market and Graded Research on [one Card Research page](CombinedCardResearch.md), with shared printing/language controls and a grader/grade menu in Graded mode. PSA confirmation opens Graded directly and retains the verified grade, including qualifiers. The live page uses numeric summaries; chart enhancements are deferred. The build 17/22 UI descriptions below are historical.
+
+For current public-pricing and live OppsV2 behavior, see [Market Details, API connections and cached prices](MarketData.md). Graded Research remains a separate experimental API and does not block those features.
 
 Build 17 adds a read-only Research screen and a separate **Research a PSA Slab** flow on Home. Ordinary card recognition, list identity, scan order, offers, selectable market-price sources and personal signing retain their existing paths. Research does not add a slab to inventory or replace an ungraded card's market price with a graded guide estimate.
 

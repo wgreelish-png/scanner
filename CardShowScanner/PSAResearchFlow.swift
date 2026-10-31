@@ -187,7 +187,8 @@ private struct PSACatalogMatchView: View {
             }
         }.navigationTitle("Confirm Catalog Card").navigationBarTitleDisplayMode(.inline)
             .navigationDestination(isPresented: $showingResearch) {
-                ResearchView(card: card, grader: "PSA", grade: match.metadata?.researchGrade ?? "")
+                CardResearchView(card: card, initialSection: .graded,
+                                 grader: "PSA", grade: match.metadata?.researchGrade ?? "")
             }
     }
 }

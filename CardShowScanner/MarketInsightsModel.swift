@@ -78,10 +78,11 @@ import Observation
         }
     }
 
-    func changeCard(_ card: CardCandidate) {
+    func changeCard(_ card: CardCandidate, refresh: Bool = true) {
         cancel()
         self.card = card
-        refresh(forceRefresh: false)
+        publicDetails = nil; activityDetails = nil; publicMessage = nil; activityMessage = nil
+        if refresh { self.refresh(forceRefresh: false) }
     }
 
     func cancel() { cancelPublic(); cancelActivity() }

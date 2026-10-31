@@ -8,14 +8,29 @@ struct MarketEvidenceFixtureScreen: View {
 
     var body: some View {
         NavigationStack {
-            if research {
-                ResearchView(card: EvidenceFixtureData.card, grader: "PSA", grade: "9",
-                             provider: EvidenceFixtureResearch())
-            } else {
-                MarketInsightsView(card: EvidenceFixtureData.card,
-                                   publicPricing: EvidenceFixturePricing(),
-                                   opportunities: EvidenceFixtureOpportunities())
-            }
+            List {
+                if research {
+                    if let details = try? EvidenceFixtureData.research(),
+                       let grade = details.product.variants["EN:Holofoil"]?.grades.first {
+                        ResearchEvidenceView(grade: grade)
+                    }
+                } else {
+                    MarketEvidenceView(publicDetails: EvidenceFixtureData.publicDetails,
+                        activity: try? EvidenceFixtureData.activity(), publicLoading: false, activityLoading: false)
+                }
+            }.navigationTitle(research ? "Research & Demand" : "Market Details")
+        }
+    }
+}
+
+/// Combined-page checks use explicit synthetic providers and never touch a
+/// production account, list or API. Historical chart fixtures remain separate.
+struct CombinedResearchFixtureScreen: View {
+    var body: some View {
+        NavigationStack {
+            CardResearchView(card: EvidenceFixtureData.card, grader: "PSA", grade: "9",
+                publicPricing: EvidenceFixturePricing(), opportunities: EvidenceFixtureOpportunities(),
+                research: EvidenceFixtureResearch())
         }
     }
 }
@@ -40,12 +55,21 @@ private enum EvidenceFixtureData {
 
     static var timestamp: String { ISO8601DateFormatter().string(from: Date()) }
 
-    static func activity() throws -> OpportunitiesDetails {
+    static var publicDetails: MarketDetails {
+        MarketDetails(quote: MarketQuote(marketPrice: Decimal(string: "12.50"), skuID: "100"),
+            metadata: MarketPriceMetadata(source: .openAPI, updatedAt: Date(), fetchedAt: Date(), isCached: true),
+            context: MarketPriceContext(lowPrice: 10, highPrice: 15, listingCount: 5))
+    }
+
+    static func activity(for selected: CardCandidate? = nil) throws -> OpportunitiesDetails {
+        let card = selected ?? Self.card
+        let conditionID = (CatalogOptions.conditions.firstIndex(of: card.identity.condition) ?? 0) + 1
+        let skuID = String(conditionID * 100)
         let body: [String: Any] = [
             "meta": ["category_id": 3, "group_id": 1430, "generated_at": timestamp],
             "product": ["product_id": 42, "name": "Synthetic evidence fixture", "skus": [
-                "100": ["sku_id": 100, "condition_id": 1, "condition": "Near Mint",
-                        "finish": "Holofoil", "language": "English",
+                skuID: ["sku_id": conditionID * 100, "condition_id": conditionID, "condition": card.identity.condition,
+                        "finish": card.identity.printing, "language": card.identity.language,
                         "pricing": ["market_sku": "12.25", "listed_low_card": "10.00"],
                         "timestamps": ["tcgp_sales_updated_at": timestamp],
                         "trends": ["updated_at": timestamp, "windows": [
@@ -85,7 +109,9 @@ private enum EvidenceFixtureData {
 private struct EvidenceFixturePricing: MarketPricing {
     func quote(for card: CardCandidate) async throws -> MarketQuote? {
         try Task.checkCancellation()
-        return MarketQuote(marketPrice: Decimal(string: "12.50"), skuID: "100")
+        let conditionID = (CatalogOptions.conditions.firstIndex(of: card.identity.condition) ?? 0) + 1
+        return MarketQuote(marketPrice: card.identity.condition == "Lightly Played" ? Decimal(string: "8.50") : Decimal(string: "12.50"),
+                           skuID: String(conditionID * 100))
     }
     func details(for card: CardCandidate, candidates: [CardCandidate], forceRefresh: Bool) async throws -> MarketDetails {
         MarketDetails(quote: try await quote(for: card),
@@ -97,7 +123,7 @@ private struct EvidenceFixturePricing: MarketPricing {
 private struct EvidenceFixtureOpportunities: OpportunitiesProviding {
     func opportunities(for card: CardCandidate, forceRefresh: Bool) async throws -> OpportunitiesDetails {
         try Task.checkCancellation()
-        return try EvidenceFixtureData.activity()
+        return try EvidenceFixtureData.activity(for: card)
     }
 }
 
