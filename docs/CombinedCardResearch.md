@@ -9,6 +9,8 @@ The card artwork, name, set, number and game appear once. Shared **Printing** an
 | Market | NM, LP, MP, HP and DMG; exact-condition Open API market value; optional listing details; OppsV2 reported units and sold averages for 30/90/365 days. Additional activity/listing information is collapsed. |
 | Graded | Exact returned grader/grade selection; guide estimate, research market value and population; reported 30-day sales/average when available. Additional research is collapsed. |
 
+Build 30 adds **View Card on TCGplayer** under the shared selections in both modes. It opens the exact catalog product page for listings and TCGplayer’s sales graphs. The verified API does not supply exact lowest-listing URLs, so the app does not fabricate a seller link or a condition-specific history URL.
+
 The mode switch stays at the top. A short update/cache label and the information button replace the large evidence block. The information sheet contains timestamps, source explanations and coverage limits. Live charts and history enhancements remain deferred until the Beta APIs are fully released; earlier chart components remain isolated in explicit DEBUG fixtures.
 
 ## Data and lifecycle

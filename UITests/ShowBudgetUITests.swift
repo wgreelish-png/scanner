@@ -13,8 +13,13 @@ import XCTest
         tapVisible(app.buttons["budget.setup"], in: app)
         enter("300", into: app.textFields["budget.starting"])
         app.buttons["budget.keyboardDone"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["budget.startDate"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["budget.endDate"].exists)
         tapVisible(app.buttons["budget.create"], in: app)
         assertMoney("$300.00", title: "Available to buy", element: app.staticTexts["budget.available"])
+        let dates = app.staticTexts["budget.showDates"]
+        XCTAssertTrue(dates.waitForExistence(timeout: 5))
+        let showDates = dates.label
 
         tapVisible(app.buttons["budget.sell"], in: app)
         enter("200", into: app.textFields["budget.amount"])
@@ -32,6 +37,8 @@ import XCTest
         assertMoney("$70.00", title: "Saved for you", element: app.staticTexts["budget.saved"])
 
         app.terminate(); app.launch()
+        XCTAssertTrue(app.staticTexts["budget.showDates"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["budget.showDates"].label, showDates)
         assertMoney("$320.00", title: "Available to buy", element: app.staticTexts["budget.available"])
         assertMoney("$70.00", title: "Saved for you", element: app.staticTexts["budget.saved"])
         XCTAssertFalse(app.alerts.firstMatch.exists)

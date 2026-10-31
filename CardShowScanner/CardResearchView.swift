@@ -36,6 +36,12 @@ struct CardResearchView: View {
                 Picker("Language", selection: Binding(get: { model.card.identity.language }, set: { model.selectLanguage($0) })) {
                     ForEach(model.languages, id: \.self) { Text($0).tag($0) }
                 }.pickerStyle(.menu).accessibilityIdentifier("cardResearch.language")
+                if let url = MarketplaceLinks.tcgplayerProduct(model.card.identity.productID) {
+                    Link(destination: url) {
+                        Label("View Card on TCGplayer", systemImage: "arrow.up.right.square")
+                    }.accessibilityIdentifier("cardResearch.tcgplayer")
+                        .accessibilityHint("Opens raw-card listings and sales history. Choose the matching printing and condition on TCGplayer.")
+                }
             }.listRowBackground(Color.indigo.opacity(0.07))
             if model.section == .market {
                 Section {

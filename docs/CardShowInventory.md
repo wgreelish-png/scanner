@@ -4,7 +4,7 @@ Build 29 adds **Lists → Card Show Inventory**. Import connects to the existing
 
 1. Open Card Show Inventory and tap **Import Inventory**.
 2. If sign-in is required, choose **Sign In to TCGTracking**, complete the existing account flow and return to inventory. Returning retries the import.
-3. Open **Saved Inventory** to browse card details, research and CSV export. The imported rows retain the website's quantities, including multiple copies in one source row.
+3. Open **Saved Inventory** to browse card details and research; use the top-right **•••** menu for CSV export. The imported rows retain the website's quantities, including multiple copies in one source row.
 4. Use **Refresh Inventory** to update the saved copy, or **Make an Editable Copy** to create an ordinary list for scanning, editing and the existing session/offer workflow.
 
 Opening the importer or saved list makes no inventory request. Card data, quantities and last imported prices remain available after closing/reopening the app and with poor reception. Artwork that is not cached and new market/research lookups can need internet. The update label shows the last successful import time and does not claim that old data is current.

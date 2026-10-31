@@ -1,3 +1,5 @@
+> Build 30 adds optional start/end **Show dates** in New/Edit Show and the budget dashboard. Existing undated shows remain undated. Dates describe the show; individual transaction timestamps and cash calculations are unchanged.
+
 # Show cash budget
 
 Build 24 adds **Show Budget** to Lists and the Scan home screen. Set a show name and starting buying funds, then explicitly record cash purchases, sales and trades. Each show and its ledger remain saved when the app closes; creating another show keeps the previous one available in the show picker.

@@ -1,3 +1,5 @@
+> Build 30: export controls are in the list’s top-right **••• → Export CSV to Files / Share CSV** menu. The separate export tile has been removed; export data/order behavior below is unchanged.
+
 # Export a scanned inventory list
 
 From the scanner, choose **View List**. You can also use **Open Existing List** on the home screen and select the saved list. The **Export inventory** section is at the top of list review, above the offer calculations.

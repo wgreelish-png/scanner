@@ -29,6 +29,9 @@ import SwiftUI
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }
                     Text(show.name).font(.caption).foregroundStyle(.secondary)
+                    if let dates = budgetShowDateLabel(show) {
+                        Text(dates).font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("budget.summaryDates")
+                    }
                 } else {
                     Text(store.isLoaded ? "Set buying funds and keep 35% of gross sales for you." : "Your budget needs attention. Open it to retry loading.")
                         .font(.subheadline).foregroundStyle(.secondary)
@@ -57,6 +60,7 @@ import SwiftUI
                 if !store.book.shows.isEmpty { showSelector }
                 if let show = store.activeShow, let totals = try? show.totals() {
                     balanceSection(show, totals: totals)
+                    dateSection(show)
                     recordSection(show)
                     totalsSection(totals)
                     entriesSection(show)
@@ -142,6 +146,17 @@ import SwiftUI
         } header: { Text(show.name) }
     }
 
+    private func dateSection(_ show: ShowBudgetEvent) -> some View {
+        Section("Show dates") {
+            if let dates = budgetShowDateLabel(show) {
+                Text(dates).accessibilityIdentifier("budget.showDates")
+            } else {
+                Button("Set Show Dates") { sheet = .edit(show.id) }
+                    .accessibilityIdentifier("budget.setDates")
+            }
+        }
+    }
+
     private func recordSection(_ show: ShowBudgetEvent) -> some View {
         Section("Record actual cash") {
             let layout = dynamicTypeSize.isAccessibilitySize
@@ -151,7 +166,7 @@ import SwiftUI
                 recordButton("Sell", symbol: "arrow.down.left", kind: .sale, showID: show.id, id: "budget.sell")
                 recordButton("Trade", symbol: "arrow.left.arrow.right", kind: .trade, showID: show.id, id: "budget.trade")
             }.padding(.vertical, 4)
-            Text("Only confirmed cash entries affect this budget. Card values, offer estimates and list status do not move cash.")
+            Text("Confirm the cash you actually paid or received to update this budget.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -270,6 +285,9 @@ private enum BudgetDashboardSheet: Identifiable {
     @Environment(\.dismiss) private var dismiss
     @State private var name: String
     @State private var starting: String
+    @State private var hasDates: Bool
+    @State private var startDate: Date
+    @State private var endDate: Date
     @State private var error: String?
     @State private var saved = false
     @State private var saving = false
@@ -281,6 +299,10 @@ private enum BudgetDashboardSheet: Identifiable {
         self.store = store; self.editing = editing; self.onSaved = onSaved
         _name = State(initialValue: editing?.name ?? "Card Show " + Date().formatted(date: .abbreviated, time: .omitted))
         _starting = State(initialValue: editing.map { CSVExportService.number(ShowBudgetMoney.decimal($0.startingCents)) } ?? "")
+        let today = Calendar.current.startOfDay(for: Date())
+        _hasDates = State(initialValue: editing == nil || editing?.startDate != nil)
+        _startDate = State(initialValue: editing?.startDate ?? today)
+        _endDate = State(initialValue: editing?.endDate ?? editing?.startDate ?? today)
     }
 
     var body: some View {
@@ -291,6 +313,16 @@ private enum BudgetDashboardSheet: Identifiable {
                     .onChange(of: name) { _, value in if value.count > 120 { name = String(value.prefix(120)) } }
                 TextField("Starting buying funds, e.g. 300", text: $starting)
                     .keyboardType(.decimalPad).focused($focused, equals: .starting).accessibilityIdentifier("budget.starting")
+            }
+            Section("Show dates") {
+                Toggle("Set show dates", isOn: $hasDates).accessibilityIdentifier("budget.hasDates")
+                if hasDates {
+                    DatePicker("Start date", selection: $startDate, displayedComponents: .date)
+                        .accessibilityIdentifier("budget.startDate")
+                        .onChange(of: startDate) { _, value in if endDate < value { endDate = value } }
+                    DatePicker("End date", selection: $endDate, in: startDate..., displayedComponents: .date)
+                        .accessibilityIdentifier("budget.endDate")
+                }
             }
             Section("Your split") {
                 LabeledContent("Reinvest", value: "\(reinvestmentPercent)% of gross sales")
@@ -320,7 +352,8 @@ private enum BudgetDashboardSheet: Identifiable {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
-                Button("Done") { focused = nil }.accessibilityIdentifier("budget.keyboardDone")
+                Button("Done") { focused = nil }
+                    .fixedSize().frame(minWidth: 60).accessibilityIdentifier("budget.keyboardDone")
             }
         }
         .interactiveDismissDisabled(saving)
@@ -332,8 +365,12 @@ private enum BudgetDashboardSheet: Identifiable {
         defer { saving = false }
         do {
             let id: UUID
-            if let editing { try store.update(showID: editing.id, name: name, startingCents: cents); id = editing.id }
-            else { id = try store.create(name: name, startingCents: cents) }
+            let start = hasDates ? Calendar.current.startOfDay(for: startDate) : nil
+            let end = hasDates ? Calendar.current.startOfDay(for: endDate) : nil
+            if let editing {
+                try store.update(showID: editing.id, name: name, startingCents: cents, startDate: start, endDate: end)
+                id = editing.id
+            } else { id = try store.create(name: name, startingCents: cents, startDate: start, endDate: end) }
             saved = true; onSaved(id)
         } catch { self.error = budgetError(error) }
     }
@@ -453,7 +490,7 @@ private enum BudgetTradeDirection: String, CaseIterable, Identifiable {
                     .disabled(entry == nil || saving || saved || !store.isLoaded)
                     .accessibilityIdentifier("budget.record")
             } footer: {
-                Text("Recording cash changes only the show budget. It does not save an offer estimate or change inventory quantities.")
+                Text("Confirm the actual cash paid or received to record this budget transaction.")
             }
         }
         .navigationTitle("Record Cash").navigationBarTitleDisplayMode(.inline)
@@ -461,7 +498,8 @@ private enum BudgetTradeDirection: String, CaseIterable, Identifiable {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
-                Button("Done") { focused = nil }.accessibilityIdentifier("budget.keyboardDone")
+                Button("Done") { focused = nil }
+                    .fixedSize().frame(minWidth: 60).accessibilityIdentifier("budget.keyboardDone")
             }
         }
         .interactiveDismissDisabled(saving)
@@ -550,4 +588,11 @@ private func entryCashLabel(_ entry: ShowBudgetEntry) -> String {
 }
 private func budgetError(_ error: Error) -> String {
     (error as? LocalizedError)?.errorDescription ?? "The show budget could not be saved. Your entries have been kept; retry."
+}
+
+private func budgetShowDateLabel(_ show: ShowBudgetEvent) -> String? {
+    guard let start = show.startDate, let end = show.endDate else { return nil }
+    let first = start.formatted(date: .abbreviated, time: .omitted)
+    if Calendar.current.isDate(start, inSameDayAs: end) { return first }
+    return first + " – " + end.formatted(date: .abbreviated, time: .omitted)
 }

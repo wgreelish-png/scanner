@@ -64,7 +64,9 @@ struct OfferBreakdownView: View {
                     }
                     LabeledContent("Maximum buy (\(CSVExportService.number(rates.maximum))%)", value: totals.maximum.money)
                     LabeledContent("Market minus cash offer", value: (totals.market - cashTotal).money)
-                    Text("Base rates and per-card overrides determine calculated offers. A custom cash amount updates the full-list cash value and the cash payout for unused trade value.")
+                    Text(customCashOffer == nil
+                         ? "Base rates and per-card overrides determine calculated offers."
+                         : "Base rates and per-card overrides determine calculated offers. This saved custom cash amount supplied the full-list cash value and the payout for unused trade value.")
                         .font(.caption).foregroundStyle(.secondary)
                     Text("Market minus cash offer is a valuation estimate. Realized profit requires recorded purchase costs, sale proceeds and fees.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -144,7 +146,9 @@ private struct TradeTransactionSummary: View {
                     LabeledContent("Full-list cash value used", value: cashValuation.money)
                     LabeledContent("Cash Payout", value: transaction.cashPayout.money)
                     if transaction.mode != .cashOnly { LabeledContent("Customer Balance", value: transaction.customerPays.money) }
-                    Text("Applied percentages include per-card overrides, cent rounding and the selected cash amount. Unused value is allocated proportionally across this list.")
+                    Text(customCashOffer == nil
+                         ? "Applied percentages include per-card overrides and cent rounding. Unused value is allocated proportionally across this list."
+                         : "Applied percentages include per-card overrides, cent rounding and the saved cash amount. Unused value is allocated proportionally across this list.")
                         .font(.caption).foregroundStyle(.secondary)
                     if totals.market == 0 || totals.unpricedQuantity > 0 {
                         Text("Applied percentages require a complete market total greater than zero.")
@@ -168,31 +172,26 @@ struct SessionReviewHeader: View {
     let list: CardList
     let onContinue: () -> Void
     let onSavedOffers: () -> Void
+    var outcomeActions: AnyView? = nil
     @Environment(\.modelContext) private var context
-    @State private var editRates = false
     @State private var openingScanner = false
     @State private var confirmResume = false
-    private enum MoneyField: Hashable { case customCash, myCard }
+    private enum MoneyField: Hashable { case myCard }
     @FocusState private var editingMoney: MoneyField?
-    @State private var customCashText = ""
     @State private var myCardPriceText = ""
     @State private var transactionMode = TradeTransactionMode.cashOnly
     @State private var restoredInputs = false
-    @State private var offerSaved = false
     @State private var error: String?
-    private var hasCustomInput: Bool { !customCashText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var hasMyCardInput: Bool { !myCardPriceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    private var customAmount: Decimal? { CustomOfferAmount.parse(customCashText) }
     private var myCardPrice: Decimal? { CustomOfferAmount.parse(myCardPriceText) }
-    private var invalidCustomAmount: Bool { hasCustomInput && customAmount == nil }
     private var invalidMyCardPrice: Bool { hasMyCardInput && myCardPrice == nil }
     private var totals: OfferTotals { OfferCalculator.calculate(list.cards.map(\.offerLine), rates: session.rates) }
     private var transactionInput: TradeTransactionInput {
         TradeTransactionInput(mode: transactionMode, myCardPrice: transactionMode == .cashOnly ? nil : myCardPrice)
     }
     private var transaction: TradeTransactionResult? {
-        guard !invalidMyCardPrice, !invalidCustomAmount else { return nil }
-        return try? TradeTransactionCalculator.calculate(totals: totals, input: transactionInput, customCashOffer: customAmount)
+        guard !invalidMyCardPrice else { return nil }
+        return try? TradeTransactionCalculator.calculate(totals: totals, input: transactionInput, customCashOffer: nil)
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -202,10 +201,9 @@ struct SessionReviewHeader: View {
                 Text(session.startedAt, format: .dateTime).font(.caption).foregroundStyle(.secondary)
             }
             transactionControls
-            cashNegotiationControls
-            if let transaction { TradeTransactionSummary(transaction: transaction, totals: totals, rates: session.rates, customCashOffer: customAmount) }
+            if let transaction { TradeTransactionSummary(transaction: transaction, totals: totals, rates: session.rates, customCashOffer: nil) }
             else {
-                Text(invalidMyCardPrice || invalidCustomAmount
+                Text(invalidMyCardPrice
                      ? "Enter a valid amount to calculate the transaction."
                      : "Enter My Card Price to calculate the trade, or choose Cash Only.")
                     .font(.subheadline).foregroundStyle(.secondary)
@@ -214,28 +212,29 @@ struct SessionReviewHeader: View {
                 Text("No trade credit is available. Choose Cash Only to make a cash offer for these cards.")
                     .font(.caption).foregroundStyle(.orange)
             }
-            OfferBreakdownView(totals: totals, rates: session.rates, customCashOffer: customAmount, transactionMode: transactionMode,
-                               cashValuation: transaction?.resolvedCashValuation(totals: totals, customCashOffer: customAmount))
+            OfferBreakdownView(totals: totals, rates: session.rates, customCashOffer: nil, transactionMode: transactionMode,
+                               cashValuation: transaction?.resolvedCashValuation(totals: totals, customCashOffer: nil))
+            if let outcomeActions { outcomeActions }
             offerActions
         }.padding(.vertical, 8).buttonStyle(.borderless)
             .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    if editingMoney != nil { Spacer(); Button("Done") { editingMoney = nil } }
+                if editingMoney != nil {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button { editingMoney = nil } label: {
+                            Text("Done").fixedSize().frame(minWidth: 64, minHeight: 44)
+                        }.layoutPriority(1).accessibilityIdentifier("offer.keyboardDone")
+                    }
                 }
             }
             .onAppear { openingScanner = false; restoreOfferInputs() }
-            .onChange(of: customCashText) { _, _ in offerSaved = false }
             .onChange(of: myCardPriceText) { _, _ in
-                offerSaved = false
                 if hasMyCardInput && transactionMode == .cashOnly { transactionMode = .tradeAndCash }
                 else if !hasMyCardInput && transactionMode == .tradeAndCash { transactionMode = .cashOnly }
             }
             .onChange(of: transactionMode) { _, mode in
-                offerSaved = false
                 if mode == .cashOnly { myCardPriceText = "" }
             }
-            .onChange(of: totals) { _, _ in offerSaved = false }
-            .onChange(of: session.rates) { _, _ in offerSaved = false }
             .confirmationDialog("Continue this list?", isPresented: $confirmResume) {
                 Button("Continue Scanning") {
                     do {
@@ -247,7 +246,6 @@ struct SessionReviewHeader: View {
                     catch { openingScanner = false; self.error = error.localizedDescription }
                 }
             } message: { Text("New cards append to this list. Any other active session will be finished and kept.") }
-            .sheet(isPresented: $editRates) { SessionRatesView(session: session) }
             .failureAlert($error)
     }
     private var transactionControls: some View {
@@ -274,43 +272,8 @@ struct SessionReviewHeader: View {
             }
         }.padding(16).background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 18))
     }
-    private var cashNegotiationControls: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Custom cash offer").font(.subheadline.weight(.semibold))
-            HStack {
-                Text("$").foregroundStyle(.secondary)
-                TextField("Use calculated cash when blank", text: $customCashText)
-                    .keyboardType(.decimalPad).textFieldStyle(.roundedBorder).multilineTextAlignment(.trailing)
-                    .focused($editingMoney, equals: .customCash).accessibilityLabel("Custom cash offer for the whole list")
-            }
-            if hasCustomInput {
-                Button { customCashText = "" } label: {
-                    Text("Use Calculated Cash").font(.caption).frame(minHeight: 44)
-                }
-            }
-            if invalidCustomAmount {
-                Text(BatchFailure.invalidOfferAmount.localizedDescription).font(.caption).foregroundStyle(.orange)
-            } else {
-                Text("Set the cash value for the whole list. Cash Only pays this amount; Trade + Cash pays the unused proportion. Changes update the payout immediately.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }.padding(16).background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 18))
-    }
     private var offerActions: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Button("Save Offer Estimate", systemImage: "square.and.arrow.down") {
-                do {
-                    try SessionService.saveOffer(session, list: list, context: context, customCashOffer: customAmount, transactionInput: transactionInput)
-                    editingMoney = nil; offerSaved = true
-                } catch { self.error = error.localizedDescription }
-            }.buttonStyle(.borderedProminent).controlSize(.large).disabled(transaction == nil)
-            if offerSaved { Label("Offer estimate saved", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.green) }
-            Button { editingMoney = nil; editRates = true } label: {
-                Text("Session Offer Percentages").frame(minHeight: 44)
-            }
-            Button { editingMoney = nil; onSavedOffers() } label: {
-                Text("Saved Offer Estimates").frame(minHeight: 44)
-            }
             Button {
                 guard !openingScanner, !confirmResume else { return }
                 editingMoney = nil
@@ -323,7 +286,7 @@ struct SessionReviewHeader: View {
             } label: { Label("Continue Scanning", systemImage: "viewfinder").frame(minHeight: 44) }
                 .buttonStyle(.bordered).disabled(openingScanner)
             if session.isActive { FinishSessionButton(session: session) }
-            Text("Editing cards updates this review. Saved estimates keep their original values, rates, overrides, card price and transaction choice. Saving an estimate does not record a completed purchase.")
+            Text("Editing cards and offer percentages updates this review. Record a transaction outcome to mark what happened.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -332,7 +295,6 @@ struct SessionReviewHeader: View {
         restoredInputs = true
         do {
             if let saved = try session.savedOffers().last {
-                if let amount = saved.customCashOffer { customCashText = CSVExportService.number(amount) }
                 if let transaction = saved.tradeTransaction {
                     transactionMode = transaction.mode
                     if transaction.mode != .cashOnly, let price = transaction.myCardPrice { myCardPriceText = CSVExportService.number(price) }

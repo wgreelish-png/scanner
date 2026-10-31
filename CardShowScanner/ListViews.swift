@@ -259,6 +259,7 @@ struct CardListView: View {
     @State private var editing: InventoryCard?
     @State private var showingCatalogSearch = false
     @State private var showingInventoryImport = false
+    @State private var showingOfferRates = false
     @State private var exportText = ""
     @State private var exporting = false
     @State private var shareURL: URL?
@@ -290,19 +291,6 @@ struct CardListView: View {
                         .buttonStyle(.borderless).accessibilityIdentifier("list.manageCardShowInventory")
                 }
             }
-            listOutcomeSection
-            Section("Export inventory") {
-                Button("Export CSV to Files", systemImage: "square.and.arrow.up") { exportCSV() }
-                    .buttonStyle(.borderless).frame(minHeight: 44)
-                    .disabled(list.cards.isEmpty || exporting || shareURL != nil)
-                    .accessibilityIdentifier("list.exportCSV")
-                Button("Share CSV", systemImage: "paperplane") { share() }
-                    .buttonStyle(.borderless).frame(minHeight: 44)
-                    .disabled(list.cards.isEmpty || exporting || shareURL != nil)
-                    .accessibilityIdentifier("list.shareCSV")
-                Text("Exports all \(list.quantity) cards in \(list.isCardShowInventory ? "import order" : "scan order"), including quantity, condition, printing and market value. Search and sorting do not limit the export.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
             Section {
                 if let session = reviewSession {
                     // This row contains several independent controls. Automatic
@@ -310,13 +298,15 @@ struct CardListView: View {
                     // panel trigger its Continue Scanning action.
                     SessionReviewHeader(session: session, list: list,
                         onContinue: { continueScanning(session) },
-                        onSavedOffers: { open(.savedOffers(session.id), session: session) })
+                        onSavedOffers: { open(.savedOffers(session.id), session: session) },
+                        outcomeActions: AnyView(listOutcomeActions))
                         .buttonStyle(.borderless)
                 }
                 else {
                     LabeledContent("Total quantity", value: String(list.quantity))
                     LabeledContent("Known market subtotal", value: list.knownValue.money)
                     if list.unpricedQuantity > 0 { Text("Partial valuation: \(list.unpricedQuantity) copies have no price.").foregroundStyle(.orange) }
+                    listOutcomeActions
                     if !list.isCardShowInventory {
                         Picker("Game for continued scanning", selection: $continueGame) {
                             ForEach(CatalogOptions.games, id: \.self) { Text($0) }
@@ -338,8 +328,20 @@ struct CardListView: View {
             Picker("Sort", selection: $sort) { ForEach(["Scan Order", "Name", "Value"], id: \.self) { Text($0 == "Scan Order" && list.isCardShowInventory ? "Import Order" : $0).tag($0) } }
             if list.cards.isEmpty { ContentUnavailableView("No cards yet", systemImage: "rectangle.stack", description: Text(list.isCardShowInventory ? "Your last imported location is empty. Refresh inventory to check for changes." : "Open the scanner to add cards.")) }
             ForEach(filtered) { item in
-                Button { editing = item } label: {
-                    VStack(alignment: .leading, spacing: 5) {
+                Button {
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    editing = item
+                } label: {
+                    HStack(alignment: .top, spacing: 12) {
+                        AsyncImage(url: item.snapshot.imageURL) { phase in
+                            if let image = phase.image { image.resizable().scaledToFit() }
+                            else {
+                                RoundedRectangle(cornerRadius: 5).fill(.quaternary)
+                                    .overlay { Image(systemName: "rectangle.portrait").foregroundStyle(.secondary) }
+                            }
+                        }.frame(width: 52, height: 74).clipShape(RoundedRectangle(cornerRadius: 5))
+                            .accessibilityIdentifier("list.cardThumbnail").accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 5) {
                         Text(item.snapshot.name).font(.headline)
                         Text("\(item.snapshot.set) • \(item.snapshot.number)").font(.caption)
                         Text("\(item.snapshot.identity.printing) • \(item.snapshot.identity.condition) • \(item.snapshot.identity.language)").font(.caption)
@@ -347,7 +349,8 @@ struct CardListView: View {
                         if item.cashOverrideText != nil || item.tradeOverrideText != nil || item.maximumOverrideText != nil {
                             Text("Per-copy offer overrides applied").font(.caption).foregroundStyle(.secondary)
                         }
-                    }.foregroundStyle(.primary).frame(minHeight: 60)
+                        }.foregroundStyle(.primary).frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(maxWidth: .infinity, minHeight: 74, alignment: .leading)
                 }.swipeActions {
                     if !list.isCardShowInventory { Button("Remove", role: .destructive) { context.delete(item); save() } }
                 }
@@ -381,10 +384,19 @@ struct CardListView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         if !list.isCardShowInventory { Button("Rename") { name = list.name; rename = true } }
-                        Button("Export CSV to Files") { exportCSV() }
-                            .disabled(list.cards.isEmpty || exporting || shareURL != nil)
-                        Button("Share CSV") { share() }
-                            .disabled(list.cards.isEmpty || exporting || shareURL != nil)
+                        Button("Export CSV to Files", systemImage: "square.and.arrow.up") { exportCSV() }
+                            .disabled(list.cards.isEmpty || exporting || shareURL != nil).accessibilityIdentifier("list.exportCSV")
+                        Button("Share CSV", systemImage: "paperplane") { share() }
+                            .disabled(list.cards.isEmpty || exporting || shareURL != nil).accessibilityIdentifier("list.shareCSV")
+                        if let session = reviewSession {
+                            Button("Offer Percentages", systemImage: "percent") { showingOfferRates = true }
+                                .accessibilityIdentifier("list.offerPercentages")
+                            if (try? session.savedOffers().isEmpty) == false {
+                                Button("Previous Estimates", systemImage: "clock.arrow.circlepath") {
+                                    open(.savedOffers(session.id), session: session)
+                                }
+                            }
+                        }
                         Button("Clear List Outcome", systemImage: "arrow.uturn.backward") { recordOutcome(nil) }
                             .disabled(list.transactionOutcomeData == nil || savingOutcome)
                             .accessibilityIdentifier("list.clearOutcome")
@@ -404,6 +416,9 @@ struct CardListView: View {
             .sheet(item: $editing) { item in
                 if list.isCardShowInventory { CardShowInventoryCardView(item: item) }
                 else { CardEditorView(item: item) }
+            }
+            .sheet(isPresented: $showingOfferRates) {
+                if let session = reviewSession { SessionRatesView(session: session) }
             }
             .sheet(isPresented: $showingInventoryImport) {
                 NavigationStack {
@@ -427,8 +442,8 @@ struct CardListView: View {
         guard let kind = list.outcomeRecord?.kind, kind != .nothingHappened else { return nil }
         return kind
     }
-    private var listOutcomeSection: some View {
-        Section("List outcome") {
+    private var listOutcomeActions: some View {
+        VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text("Outcome")
@@ -472,13 +487,11 @@ struct CardListView: View {
                 .disabled(savingOutcome)
                 .accessibilityIdentifier("list.nothingHappened")
                 .accessibilityHint("Record that this deal did not go ahead.")
-            Text("The outcome stays with this saved list until you change or clear it.")
-                .font(.caption).foregroundStyle(.secondary)
+            Divider()
             RecordListBudgetButton(listID: list.id, listName: list.name,
                                    suggestedKind: recordedTransaction == .trade || recordedTransaction == .tradeAndPurchase ? .trade : .purchase,
                                    startsWithCashPaid: recordedTransaction == .tradeAndPurchase)
-            Text("Confirm the actual cash amount to update your show budget.")
-                .font(.caption).foregroundStyle(.secondary)
+
         }
     }
     private func recordOutcome(_ kind: ListOutcomeKind?) {
@@ -621,9 +634,13 @@ struct CardEditorView: View {
                     Button("Save") { save() }.disabled(pricing.priceLoading || saving)
                         .accessibilityIdentifier("cardEditor.save")
                 }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") { focusedField = nil }.accessibilityIdentifier("cardEditor.keyboardDone")
+                if focusedField != nil {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button { focusedField = nil } label: { Text("Done").fixedSize() }
+                            .frame(minWidth: 64, minHeight: 44).layoutPriority(1)
+                            .accessibilityIdentifier("cardEditor.keyboardDone")
+                    }
                 }
             }
             .task { pricing.loadPrintingOptions() }
