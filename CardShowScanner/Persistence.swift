@@ -7,6 +7,8 @@ import SwiftData
     var createdAt: Date
     // Nil is an unmarked list; explicit outcomes are versioned app-owned JSON.
     var transactionOutcomeData: Data? = nil
+    // Versioned source metadata exists only on the one-way Card Show mirror.
+    var inventorySourceData: Data? = nil
     @Relationship(deleteRule: .cascade, inverse: \InventoryCard.list) var cards: [InventoryCard] = []
     init(name: String) { id = UUID(); self.name = name; createdAt = .now }
     var orderedCards: [InventoryCard] {
@@ -26,6 +28,7 @@ import SwiftData
     var cashOverrideText: String? = nil
     var tradeOverrideText: String? = nil
     var maximumOverrideText: String? = nil
+    var sourceInventoryID: Int? = nil
     var offerLine: OfferLine {
         OfferLine(price: snapshot.marketPrice, quantity: quantity,
             cashOverride: cashOverrideText.flatMap { Decimal(string: $0) },
@@ -91,6 +94,7 @@ import SwiftData
 
 @MainActor enum CardListService {
     static func add(_ card: CardCandidate, to list: CardList, context: ModelContext) throws {
+        guard !list.isCardShowInventory else { throw CardShowInventoryFailure.readOnlyList }
         // Every confirmation is a physical card, including exact duplicates.
         let item = try InventoryCard(card: card)
         if let last = list.orderedCards.last {
@@ -103,6 +107,7 @@ import SwiftData
     /// Editing never coalesces physical rows, even when their identities become equal.
     static func edit(_ item: InventoryCard, card: CardCandidate, quantity: Int,
                      cashOverride: String?, tradeOverride: String?, maximumOverride: String?, context: ModelContext) throws {
+        guard item.sourceInventoryID == nil, item.list?.isCardShowInventory != true else { throw CardShowInventoryFailure.readOnlyList }
         guard quantity > 0 else { throw BatchFailure.invalidQuantity }
         do {
             try item.update(card); item.quantity = quantity
@@ -112,6 +117,7 @@ import SwiftData
     }
 
     static func duplicate(_ list: CardList, context: ModelContext) throws {
+        // Copies intentionally have neither source metadata nor source row IDs.
         let copy = CardList(name: list.name + " Copy"); context.insert(copy)
         for card in list.orderedCards {
             let item = try InventoryCard(card: card.snapshot, quantity: card.quantity)

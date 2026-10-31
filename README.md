@@ -34,6 +34,8 @@ Build 26 adds [compact Card Details](docs/CompactCardDetails.md): artwork, human
 
 Build 27 adds [one standard pricing source](docs/StandardMarketPricing.md): all market quotes use Open API. Provider selectors and the scanner’s first-use website-price sign-in prompt are removed. Existing provider preferences are ignored, while historical saved prices, source metadata and offers remain intact. Account sign-in and Beta API access stay separate; daily caching is unchanged.
 
+Build 29 adds [Card Show inventory import](docs/CardShowInventory.md). Lists → **Card Show Inventory** connects the existing TCGTracking account and imports its exact Card Show location into one saved list. Explicit refresh updates source rows and quantities without duplication; failed/partial refreshes keep the previous copy. Card details, quantities and last imported values stay available offline. An editable duplicate supports local scanning and corrections; the imported list mirrors the website.
+
 Open `CardShowScanner.xcodeproj` in Xcode 16+, select **CardShowScanner**, and Run. Set personal signing using the local configuration instructions below. Use a physical iPhone for live camera verification.
 
 For the final personal-use installation, select **CardShowScanner Personal**: Run uses Release without attaching a debugger, with the same bundle ID and your ignored signing configuration. [Final phone test and weekly Personal Team refresh](docs/PersonalIPhone.md) explains how to keep the app/data installed; free signing normally expires after seven days.

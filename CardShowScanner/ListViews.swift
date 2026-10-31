@@ -34,12 +34,40 @@ struct SavedListsView: View {
 
     private var filtered: [CardList] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        return lists.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.outcomeTitle.localizedCaseInsensitiveContains(query) }
+        return lists.filter { !$0.isCardShowInventory && (query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.outcomeTitle.localizedCaseInsensitiveContains(query)) }
     }
+
+    private var importedInventory: CardList? { lists.first { $0.isCardShowInventory } }
 
     var body: some View {
         List {
             Section { ShowBudgetSummaryCard() }
+            Section {
+                NavigationLink { CardShowInventoryView() } label: {
+                    HStack(spacing: 14) {
+                        Image(systemName: "shippingbox.fill").font(.title2).foregroundStyle(.indigo)
+                            .frame(width: 44, height: 52)
+                            .background(Color.indigo.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("Card Show Inventory").font(.headline)
+                            if let importedInventory {
+                                Text("\(importedInventory.quantity) cards · Saved on this iPhone").font(.caption).foregroundStyle(.secondary)
+                            } else {
+                                Text("Import your TCGTracking location.").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }.padding(.vertical, 3)
+                }.accessibilityIdentifier("savedLists.cardShowInventory")
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        if let importedInventory {
+                            Button("Remove Saved Copy", role: .destructive) {
+                                guard pendingDeletion == nil else { return }
+                                pendingDeletion = ListDeletionRequest(list: importedInventory)
+                            }.accessibilityIdentifier("savedLists.removeCardShowInventory")
+                        }
+                    }
+            }
             Section {
                 let layout = dynamicTypeSize.isAccessibilitySize
                     ? AnyLayout(VStackLayout(alignment: .leading, spacing: 14))
@@ -61,7 +89,7 @@ struct SavedListsView: View {
                 }.padding(.vertical, 8)
             }
             Section("Your lists") {
-                if lists.isEmpty {
+                if lists.allSatisfy({ $0.isCardShowInventory }) {
                     ContentUnavailableView {
                         Label("Your collection starts here", systemImage: "rectangle.stack")
                     } description: {
@@ -176,6 +204,10 @@ struct ListDeletionConfirmationView: View {
                 Section {
                     Text(model.request.name).font(.headline)
                     Text("This list and its \(model.request.quantity) cards will be deleted.")
+                    if model.request.isImportedInventory {
+                        Text("This removes the saved copy from this iPhone. Import again to download your TCGTracking inventory.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
                     Text("Saved offer estimates and session history will stay in All Sessions.")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
@@ -226,6 +258,7 @@ struct CardListView: View {
     @State private var error: String?
     @State private var editing: InventoryCard?
     @State private var showingCatalogSearch = false
+    @State private var showingInventoryImport = false
     @State private var exportText = ""
     @State private var exporting = false
     @State private var shareURL: URL?
@@ -245,6 +278,18 @@ struct CardListView: View {
     }
     var body: some View {
         List {
+            if list.isCardShowInventory {
+                Section("TCGTracking inventory") {
+                    if let link = list.cardShowInventory {
+                        Text("Saved on this iPhone · Updated " + link.refreshedAt.formatted(date: .abbreviated, time: .shortened))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text("This list mirrors your Card Show location. Use an editable copy to scan or change cards locally.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Refresh or Make Editable Copy", systemImage: "arrow.triangle.2.circlepath") { showingInventoryImport = true }
+                        .buttonStyle(.borderless).accessibilityIdentifier("list.manageCardShowInventory")
+                }
+            }
             listOutcomeSection
             Section("Export inventory") {
                 Button("Export CSV to Files", systemImage: "square.and.arrow.up") { exportCSV() }
@@ -255,7 +300,7 @@ struct CardListView: View {
                     .buttonStyle(.borderless).frame(minHeight: 44)
                     .disabled(list.cards.isEmpty || exporting || shareURL != nil)
                     .accessibilityIdentifier("list.shareCSV")
-                Text("Exports all \(list.quantity) cards in scan order, including quantity, condition, printing and market value. Search and sorting do not limit the export.")
+                Text("Exports all \(list.quantity) cards in \(list.isCardShowInventory ? "import order" : "scan order"), including quantity, condition, printing and market value. Search and sorting do not limit the export.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {
@@ -272,22 +317,26 @@ struct CardListView: View {
                     LabeledContent("Total quantity", value: String(list.quantity))
                     LabeledContent("Known market subtotal", value: list.knownValue.money)
                     if list.unpricedQuantity > 0 { Text("Partial valuation: \(list.unpricedQuantity) copies have no price.").foregroundStyle(.orange) }
-                    Picker("Game for continued scanning", selection: $continueGame) {
-                        ForEach(CatalogOptions.games, id: \.self) { Text($0) }
+                    if !list.isCardShowInventory {
+                        Picker("Game for continued scanning", selection: $continueGame) {
+                            ForEach(CatalogOptions.games, id: \.self) { Text($0) }
+                        }
+                        Button("Continue Scanning", systemImage: "viewfinder") {
+                            guard !confirmContinue, reviewDestination == nil else { return }
+                            DiagnosticLog.shared.record("navigation.scan_requested", ["phase": "standalone_list"])
+                            confirmContinue = true
+                        }.buttonStyle(.borderless)
                     }
-                    Button("Continue Scanning", systemImage: "viewfinder") {
-                        guard !confirmContinue, reviewDestination == nil else { return }
-                        DiagnosticLog.shared.record("navigation.scan_requested", ["phase": "standalone_list"])
-                        confirmContinue = true
-                    }.buttonStyle(.borderless)
                 }
             }
-            Section {
-                Button("Search & Add Card", systemImage: "magnifyingglass") { showingCatalogSearch = true }
-                    .buttonStyle(.borderless).frame(minHeight: 44).accessibilityIdentifier("list.searchAndAdd")
+            if !list.isCardShowInventory {
+                Section {
+                    Button("Search & Add Card", systemImage: "magnifyingglass") { showingCatalogSearch = true }
+                        .buttonStyle(.borderless).frame(minHeight: 44).accessibilityIdentifier("list.searchAndAdd")
+                }
             }
-            Picker("Sort", selection: $sort) { ForEach(["Scan Order", "Name", "Value"], id: \.self) { Text($0) } }
-            if list.cards.isEmpty { ContentUnavailableView("No cards yet", systemImage: "rectangle.stack", description: Text("Open the scanner to add cards.")) }
+            Picker("Sort", selection: $sort) { ForEach(["Scan Order", "Name", "Value"], id: \.self) { Text($0 == "Scan Order" && list.isCardShowInventory ? "Import Order" : $0).tag($0) } }
+            if list.cards.isEmpty { ContentUnavailableView("No cards yet", systemImage: "rectangle.stack", description: Text(list.isCardShowInventory ? "Your last imported location is empty. Refresh inventory to check for changes." : "Open the scanner to add cards.")) }
             ForEach(filtered) { item in
                 Button { editing = item } label: {
                     VStack(alignment: .leading, spacing: 5) {
@@ -300,7 +349,7 @@ struct CardListView: View {
                         }
                     }.foregroundStyle(.primary).frame(minHeight: 60)
                 }.swipeActions {
-                    Button("Remove", role: .destructive) { context.delete(item); save() }
+                    if !list.isCardShowInventory { Button("Remove", role: .destructive) { context.delete(item); save() } }
                 }
             }
         }.navigationTitle(reviewSession == nil ? list.name : "Review & Offer").searchable(text: $search)
@@ -331,7 +380,7 @@ struct CardListView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        Button("Rename") { name = list.name; rename = true }
+                        if !list.isCardShowInventory { Button("Rename") { name = list.name; rename = true } }
                         Button("Export CSV to Files") { exportCSV() }
                             .disabled(list.cards.isEmpty || exporting || shareURL != nil)
                         Button("Share CSV") { share() }
@@ -352,7 +401,16 @@ struct CardListView: View {
                 Button("Save") { if !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { list.name = name; save() } }
                 Button("Cancel", role: .cancel) {}
             }
-            .sheet(item: $editing) { item in CardEditorView(item: item) }
+            .sheet(item: $editing) { item in
+                if list.isCardShowInventory { CardShowInventoryCardView(item: item) }
+                else { CardEditorView(item: item) }
+            }
+            .sheet(isPresented: $showingInventoryImport) {
+                NavigationStack {
+                    CardShowInventoryView()
+                        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { showingInventoryImport = false } } }
+                }
+            }
             .sheet(isPresented: $showingCatalogSearch) {
                 ManualCardSearchView(list: list, game: reviewSession?.game ?? list.orderedCards.first?.snapshot.identity.game ?? continueGame,
                     allowsGameChange: reviewSession == nil && list.cards.isEmpty)
