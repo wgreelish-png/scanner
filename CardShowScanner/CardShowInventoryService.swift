@@ -50,9 +50,15 @@ extension CardList {
 @MainActor enum CardShowInventoryService {
     static func importedList(context: ModelContext) throws -> CardList? {
         let linked = try context.fetch(FetchDescriptor<CardList>()).filter(\.isCardShowInventory)
-        guard linked.count <= 1 else { throw CardShowInventoryFailure.invalidResponse }
+        guard linked.count <= 1 else {
+            DiagnosticLog.shared.record("inventory_import.save_blocked", ["phase": "persistence", "reason": "multiple_imported_lists"])
+            throw CardShowInventoryFailure.invalidResponse
+        }
         guard let list = linked.first else { return nil }
-        guard list.cardShowInventory != nil else { throw CardShowInventoryFailure.invalidResponse }
+        guard list.cardShowInventory != nil else {
+            DiagnosticLog.shared.record("inventory_import.save_blocked", ["phase": "persistence", "reason": "invalid_source_link"])
+            throw CardShowInventoryFailure.invalidResponse
+        }
         return list
     }
 
@@ -76,7 +82,10 @@ extension CardList {
             throw CardShowInventoryFailure.locationChanged
         }
         // A rollback of a sync must never discard somebody else's unsaved draft.
-        guard !context.hasChanges else { throw CardShowInventoryFailure.persistenceFailed }
+        guard !context.hasChanges else {
+            DiagnosticLog.shared.record("inventory_import.save_blocked", ["phase": "persistence", "reason": "unsaved_changes"])
+            throw CardShowInventoryFailure.persistenceFailed
+        }
         let list = existing ?? CardList(name: "Card Show")
         let previous = State(list: list)
         var bySource: [Int: InventoryCard] = [:]
@@ -122,7 +131,9 @@ extension CardList {
             // Initial inserts are discarded by rollback. Deleting them here
             // would introduce new pending changes after a failed save.
             context.processPendingChanges()
-            DiagnosticLog.shared.record("inventory_import.save_failed", ["reason": "persistence_failed"])
+            DiagnosticLog.shared.failure("inventory_import.persistence_error", error)
+            DiagnosticLog.shared.record("inventory_import.save_failed", ServiceDiagnosticFields.failure(error)
+                .merging(["phase": "persistence", "reason": "persistence_failed"]) { _, value in value })
             throw CardShowInventoryFailure.persistenceFailed
         }
     }
