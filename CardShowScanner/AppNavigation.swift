@@ -4,26 +4,35 @@ import UIKit
 
 /// Tabs navigate; only an explicit scan action creates a list or opens capture.
 struct HomeView: View {
-    private enum Section: Hashable { case lists, scan, research, settings }
+    private enum Section: Hashable { case lists, scan, show, research, settings }
     @State private var section: Section = .scan
+    @State private var listsNavigationID = UUID()
+    @State private var scanNavigationID = UUID()
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.modelContext) private var context
 
     var body: some View {
         TabView(selection: $section) {
             NavigationStack {
-                SavedListsView(onOpenScan: { section = .scan })
+                SavedListsView(onOpenScan: openScan)
             }
+            .id(listsNavigationID)
             .tabItem { Label("Lists", systemImage: "rectangle.stack") }
             .tag(Section.lists)
 
             NavigationStack {
-                ScanHomeView(onOpenLists: { section = .lists })
+                ScanHomeView(onOpenLists: openLists)
             }
+            .id(scanNavigationID)
             .tabItem { Label("Scan", systemImage: "viewfinder") }
             .tag(Section.scan)
 
+            NavigationStack { ShowBudgetView() }
+                .tabItem { Label("Show", systemImage: "calendar") }
+                .tag(Section.show)
+
             NavigationStack {
-                ResearchHubView(onOpenScan: { section = .scan }, openSettings: { section = .settings })
+                ResearchHubView(onOpenScan: openScan, openSettings: { section = .settings })
             }
             .tabItem { Label("Research", systemImage: "chart.xyaxis.line") }
             .tag(Section.research)
@@ -34,9 +43,31 @@ struct HomeView: View {
         }
         .tint(.indigo)
         .toolbarBackground(.visible, for: .tabBar)
-        .onAppear { BetaAllowlistForegroundObserver.shared.setForeground(scenePhase == .active) }
-        .onChange(of: scenePhase) { _, phase in BetaAllowlistForegroundObserver.shared.setForeground(phase == .active) }
+        .onAppear {
+            BetaAllowlistForegroundObserver.shared.setForeground(scenePhase == .active)
+            if scenePhase == .active { synchronizeBudgetOutcomes() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            BetaAllowlistForegroundObserver.shared.setForeground(phase == .active)
+            if phase == .active { synchronizeBudgetOutcomes() }
+        }
         .onDisappear { BetaAllowlistForegroundObserver.shared.setForeground(false) }
+    }
+
+    private func synchronizeBudgetOutcomes() {
+        do { _ = try ListBudgetOutcomeService.synchronizePending(context: context) }
+        catch { DiagnosticLog.shared.record("outcome_budget.recovery_deferred", ["reason": "pending_sync"]) }
+    }
+
+    /// Explicit destination actions start at that tab's root. Ordinary tab
+    /// changes keep their existing stacks and do not start a camera or session.
+    private func openLists() {
+        listsNavigationID = UUID()
+        section = .lists
+    }
+    private func openScan() {
+        scanNavigationID = UUID()
+        section = .scan
     }
 }
 
@@ -68,7 +99,6 @@ private struct ScanHomeView: View {
                         .font(.subheadline).foregroundStyle(.secondary)
                 }.padding(.top, 8)
 
-                ShowBudgetSummaryCard()
                 newScanCard
                 if let active, let activeList { continueCard(session: active, list: activeList) }
 

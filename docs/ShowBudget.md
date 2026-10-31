@@ -1,3 +1,5 @@
+> Build 32: scheduled shows accept new cash only during their inclusive local show dates; future/ended shows remain reviewable. A dedicated **Show** tab replaces the shared budget entry on Lists/Scan. [List outcomes now post calculated cash automatically](AutomaticOutcomeBudget.md), replacing the separate Record Cash action on list review. Existing receipts and dates are retained.
+
 > Build 30 adds optional start/end **Show dates** in New/Edit Show and the budget dashboard. Existing undated shows remain undated. Dates describe the show; individual transaction timestamps and cash calculations are unchanged.
 
 # Show cash budget

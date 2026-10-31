@@ -27,6 +27,8 @@ Validated, account-isolated native snapshots persist across app launches, with u
 
 ## Previously downloaded OpenAPI prices offline
 
+Scanner recognition, candidate changes, printing/condition changes and confirmation use ordinary cached lookups, without forcing an API call per physical scan. An uncached, evicted or expired set needs a request; explicit Refresh revalidates sooner. A missing catalog mapping can also require the separate cached product-metadata lookup.
+
 Standard Open API pricing retains up to four recently fetched, validated public SKU set responses on disk, with a 32 MiB total cap. Successful online lookups populate the cache automatically. Fresh bodies are reused for 24 hours, including after a restart, and labeled cached without claiming an offline connection. Refresh Market Price can revalidate sooner. Disk data is separate from recognition packs, website cookies, Beta credentials and saved offers.
 
 On a genuine connectivity failure, an available cached set can supply the exact product/printing/language/condition quote. It is labeled **cached / offline**, keeps its original provider/retrieval timestamps, and does not become a fresh online response. A missing condition, ambiguous SKU or missing market value remains unavailable. Authentication/HTTP errors, malformed responses and canceled requests do not silently return cached data. Pricing never switches to a website quote as a fallback.

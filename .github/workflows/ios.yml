@@ -104,7 +104,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build and run navigation and chart UI checks independently
         id: evidence_ui_tests
-        run: bash scripts/run_ios_tests.sh CardShowScannerUITests/MarketEvidenceUITests CardShowScannerUITests/AppNavigationUITests CardShowScannerUITests/ReviewPresentationUITests
+        run: bash scripts/run_ios_tests.sh CardShowScannerUITests/MarketEvidenceUITests CardShowScannerUITests/AppNavigationUITests CardShowScannerUITests/ReviewPresentationUITests CardShowScannerUITests/ListBulkDeletionUITests
       - name: Publish evidence UI summary
         if: ${{ always() && steps.evidence_ui_tests.outcome != 'skipped' }}
         run: python3 scripts/report_xcode_test_summary.py NativeTests.log

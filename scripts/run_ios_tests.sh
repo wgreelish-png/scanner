@@ -5,7 +5,7 @@ SCANNER_TEST_TARGET="${1:?Expected an allowlisted native or UI suite}"
 SCANNER_TEST_SELECTION=(-only-testing:"$SCANNER_TEST_TARGET")
 for SCANNER_ALLOWED_TARGET in "$@"; do
   case "$SCANNER_ALLOWED_TARGET" in
-    CardShowScannerTests|CardShowScannerUITests|CardShowScannerUITests/ResearchUITests|CardShowScannerUITests/MarketEvidenceUITests|CardShowScannerUITests/AppNavigationUITests|CardShowScannerUITests/ShowBudgetUITests|CardShowScannerUITests/CardShowInventoryUITests|CardShowScannerUITests/ReviewPresentationUITests) ;;
+    CardShowScannerTests|CardShowScannerUITests|CardShowScannerUITests/ResearchUITests|CardShowScannerUITests/MarketEvidenceUITests|CardShowScannerUITests/AppNavigationUITests|CardShowScannerUITests/ShowBudgetUITests|CardShowScannerUITests/CardShowInventoryUITests|CardShowScannerUITests/ReviewPresentationUITests|CardShowScannerUITests/ListBulkDeletionUITests) ;;
     *) echo "Unknown test target" >&2; exit 2 ;;
   esac
 done
@@ -23,6 +23,7 @@ if [ "$SCANNER_TEST_TARGET" = CardShowScannerUITests ]; then
   SCANNER_TEST_SELECTION+=(-skip-testing:CardShowScannerUITests/ShowBudgetUITests)
   SCANNER_TEST_SELECTION+=(-skip-testing:CardShowScannerUITests/CardShowInventoryUITests)
   SCANNER_TEST_SELECTION+=(-skip-testing:CardShowScannerUITests/ReviewPresentationUITests)
+  SCANNER_TEST_SELECTION+=(-skip-testing:CardShowScannerUITests/ListBulkDeletionUITests)
 fi
 DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for k,v in d["devices"].items() if "iOS" in k for x in v if x["name"].startswith("iPhone")))')
 # Xcode 16.3/16.4's iOS 18.4/18.5 simulator omits a Swift WebKit symlink.

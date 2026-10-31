@@ -15,6 +15,50 @@ final class ShowBudgetTests: XCTestCase {
                         reinvestmentPercent: percent, splitBasis: basis, recordedAt: instant)
     }
 
+    private var localCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        return calendar
+    }
+    private func localDate(_ year: Int, _ month: Int, _ day: Int, _ hour: Int = 0, _ minute: Int = 0) -> Date {
+        localCalendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute))!
+    }
+
+    func testScheduledBudgetAppliesForBothWholeEndpointDaysOnly() {
+        var event = show()
+        event.startDate = localDate(2026, 10, 31, 15)
+        event.endDate = localDate(2026, 11, 1, 9)
+        XCTAssertEqual(event.scheduleStatus(on: localDate(2026, 10, 30, 23, 59), calendar: localCalendar), .scheduled)
+        XCTAssertFalse(event.applies(on: localDate(2026, 10, 30, 23, 59), calendar: localCalendar))
+        XCTAssertTrue(event.applies(on: localDate(2026, 10, 31), calendar: localCalendar))
+        XCTAssertTrue(event.applies(on: localDate(2026, 11, 1, 23, 59), calendar: localCalendar))
+        XCTAssertEqual(event.scheduleStatus(on: localDate(2026, 11, 2), calendar: localCalendar), .ended)
+        XCTAssertFalse(event.applies(on: localDate(2026, 11, 2), calendar: localCalendar))
+    }
+
+    func testSingleShowDayUsesCalendarBoundariesAcrossSpringAndFallDaylightSaving() {
+        for (month, day, expectedHours) in [(3, 8, 23), (11, 1, 25)] {
+            let first = localDate(2026, month, day)
+            let next = localCalendar.date(byAdding: .day, value: 1, to: first)!
+            XCTAssertEqual(next.timeIntervalSince(first), Double(expectedHours * 3_600))
+            var event = show(); event.startDate = first; event.endDate = first
+            XCTAssertTrue(event.applies(on: first, calendar: localCalendar))
+            XCTAssertTrue(event.applies(on: next.addingTimeInterval(-1), calendar: localCalendar))
+            XCTAssertFalse(event.applies(on: first.addingTimeInterval(-1), calendar: localCalendar))
+            XCTAssertFalse(event.applies(on: next, calendar: localCalendar))
+        }
+    }
+
+    func testUndatedBudgetRemainsManuallyApplicableAndMalformedScheduleNeverApplies() {
+        var event = show()
+        XCTAssertEqual(event.scheduleStatus(on: localDate(2026, 10, 31), calendar: localCalendar), .manual)
+        XCTAssertTrue(event.applies(on: localDate(2026, 1, 1), calendar: localCalendar))
+        event.startDate = localDate(2026, 10, 31)
+        XCTAssertFalse(event.applies(on: localDate(2026, 10, 31), calendar: localCalendar))
+        event.endDate = localDate(2026, 10, 30)
+        XCTAssertFalse(event.applies(on: localDate(2026, 10, 31), calendar: localCalendar))
+    }
+
     func testLegacyVersionOneShowWithoutDateFieldsKeepsOriginalReceiptsAndBalances() throws {
         let original = show([entry(.sale, received: 20_000, fees: 1_000)])
         let book = ShowBudgetBook(shows: [original], activeShowID: original.id)
@@ -22,8 +66,9 @@ final class ShowBudgetTests: XCTestCase {
         var shows = try XCTUnwrap(body["shows"] as? [[String: Any]])
         shows[0].removeValue(forKey: "startDate"); shows[0].removeValue(forKey: "endDate")
         body["shows"] = shows
+        body["version"] = 1
         let reopened = try JSONDecoder().decode(ShowBudgetBook.self, from: JSONSerialization.data(withJSONObject: body))
-        XCTAssertEqual(reopened.version, 1)
+        XCTAssertEqual(reopened.version, 2)
         let restored = try XCTUnwrap(reopened.shows.first)
         XCTAssertNil(restored.startDate); XCTAssertNil(restored.endDate)
         XCTAssertEqual(restored.createdAt, original.createdAt); XCTAssertEqual(restored.entries, original.entries)
@@ -219,7 +264,7 @@ final class ShowBudgetTests: XCTestCase {
         let event = show([entry(.sale, received: 10_000)])
         let data = try JSONEncoder().encode(ShowBudgetBook(shows: [event], activeShowID: event.id))
         let initial = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        var version = initial; version["version"] = 2
+        var version = initial; version["version"] = 3
         XCTAssertThrowsError(try JSONDecoder().decode(ShowBudgetBook.self, from: JSONSerialization.data(withJSONObject: version)))
         for (key, value) in [("splitBasis", "estimated" as Any), ("kind", "unknown" as Any), ("paidCents", -1 as Any)] {
             var object = initial
@@ -233,7 +278,7 @@ final class ShowBudgetTests: XCTestCase {
 
     func testBookAndEventBoundsRejectInvalidStateRatherThanTruncateHistory() throws {
         XCTAssertThrowsError(try ShowBudgetBook(activeShowID: UUID()).validate())
-        XCTAssertThrowsError(try ShowBudgetBook(version: 2).validate())
+        XCTAssertThrowsError(try ShowBudgetBook(version: 3).validate())
         XCTAssertThrowsError(try ShowBudgetEvent(name: "  ", startingCents: 0).validate())
         XCTAssertThrowsError(try ShowBudgetEvent(name: "Valid", startingCents: -1).validate())
         XCTAssertThrowsError(try ShowBudgetEvent(name: "Valid", startingCents: 0, reinvestmentPercent: 101).validate())

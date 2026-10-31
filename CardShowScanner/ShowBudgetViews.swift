@@ -4,9 +4,16 @@ import SwiftUI
 @MainActor struct ShowBudgetSummaryCard: View {
     @State private var store: ShowBudgetStore
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var isVisible = false
     init(store: ShowBudgetStore = .shared) { _store = State(initialValue: store) }
 
     var body: some View {
+        TimelineView(.animation(minimumInterval: 60, paused: !isVisible || scenePhase != .active)) { _ in summary }
+            .onAppear { isVisible = true }.onDisappear { isVisible = false }
+    }
+
+    private var summary: some View {
         NavigationLink { ShowBudgetView(store: store) } label: {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
@@ -19,7 +26,7 @@ import SwiftUI
                         : AnyLayout(HStackLayout(alignment: .top, spacing: 20))
                     layout {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Available to buy").font(.caption).foregroundStyle(.secondary)
+                            Text(budgetBalanceTitle(show, store: store)).font(.caption).foregroundStyle(.secondary)
                             Text(budgetMoney(totals.availableCents)).font(.title2.bold())
                                 .foregroundStyle(totals.availableCents < 0 ? Color.orange : Color.primary)
                         }.frame(maxWidth: .infinity, alignment: .leading)
@@ -29,6 +36,9 @@ import SwiftUI
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }
                     Text(show.name).font(.caption).foregroundStyle(.secondary)
+                    Text(show.scheduleStatus(on: store.currentDate, calendar: store.calendar).title)
+                        .font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("budget.summaryStatus")
                     if let dates = budgetShowDateLabel(show) {
                         Text(dates).font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("budget.summaryDates")
                     }
@@ -48,11 +58,35 @@ import SwiftUI
 @MainActor struct ShowBudgetView: View {
     @State private var store: ShowBudgetStore
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var isVisible = false
     @State private var sheet: BudgetDashboardSheet?
     @State private var error: String?
     init(store: ShowBudgetStore = .shared) { _store = State(initialValue: store) }
 
     var body: some View {
+        TimelineView(.animation(minimumInterval: 60, paused: !isVisible || scenePhase != .active)) { _ in dashboard }
+        .onAppear { isVisible = true }.onDisappear { isVisible = false }
+        .navigationTitle("Show Budget")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { dashboardToolbar }
+        .sheet(item: $sheet) { destination in
+            NavigationStack {
+                switch destination {
+                case .newShow:
+                    BudgetSetupForm(store: store, editing: nil) { _ in sheet = nil }
+                case .edit(let id):
+                    if let show = store.book.shows.first(where: { $0.id == id }) {
+                        BudgetSetupForm(store: store, editing: show) { _ in sheet = nil }
+                    } else { ContentUnavailableView("Show unavailable", systemImage: "tray") }
+                case .record(let id, let kind):
+                    BudgetEntryForm(store: store, showID: id, initialKind: kind) { sheet = nil }
+                }
+            }
+        }
+    }
+
+    private var dashboard: some View {
         List {
             if !store.isLoaded {
                 BudgetLoadFailure(store: store)
@@ -81,32 +115,17 @@ import SwiftUI
                 }
             }
         }
-        .navigationTitle("Show Budget")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            if store.isLoaded {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { sheet = .newShow } label: { Image(systemName: "plus") }
-                        .accessibilityLabel("New Show").accessibilityIdentifier("budget.newShow")
-                }
-                if let show = store.activeShow {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("Edit") { sheet = .edit(show.id) }.accessibilityIdentifier("budget.editShow")
-                    }
-                }
+    }
+
+    @ToolbarContentBuilder private var dashboardToolbar: some ToolbarContent {
+        if store.isLoaded {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { sheet = .newShow } label: { Image(systemName: "plus") }
+                    .accessibilityLabel("New Show").accessibilityIdentifier("budget.newShow")
             }
-        }
-        .sheet(item: $sheet) { destination in
-            NavigationStack {
-                switch destination {
-                case .newShow:
-                    BudgetSetupForm(store: store, editing: nil) { _ in sheet = nil }
-                case .edit(let id):
-                    if let show = store.book.shows.first(where: { $0.id == id }) {
-                        BudgetSetupForm(store: store, editing: show) { _ in sheet = nil }
-                    } else { ContentUnavailableView("Show unavailable", systemImage: "tray") }
-                case .record(let id, let kind):
-                    BudgetEntryForm(store: store, showID: id, initialKind: kind) { sheet = nil }
+            if let show = store.activeShow {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Edit") { sheet = .edit(show.id) }.accessibilityIdentifier("budget.editShow")
                 }
             }
         }
@@ -127,7 +146,7 @@ import SwiftUI
     private func balanceSection(_ show: ShowBudgetEvent, totals: ShowBudgetTotals) -> some View {
         Section {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Available to buy").font(.subheadline).foregroundStyle(.secondary)
+                Text(budgetBalanceTitle(show, store: store)).font(.subheadline).foregroundStyle(.secondary)
                 Text(budgetMoney(totals.availableCents)).font(.largeTitle.bold()).monospacedDigit()
                     .foregroundStyle(totals.availableCents < 0 ? Color.orange : Color.primary)
                     .accessibilityIdentifier("budget.available")
@@ -148,6 +167,11 @@ import SwiftUI
 
     private func dateSection(_ show: ShowBudgetEvent) -> some View {
         Section("Show dates") {
+            LabeledContent("Status", value: show.scheduleStatus(on: store.currentDate, calendar: store.calendar).title)
+                .accessibilityIdentifier("budget.scheduleStatus")
+            if !store.canRecord(showID: show.id) {
+                Text(budgetScheduleMessage(show, store: store)).font(.caption).foregroundStyle(.secondary)
+            }
             if let dates = budgetShowDateLabel(show) {
                 Text(dates).accessibilityIdentifier("budget.showDates")
             } else {
@@ -166,18 +190,21 @@ import SwiftUI
                 recordButton("Sell", symbol: "arrow.down.left", kind: .sale, showID: show.id, id: "budget.sell")
                 recordButton("Trade", symbol: "arrow.left.arrow.right", kind: .trade, showID: show.id, id: "budget.trade")
             }.padding(.vertical, 4)
-            Text("Confirm the cash you actually paid or received to update this budget.")
+            Text("List outcomes update this budget automatically. Use these actions for cash you have not already recorded.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
 
     private func recordButton(_ title: String, symbol: String, kind: ShowBudgetEntryKind, showID: UUID, id: String) -> some View {
-        Button { sheet = .record(showID, kind) } label: {
+        Button {
+            guard store.canRecord(showID: showID) else { return }
+            sheet = .record(showID, kind)
+        } label: {
             VStack(spacing: 8) {
                 Image(systemName: symbol).font(.title3)
                 Text(title).font(.subheadline.weight(.semibold))
             }.frame(maxWidth: .infinity).padding(.vertical, 10)
-        }.buttonStyle(.bordered).tint(.indigo).accessibilityIdentifier(id)
+        }.buttonStyle(.bordered).tint(.indigo).disabled(!store.canRecord(showID: showID)).accessibilityIdentifier(id)
     }
 
     private func totalsSection(_ totals: ShowBudgetTotals) -> some View {
@@ -246,9 +273,14 @@ private enum BudgetDashboardSheet: Identifiable {
     }
 
     var body: some View {
-        Button { showing = true } label: {
+        Button {
+            guard store.activeShow == nil || store.eligibleActiveShow != nil else { return }
+            showing = true
+        } label: {
             Label("Record Cash in Show Budget", systemImage: "wallet.bifold")
-        }.buttonStyle(.borderless).accessibilityIdentifier("budget.recordListCash")
+        }.buttonStyle(.borderless)
+            .disabled(!store.isLoaded || (store.activeShow != nil && store.eligibleActiveShow == nil))
+            .accessibilityIdentifier("budget.recordListCash")
             .sheet(isPresented: $showing) {
                 BudgetListRecordFlow(store: store, listID: listID, listName: listName, kind: suggestedKind,
                                      startsWithCashPaid: startsWithCashPaid)
@@ -388,6 +420,8 @@ private enum BudgetTradeDirection: String, CaseIterable, Identifiable {
     let listName: String?
     let onRecorded: () -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var isVisible = false
     @State private var kind: ShowBudgetEntryKind
     @State private var direction: BudgetTradeDirection = .none
     @State private var amount = ""
@@ -428,6 +462,23 @@ private enum BudgetTradeDirection: String, CaseIterable, Identifiable {
     }
 
     var body: some View {
+        TimelineView(.animation(minimumInterval: 60, paused: !isVisible || scenePhase != .active)) { _ in form }
+        .onAppear { isVisible = true }.onDisappear { isVisible = false }
+        .navigationTitle("Record Cash").navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { focused = nil }
+                    .fixedSize().frame(minWidth: 60).accessibilityIdentifier("budget.keyboardDone")
+            }
+        }
+        .interactiveDismissDisabled(saving)
+        .onChange(of: kind) { _, _ in amount = ""; fees = ""; direction = .none; error = nil }
+        .onChange(of: direction) { _, _ in amount = ""; fees = ""; error = nil }
+    }
+
+    private var form: some View {
         Form {
             Section {
                 Picker("Transaction", selection: $kind) {
@@ -435,6 +486,12 @@ private enum BudgetTradeDirection: String, CaseIterable, Identifiable {
                 }.pickerStyle(.segmented).accessibilityIdentifier("budget.kind")
                 if let show = store.book.shows.first(where: { $0.id == showID }) { LabeledContent("Show", value: show.name) }
                 if let listName { LabeledContent("Linked list", value: listName) }
+            }
+            if !store.canRecord(showID: showID), let show = store.book.shows.first(where: { $0.id == showID }) {
+                Section("Show schedule") {
+                    Text(budgetScheduleMessage(show, store: store)).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("budget.recordScheduleStatus")
+                }
             }
             Section("Cash movement") {
                 if kind == .trade {
@@ -487,28 +544,20 @@ private enum BudgetTradeDirection: String, CaseIterable, Identifiable {
             if let error { Section { Text(error).foregroundStyle(.orange).accessibilityIdentifier("budget.error") } }
             Section {
                 Button("Record Transaction") { record() }
-                    .disabled(entry == nil || saving || saved || !store.isLoaded)
+                    .disabled(entry == nil || saving || saved || !store.isLoaded || !store.canRecord(showID: showID))
                     .accessibilityIdentifier("budget.record")
             } footer: {
                 Text("Confirm the actual cash paid or received to record this budget transaction.")
             }
         }
-        .navigationTitle("Record Cash").navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("Done") { focused = nil }
-                    .fixedSize().frame(minWidth: 60).accessibilityIdentifier("budget.keyboardDone")
-            }
-        }
-        .interactiveDismissDisabled(saving)
-        .onChange(of: kind) { _, _ in amount = ""; fees = ""; direction = .none; error = nil }
-        .onChange(of: direction) { _, _ in amount = ""; fees = ""; error = nil }
     }
 
     private func record() {
         guard !saving, !saved, let entry else { return }
+        guard store.canRecord(showID: showID) else {
+            error = "Cash can be recorded only on this show's scheduled dates. Your transaction has not been added."
+            return
+        }
         saving = true; error = nil
         defer { saving = false }
         do { try store.record(entry, showID: showID); saved = true; onRecorded() }
@@ -595,4 +644,21 @@ private func budgetShowDateLabel(_ show: ShowBudgetEvent) -> String? {
     let first = start.formatted(date: .abbreviated, time: .omitted)
     if Calendar.current.isDate(start, inSameDayAs: end) { return first }
     return first + " – " + end.formatted(date: .abbreviated, time: .omitted)
+}
+
+@MainActor private func budgetBalanceTitle(_ show: ShowBudgetEvent, store: ShowBudgetStore) -> String {
+    switch show.scheduleStatus(on: store.currentDate, calendar: store.calendar) {
+    case .manual, .active: return "Available to buy"
+    case .scheduled: return "Planned buying funds"
+    case .ended: return "Show balance"
+    }
+}
+
+@MainActor private func budgetScheduleMessage(_ show: ShowBudgetEvent, store: ShowBudgetStore) -> String {
+    switch show.scheduleStatus(on: store.currentDate, calendar: store.calendar) {
+    case .scheduled: return "This show is scheduled for later. Cash recording opens on its show dates."
+    case .ended: return "This show has ended. Its saved balance and transactions remain available for review."
+    case .manual: return "This budget has no schedule and is available while selected."
+    case .active: return "This show is active today."
+    }
 }
