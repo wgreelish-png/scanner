@@ -28,6 +28,8 @@ Build 24 adds a [persistent show cash budget](docs/ShowBudget.md): record purcha
 
 Build 25 adds [automatic Beta IP access](docs/AutomaticBetaIP.md). With a saved Direct connection and matching website sign-in, the app keeps the entire allowlist set to this phone's detected public IP. Checks run only while the app is active and stop when you leave it.
 
+Build 26 adds [compact Card Details](docs/CompactCardDetails.md): artwork, human-readable card identity, prominent per-card market value, quick condition buttons, printing/language menus and quantity. Technical identity fields and the card-level provider picker are removed. Find Correct Card searches the saved catalog, while manual price adjustment and offer overrides are collapsed. Explicit Save/Cancel and the provider selected in Settings are preserved. Chart enhancements are deferred.
+
 Open `CardShowScanner.xcodeproj` in Xcode 16+, select **CardShowScanner**, and Run. Set personal signing using the local configuration instructions below. Use a physical iPhone for live camera verification.
 
 For the final personal-use installation, select **CardShowScanner Personal**: Run uses Release without attaching a debugger, with the same bundle ID and your ignored signing configuration. [Final phone test and weekly Personal Team refresh](docs/PersonalIPhone.md) explains how to keep the app/data installed; free signing normally expires after seven days.

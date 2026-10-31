@@ -212,6 +212,75 @@ import SwiftData
         XCTAssertEqual(item.snapshot.marketPrice, 5); XCTAssertEqual(item.snapshot.identity.skuID, "555")
     }
 
+    func testCatalogCorrectionKeepsInventoryAndOffersUntilExplicitSaveWithoutMergingRows() async throws {
+        let container = try ModelContainer(for: CardList.self, InventoryCard.self, ScanSession.self,
+                                           configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let context = container.mainContext, list = CardList(name: "Correct a saved match")
+        context.insert(list)
+        var saved = card()
+        saved.identity.condition = "Lightly Played"; saved.identity.language = "Japanese"
+        saved.identity.printing = "Holofoil"
+        var replacement = saved
+        replacement.identity.productID = "p:999"; replacement.identity.skuID = "999"
+        replacement.identity.printing = "Normal"; replacement.identity.condition = "Near Mint"
+        replacement.identity.language = "English"; replacement.name = "Correct catalog card"
+        replacement.printings = ["Normal", "Holofoil"]; replacement.marketPrice = 999
+        replacement.marketPriceMetadata = .init(source: .openAPI, fetchedAt: .now)
+        try CardListService.add(saved, to: list, context: context)
+        let item = try XCTUnwrap(list.orderedCards.first)
+        item.quantity = 2; item.cashOverrideText = "6.5"; item.tradeOverrideText = "7"; item.maximumOverrideText = "8"
+        var matchingRow = replacement
+        matchingRow.identity.condition = saved.identity.condition
+        matchingRow.identity.language = saved.identity.language
+        matchingRow.identity.printing = saved.identity.printing
+        matchingRow.identity.skuID = "555"
+        try CardListService.add(matchingRow, to: list, context: context); try context.save()
+        let rowIDs = list.orderedCards.map(\.id), addedAt = item.addedAt, listID = list.id
+
+        let service = ControlledEditorPricing()
+        let model = CardEditorPricingModel(card: saved, pricing: service)
+        model.replaceCard(with: replacement)
+        XCTAssertEqual(item.snapshot, saved)
+        XCTAssertNil(model.card.marketPrice); XCTAssertNil(model.card.identity.skuID)
+        XCTAssertNil(model.card.marketPriceMetadata); XCTAssertEqual(model.price, "")
+        try await waitForRequests(1, pricing: service)
+        let requests = await service.requests
+        XCTAssertEqual(requests[0].identity.productID, "p:999")
+        XCTAssertEqual(requests[0].identity.condition, "Lightly Played")
+        XCTAssertEqual(requests[0].identity.language, "Japanese")
+        XCTAssertEqual(requests[0].identity.printing, "Holofoil")
+        await service.resolve(0, with: MarketQuote(marketPrice: 5, skuID: "555")); await waitForIdle(model)
+        XCTAssertEqual(item.snapshot, saved, "Correcting and pricing a draft must not save it")
+        try CardListService.edit(item, card: model.card, quantity: item.quantity,
+                                 cashOverride: item.cashOverrideText, tradeOverride: item.tradeOverrideText,
+                                 maximumOverride: item.maximumOverrideText, context: context)
+        XCTAssertEqual(list.id, listID); XCTAssertEqual(list.orderedCards.map(\.id), rowIDs)
+        XCTAssertEqual(list.cards.count, 2); XCTAssertEqual(item.addedAt, addedAt)
+        XCTAssertEqual(item.quantity, 2); XCTAssertEqual(item.cashOverrideText, "6.5")
+        XCTAssertEqual(item.tradeOverrideText, "7"); XCTAssertEqual(item.maximumOverrideText, "8")
+        XCTAssertEqual(item.snapshot.name, replacement.name); XCTAssertEqual(item.snapshot.marketPrice, 5)
+        XCTAssertEqual(item.snapshot.identity.skuID, "555")
+    }
+
+    func testCatalogCorrectionUsesSupportedPrintingAndRejectsPreviousCardsLateQuote() async throws {
+        let service = ControlledEditorPricing()
+        let model = CardEditorPricingModel(card: card(), pricing: service)
+        model.refreshPrice(); try await waitForRequests(1, pricing: service)
+        var replacement = card()
+        replacement.identity.productID = "p:777"; replacement.name = "New match"
+        replacement.identity.printing = "Holofoil"; replacement.printings = ["Holofoil"]
+        model.replaceCard(with: replacement)
+        try await waitForRequests(2, pricing: service)
+        await service.resolve(1, with: MarketQuote(marketPrice: 7, skuID: "777"), printings: ["Holofoil"])
+        await waitForIdle(model)
+        await service.resolve(0, with: MarketQuote(marketPrice: 99, skuID: "999"), printings: ["Old printing"])
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(model.card.identity.productID, "p:777"); XCTAssertEqual(model.card.name, "New match")
+        XCTAssertEqual(model.card.identity.printing, "Holofoil"); XCTAssertEqual(model.card.printings, ["Holofoil"])
+        XCTAssertEqual(model.card.identity.skuID, "777"); XCTAssertEqual(model.card.marketPrice, 7)
+        XCTAssertEqual(model.price, "7")
+    }
+
     private func waitForRequests(_ count: Int, pricing: ControlledEditorPricing) async throws {
         for _ in 0..<100 {
             let received = await pricing.requests.count

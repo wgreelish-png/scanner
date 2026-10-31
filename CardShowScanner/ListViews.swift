@@ -478,9 +478,12 @@ struct ShareSheet: UIViewControllerRepresentable {
 }
 
 struct CardEditorView: View {
+    private enum Sheet: String, Identifiable { case artwork, correction; var id: Self { self } }
+    private enum Field: Hashable { case market, cash, trade, maximum }
     let item: InventoryCard
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var textSize
     @AppStorage(PricingSource.defaultsKey) private var pricingSource = PricingSource.tcgTracking.rawValue
     @State private var pricing: CardEditorPricingModel
     @State private var quantity: Int
@@ -489,119 +492,347 @@ struct CardEditorView: View {
     @State private var tradeOverride: String
     @State private var maximumOverride: String
     @State private var showingConnection = false
+    @State private var sheet: Sheet?
+    @State private var adjustingPrice = false
+    @State private var showingOffers = false
+    @State private var saving = false
+    @FocusState private var focusedField: Field?
+
     init(item: InventoryCard) {
         self.item = item
-        _pricing = State(initialValue: CardEditorPricingModel(card: item.snapshot)); _quantity = State(initialValue: item.quantity)
+        _pricing = State(initialValue: CardEditorPricingModel(card: item.snapshot))
+        _quantity = State(initialValue: item.quantity)
         _cashOverride = State(initialValue: item.cashOverrideText ?? "")
         _tradeOverride = State(initialValue: item.tradeOverrideText ?? "")
         _maximumOverride = State(initialValue: item.maximumOverrideText ?? "")
     }
+
+    private var hasOfferOverrides: Bool { !cashOverride.isEmpty || !tradeOverride.isEmpty || !maximumOverride.isEmpty }
+    private var languages: [String] {
+        Array(Set([pricing.card.identity.language, "English", "Japanese", "French", "German", "Italian",
+                   "Spanish", "Portuguese", "Russian", "Korean", "Simplified Chinese", "Traditional Chinese"]))
+            .filter { !$0.isEmpty }.sorted()
+    }
+
     var body: some View {
         NavigationStack {
             Form {
-                Section("Card identity — edit to correct a match") {
-                    TextField("Name", text: $pricing.card.name)
-                    Picker("Game", selection: identityBinding(\.game)) { ForEach(CatalogOptions.games, id: \.self) { Text($0) } }
-                    TextField("Set", text: $pricing.card.set)
-                    TextField("Number", text: $pricing.card.number)
-                    TextField("Product ID", text: identityBinding(\.productID)).textInputAutocapitalization(.never)
-                    TextField("SKU ID (optional)", text: Binding(get: { pricing.card.identity.skuID ?? "" }, set: { pricing.setSKU($0) }))
-                    Picker("Type / printing", selection: identityBinding(\.printing)) {
+                Section {
+                    if textSize.isAccessibilitySize {
+                        VStack(alignment: .leading, spacing: 14) { artworkButton; cardIdentity }
+                    } else {
+                        HStack(alignment: .top, spacing: 16) { artworkButton; cardIdentity }
+                    }
+                }.listRowBackground(Color.indigo.opacity(0.07))
+
+                marketSection
+                Section("Printing & language") {
+                    Picker("Printing", selection: identityBinding(\.printing)) {
                         ForEach(Array(Set(pricing.card.printings + [pricing.card.identity.printing])).sorted(), id: \.self) { Text($0) }
-                    }.pickerStyle(.menu)
-                    TextField("Language", text: identityBinding(\.language))
-                    TextField("Image URL (optional)", text: Binding(get: { pricing.card.imageURL?.absoluteString ?? "" }, set: { pricing.card.imageURL = URL(string: $0) })).keyboardType(.URL).textInputAutocapitalization(.never)
+                    }.pickerStyle(.menu).accessibilityIdentifier("cardEditor.printing")
+                    Picker("Language", selection: identityBinding(\.language)) {
+                        ForEach(languages, id: \.self) { Text($0) }
+                    }.pickerStyle(.menu).accessibilityIdentifier("cardEditor.language")
                 }
-                Section("Market details") {
+                Section("Your inventory") {
+                    Stepper(value: $quantity, in: 1...100_000) {
+                        LabeledContent("Quantity", value: quantity.formatted())
+                    }.accessibilityIdentifier("cardEditor.quantity")
+                    if quantity > 1, let price = pricing.card.marketPrice {
+                        LabeledContent("Total market value", value: (price * Decimal(quantity)).money)
+                            .foregroundStyle(.secondary).accessibilityIdentifier("cardEditor.totalValue")
+                    }
+                }
+                Section {
+                    Button("Find Correct Card", systemImage: "magnifyingglass") {
+                        focusedField = nil; sheet = .correction
+                    }.accessibilityIdentifier("cardEditor.correctMatch")
+                }
+                Section("Research") {
                     NavigationLink { MarketInsightsView(card: pricing.card) } label: {
                         Label("Market Details", systemImage: "chart.line.uptrend.xyaxis")
                     }.accessibilityIdentifier("cardEditor.marketDetails")
-                    Text("View public prices and optional exact-condition market activity for this card.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Section("Graded Research (experimental)") {
                     NavigationLink { ResearchView(card: pricing.card) } label: {
-                        Label("View Graded Research", systemImage: "chart.bar.xaxis")
-                    }.disabled(pricing.priceLoading)
-                        .accessibilityIdentifier("cardEditor.research")
-                    Text("View reported sales and grading estimates for this catalog card. Research does not apply a new inventory price or change saved offers.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        Label("Graded Research", systemImage: "rectangle.portrait.on.rectangle.portrait")
+                    }.disabled(pricing.priceLoading).accessibilityIdentifier("cardEditor.research")
                 }
-                Section("Inventory") {
-                    PricingSourcePicker(accessibilityID: "cardEditor.pricingSource")
-                    Picker("Condition", selection: identityBinding(\.condition)) { ForEach(CatalogOptions.conditions, id: \.self) { Text($0) } }
-                    Stepper("Quantity: \(quantity)", value: $quantity, in: 1...100000)
-                    TextField("Market price USD — blank means unknown", text: Binding(get: { pricing.price }, set: { pricing.setPrice($0) })).keyboardType(.decimalPad)
-                    if let metadata = pricing.card.marketPriceMetadata {
-                        Text(metadata.summary).font(.caption).foregroundStyle(.secondary)
-                    }
-                    if pricing.priceLoading { ProgressView("Checking market value…") }
-                    if let message = pricing.priceMessage { Text(message).font(.caption).foregroundStyle(.secondary) }
-                    if pricing.priceConnectionRequired {
-                        Button("Connect TCGTracking", systemImage: "person.crop.circle") {
-                            pricing.cancelLookup(); showingConnection = true
-                        }
-                    }
-                    Button("Refresh Market Price & Types", systemImage: "arrow.clockwise") { pricing.refreshPrice() }
-                        .disabled(pricing.priceLoading)
-                    Text("Condition and type use the exact catalog quote. You can enter a market price manually if a quote is unavailable.").font(.caption)
-                    Text("Added \(item.addedAt.formatted())").font(.caption)
+                offerSection
+            }
+            .navigationTitle("Card Details").navigationBarTitleDisplayMode(.inline)
+            .scrollDismissesKeyboard(.interactively)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }.disabled(saving).accessibilityIdentifier("cardEditor.cancel")
                 }
-                Section("Offer overrides • USD per copy") {
-                    TextField("Cash (blank uses session rate)", text: $cashOverride).keyboardType(.decimalPad)
-                    TextField("Trade (blank uses session rate)", text: $tradeOverride).keyboardType(.decimalPad)
-                    TextField("Maximum buy (blank uses session rate)", text: $maximumOverride).keyboardType(.decimalPad)
-                    Text("Overrides apply to each copy of this exact variant/condition. Unpriced cards remain excluded until a market price is supplied. No automatic bulk classification is performed.").font(.caption)
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }.disabled(pricing.priceLoading || saving)
+                        .accessibilityIdentifier("cardEditor.save")
                 }
-            }.navigationTitle("Edit Card")
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                    ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.disabled(pricing.priceLoading) }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { focusedField = nil }.accessibilityIdentifier("cardEditor.keyboardDone")
                 }
-                .task { pricing.loadPrintingOptions() }
-                .onChange(of: pricingSource) { _, _ in pricing.pricingSourceChanged() }
-                .onDisappear { pricing.cancelLookup() }
-                .fullScreenCover(isPresented: $showingConnection, onDismiss: { pricing.refreshPrice() }) {
-                    TCGTrackingConnectionView(continueTitle: "Return to Card") {
-                        guard showingConnection else { return }
-                        OnlineMarketPricing.connectionDidChange(); showingConnection = false
+            }
+            .task { pricing.loadPrintingOptions() }
+            .onChange(of: pricingSource) { _, _ in pricing.pricingSourceChanged() }
+            .onDisappear { pricing.cancelLookup() }
+            .sheet(item: $sheet) { selected in
+                switch selected {
+                case .artwork:
+                    CardArtworkSheet(card: pricing.card)
+                case .correction:
+                    CardMatchCorrectionSheet(game: pricing.card.identity.game) { candidate in
+                        pricing.replaceCard(with: candidate); sheet = nil
                     }
                 }
-                .failureAlert($error)
+            }
+            .fullScreenCover(isPresented: $showingConnection, onDismiss: { pricing.refreshPrice() }) {
+                TCGTrackingConnectionView(continueTitle: "Return to Card") {
+                    guard showingConnection else { return }
+                    OnlineMarketPricing.connectionDidChange(); showingConnection = false
+                }
+            }
+            .failureAlert($error)
         }
     }
+
+    private var artworkButton: some View {
+        Button { focusedField = nil; sheet = .artwork } label: {
+            CardDetailsArtwork(url: pricing.card.imageURL)
+                .frame(width: textSize.isAccessibilitySize ? 120 : 104, height: textSize.isAccessibilitySize ? 168 : 146)
+        }.buttonStyle(.plain).accessibilityLabel("Enlarge card image")
+            .accessibilityIdentifier("cardEditor.artwork")
+    }
+
+    private var cardIdentity: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(pricing.card.name).font(.title2.bold()).fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("cardEditor.name")
+            Text(pricing.card.set).font(.subheadline).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if !pricing.card.number.isEmpty {
+                Text("#" + pricing.card.number).font(.subheadline.weight(.semibold))
+                    .accessibilityIdentifier("cardEditor.number")
+            }
+            Text(pricing.card.identity.game).font(.caption.weight(.medium)).foregroundStyle(.indigo)
+                .padding(.horizontal, 9).padding(.vertical, 5)
+                .background(Color.indigo.opacity(0.1), in: Capsule())
+                .accessibilityIdentifier("cardEditor.game")
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 3)
+    }
+
+    private var marketSection: some View {
+        Section {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Market price").font(.subheadline).foregroundStyle(.secondary)
+                    if pricing.priceLoading {
+                        HStack(spacing: 8) { ProgressView(); Text("Checking…").font(.headline) }
+                    } else {
+                        Text(pricing.card.marketPrice?.money ?? "Price unavailable")
+                            .font(pricing.card.marketPrice == nil ? .headline : .largeTitle.bold()).monospacedDigit()
+                            .accessibilityIdentifier("cardEditor.marketPrice")
+                    }
+                    Text("per card").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                Button { focusedField = nil; pricing.refreshPrice() } label: {
+                    Image(systemName: "arrow.clockwise").font(.title3).frame(width: 44, height: 44)
+                }.buttonStyle(.borderless).disabled(pricing.priceLoading)
+                    .accessibilityLabel("Refresh market price and printings").accessibilityIdentifier("cardEditor.refreshPrice")
+            }.padding(.vertical, 4)
+
+            CardDetailsConditionPicker(selection: identityBinding(\.condition))
+            if let metadata = pricing.card.marketPriceMetadata {
+                Text(compactPriceStatus(metadata)).font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("cardEditor.priceStatus")
+            }
+            if let message = pricing.priceMessage { Text(message).font(.footnote).foregroundStyle(.secondary) }
+            if pricing.priceConnectionRequired {
+                Button("Connect TCGTracking", systemImage: "person.crop.circle") {
+                    focusedField = nil; pricing.cancelLookup(); showingConnection = true
+                }
+            }
+            DisclosureGroup("Adjust market price", isExpanded: $adjustingPrice) {
+                TextField("Market price", text: Binding(get: { pricing.price }, set: { pricing.setPrice($0) }))
+                    .keyboardType(.decimalPad).focused($focusedField, equals: .market)
+                    .accessibilityIdentifier("cardEditor.manualPrice")
+                Text("USD per card. Leave blank when unknown.").font(.caption).foregroundStyle(.secondary)
+            }.font(.subheadline).accessibilityIdentifier("cardEditor.adjustPrice")
+        }
+    }
+
+    private var offerSection: some View {
+        Section {
+            DisclosureGroup(isExpanded: $showingOffers) {
+                TextField("Cash", text: $cashOverride).keyboardType(.decimalPad).focused($focusedField, equals: .cash)
+                    .accessibilityIdentifier("cardEditor.cashOverride")
+                TextField("Trade", text: $tradeOverride).keyboardType(.decimalPad).focused($focusedField, equals: .trade)
+                    .accessibilityIdentifier("cardEditor.tradeOverride")
+                TextField("Maximum buy", text: $maximumOverride).keyboardType(.decimalPad).focused($focusedField, equals: .maximum)
+                    .accessibilityIdentifier("cardEditor.maximumOverride")
+                Text("USD per card. Leave blank to use session rates.").font(.caption).foregroundStyle(.secondary)
+            } label: {
+                HStack {
+                    Text("Offer overrides")
+                    Spacer()
+                    if hasOfferOverrides { Text("Applied").font(.caption).foregroundStyle(.indigo) }
+                }
+            }.accessibilityIdentifier("cardEditor.offerOverrides")
+        }
+    }
+
+    private func compactPriceStatus(_ metadata: MarketPriceMetadata) -> String {
+        var labels: [String] = []
+        if metadata.isOffline == true { labels.append("Offline cache") }
+        else if metadata.isCached == true { labels.append("Cached") }
+        if let updated = metadata.updatedAt {
+            labels.append("Updated " + updated.formatted(date: .abbreviated, time: .omitted))
+        } else {
+            labels.append("Checked " + metadata.fetchedAt.formatted(date: .abbreviated, time: .omitted))
+        }
+        return labels.joined(separator: " · ")
+    }
+
     private func identityBinding(_ keyPath: WritableKeyPath<CardIdentity, String>) -> Binding<String> {
         Binding(get: { pricing.card.identity[keyPath: keyPath] }, set: { value in
+            focusedField = nil
             pricing.changeIdentity { $0[keyPath: keyPath] = value }
         })
     }
+
     private func save() {
-        guard !pricing.priceLoading else { return }
+        guard !pricing.priceLoading, !saving else { return }
+        focusedField = nil
         guard !pricing.card.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !pricing.card.identity.productID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !pricing.card.identity.language.isEmpty, !pricing.card.identity.printing.isEmpty else {
-            error = "Name, product ID, language, and printing are required."; return
+            error = "Choose a card, printing and language before saving."; return
         }
         let text = pricing.price.trimmingCharacters(in: .whitespacesAndNewlines)
         let parsed = Decimal(string: text, locale: Locale(identifier: "en_US_POSIX"))
-        guard text.isEmpty || (text.range(of: #"^[0-9]+(?:\.[0-9]{1,6})?$"#, options: .regularExpression) != nil && parsed != nil && parsed! >= 0) else { error = "Enter a nonnegative USD price or leave it blank."; return }
+        guard text.isEmpty || (text.range(of: #"^[0-9]+(?:\.[0-9]{1,6})?$"#, options: .regularExpression) != nil && parsed != nil && parsed! >= 0) else {
+            error = "Enter a nonnegative USD price or leave it blank."; return
+        }
         guard [cashOverride, tradeOverride, maximumOverride].allSatisfy({ $0.isEmpty || MoneyInput.parse($0) != nil }) else {
             error = "Offer overrides must be nonnegative USD amounts or blank."; return
         }
         let cashText = cashOverride.isEmpty ? nil : CSVExportService.number(MoneyInput.parse(cashOverride))
         let tradeText = tradeOverride.isEmpty ? nil : CSVExportService.number(MoneyInput.parse(tradeOverride))
         let maximumText = maximumOverride.isEmpty ? nil : CSVExportService.number(MoneyInput.parse(maximumOverride))
+        saving = true
+        defer { saving = false }
         do {
             let batches = try context.fetch(FetchDescriptor<ScanSession>())
             if let batch = batches.first(where: { $0.listID != nil && $0.listID == item.list?.id }), pricing.card.identity.game != batch.game {
                 error = "The card game must match this batch. Start a new session for a different game."; return
             }
-        } catch { self.error = error.localizedDescription; return }
-        pricing.card.marketPrice = text.isEmpty ? nil : parsed
-        do {
+            pricing.card.marketPrice = text.isEmpty ? nil : parsed
             try CardListService.edit(item, card: pricing.card, quantity: quantity,
                 cashOverride: cashText, tradeOverride: tradeText, maximumOverride: maximumText, context: context)
             DiagnosticLog.shared.record("inventory.edited"); dismiss()
-        } catch { context.rollback(); self.error = error.localizedDescription }
+        } catch { context.rollback(); self.error = "The card could not be saved. Your changes are kept; try Save again." }
+    }
+}
+
+private struct CardDetailsConditionPicker: View {
+    @Binding var selection: String
+    @Environment(\.dynamicTypeSize) private var textSize
+    private let conditions = [("Near Mint", "NM"), ("Lightly Played", "LP"), ("Moderately Played", "MP"),
+                              ("Heavily Played", "HP"), ("Damaged", "DMG")]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Condition").font(.subheadline).foregroundStyle(.secondary)
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: textSize.isAccessibilitySize ? 2 : 5), spacing: 8) {
+                ForEach(conditions, id: \.0) { condition, short in
+                    Button { selection = condition } label: {
+                        Text(short).font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 44)
+                            .foregroundStyle(selection == condition ? Color.white : Color.primary)
+                            .background(selection == condition ? Color.indigo : Color.indigo.opacity(0.09), in: RoundedRectangle(cornerRadius: 10))
+                    }.buttonStyle(.plain).accessibilityLabel(condition)
+                        .accessibilityAddTraits(selection == condition ? .isSelected : [])
+                        .accessibilityIdentifier("cardEditor.condition." + short)
+                }
+            }
+            if !conditions.contains(where: { $0.0 == selection }) {
+                Text(selection).font(.footnote).foregroundStyle(.secondary)
+            }
+        }.padding(.vertical, 3)
+    }
+}
+
+private struct CardDetailsArtwork: View {
+    let url: URL?
+    var body: some View {
+        AsyncImage(url: url) { phase in
+            if let image = phase.image { image.resizable().scaledToFit() }
+            else {
+                RoundedRectangle(cornerRadius: 8).fill(.quaternary)
+                    .overlay { Image(systemName: "rectangle.portrait").font(.largeTitle).foregroundStyle(.secondary) }
+            }
+        }.clipShape(RoundedRectangle(cornerRadius: 8)).accessibilityHidden(true)
+    }
+}
+
+private struct CardArtworkSheet: View {
+    let card: CardCandidate
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            CardDetailsArtwork(url: card.imageURL).padding(20).frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(uiColor: .systemGroupedBackground))
+                .navigationTitle(card.name).navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+    }
+}
+
+private struct CardMatchCorrectionSheet: View {
+    let onSelect: (CardCandidate) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var search: ManualCardSearchModel
+    init(game: String, onSelect: @escaping (CardCandidate) -> Void) {
+        self.onSelect = onSelect
+        _search = State(initialValue: ManualCardSearchModel(game: CatalogOptions.games.contains(game) ? game : "Pokémon"))
+    }
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Picker("Game", selection: Binding(get: { search.game }, set: { search.changeGame($0) })) {
+                        ForEach(CatalogOptions.games, id: \.self) { Text($0) }
+                    }.accessibilityIdentifier("cardCorrection.game")
+                    TextField("Name, card number or set", text: Binding(get: { search.query }, set: { search.updateQuery($0) }))
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("cardCorrection.query")
+                }
+                if search.isSearching { ProgressView("Searching saved catalog…") }
+                if let error = search.error {
+                    Section {
+                        Text(error).font(.footnote).foregroundStyle(.secondary)
+                        Button("Retry Search") { search.load() }
+                    }
+                } else if !search.isSearching && !search.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && search.results.isEmpty {
+                    ContentUnavailableView("No matches", systemImage: "magnifyingglass", description: Text("Try a name, number or set."))
+                }
+                ForEach(search.results) { card in
+                    Button { onSelect(card) } label: {
+                        HStack(spacing: 14) {
+                            CardDetailsArtwork(url: card.imageURL).frame(width: 64, height: 90)
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(card.name).font(.headline)
+                                Text(card.set).font(.caption).foregroundStyle(.secondary)
+                                Text(card.number).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                            }.frame(maxWidth: .infinity, alignment: .leading)
+                            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+                        }.foregroundStyle(.primary).padding(.vertical, 3)
+                    }.buttonStyle(.plain).accessibilityIdentifier("cardCorrection.result." + card.identity.productID)
+                }
+            }
+            .navigationTitle("Find Correct Card").navigationBarTitleDisplayMode(.inline)
+            .scrollDismissesKeyboard(.interactively)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .task { search.load() }
+            .onDisappear { search.cancel() }
+        }
     }
 }
