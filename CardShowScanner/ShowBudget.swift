@@ -1,12 +1,13 @@
 import Foundation
 
 enum ShowBudgetFailure: LocalizedError, Equatable, Sendable {
-    case invalidAmount, invalidEntry, invalidEvent, invalidBook, duplicateIdentity, invalidVersion, arithmeticOverflow
+    case invalidAmount, invalidEntry, invalidEvent, invalidDates, invalidBook, duplicateIdentity, invalidVersion, arithmeticOverflow
     var errorDescription: String? {
         switch self {
         case .invalidAmount: return "Enter an amount from $0 to $999,999,999.99 with at most two decimal places."
         case .invalidEntry: return "This budget transaction contains invalid cash amounts or details. Review it and try again."
         case .invalidEvent: return "Enter a show name and a valid starting budget."
+        case .invalidDates: return "Choose a valid show start date and an end date on or after it."
         case .invalidBook: return "The saved show budget could not be validated. Your saved data has been kept."
         case .duplicateIdentity: return "A budget record has a duplicate identifier. Your saved data has been kept."
         case .invalidVersion: return "This show budget uses an unsupported format. Your saved data has been kept."
@@ -136,11 +137,14 @@ struct ShowBudgetEvent: Codable, Equatable, Identifiable, Sendable {
     var reinvestmentPercent: Int
     var createdAt: Date
     var entries: [ShowBudgetEntry]
+    var startDate: Date?
+    var endDate: Date?
 
     init(id: UUID = UUID(), name: String, startingCents: Int64, reinvestmentPercent: Int = 65,
-         createdAt: Date = Date(), entries: [ShowBudgetEntry] = []) {
+         createdAt: Date = Date(), entries: [ShowBudgetEntry] = [], startDate: Date? = nil, endDate: Date? = nil) {
         self.id = id; self.name = name; self.startingCents = startingCents
         self.reinvestmentPercent = reinvestmentPercent; self.createdAt = createdAt; self.entries = entries
+        self.startDate = startDate; self.endDate = endDate
     }
 
     func validate() throws {
@@ -149,6 +153,10 @@ struct ShowBudgetEvent: Codable, Equatable, Identifiable, Sendable {
               createdAt.timeIntervalSince1970.isFinite, entries.count <= ShowBudgetBook.maximumEntriesPerShow else {
             throw ShowBudgetFailure.invalidEvent
         }
+        if let startDate, let endDate {
+            guard startDate.timeIntervalSince1970.isFinite, endDate.timeIntervalSince1970.isFinite,
+                  endDate >= startDate else { throw ShowBudgetFailure.invalidDates }
+        } else if startDate != nil || endDate != nil { throw ShowBudgetFailure.invalidDates }
         guard Set(entries.map(\.id)).count == entries.count else { throw ShowBudgetFailure.duplicateIdentity }
         for entry in entries { try entry.validate() }
     }

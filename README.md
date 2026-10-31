@@ -36,6 +36,8 @@ Build 27 adds [one standard pricing source](docs/StandardMarketPricing.md): all 
 
 Build 29 adds [Card Show inventory import](docs/CardShowInventory.md). Lists → **Card Show Inventory** connects the existing TCGTracking account and imports its exact Card Show location into one saved list. Explicit refresh updates source rows and quantities without duplication; failed/partial refreshes keep the previous copy. Card details, quantities and last imported values stay available offline. An editable duplicate supports local scanning and corrections; the imported list mirrors the website.
 
+Build 30 applies the PokéDen Collectibles logo as the app icon and [streamlines list review](docs/StreamlinedListReview.md). CSV export and offer percentages live in the top-right options menu; outcome buttons join the offer tile, live custom cash and save-estimate controls are removed, and card rows include thumbnails. Research links open TCGplayer listings/history, and show budgets support optional show dates.
+
 Open `CardShowScanner.xcodeproj` in Xcode 16+, select **CardShowScanner**, and Run. Set personal signing using the local configuration instructions below. Use a physical iPhone for live camera verification.
 
 For the final personal-use installation, select **CardShowScanner Personal**: Run uses Release without attaching a debugger, with the same bundle ID and your ignored signing configuration. [Final phone test and weekly Personal Team refresh](docs/PersonalIPhone.md) explains how to keep the app/data installed; free signing normally expires after seven days.

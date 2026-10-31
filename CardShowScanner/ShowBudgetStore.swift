@@ -72,9 +72,10 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
     }
 
     @discardableResult
-    func create(name: String, startingCents: Int64) throws -> UUID {
+    func create(name: String, startingCents: Int64, startDate: Date? = nil, endDate: Date? = nil) throws -> UUID {
         try requireWritable()
-        let show = ShowBudgetEvent(name: name.trimmingCharacters(in: .whitespacesAndNewlines), startingCents: startingCents)
+        let show = ShowBudgetEvent(name: name.trimmingCharacters(in: .whitespacesAndNewlines), startingCents: startingCents,
+                                   startDate: startDate, endDate: endDate)
         var next = book
         next.shows.append(show)
         next.activeShowID = show.id
@@ -95,14 +96,22 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
 
     func update(showID: UUID, name: String, startingCents: Int64) throws {
         try requireWritable()
+        guard let show = book.shows.first(where: { $0.id == showID }) else { throw ShowBudgetStoreFailure.showNotFound }
+        try update(showID: showID, name: name, startingCents: startingCents, startDate: show.startDate, endDate: show.endDate)
+    }
+
+    func update(showID: UUID, name: String, startingCents: Int64, startDate: Date?, endDate: Date?) throws {
+        try requireWritable()
         guard let index = book.shows.firstIndex(where: { $0.id == showID }) else {
             throw ShowBudgetStoreFailure.showNotFound
         }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard book.shows[index].name != trimmed || book.shows[index].startingCents != startingCents else { return }
+        guard book.shows[index].name != trimmed || book.shows[index].startingCents != startingCents ||
+                book.shows[index].startDate != startDate || book.shows[index].endDate != endDate else { return }
         var next = book
         next.shows[index].name = trimmed
         next.shows[index].startingCents = startingCents
+        next.shows[index].startDate = startDate; next.shows[index].endDate = endDate
         try commit(next)
     }
 

@@ -26,8 +26,11 @@ import XCTest
         assertValue("1", title: "Inventory rows", element: app.staticTexts["cardShowInventory.rows"])
         let open = app.buttons["cardShowInventory.open"]
         reveal(open, in: app); open.tap()
+        let options = app.buttons["list.options"]
+        XCTAssertTrue(options.waitForExistence(timeout: 5)); options.tap()
         let export = app.buttons["list.exportCSV"]
-        reveal(export, in: app)
+        XCTAssertTrue(export.waitForExistence(timeout: 5)); XCTAssertTrue(export.isEnabled)
+        app.navigationBars.firstMatch.staticTexts.firstMatch.tap()
         XCTAssertFalse(app.buttons["list.searchAndAdd"].exists)
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(app.navigationBars["Card Show Inventory"].waitForExistence(timeout: 5))

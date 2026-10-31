@@ -15,6 +15,37 @@ final class ShowBudgetTests: XCTestCase {
                         reinvestmentPercent: percent, splitBasis: basis, recordedAt: instant)
     }
 
+    func testLegacyVersionOneShowWithoutDateFieldsKeepsOriginalReceiptsAndBalances() throws {
+        let original = show([entry(.sale, received: 20_000, fees: 1_000)])
+        let book = ShowBudgetBook(shows: [original], activeShowID: original.id)
+        var body = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(book)) as? [String: Any])
+        var shows = try XCTUnwrap(body["shows"] as? [[String: Any]])
+        shows[0].removeValue(forKey: "startDate"); shows[0].removeValue(forKey: "endDate")
+        body["shows"] = shows
+        let reopened = try JSONDecoder().decode(ShowBudgetBook.self, from: JSONSerialization.data(withJSONObject: body))
+        XCTAssertEqual(reopened.version, 1)
+        let restored = try XCTUnwrap(reopened.shows.first)
+        XCTAssertNil(restored.startDate); XCTAssertNil(restored.endDate)
+        XCTAssertEqual(restored.createdAt, original.createdAt); XCTAssertEqual(restored.entries, original.entries)
+        XCTAssertEqual(try restored.totals(), try original.totals())
+    }
+
+    func testShowDateRangeValidatesWithoutChangingCashAllocation() throws {
+        let baseline = show([entry(.sale, received: 20_000, fees: 1_000)])
+        var dated = baseline
+        dated.startDate = instant; dated.endDate = instant.addingTimeInterval(86_400)
+        XCTAssertEqual(try dated.totals(), try baseline.totals())
+        dated.endDate = instant
+        XCTAssertNoThrow(try dated.validate(), "A one-day show is valid")
+        for (start, end) in [(Optional(instant), Optional(instant.addingTimeInterval(-1))),
+                             (Optional(instant), nil), (nil, Optional(instant))] {
+            dated.startDate = start; dated.endDate = end
+            XCTAssertThrowsError(try dated.validate()) { XCTAssertEqual($0 as? ShowBudgetFailure, .invalidDates) }
+        }
+        dated.startDate = Date(timeIntervalSince1970: .infinity); dated.endDate = instant
+        XCTAssertThrowsError(try dated.validate()) { XCTAssertEqual($0 as? ShowBudgetFailure, .invalidDates) }
+    }
+
     func testThreeHundredBudgetAndTwoHundredSaleAddsOneHundredThirtyAndSavesSeventy() throws {
         let result = try show([entry(.sale, received: 20_000)]).totals()
         XCTAssertEqual(result.startingCents, 30_000)

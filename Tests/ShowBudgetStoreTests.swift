@@ -13,6 +13,52 @@ import XCTest
                         recordedAt: now, listID: UUID(), listName: "Original list", note: "Recorded cash")
     }
 
+    func testShowDatesPersistEditAndClearWithoutRewritingReceiptsOrAllocations() async throws {
+        let url = location(); defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = ShowBudgetStore(url: url)
+        let end = now.addingTimeInterval(86_400)
+        let id = try store.create(name: "Weekend show", startingCents: 30_000, startDate: now, endDate: end)
+        let receipt = sale(); try store.record(receipt, showID: id)
+        let original = try XCTUnwrap(store.activeShow), totals = try original.totals()
+        var reopened = ShowBudgetStore(url: url)
+        XCTAssertEqual(reopened.activeShow?.startDate, now); XCTAssertEqual(reopened.activeShow?.endDate, end)
+        try reopened.update(showID: id, name: "Renamed show", startingCents: 30_000)
+        XCTAssertEqual(reopened.activeShow?.startDate, now, "An ordinary name/budget update retains show dates")
+        let moved = now.addingTimeInterval(7 * 86_400)
+        try reopened.update(showID: id, name: "Renamed show", startingCents: 30_000, startDate: moved, endDate: moved)
+        reopened = ShowBudgetStore(url: url)
+        XCTAssertEqual(reopened.activeShow?.startDate, moved); XCTAssertEqual(reopened.activeShow?.endDate, moved)
+        XCTAssertEqual(reopened.activeShow?.createdAt, original.createdAt)
+        XCTAssertEqual(reopened.activeShow?.entries, [receipt]); XCTAssertEqual(try reopened.activeShow?.totals(), totals)
+        try reopened.update(showID: id, name: "Renamed show", startingCents: 30_000, startDate: nil, endDate: nil)
+        reopened = ShowBudgetStore(url: url)
+        XCTAssertNil(reopened.activeShow?.startDate); XCTAssertNil(reopened.activeShow?.endDate)
+        XCTAssertEqual(reopened.activeShow?.entries.first?.recordedAt, receipt.recordedAt)
+        XCTAssertEqual(try reopened.activeShow?.totals(), totals)
+    }
+
+    func testInvalidOrFailedDateUpdateKeepsSavedDateRangeAndLedgerUntilRetry() async throws {
+        var data: Data?, fail = false
+        let store = ShowBudgetStore(url: location(), read: { _ in data }, write: { value, _ in
+            if fail { throw CocoaError(.fileWriteOutOfSpace) }; data = value
+        })
+        let id = try store.create(name: "Show", startingCents: 30_000, startDate: now, endDate: now)
+        try store.record(sale(), showID: id)
+        let before = store.book, bytes = data, moved = now.addingTimeInterval(86_400)
+        XCTAssertThrowsError(try store.update(showID: id, name: "Show", startingCents: 30_000,
+                                               startDate: moved, endDate: now)) {
+            XCTAssertEqual($0 as? ShowBudgetFailure, .invalidDates)
+        }
+        XCTAssertEqual(store.book, before); XCTAssertEqual(data, bytes)
+        fail = true
+        XCTAssertThrowsError(try store.update(showID: id, name: "Show", startingCents: 30_000,
+                                               startDate: moved, endDate: moved))
+        XCTAssertEqual(store.book, before); XCTAssertEqual(data, bytes)
+        fail = false
+        try store.update(showID: id, name: "Show", startingCents: 30_000, startDate: moved, endDate: moved)
+        XCTAssertEqual(store.activeShow?.startDate, moved); XCTAssertEqual(store.activeShow?.entries, before.shows[0].entries)
+    }
+
     func testMissingFileBeginsEmptyWithoutCreatingOrChangingInventoryStorage() async throws {
         let url = location()
         let store = ShowBudgetStore(url: url)

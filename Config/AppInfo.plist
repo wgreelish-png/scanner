@@ -8,7 +8,7 @@
 		<true/>
 	</dict>
 	<key>ScannerWorkflowRevision</key>
-	<string>card-show-inventory</string>
+	<string>streamlined-show-ui</string>
 	<key>UIRequiresFullScreen</key>
 	<true/>
 	<key>UISupportedInterfaceOrientations</key>

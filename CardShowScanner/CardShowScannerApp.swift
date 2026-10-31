@@ -30,6 +30,8 @@ import SwiftData
             CombinedResearchFixtureScreen()
         } else if ProcessInfo.processInfo.arguments.contains("--uitest-card-show-inventory") {
             CardShowInventoryFixtureScreen()
+        } else if ProcessInfo.processInfo.arguments.contains("--uitest-streamlined-review") {
+            ReviewPresentationFixtureScreen()
         } else if let budgetTestID = Self.budgetUITestID {
             ShowBudgetFixtureScreen(id: budgetTestID)
         } else {
