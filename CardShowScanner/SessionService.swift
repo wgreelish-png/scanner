@@ -259,6 +259,11 @@ enum ScannerUndoFailure: LocalizedError, Equatable {
         try CardListService.save(context)
         DiagnosticLog.shared.record("offer.snapshot_saved")
     }
+    /// Re-fetch and delete a multi-selection in one persistence transaction.
+    static func deleteLists(ids: Set<UUID>, context: ModelContext,
+        save: (@MainActor (ModelContext) throws -> Void)? = nil) throws {
+        try ListBulkDeletionService.delete(ids: ids, context: context, save: save)
+    }
     static func deleteList(_ list: CardList, context: ModelContext) throws {
         do {
             let id = list.id

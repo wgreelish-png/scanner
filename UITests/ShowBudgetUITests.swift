@@ -20,6 +20,10 @@ import XCTest
         let dates = app.staticTexts["budget.showDates"]
         XCTAssertTrue(dates.waitForExistence(timeout: 5))
         let showDates = dates.label
+        let status = app.staticTexts["budget.scheduleStatus"]
+        XCTAssertTrue(status.waitForExistence(timeout: 5))
+        XCTAssertTrue(["Active today", "Status, Active today"].contains(status.label))
+        XCTAssertTrue(app.buttons["budget.sell"].isEnabled)
 
         tapVisible(app.buttons["budget.sell"], in: app)
         enter("200", into: app.textFields["budget.amount"])
@@ -39,6 +43,7 @@ import XCTest
         app.terminate(); app.launch()
         XCTAssertTrue(app.staticTexts["budget.showDates"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.staticTexts["budget.showDates"].label, showDates)
+        XCTAssertTrue(["Active today", "Status, Active today"].contains(app.staticTexts["budget.scheduleStatus"].label))
         assertMoney("$320.00", title: "Available to buy", element: app.staticTexts["budget.available"])
         assertMoney("$70.00", title: "Saved for you", element: app.staticTexts["budget.saved"])
         XCTAssertFalse(app.alerts.firstMatch.exists)

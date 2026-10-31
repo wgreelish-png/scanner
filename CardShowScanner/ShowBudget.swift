@@ -55,7 +55,8 @@ struct ShowBudgetAllocation: Equatable, Sendable {
     let availableDeltaCents: Int64
 }
 
-/// Actual cash movement only. Card market values and offers never enter this ledger.
+/// Explicit cash receipts. Recording a list outcome can post its calculated
+/// cash; browsing prices or changing an offer never posts money.
 struct ShowBudgetEntry: Codable, Equatable, Identifiable, Sendable {
     var id: UUID
     var kind: ShowBudgetEntryKind
@@ -70,16 +71,19 @@ struct ShowBudgetEntry: Codable, Equatable, Identifiable, Sendable {
     var listName: String?
     var note: String
     var voidedAt: Date?
+    /// Present only for receipts created by a durable list-outcome command.
+    var outcomeOperationID: UUID? = nil
 
     init(id: UUID = UUID(), kind: ShowBudgetEntryKind, paidCents: Int64 = 0,
          grossReceivedCents: Int64 = 0, feeCents: Int64 = 0, reinvestmentPercent: Int = 65,
          splitBasis: ShowBudgetSplitBasis = .grossProceeds, recordedAt: Date = Date(),
-         listID: UUID? = nil, listName: String? = nil, note: String = "", voidedAt: Date? = nil) {
+         listID: UUID? = nil, listName: String? = nil, note: String = "", voidedAt: Date? = nil,
+         outcomeOperationID: UUID? = nil) {
         self.id = id; self.kind = kind; self.paidCents = paidCents
         self.grossReceivedCents = grossReceivedCents; self.feeCents = feeCents
         self.reinvestmentPercent = reinvestmentPercent; self.splitBasis = splitBasis
         self.recordedAt = recordedAt; self.listID = listID; self.listName = listName
-        self.note = note; self.voidedAt = voidedAt
+        self.note = note; self.voidedAt = voidedAt; self.outcomeOperationID = outcomeOperationID
     }
 
     func validate() throws {
@@ -89,6 +93,9 @@ struct ShowBudgetEntry: Codable, Equatable, Identifiable, Sendable {
               note.count <= 1_000, listName.map({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.count <= 250 }) ?? true,
               voidedAt.map({ $0.timeIntervalSince1970.isFinite && $0 >= recordedAt }) ?? true else {
             throw ShowBudgetFailure.invalidEntry
+        }
+        if let outcomeOperationID {
+            guard outcomeOperationID == id, listID != nil else { throw ShowBudgetFailure.invalidEntry }
         }
         switch kind {
         case .purchase:
@@ -130,6 +137,20 @@ struct ShowBudgetTotals: Equatable, Sendable {
     let cashOnHandCents: Int64
 }
 
+enum ShowBudgetScheduleStatus: String, Equatable, Sendable {
+    case manual, scheduled, active, ended
+
+    var title: String {
+        switch self {
+        case .manual: return "No schedule"
+        case .scheduled: return "Scheduled"
+        case .active: return "Active today"
+        case .ended: return "Ended"
+        }
+    }
+    var allowsRecording: Bool { self == .manual || self == .active }
+}
+
 struct ShowBudgetEvent: Codable, Equatable, Identifiable, Sendable {
     var id: UUID
     var name: String
@@ -159,6 +180,23 @@ struct ShowBudgetEvent: Codable, Equatable, Identifiable, Sendable {
         } else if startDate != nil || endDate != nil { throw ShowBudgetFailure.invalidDates }
         guard Set(entries.map(\.id)).count == entries.count else { throw ShowBudgetFailure.duplicateIdentity }
         for entry in entries { try entry.validate() }
+    }
+
+    /// Dates describe whole local calendar days, including both endpoints.
+    /// Calendar boundaries handle daylight-saving days without 24-hour offsets.
+    func applies(on date: Date, calendar: Calendar = .current) -> Bool {
+        scheduleStatus(on: date, calendar: calendar).allowsRecording
+    }
+
+    func scheduleStatus(on date: Date, calendar: Calendar = .current) -> ShowBudgetScheduleStatus {
+        guard date.timeIntervalSince1970.isFinite else { return .ended }
+        guard let startDate else { return endDate == nil ? .manual : .ended }
+        guard let endDate, startDate.timeIntervalSince1970.isFinite,
+              endDate.timeIntervalSince1970.isFinite, endDate >= startDate else { return .ended }
+        let day = calendar.startOfDay(for: date)
+        if day < calendar.startOfDay(for: startDate) { return .scheduled }
+        if day > calendar.startOfDay(for: endDate) { return .ended }
+        return .active
     }
 
     func totals() throws -> ShowBudgetTotals {
@@ -192,36 +230,67 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
     static let maximumShows = 100
     static let maximumEntriesPerShow = 10_000
     static let maximumEntriesTotal = 20_000
+    static let maximumOutcomeUpdates = 20_000
     var version: Int
     var shows: [ShowBudgetEvent]
     var activeShowID: UUID?
+    var listOutcomeUpdates: [BudgetListOutcomeUpdate]? = nil
 
-    init(version: Int = 1, shows: [ShowBudgetEvent] = [], activeShowID: UUID? = nil) {
+    init(version: Int = 2, shows: [ShowBudgetEvent] = [], activeShowID: UUID? = nil,
+         listOutcomeUpdates: [BudgetListOutcomeUpdate]? = nil) {
         self.version = version; self.shows = shows; self.activeShowID = activeShowID
+        self.listOutcomeUpdates = listOutcomeUpdates
     }
 
     func validate() throws {
-        guard version == 1 else { throw ShowBudgetFailure.invalidVersion }
+        guard version == 2 else { throw ShowBudgetFailure.invalidVersion }
         guard shows.count <= Self.maximumShows,
               shows.reduce(0, { $0 + $1.entries.count }) <= Self.maximumEntriesTotal,
               activeShowID.map({ id in shows.contains { $0.id == id } }) ?? true else { throw ShowBudgetFailure.invalidBook }
         guard Set(shows.map(\.id)).count == shows.count else { throw ShowBudgetFailure.duplicateIdentity }
-        var entryIDs: Set<UUID> = []
+        let updates = listOutcomeUpdates ?? []
+        guard updates.count <= Self.maximumOutcomeUpdates,
+              Set(updates.map(\.id)).count == updates.count,
+              Set(updates.map(\.listID)).count == updates.count else { throw ShowBudgetFailure.duplicateIdentity }
+        for update in updates { try update.validate() }
+        let byList = Dictionary(uniqueKeysWithValues: updates.map { ($0.listID, $0) })
+        var entryIDs: Set<UUID> = [], activeOutcomeLists: Set<UUID> = []
         for show in shows {
             try show.validate()
             _ = try show.totals()
             for entry in show.entries {
                 guard entryIDs.insert(entry.id).inserted else { throw ShowBudgetFailure.duplicateIdentity }
+                if let operation = entry.outcomeOperationID, entry.voidedAt == nil {
+                    guard let list = entry.listID, activeOutcomeLists.insert(list).inserted,
+                          let update = byList[list], update.id == operation,
+                          update.showID == show.id, update.entryID == entry.id else { throw ShowBudgetFailure.invalidBook }
+                }
+            }
+        }
+        for update in updates {
+            if let showID = update.showID, let entryID = update.entryID {
+                guard let entry = shows.first(where: { $0.id == showID })?.entries.first(where: { $0.id == entryID }),
+                      entry.outcomeOperationID == update.id, entry.listID == update.listID,
+                      entry.paidCents == update.calculatedPaidCents,
+                      entry.grossReceivedCents == update.calculatedReceivedCents else { throw ShowBudgetFailure.invalidBook }
             }
         }
     }
 
-    private enum CodingKeys: String, CodingKey { case version, shows, activeShowID }
+    private enum CodingKeys: String, CodingKey { case version, shows, activeShowID, listOutcomeUpdates }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        version = try values.decode(Int.self, forKey: .version)
+        let storedVersion = try values.decode(Int.self, forKey: .version)
+        guard storedVersion == 1 || storedVersion == 2 else { throw ShowBudgetFailure.invalidVersion }
         shows = try values.decode([ShowBudgetEvent].self, forKey: .shows)
         activeShowID = try values.decodeIfPresent(UUID.self, forKey: .activeShowID)
+        listOutcomeUpdates = try values.decodeIfPresent([BudgetListOutcomeUpdate].self, forKey: .listOutcomeUpdates)
+        if storedVersion == 1 {
+            guard (listOutcomeUpdates ?? []).isEmpty,
+                  shows.allSatisfy({ $0.entries.allSatisfy { $0.outcomeOperationID == nil } }) else { throw ShowBudgetFailure.invalidVersion }
+            listOutcomeUpdates = nil
+        }
+        version = 2
         try validate()
     }
     func encode(to encoder: Encoder) throws {
@@ -230,5 +299,6 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
         try values.encode(version, forKey: .version)
         try values.encode(shows, forKey: .shows)
         try values.encodeIfPresent(activeShowID, forKey: .activeShowID)
+        try values.encodeIfPresent(listOutcomeUpdates, forKey: .listOutcomeUpdates)
     }
 }

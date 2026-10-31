@@ -13,9 +13,42 @@ import XCTest
                         recordedAt: now, listID: UUID(), listName: "Original list", note: "Recorded cash")
     }
 
+    func testScheduledCashRecordingRechecksTodayAndKeepsCompletedRetriesAndHistory() async throws {
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        func date(_ day: Int, _ hour: Int = 0) -> Date {
+            calendar.date(from: DateComponents(year: 2026, month: 10, day: day, hour: hour))!
+        }
+        var clock = date(30, 12), bytes: Data?, writes = 0
+        let store = ShowBudgetStore(url: location(), read: { _ in bytes }, write: { data, _ in bytes = data; writes += 1 },
+            now: { clock }, calendar: calendar)
+        let showID = try store.create(name: "Saturday", startingCents: 30_000, startDate: date(31), endDate: date(31))
+        XCTAssertNotNil(store.activeShow, "An upcoming show remains selectable for review")
+        XCTAssertNil(store.eligibleActiveShow); XCTAssertFalse(store.canRecord(showID: showID))
+        let before = store.book, firstBytes = bytes, beforeWrites = writes
+        var receipt = ShowBudgetEntry(kind: .purchase, paidCents: 10_000, recordedAt: date(31, 10))
+        XCTAssertThrowsError(try store.record(receipt, showID: showID)) {
+            XCTAssertEqual($0 as? ShowBudgetStoreFailure, .outsideShowDates)
+        }
+        XCTAssertEqual(store.book, before); XCTAssertEqual(bytes, firstBytes); XCTAssertEqual(writes, beforeWrites)
+        clock = date(31, 10)
+        XCTAssertEqual(store.eligibleActiveShow?.id, showID); XCTAssertTrue(store.canRecord(showID: showID))
+        try store.record(receipt, showID: showID)
+        XCTAssertEqual(try store.activeShow?.totals().availableCents, 20_000)
+        clock = calendar.date(byAdding: .day, value: 1, to: date(31))!
+        XCTAssertNil(store.eligibleActiveShow); XCTAssertFalse(store.canRecord(showID: showID))
+        let savedWrites = writes
+        try store.record(receipt, showID: showID)
+        XCTAssertEqual(writes, savedWrites, "An exact committed retry is not a new out-of-date transaction")
+        receipt.id = UUID()
+        XCTAssertThrowsError(try store.record(receipt, showID: showID), "Backdating recordedAt cannot bypass today's schedule")
+        XCTAssertEqual(store.activeShow?.entries.count, 1)
+        try store.void(entryID: try XCTUnwrap(store.activeShow?.entries.first?.id), showID: showID, now: clock)
+        XCTAssertEqual(try store.activeShow?.totals().availableCents, 30_000, "Historical correction remains possible after the show")
+    }
+
     func testShowDatesPersistEditAndClearWithoutRewritingReceiptsOrAllocations() async throws {
         let url = location(); defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-        let store = ShowBudgetStore(url: url)
+        let store = ShowBudgetStore(url: url, now: { self.now })
         let end = now.addingTimeInterval(86_400)
         let id = try store.create(name: "Weekend show", startingCents: 30_000, startDate: now, endDate: end)
         let receipt = sale(); try store.record(receipt, showID: id)
@@ -41,7 +74,7 @@ import XCTest
         var data: Data?, fail = false
         let store = ShowBudgetStore(url: location(), read: { _ in data }, write: { value, _ in
             if fail { throw CocoaError(.fileWriteOutOfSpace) }; data = value
-        })
+        }, now: { self.now })
         let id = try store.create(name: "Show", startingCents: 30_000, startDate: now, endDate: now)
         try store.record(sale(), showID: id)
         let before = store.book, bytes = data, moved = now.addingTimeInterval(86_400)

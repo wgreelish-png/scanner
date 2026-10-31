@@ -54,6 +54,7 @@ import SwiftData
                     DiagnosticLog.shared.record("inventory_import.discarded", ["reason": "saved_inventory_changed"])
                     return
                 }
+                DiagnosticLog.shared.record("inventory_import.apply_started", ["phase": "persistence", "records": String(snapshot.rows.count)])
                 let list = try self.applySnapshot(snapshot, context)
                 self.lastImportedListID = list.id
                 self.isRefreshing = false; self.lookup = nil
@@ -77,6 +78,8 @@ import SwiftData
         let failure = error as? CardShowInventoryFailure
         if case .signInRequired? = failure { needsSignIn = true } else { needsSignIn = false }
         message = failure?.errorDescription ?? CardShowInventoryFailure.persistenceFailed.errorDescription
-        DiagnosticLog.shared.record("inventory_import.failed", ["phase": needsSignIn ? "sign_in" : "import"])
+        var fields = ServiceDiagnosticFields.failure(error)
+        fields["phase"] = needsSignIn ? "sign_in" : "import"
+        DiagnosticLog.shared.record("inventory_import.failed", fields)
     }
 }

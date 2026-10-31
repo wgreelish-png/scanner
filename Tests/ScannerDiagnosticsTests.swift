@@ -2,6 +2,37 @@ import XCTest
 @testable import CardShowScanner
 
 @MainActor final class ScannerDiagnosticsTests: XCTestCase {
+    func testInventoryDiagnosticFailuresDistinguishResponseAuthAndPersistence() {
+        XCTAssertEqual(ServiceDiagnosticFields.failure(CardShowInventoryFailure.invalidResponse),
+                       ["domain": "inventory", "reason": "invalid_response"])
+        XCTAssertEqual(ServiceDiagnosticFields.failure(CardShowInventoryFailure.persistenceFailed),
+                       ["domain": "inventory", "reason": "persistence_failed"])
+        XCTAssertEqual(ServiceDiagnosticFields.failure(CardShowInventoryFailure.signInRequired),
+                       ["domain": "inventory", "reason": "sign_in_required"])
+    }
+
+    func testInventoryDiagnosticPositionsAreNumericAndRawPayloadIsDropped() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = "InventoryDiagnosticExport." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let log = DiagnosticLog(directory: directory, defaults: defaults)
+        log.record("card_show_inventory.validation_failed", ["phase": "stock", "stage": "row",
+            "reason": "missing_sku", "record_index": "4", "page": "1", "total": "92",
+            "body": "PRIVATE_ROW", "cookie": "PRIVATE_COOKIE"])
+        log.record("card_show_inventory.validation_failed", ["record_index": "-1", "page": "PRIVATE_PAGE", "total": "1.5"])
+        let url = try log.export()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let text = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertFalse(text.contains("PRIVATE_"))
+        let entries = try text.split(separator: "\n").map { try JSONSerialization.jsonObject(with: Data($0.utf8)) as! [String: Any] }
+        let fields = entries.filter { $0["event"] as? String == "card_show_inventory.validation_failed" }.compactMap { $0["fields"] as? [String: String] }
+        XCTAssertEqual(fields.count, 2)
+        XCTAssertEqual(fields[0]["record_index"], "4"); XCTAssertEqual(fields[0]["page"], "1"); XCTAssertEqual(fields[0]["total"], "92")
+        XCTAssertNil(fields[1]["record_index"]); XCTAssertNil(fields[1]["page"]); XCTAssertNil(fields[1]["total"])
+    }
+
     func testOpportunitiesDiagnosticFailuresRemainDistinctFromExperimentalResearch() async throws {
         XCTAssertEqual(ServiceDiagnosticFields.failure(OpportunitiesFailure.notCovered), ["domain": "opportunities", "reason": "product_not_covered"])
         XCTAssertEqual(ServiceDiagnosticFields.failure(OpportunitiesFailure.skuNotCovered), ["domain": "opportunities", "reason": "exact_sku_not_covered"])

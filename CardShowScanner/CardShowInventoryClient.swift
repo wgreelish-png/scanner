@@ -21,6 +21,7 @@ extension CardShowInventoryHTTPDataLoading { func cancel() {} }
     private let makeLoader: @MainActor ([HTTPCookie]) -> any CardShowInventoryHTTPDataLoading
     private let isActive: @MainActor () -> Bool
     private let now: @MainActor () -> Date
+    private let log: DiagnosticLog
     private var generation = UUID()
     private var currentLoader: (any CardShowInventoryHTTPDataLoading)?
 
@@ -31,8 +32,9 @@ extension CardShowInventoryHTTPDataLoading { func cancel() {} }
     }, makeLoader: @escaping @MainActor ([HTTPCookie]) -> any CardShowInventoryHTTPDataLoading = {
         NativeCardShowInventoryHTTPDataLoader(cookies: $0)
     }, isActive: @escaping @MainActor () -> Bool = { UIApplication.shared.applicationState == .active },
-       now: @escaping @MainActor () -> Date = Date.init) {
+       now: @escaping @MainActor () -> Date = Date.init, log: DiagnosticLog? = nil) {
         self.cookies = cookies; self.makeLoader = makeLoader; self.isActive = isActive; self.now = now
+        self.log = log ?? .shared
     }
 
     func fetch(expectedLocationID: Int?) async throws -> CardShowInventorySnapshot {
@@ -42,7 +44,10 @@ extension CardShowInventoryHTTPDataLoading { func cancel() {} }
         let savedCookies = await cookies()
         try checkCurrent(id)
         let scoped = Self.accountCookies(savedCookies, now: now())
-        guard !scoped.isEmpty else { throw CardShowInventoryFailure.signInRequired }
+        guard !scoped.isEmpty else {
+            log.record("card_show_inventory.rejected", ["phase": "session", "stage": "session", "reason": "missing_session"])
+            throw CardShowInventoryFailure.signInRequired
+        }
         let loader = makeLoader(scoped)
         currentLoader = loader
         let deadline = now().addingTimeInterval(120)
@@ -51,38 +56,65 @@ extension CardShowInventoryHTTPDataLoading { func cancel() {} }
             if generation == id { currentLoader = nil }
         }
         return try await withTaskCancellationHandler {
+            var phase = "locations"
+            var requestedPage: Int?
             do {
                 let locations = try await load(Self.locationsURL, phase: "locations", loader: loader, id: id, deadline: deadline)
                 let location = try CardShowInventoryDecoder.location(locations, expectedID: expectedLocationID)
+                log.record("card_show_inventory.location_decoded", ["phase": "locations", "records": "1"])
+                phase = "stock"; requestedPage = 1
                 let firstBody = try await load(Self.stockURL(locationID: location.id, page: 1), phase: "stock", loader: loader,
                                                id: id, deadline: deadline)
                 let first = try CardShowInventoryDecoder.page(firstBody, location: location, requestedPage: 1)
+                recordPage(first)
                 var rows = first.rows
                 var seen = Set(rows.map(\.inventoryID))
                 if first.pages > 1 {
                     for page in 2...first.pages {
+                        requestedPage = page
                         let body = try await load(Self.stockURL(locationID: location.id, page: page), phase: "stock", loader: loader,
                                                   id: id, deadline: deadline)
                         let result = try CardShowInventoryDecoder.page(body, location: location, requestedPage: page)
-                        guard result.total == first.total, result.pages == first.pages else { throw CardShowInventoryFailure.invalidResponse }
+                        guard result.total == first.total, result.pages == first.pages else {
+                            throw CardShowInventoryValidationFailure(.pagination, .changingTotals, page: page)
+                        }
+                        recordPage(result)
                         for row in result.rows {
-                            guard seen.insert(row.inventoryID).inserted else { throw CardShowInventoryFailure.invalidResponse }
+                            guard seen.insert(row.inventoryID).inserted else {
+                                throw CardShowInventoryValidationFailure(.snapshot, .duplicateInventory, page: page)
+                            }
                             rows.append(row)
                         }
                     }
                 }
                 try checkCurrent(id)
-                guard rows.count == first.total else { throw CardShowInventoryFailure.invalidResponse }
+                guard rows.count == first.total else { throw CardShowInventoryValidationFailure(.snapshot, .finalCount) }
+                log.record("card_show_inventory.snapshot_decoded", ["phase": "stock", "records": String(rows.count), "total": String(first.total)])
                 return .init(location: location, rows: rows, fetchedAt: now())
             } catch {
                 try checkCurrent(id)
-                if let failure = error as? CardShowInventoryFailure { throw failure }
                 if error is CancellationError || (error as? URLError)?.code == .cancelled { throw CancellationError() }
-                throw CardShowInventoryFailure.networkUnavailable
+                if let rejection = error as? CardShowInventoryValidationFailure {
+                    var fields = rejection.diagnosticFields
+                    fields["phase"] = phase
+                    if fields["page"] == nil, let requestedPage { fields["page"] = String(requestedPage) }
+                    log.record("card_show_inventory.rejected", fields)
+                    throw rejection.failure
+                }
+                let failure = error as? CardShowInventoryFailure ?? .networkUnavailable
+                var fields = ["phase": phase, "stage": phase == "locations" ? "locations" : "response", "reason": failure.diagnosticReason]
+                if let requestedPage { fields["page"] = String(requestedPage) }
+                log.record("card_show_inventory.rejected", fields)
+                throw failure
             }
         } onCancel: {
             loader.cancel()
         }
+    }
+
+    private func recordPage(_ page: CardShowInventoryDecoder.Page) {
+        log.record("card_show_inventory.page_decoded", ["phase": "stock", "page": String(page.page),
+            "records": String(page.rows.count), "total": String(page.total)])
     }
 
     func cancel() {
@@ -105,16 +137,21 @@ extension CardShowInventoryHTTPDataLoading { func cancel() {} }
         request.setValue("https://tcgtracking.com/dashboard.php?tab=inventory", forHTTPHeaderField: "Referer")
         let (data, response) = try await loader.data(for: request)
         try checkCurrent(id)
-        DiagnosticLog.shared.record("card_show_inventory.http_response", ["phase": phase, "code": String(response.statusCode)])
-        guard response.url == url else { throw CardShowInventoryFailure.invalidResponse }
+        log.record("card_show_inventory.http_response", ["phase": phase, "code": String(response.statusCode)])
+        guard response.url == url else { throw CardShowInventoryValidationFailure(.response, .responseURL) }
         switch response.statusCode {
         case 200: break
-        case 301...399, 401, 403: throw CardShowInventoryFailure.signInRequired
-        case 429: throw CardShowInventoryFailure.rateLimited
-        default: throw CardShowInventoryFailure.networkUnavailable
+        case 301...399, 401, 403:
+            throw CardShowInventoryValidationFailure(.response, .httpAuthentication, failure: .signInRequired)
+        case 429: throw CardShowInventoryValidationFailure(.response, .rateLimited, failure: .rateLimited)
+        default: throw CardShowInventoryValidationFailure(.response, .httpStatus, failure: .networkUnavailable)
         }
-        guard response.mimeType?.lowercased() == "application/json" else { throw CardShowInventoryFailure.signInRequired }
-        guard data.count <= CardShowInventoryDecoder.maximumPageBytes else { throw CardShowInventoryFailure.responseTooLarge }
+        guard response.mimeType?.lowercased() == "application/json" else {
+            throw CardShowInventoryValidationFailure(.response, .contentType, failure: .signInRequired)
+        }
+        guard data.count <= CardShowInventoryDecoder.maximumPageBytes else {
+            throw CardShowInventoryValidationFailure(.response, .responseTooLarge, failure: .responseTooLarge)
+        }
         return data
     }
 

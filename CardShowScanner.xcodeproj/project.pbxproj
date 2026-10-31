@@ -7,6 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        EDC132897E3F407AA270ABE9 /* ListBulkDeletionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 430DE836C6389FEB23E9E725; };
+        7AE60614920D383322EA9D25 /* ListBulkDeletionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9992990386EE2965C7A395DF; };
+        435709511C7F8A06CDB2950C /* ListBudgetOutcomeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFC605F1D18B6AD2354280DB; };
+        FE687C12767D86085F33F461 /* ListBulkDeletion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 262B89E423EBFC24B13A5E9B; };
+        F5F4B8A2C7718B18F9BCE655 /* ListBudgetOutcome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06675DF2DAB7D9AF5D84CB98; };
         5BA1EAA709E5DEEF6392A917 /* ReviewPresentationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADB4ECED8C2078FE86B93E06; };
         587A3E4D6CE30AF6CECD658D /* MarketplaceLinksTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BF17497C6D1C277D27FA63E; };
         0D609E2779F9132385C18709 /* ReviewPresentationFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4940B16BF912F97C4218A172; };
@@ -162,6 +167,11 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        430DE836C6389FEB23E9E725 /* ListBulkDeletionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListBulkDeletionUITests.swift; sourceTree = "<group>"; };
+        9992990386EE2965C7A395DF /* ListBulkDeletionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListBulkDeletionTests.swift; sourceTree = "<group>"; };
+        CFC605F1D18B6AD2354280DB /* ListBudgetOutcomeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListBudgetOutcomeTests.swift; sourceTree = "<group>"; };
+        262B89E423EBFC24B13A5E9B /* ListBulkDeletion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListBulkDeletion.swift; sourceTree = "<group>"; };
+        06675DF2DAB7D9AF5D84CB98 /* ListBudgetOutcome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListBudgetOutcome.swift; sourceTree = "<group>"; };
         ADB4ECED8C2078FE86B93E06 /* ReviewPresentationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewPresentationUITests.swift; sourceTree = "<group>"; };
         0BF17497C6D1C277D27FA63E /* MarketplaceLinksTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketplaceLinksTests.swift; sourceTree = "<group>"; };
         4940B16BF912F97C4218A172 /* ReviewPresentationFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewPresentationFixtures.swift; sourceTree = "<group>"; };
@@ -330,6 +340,7 @@
         C4D311E710AB4F79A8B00003 /* UITests */ = {
             isa = PBXGroup;
             children = (
+                430DE836C6389FEB23E9E725 /* ListBulkDeletionUITests.swift */,
                 ADB4ECED8C2078FE86B93E06 /* ReviewPresentationUITests.swift */,
                 06D0F73C9B90723592633A6C /* CardShowInventoryUITests.swift */,
                 A418D9B7A3E4BA5F6D1CC438 /* ShowBudgetUITests.swift */,
@@ -353,6 +364,8 @@
 		59830EBC3A4184110566BF1A /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+                9992990386EE2965C7A395DF /* ListBulkDeletionTests.swift */,
+                CFC605F1D18B6AD2354280DB /* ListBudgetOutcomeTests.swift */,
                 0BF17497C6D1C277D27FA63E /* MarketplaceLinksTests.swift */,
                 1E0BED129F9BFB69E5728677 /* CardShowInventoryServiceTests.swift */,
                 7FF28E3126BAD358FE2C6FD9 /* CardShowInventoryRoutingTests.swift */,
@@ -405,6 +418,8 @@
 		878A52FC5FF6A57D50B7B870 /* CardShowScanner */ = {
 			isa = PBXGroup;
 			children = (
+                262B89E423EBFC24B13A5E9B /* ListBulkDeletion.swift */,
+                06675DF2DAB7D9AF5D84CB98 /* ListBudgetOutcome.swift */,
                 4940B16BF912F97C4218A172 /* ReviewPresentationFixtures.swift */,
                 63692F3A6E5571AB5B1ECC5C /* MarketplaceLinks.swift */,
                 95363D8294652D35490278EB /* Assets.xcassets */,
@@ -632,6 +647,7 @@
             isa = PBXSourcesBuildPhase;
             buildActionMask = 2147483647;
             files = (
+                EDC132897E3F407AA270ABE9 /* ListBulkDeletionUITests.swift in Sources */,
                 5BA1EAA709E5DEEF6392A917 /* ReviewPresentationUITests.swift in Sources */,
                 A28CFF7A7CFD4567124E3092 /* CardShowInventoryUITests.swift in Sources */,
                 47547ECCAE7611356359E7FC /* ShowBudgetUITests.swift in Sources */,
@@ -645,6 +661,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                7AE60614920D383322EA9D25 /* ListBulkDeletionTests.swift in Sources */,
+                435709511C7F8A06CDB2950C /* ListBudgetOutcomeTests.swift in Sources */,
                 587A3E4D6CE30AF6CECD658D /* MarketplaceLinksTests.swift in Sources */,
                 3B1F9892796D1021055C46B3 /* CardShowInventoryServiceTests.swift in Sources */,
                 1179362178435188408C13F0 /* CardShowInventoryRoutingTests.swift in Sources */,
@@ -696,6 +714,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                FE687C12767D86085F33F461 /* ListBulkDeletion.swift in Sources */,
+                F5F4B8A2C7718B18F9BCE655 /* ListBudgetOutcome.swift in Sources */,
                 0D609E2779F9132385C18709 /* ReviewPresentationFixtures.swift in Sources */,
                 D378D4079C3567D744A5E0F5 /* MarketplaceLinks.swift in Sources */,
                 AFE3CF44B56BDB61BC7A023E /* CardShowInventoryView.swift in Sources */,
@@ -833,7 +853,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 30;
+				CURRENT_PROJECT_VERSION = 32;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -870,7 +890,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 30;
+				CURRENT_PROJECT_VERSION = 32;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";

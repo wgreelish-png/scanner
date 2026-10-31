@@ -2,13 +2,14 @@ import Foundation
 import Observation
 
 enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
-    case notLoaded, saving, showNotFound, entryNotFound, conflictingEntry, fileTooLarge, loadFailed, saveFailed
+    case notLoaded, saving, showNotFound, entryNotFound, conflictingEntry, outsideShowDates, fileTooLarge, loadFailed, saveFailed
 
     var errorDescription: String? {
         switch self {
         case .notLoaded: return "The saved show budget could not be opened. Retry loading it before making changes. Your existing file has been kept."
         case .saving: return "The show budget is already being saved."
         case .showNotFound: return "This show budget is no longer available. Reopen the show and retry."
+        case .outsideShowDates: return "This show budget applies only during its scheduled dates. Choose an active show or update its dates before recording cash."
         case .entryNotFound: return "This budget entry is no longer available. Reopen the show and retry."
         case .conflictingEntry: return "This transaction was already recorded with different details. Review the existing entry before adding another."
         case .fileTooLarge: return "The saved show budget is too large to open or update safely. The original file has been kept."
@@ -19,10 +20,12 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
 }
 
 /// Independent, versioned financial records. Changes are published only after
-/// an atomic file write; inventory storage, migration and offers are untouched.
+/// an atomic file write. List-outcome commands coordinate their recoverable
+/// SwiftData projection without a second financial charge.
 @MainActor @Observable final class ShowBudgetStore {
     typealias Reader = @MainActor (URL) throws -> Data?
     typealias Writer = @MainActor (Data, URL) throws -> Void
+    typealias Clock = @MainActor () -> Date
 
     static let shared = ShowBudgetStore()
     static let maximumBytes = 8 * 1_024 * 1_024
@@ -40,11 +43,28 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
     private let url: URL
     private let read: Reader
     private let write: Writer
+    private let now: Clock
+    let calendar: Calendar
 
-    init(url: URL? = nil, read: Reader? = nil, write: Writer? = nil) {
+    var currentDate: Date { now() }
+
+    /// Selection remains available for review; funds apply only on show days.
+    var eligibleActiveShow: ShowBudgetEvent? {
+        guard let show = activeShow, show.applies(on: now(), calendar: calendar) else { return nil }
+        return show
+    }
+
+    func canRecord(showID: UUID) -> Bool {
+        guard isLoaded, let show = book.shows.first(where: { $0.id == showID }) else { return false }
+        return show.applies(on: now(), calendar: calendar)
+    }
+
+    init(url: URL? = nil, read: Reader? = nil, write: Writer? = nil,
+         now: @escaping Clock = Date.init, calendar: Calendar = .current) {
         self.url = url ?? Self.defaultURL
         self.read = read ?? Self.readFile
         self.write = write ?? Self.writeFile
+        self.now = now; self.calendar = calendar
         reload()
     }
 
@@ -126,6 +146,12 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
                 return // The exact same confirmation/retry has already committed.
             }
         }
+        // Recheck at commit time: an open form or a midnight boundary must not
+        // post cash outside the scheduled days. Exact committed retries above
+        // remain idempotent even after the show has ended.
+        guard book.shows[index].applies(on: now(), calendar: calendar) else {
+            throw ShowBudgetStoreFailure.outsideShowDates
+        }
         var next = book
         next.shows[index].entries.append(entry)
         try commit(next)
@@ -142,6 +168,92 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
         guard book.shows[show].entries[entry].voidedAt == nil else { return }
         var next = book
         next.shows[show].entries[entry].voidedAt = now
+        try commit(next)
+    }
+
+    /// Budget cash and its pending SwiftData projection share this one durable
+    /// write. Repeated semantic requests reuse the original operation before
+    /// today's date is checked, so old committed cash is never charged twice.
+    func applyListOutcome(_ request: ListBudgetOutcomeRequest) throws -> BudgetListOutcomeUpdate {
+        try requireWritable()
+        guard !request.listName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              request.listName.count <= 250 else { throw ShowBudgetFailure.invalidBook }
+        let candidate = BudgetListOutcomeUpdate(id: UUID(), listID: request.listID,
+            desiredOutcomeData: request.desiredOutcomeData, calculatedPaidCents: request.paidCents,
+            calculatedReceivedCents: request.receivedCents, createdAt: request.recordedAt,
+            showID: nil, entryID: nil, disposition: request.hasCash ? .noApplicableShow : .noCash, mirrored: false)
+        try candidate.validate()
+        guard candidate.outcomeKind == request.kind else { throw ShowBudgetFailure.invalidBook }
+        if let previous = book.listOutcomeUpdates?.first(where: { $0.listID == request.listID }) {
+            let same = previous.outcomeKind == request.kind && previous.calculatedPaidCents == request.paidCents &&
+                previous.calculatedReceivedCents == request.receivedCents
+            if same {
+                if !previous.mirrored { return previous }
+                if previous.disposition == .noApplicableShow {
+                    if eligibleActiveShow == nil { return previous }
+                } else if let entryID = previous.entryID {
+                    if book.shows.contains(where: { $0.entries.contains { $0.id == entryID && $0.voidedAt == nil } }) { return previous }
+                } else { return previous }
+            }
+            guard previous.mirrored else { throw ShowBudgetStoreFailure.conflictingEntry }
+        }
+        let priorAuto = book.shows.flatMap(\.entries).filter {
+            $0.listID == request.listID && $0.outcomeOperationID != nil && $0.voidedAt == nil
+        }
+        let manualCash = book.shows.flatMap(\.entries).contains {
+            $0.listID == request.listID && $0.outcomeOperationID == nil && $0.voidedAt == nil &&
+                ($0.paidCents > 0 || $0.grossReceivedCents > 0)
+        }
+        if request.hasCash && manualCash { throw ListBudgetOutcomeFailure.manualReceiptExists }
+        let target = request.hasCash ? eligibleActiveShow : nil
+        if let target, request.hasCash, book.shows.contains(where: { show in
+            show.id != target.id && show.entries.contains { $0.listID == request.listID && $0.outcomeOperationID != nil && $0.voidedAt == nil }
+        }) { throw ListBudgetOutcomeFailure.differentShowReplacement }
+        if request.hasCash && target == nil && !priorAuto.isEmpty {
+            throw ListBudgetOutcomeFailure.noApplicableShowForReplacement
+        }
+        var next = book
+        // Zero-cash corrections are allowed after the original show's dates.
+        // They reverse only this app's auto receipts, never manual cash records.
+        for show in next.shows.indices {
+            for entry in next.shows[show].entries.indices {
+                let old = next.shows[show].entries[entry]
+                if old.listID == request.listID && old.outcomeOperationID != nil && old.voidedAt == nil {
+                    next.shows[show].entries[entry].voidedAt = max(request.recordedAt, old.recordedAt)
+                }
+            }
+        }
+        var showID: UUID?, entryID: UUID?
+        let disposition: BudgetListOutcomeUpdate.Disposition
+        if let target, let index = next.shows.firstIndex(where: { $0.id == target.id }) {
+            let receipt = ShowBudgetEntry(id: candidate.id, kind: request.kind == .purchase ? .purchase : .trade,
+                paidCents: request.paidCents, grossReceivedCents: request.receivedCents,
+                reinvestmentPercent: target.reinvestmentPercent, splitBasis: .grossProceeds,
+                recordedAt: request.recordedAt, listID: request.listID, listName: request.listName,
+                note: "Recorded from list outcome", outcomeOperationID: candidate.id)
+            next.shows[index].entries.append(receipt)
+            showID = target.id; entryID = receipt.id; disposition = .applied
+        } else if request.hasCash { disposition = .noApplicableShow }
+        else if manualCash { disposition = .manualCashPreserved }
+        else { disposition = priorAuto.isEmpty ? .noCash : .applied }
+        let update = BudgetListOutcomeUpdate(id: candidate.id, listID: request.listID,
+            desiredOutcomeData: request.desiredOutcomeData, calculatedPaidCents: request.paidCents,
+            calculatedReceivedCents: request.receivedCents, createdAt: request.recordedAt,
+            showID: showID, entryID: entryID, disposition: disposition, mirrored: false)
+        var updates = next.listOutcomeUpdates ?? []
+        updates.removeAll { $0.listID == request.listID }; updates.append(update)
+        next.listOutcomeUpdates = updates
+        try commit(next)
+        DiagnosticLog.shared.record("list.outcome_budget_committed", ["phase": "budget", "reason": disposition.rawValue])
+        return update
+    }
+
+    func acknowledgeListOutcome(_ operationID: UUID) throws {
+        try requireWritable()
+        guard let index = book.listOutcomeUpdates?.firstIndex(where: { $0.id == operationID }),
+              book.listOutcomeUpdates?[index].mirrored == false else { return }
+        var next = book
+        next.listOutcomeUpdates?[index].mirrored = true
         try commit(next)
     }
 

@@ -38,6 +38,10 @@ Build 29 adds [Card Show inventory import](docs/CardShowInventory.md). Lists →
 
 Build 30 applies the PokéDen Collectibles logo as the app icon and [streamlines list review](docs/StreamlinedListReview.md). CSV export and offer percentages live in the top-right options menu; outcome buttons join the offer tile, live custom cash and save-estimate controls are removed, and card rows include thumbnails. Research links open TCGplayer listings/history, and show budgets support optional show dates.
 
+Build 31 adds precise [inventory import rejection diagnostics](docs/CardShowInventory.md), separating response validation from authentication and persistence guards without changing saved data or accepting partial imports.
+
+Build 32 adds a dedicated **Show** tab, applies scheduled budgets only on their local show dates, and [records calculated outcome cash automatically](docs/AutomaticOutcomeBudget.md). Open Existing List always returns to the Lists root. Lists now supports multi-select deletion with one confirmation; swipe deletion remains. Public pricing retains its daily set cache. Inventory import still needs the build-31 rejection diagnostics from a new device attempt.
+
 Open `CardShowScanner.xcodeproj` in Xcode 16+, select **CardShowScanner**, and Run. Set personal signing using the local configuration instructions below. Use a physical iPhone for live camera verification.
 
 For the final personal-use installation, select **CardShowScanner Personal**: Run uses Release without attaching a debugger, with the same bundle ID and your ignored signing configuration. [Final phone test and weekly Personal Team refresh](docs/PersonalIPhone.md) explains how to keep the app/data installed; free signing normally expires after seven days.

@@ -172,7 +172,7 @@ struct SessionReviewHeader: View {
     let list: CardList
     let onContinue: () -> Void
     let onSavedOffers: () -> Void
-    var outcomeActions: AnyView? = nil
+    var outcomeActions: ((OfferTotals, TradeTransactionResult?) -> AnyView)? = nil
     @Environment(\.modelContext) private var context
     @State private var openingScanner = false
     @State private var confirmResume = false
@@ -214,7 +214,7 @@ struct SessionReviewHeader: View {
             }
             OfferBreakdownView(totals: totals, rates: session.rates, customCashOffer: nil, transactionMode: transactionMode,
                                cashValuation: transaction?.resolvedCashValuation(totals: totals, customCashOffer: nil))
-            if let outcomeActions { outcomeActions }
+            if let outcomeActions { outcomeActions(totals, transaction) }
             offerActions
         }.padding(.vertical, 8).buttonStyle(.borderless)
             .toolbar {

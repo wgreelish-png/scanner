@@ -1,3 +1,5 @@
+> Build 32 integrates calculated budget cash into the two outcome controls and moves budget details into the dedicated **Show** tab. The separate Record Cash action on list review has been removed.
+
 # Simpler list review and PokéDen app icon
 
 Build 30 keeps the existing saved-list, session and pricing behavior while reducing the controls visible in list review.

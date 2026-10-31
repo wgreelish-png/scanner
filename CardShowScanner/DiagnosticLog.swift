@@ -10,7 +10,7 @@ enum DiagnosticScanFields {
         if ["solid", "tracked", "border_retry", "border_retained"].contains(key) { return value == "true" || value == "false" }
         if key == "scan_stage" { return ["none", "one", "quick", "full"].contains(value) }
         if key == "quad_source" { return ["none", "detected", "selected"].contains(value) }
-        let integers: Set<String> = ["raw_quads", "rejected_quads", "candidate_quads", "selected_base", "sample_age_ms"]
+        let integers: Set<String> = ["raw_quads", "rejected_quads", "candidate_quads", "selected_base", "sample_age_ms", "record_index", "page", "total"]
         let maxima: [String: Double] = ["quad_aspect": 1, "quad_area": 1, "quad_support": 1,
             "mean_luma": 255, "luma_std": 128, "match_distance": 100, "match_gap": 100, "sample_age_ms": 600_000]
         guard integers.contains(key) || maxima[key] != nil else { return true }
@@ -27,6 +27,9 @@ enum ServiceDiagnosticFields {
         case opportunitiesMeta = "opportunities_meta", opportunitiesProduct = "opportunities_product"
     }
     static func failure(_ error: Error) -> [String: String] {
+        if let error = error as? CardShowInventoryFailure {
+            return ["domain": "inventory", "reason": error.diagnosticReason]
+        }
         if let error = error as? BetaAPICadenceFailure {
             switch error {
             case .invalidRequest: return ["domain": "beta", "reason": "invalid_request"]
@@ -153,7 +156,7 @@ enum ServiceDiagnosticFields {
     private let keys: Set<String> = ["provider", "game", "episode", "same", "accepted", "confidence", "candidates",
         "printing_required", "priced", "merged", "automatic", "quantity", "reason", "stage", "backend", "elapsed_ms",
         "scan_ms", "capture_ms", "frames", "domain", "code", "records", "rejected_records", "phase", "candidate_index", "app_version", "build", "downloaded_bytes", "cached_shards", "cache", "source", "persisted", "cache_backend", "revision",
-        "method", "solid", "tracked", "border_retry", "border_retained", "scan_stage", "raw_quads", "rejected_quads", "candidate_quads", "selected_base", "quad_source",
+        "record_index", "page", "total", "method", "solid", "tracked", "border_retry", "border_retained", "scan_stage", "raw_quads", "rejected_quads", "candidate_quads", "selected_base", "quad_source",
         "quad_aspect", "quad_area", "quad_support", "mean_luma", "luma_std", "match_distance", "match_gap", "sample_age_ms"]
     private var current: URL { directory.appendingPathComponent("current.jsonl") }
     private var previous: URL { directory.appendingPathComponent("previous.jsonl") }

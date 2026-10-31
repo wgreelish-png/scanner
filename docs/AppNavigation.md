@@ -1,3 +1,5 @@
+> Build 32 adds **Show** as a fifth tab for show dates and budgets, removes budget links from the Lists/Scan roots, and makes explicit **Open Existing List** reset the Lists navigation stack. Ordinary tab taps retain their stacks. The four-tab build-23 description below is historical.
+
 # Bottom navigation and simpler screens
 
 Build 23 uses a native bottom tab bar with four destinations. Each tab keeps its own navigation stack while the app is open.

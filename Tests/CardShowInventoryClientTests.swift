@@ -140,9 +140,80 @@ import XCTest
         XCTAssertEqual(CardShowInventoryWebsiteClient.accountCookies(cookies, now: now).count, 2)
     }
 
-    private func client(_ loader: any CardShowInventoryHTTPDataLoading) -> CardShowInventoryWebsiteClient {
+    func testRowRejectionIdentifiesOnlyTheFieldPageAndPositionWithoutLoggingSourceValues() async throws {
+        let capture = try diagnosticCapture()
+        defer { capture.cleanup() }
+        var invalid = row(2)
+        invalid["sku_id"] = NSNull()
+        invalid["product_name"] = "PRIVATE_CARD_AND_TOKEN"
+        invalid["notes"] = "PRIVATE_ACCOUNT_COOKIE"
+        let loader = InventoryImportLoader([.init(try locations()), .init(try page([row(1), invalid]))])
+        await assertFailure(.invalidResponse) { try await self.client(loader, log: capture.log).fetch(expectedLocationID: 42) }
+        let (text, events) = try capture.events()
+        let event = try XCTUnwrap(events.first { $0["event"] as? String == "card_show_inventory.rejected" })
+        let fields = try XCTUnwrap(event["fields"] as? [String: String])
+        XCTAssertEqual(fields["phase"], "stock"); XCTAssertEqual(fields["stage"], "row")
+        XCTAssertEqual(fields["reason"], "sku_id_invalid"); XCTAssertEqual(fields["page"], "1")
+        XCTAssertEqual(fields["record_index"], "1")
+        XCTAssertFalse(events.contains { $0["event"] as? String == "card_show_inventory.page_decoded" })
+        XCTAssertFalse(events.contains { $0["event"] as? String == "card_show_inventory.snapshot_decoded" })
+        XCTAssertFalse(text.contains("PRIVATE_")); XCTAssertFalse(text.contains("fixture-only"))
+        XCTAssertFalse(text.contains("Synthetic inventory card")); XCTAssertFalse(text.contains("https://tcgtracking.com"))
+    }
+
+    func testPaginationRejectionReportsTheLimitCheckpointInsteadOfGenericInvalidResponse() throws {
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: page([row(1)])) as? [String: Any])
+        let changed = object.merging(["limit": 100]) { _, new in new }
+        XCTAssertThrowsError(try CardShowInventoryDecoder.page(JSONSerialization.data(withJSONObject: changed),
+            location: .init(id: 42, name: "Card Show"), requestedPage: 1)) { error in
+            let rejection = error as? CardShowInventoryValidationFailure
+            XCTAssertEqual(rejection?.failure, .invalidResponse)
+            XCTAssertEqual(rejection?.stage, .pagination); XCTAssertEqual(rejection?.reason, .limit)
+            XCTAssertEqual(rejection?.page, 1); XCTAssertNil(rejection?.recordIndex)
+        }
+    }
+
+    func testHTMLAndHTTPAuthenticationHaveDistinctCheckpointsAndSameSignInBehavior() async throws {
+        for (reply, reason) in [(InventoryImportLoader.Reply(Data("PRIVATE_LOGIN_BODY".utf8), mime: "text/html"), "content_type"),
+                                (.init(Data("PRIVATE_AUTH_BODY".utf8), status: 401), "http_authentication")] {
+            let capture = try diagnosticCapture()
+            defer { capture.cleanup() }
+            await assertFailure(.signInRequired) {
+                try await self.client(InventoryImportLoader([reply]), log: capture.log).fetch(expectedLocationID: nil)
+            }
+            let (text, events) = try capture.events()
+            let event = try XCTUnwrap(events.first { $0["event"] as? String == "card_show_inventory.rejected" })
+            let fields = try XCTUnwrap(event["fields"] as? [String: String])
+            XCTAssertEqual(fields["stage"], "response"); XCTAssertEqual(fields["reason"], reason)
+            XCTAssertFalse(text.contains("PRIVATE_")); XCTAssertFalse(text.contains("fixture-only"))
+        }
+    }
+
+    func testSuccessfulDecodeLogsCountsBeforePersistenceWithoutSourceContents() async throws {
+        let capture = try diagnosticCapture()
+        defer { capture.cleanup() }
+        let loader = InventoryImportLoader([.init(try locations()), .init(try page([row(1), row(2)]))])
+        _ = try await client(loader, log: capture.log).fetch(expectedLocationID: 42)
+        let (text, events) = try capture.events()
+        let event = try XCTUnwrap(events.first { $0["event"] as? String == "card_show_inventory.page_decoded" })
+        let fields = try XCTUnwrap(event["fields"] as? [String: String])
+        XCTAssertEqual(fields["page"], "1"); XCTAssertEqual(fields["records"], "2"); XCTAssertEqual(fields["total"], "2")
+        XCTAssertTrue(events.contains { $0["event"] as? String == "card_show_inventory.snapshot_decoded" })
+        XCTAssertFalse(text.contains("Synthetic inventory card")); XCTAssertFalse(text.contains("Synthetic set"))
+    }
+
+    private func diagnosticCapture() throws -> InventoryDiagnosticCapture {
+        let name = "CardShowInventoryClientTests-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defaults.set(true, forKey: "diagnosticsEnabled")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(name, isDirectory: true)
+        return InventoryDiagnosticCapture(log: DiagnosticLog(directory: directory, defaults: defaults), directory: directory,
+                                          defaults: defaults, suite: name)
+    }
+
+    private func client(_ loader: any CardShowInventoryHTTPDataLoading, log: DiagnosticLog? = nil) -> CardShowInventoryWebsiteClient {
         let session = cookie("tcgtracking.com")
-        return .init(cookies: { [session] }, makeLoader: { _ in loader }, isActive: { true })
+        return .init(cookies: { [session] }, makeLoader: { _ in loader }, isActive: { true }, log: log)
     }
     private func cookie(_ domain: String, expires: Date? = nil) -> HTTPCookie {
         var properties: [HTTPCookiePropertyKey: Any] = [.name: "SyntheticSession", .value: "fixture-only", .domain: domain, .path: "/", .secure: "TRUE"]
@@ -168,6 +239,26 @@ import XCTest
                                file: StaticString = #filePath, line: UInt = #line) async {
         do { _ = try await operation(); XCTFail("Expected \(failure)", file: file, line: line) }
         catch { XCTAssertEqual(error as? CardShowInventoryFailure, failure, file: file, line: line) }
+    }
+}
+
+@MainActor private struct InventoryDiagnosticCapture {
+    let log: DiagnosticLog
+    let directory: URL
+    let defaults: UserDefaults
+    let suite: String
+    func events() throws -> (String, [[String: Any]]) {
+        let exported = try log.export()
+        defer { try? FileManager.default.removeItem(at: exported.deletingLastPathComponent()) }
+        let text = try String(contentsOf: exported, encoding: .utf8)
+        let events = try text.split(separator: "\n").map {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])
+        }
+        return (text, events)
+    }
+    func cleanup() {
+        try? FileManager.default.removeItem(at: directory)
+        defaults.removePersistentDomain(forName: suite)
     }
 }
 

@@ -30,6 +30,9 @@ struct SavedListsView: View {
     @State private var error: String?
     @State private var creationError: String?
     @State private var pendingDeletion: ListDeletionRequest?
+    @State private var selectingLists = false
+    @State private var selectedListIDs = Set<UUID>()
+    @State private var pendingBulkDeletion: ListBulkDeletionRequest?
     @FocusState private var nameFocused: Bool
 
     private var filtered: [CardList] {
@@ -38,12 +41,30 @@ struct SavedListsView: View {
     }
 
     private var importedInventory: CardList? { lists.first { $0.isCardShowInventory } }
+    private var visibleSelectionIDs: Set<UUID> {
+        var result = Set(filtered.map(\.id))
+        if let importedInventory, search.isEmpty || "Card Show Inventory".localizedCaseInsensitiveContains(search) {
+            result.insert(importedInventory.id)
+        }
+        return result
+    }
 
     var body: some View {
         List {
-            Section { ShowBudgetSummaryCard() }
             Section {
-                NavigationLink { CardShowInventoryView() } label: {
+                if selectingLists, let importedInventory {
+                    Button { toggleSelection(importedInventory.id) } label: {
+                        HStack {
+                            selectionMark(importedInventory.id)
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text("Card Show Inventory").font(.headline)
+                                Text("\(importedInventory.quantity) cards · Saved copy").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }.frame(maxWidth: .infinity, minHeight: 52, alignment: .leading).contentShape(Rectangle())
+                    }.buttonStyle(.borderless).accessibilityIdentifier("savedLists.selectImported")
+                        .accessibilityAddTraits(selectedListIDs.contains(importedInventory.id) ? .isSelected : [])
+                } else {
+                    NavigationLink { CardShowInventoryView() } label: {
                     HStack(spacing: 14) {
                         Image(systemName: "shippingbox.fill").font(.title2).foregroundStyle(.indigo)
                             .frame(width: 44, height: 52)
@@ -67,6 +88,7 @@ struct SavedListsView: View {
                             }.accessibilityIdentifier("savedLists.removeCardShowInventory")
                         }
                     }
+                }
             }
             Section {
                 let layout = dynamicTypeSize.isAccessibilitySize
@@ -101,9 +123,92 @@ struct SavedListsView: View {
                     ContentUnavailableView.search(text: search)
                 }
                 ForEach(filtered) { list in
-                    NavigationLink {
-                        CardListView(list: list, session: sessions.first { $0.listID == list.id })
-                    } label: {
+                    Group {
+                        if selectingLists {
+                            Button { toggleSelection(list.id) } label: {
+                                HStack(alignment: .top, spacing: 12) {
+                                    selectionMark(list.id)
+                                    savedListLabel(list)
+                                }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                            }.buttonStyle(.borderless)
+                                .accessibilityIdentifier("savedLists.select." + list.name)
+                                .accessibilityAddTraits(selectedListIDs.contains(list.id) ? .isSelected : [])
+                        } else {
+                            NavigationLink {
+                                CardListView(list: list, session: sessions.first { $0.listID == list.id })
+                            } label: { savedListLabel(list) }
+                        }
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: !selectingLists) {
+                        if !selectingLists {
+                            Button("Delete") {
+                                guard pendingDeletion == nil else { return }
+                                pendingDeletion = ListDeletionRequest(list: list)
+                                DiagnosticLog.shared.record("list.delete_requested", ["quantity": String(list.quantity)])
+                            }.tint(.red).accessibilityIdentifier("savedList.requestDelete")
+                            Button("Duplicate") {
+                                do { try CardListService.duplicate(list, context: context) }
+                                catch { context.rollback(); self.error = error.localizedDescription }
+                            }.tint(.blue)
+                        }
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("My Lists")
+        .searchable(text: $search, prompt: "Search lists")
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button(selectingLists ? "Done" : "Select") {
+                    selectingLists.toggle()
+                    if !selectingLists { selectedListIDs.removeAll() }
+                }.disabled(lists.isEmpty).accessibilityIdentifier("savedLists.selectionMode")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                if selectingLists {
+                    Button("Select All") { selectedListIDs.formUnion(visibleSelectionIDs) }
+                        .disabled(visibleSelectionIDs.isEmpty).accessibilityIdentifier("savedLists.selectAll")
+                } else {
+                    Button {
+                        newName = ""; creationError = nil; showingNewList = true
+                    } label: { Image(systemName: "plus") }
+                        .accessibilityLabel("New List").accessibilityIdentifier("savedLists.newList")
+                }
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if selectingLists {
+                Button("Delete Selected (\(selectedListIDs.count))", role: .destructive) {
+                    guard pendingBulkDeletion == nil else { return }
+                    let selected = lists.filter { selectedListIDs.contains($0.id) }
+                    guard !selected.isEmpty else { return }
+                    pendingBulkDeletion = ListBulkDeletionRequest(lists: selected)
+                }.buttonStyle(.borderedProminent).tint(.red)
+                    .frame(maxWidth: .infinity, minHeight: 44).padding().background(.regularMaterial)
+                    .disabled(selectedListIDs.isEmpty).accessibilityIdentifier("savedLists.deleteSelected")
+            }
+        }
+        .sheet(isPresented: $showingNewList) { newListSheet }
+        .sheet(item: $pendingDeletion) { request in ListDeletionConfirmationView(request: request) }
+        .sheet(item: $pendingBulkDeletion) { request in
+            ListBulkDeletionConfirmationView(request: request) {
+                selectedListIDs.subtract(request.ids)
+                if selectedListIDs.isEmpty { selectingLists = false }
+            }
+        }
+        .onChange(of: Set(lists.map(\.id))) { _, existing in selectedListIDs.formIntersection(existing) }
+        .failureAlert($error)
+    }
+
+    private func toggleSelection(_ id: UUID) {
+        if !selectedListIDs.insert(id).inserted { selectedListIDs.remove(id) }
+    }
+    private func selectionMark(_ id: UUID) -> some View {
+        Image(systemName: selectedListIDs.contains(id) ? "checkmark.circle.fill" : "circle")
+            .font(.title2).foregroundStyle(.indigo).frame(width: 28, height: 44).accessibilityHidden(true)
+    }
+    private func savedListLabel(_ list: CardList) -> some View {
                         HStack(alignment: .top, spacing: 14) {
                             Image(systemName: "rectangle.stack.fill")
                                 .font(.title2).foregroundStyle(.indigo)
@@ -123,35 +228,6 @@ struct SavedListsView: View {
                                 }.foregroundStyle(.secondary)
                             }.padding(.vertical, 3)
                         }
-                    }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button("Delete") {
-                            guard pendingDeletion == nil else { return }
-                            pendingDeletion = ListDeletionRequest(list: list)
-                            DiagnosticLog.shared.record("list.delete_requested", ["quantity": String(list.quantity)])
-                        }.tint(.red).accessibilityIdentifier("savedList.requestDelete")
-                        Button("Duplicate") {
-                            do { try CardListService.duplicate(list, context: context) }
-                            catch { context.rollback(); self.error = error.localizedDescription }
-                        }.tint(.blue)
-                    }
-                }
-            }
-        }
-        .listStyle(.insetGrouped)
-        .navigationTitle("My Lists")
-        .searchable(text: $search, prompt: "Search lists")
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    newName = ""; creationError = nil; showingNewList = true
-                } label: { Image(systemName: "plus") }
-                    .accessibilityLabel("New List").accessibilityIdentifier("savedLists.newList")
-            }
-        }
-        .sheet(isPresented: $showingNewList) { newListSheet }
-        .sheet(item: $pendingDeletion) { request in ListDeletionConfirmationView(request: request) }
-        .failureAlert($error)
     }
 
     private var newListSheet: some View {
@@ -244,6 +320,7 @@ struct CardListView: View {
     }
     @Bindable var list: CardList
     @Environment(\.modelContext) private var context
+    @Environment(\.scenePhase) private var scenePhase
     var session: ScanSession? = nil
     var onContinueScanning: (() -> Void)? = nil
     @Query private var sessions: [ScanSession]
@@ -266,6 +343,9 @@ struct CardListView: View {
     @State private var choosingOutcome = false
     @State private var savingOutcome = false
     @State private var outcomeError: String?
+    @State private var outcomeBudgetMessage: String?
+    @State private var pendingOutcomeBudget = false
+    @State private var isVisible = false
     private var reviewSession: ScanSession? { session ?? sessions.first { $0.listID == list.id } }
     var filtered: [InventoryCard] {
         list.orderedCards.filter { search.isEmpty || [$0.snapshot.name, $0.snapshot.set, $0.snapshot.number, $0.snapshot.identity.productID].contains { $0.localizedCaseInsensitiveContains(search) } }
@@ -299,14 +379,15 @@ struct CardListView: View {
                     SessionReviewHeader(session: session, list: list,
                         onContinue: { continueScanning(session) },
                         onSavedOffers: { open(.savedOffers(session.id), session: session) },
-                        outcomeActions: AnyView(listOutcomeActions))
+                        outcomeActions: { totals, transaction in AnyView(listOutcomeActions(totals: totals, transaction: transaction)) })
                         .buttonStyle(.borderless)
                 }
                 else {
                     LabeledContent("Total quantity", value: String(list.quantity))
                     LabeledContent("Known market subtotal", value: list.knownValue.money)
                     if list.unpricedQuantity > 0 { Text("Partial valuation: \(list.unpricedQuantity) copies have no price.").foregroundStyle(.orange) }
-                    listOutcomeActions
+                    Text("Cash on purchase: " + currentOfferTotals.cash.money).font(.caption).foregroundStyle(.secondary)
+                    listOutcomeActions(totals: currentOfferTotals, transaction: nil)
                     if !list.isCardShowInventory {
                         Picker("Game for continued scanning", selection: $continueGame) {
                             ForEach(CatalogOptions.games, id: \.self) { Text($0) }
@@ -356,7 +437,13 @@ struct CardListView: View {
                 }
             }
         }.navigationTitle(reviewSession == nil ? list.name : "Review & Offer").searchable(text: $search)
-            .onAppear { continueGame = list.orderedCards.first?.snapshot.identity.game ?? "Pokémon" }
+            .onAppear {
+                isVisible = true
+                continueGame = list.orderedCards.first?.snapshot.identity.game ?? "Pokémon"
+                synchronizeBudgetOutcomes()
+            }
+            .onDisappear { isVisible = false }
+            .onChange(of: scenePhase) { _, phase in if isVisible && phase == .active { synchronizeBudgetOutcomes() } }
             .confirmationDialog("Continue this list?", isPresented: $confirmContinue) {
                 Button("Continue Scanning") {
                     guard reviewDestination == nil else { return }
@@ -398,7 +485,7 @@ struct CardListView: View {
                             }
                         }
                         Button("Clear List Outcome", systemImage: "arrow.uturn.backward") { recordOutcome(nil) }
-                            .disabled(list.transactionOutcomeData == nil || savingOutcome)
+                            .disabled(list.transactionOutcomeData == nil || savingOutcome || pendingOutcomeBudget)
                             .accessibilityIdentifier("list.clearOutcome")
                     } label: {
                         Image(systemName: "ellipsis.circle")
@@ -442,8 +529,13 @@ struct CardListView: View {
         guard let kind = list.outcomeRecord?.kind, kind != .nothingHappened else { return nil }
         return kind
     }
-    private var listOutcomeActions: some View {
+    private var currentOfferTotals: OfferTotals {
+        OfferCalculator.calculate(list.cards.map(\.offerLine), rates: reviewSession?.rates ?? SessionService.defaults())
+    }
+    private func listOutcomeActions(totals: OfferTotals, transaction: TradeTransactionResult?) -> some View {
         VStack(alignment: .leading, spacing: 12) {
+            Text("Calculated cash updates your show budget when it applies today.")
+                .font(.caption).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text("Outcome")
@@ -459,6 +551,14 @@ struct CardListView: View {
                     Text(outcomeError).font(.caption).foregroundStyle(.red)
                         .accessibilityIdentifier("list.outcomeError")
                 }
+                if let outcomeBudgetMessage {
+                    Text(outcomeBudgetMessage).font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("list.outcomeBudgetStatus")
+                }
+                if pendingOutcomeBudget {
+                    Button("Retry Outcome Sync") { synchronizeBudgetOutcomes() }
+                        .accessibilityIdentifier("list.retryOutcomeSync")
+                }
             }
             Button {
                 choosingOutcome = true
@@ -467,42 +567,54 @@ struct CardListView: View {
                       systemImage: recordedTransaction == nil ? "checkmark.circle" : "checkmark.circle.fill")
                     .frame(maxWidth: .infinity, minHeight: 44)
             }.buttonStyle(.borderedProminent)
-                .disabled(savingOutcome)
+                .disabled(savingOutcome || pendingOutcomeBudget)
                 .accessibilityIdentifier("list.recordTransaction")
                 .accessibilityHint("Choose Purchase, Trade + Purchase, or Trade for this list.")
                 .confirmationDialog("Record Transaction", isPresented: $choosingOutcome, titleVisibility: .visible) {
                     ForEach([ListOutcomeKind.purchase, .tradeAndPurchase, .trade]) { kind in
-                        Button(kind.title) { recordOutcome(kind) }
+                        Button(kind.title) { recordOutcome(kind, totals: totals, transaction: transaction) }
                             .accessibilityIdentifier("list.outcome." + kind.rawValue)
                     }
                     Button("Cancel", role: .cancel) {}
                 }
             Button {
-                recordOutcome(.nothingHappened)
+                recordOutcome(.nothingHappened, totals: totals, transaction: transaction)
             } label: {
                 Label("Nothing Happened", systemImage: list.outcomeRecord?.kind == .nothingHappened
                       ? "checkmark.circle.fill" : "minus.circle")
                     .frame(maxWidth: .infinity, minHeight: 44)
             }.buttonStyle(.bordered).tint(list.outcomeRecord?.kind == .nothingHappened ? Color.orange : Color.gray)
-                .disabled(savingOutcome)
+                .disabled(savingOutcome || pendingOutcomeBudget)
                 .accessibilityIdentifier("list.nothingHappened")
                 .accessibilityHint("Record that this deal did not go ahead.")
-            Divider()
-            RecordListBudgetButton(listID: list.id, listName: list.name,
-                                   suggestedKind: recordedTransaction == .trade || recordedTransaction == .tradeAndPurchase ? .trade : .purchase,
-                                   startsWithCashPaid: recordedTransaction == .tradeAndPurchase)
 
         }
     }
-    private func recordOutcome(_ kind: ListOutcomeKind?) {
-        guard !savingOutcome else { return }
+    private func recordOutcome(_ kind: ListOutcomeKind?, totals: OfferTotals? = nil, transaction: TradeTransactionResult? = nil) {
+        guard !savingOutcome, !pendingOutcomeBudget else { return }
         savingOutcome = true
         defer { savingOutcome = false }
         do {
-            try ListOutcomeService.set(kind, for: list, context: context)
-            outcomeError = nil
+            let result = try ListBudgetOutcomeService.record(kind, totals: totals ?? currentOfferTotals,
+                transaction: transaction, for: list, context: context)
+            outcomeError = nil; outcomeBudgetMessage = result.message; pendingOutcomeBudget = result.isPending
         } catch {
-            outcomeError = "The outcome could not be saved. Your previous status is kept. Please try again."
+            outcomeError = (error as? LocalizedError)?.errorDescription ?? "The outcome and budget could not be updated. Please try again."
+        }
+    }
+    private func synchronizeBudgetOutcomes() {
+        let wasPending = pendingOutcomeBudget
+        do {
+            let result = try ListBudgetOutcomeService.synchronizePending(context: context)
+            pendingOutcomeBudget = result.isPending
+            if wasPending {
+                outcomeBudgetMessage = result.message ?? "Outcome and budget are up to date."
+                if !result.isPending { outcomeError = nil }
+            }
+            else if let message = result.message { outcomeBudgetMessage = message }
+        } catch {
+            pendingOutcomeBudget = true
+            outcomeError = (error as? LocalizedError)?.errorDescription ?? "The saved outcome needs to finish syncing. Tap Retry Outcome Sync."
         }
     }
     private func continueScanning(_ session: ScanSession) {

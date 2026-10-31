@@ -1,3 +1,5 @@
+> Build 32 also supports **Select → choose lists / Select All → Delete Selected**. One confirmation shows the list/card counts. All selected local lists commit in one save; cancellation/failure retains them. Session history, saved offers and actual budget receipts remain. Swipe deletion is unchanged. Removing imported inventory deletes only the local saved copy.
+
 # Build 9: reliable swipe-to-delete
 
 The old swipe button used a destructive role before deletion was confirmed. SwiftUI could animate the row away while the app was still trying to present its confirmation dialog, producing the reported disappear-and-return behavior. Persistence tests alone did not exercise that UI transition.
