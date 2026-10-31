@@ -76,8 +76,8 @@ import XCTest
         XCTAssertTrue(saved.waitForExistence(timeout: 5), "The confirmed one-card inventory must survive relaunch")
         saved.tap()
         XCTAssertTrue(app.navigationBars["Review & Offer"].waitForExistence(timeout: 5))
-        let options = app.buttons["list.options"]
-        XCTAssertTrue(options.waitForExistence(timeout: 5)); options.tap()
+        let exportOptions = app.buttons["list.options"]
+        XCTAssertTrue(exportOptions.waitForExistence(timeout: 5)); exportOptions.tap()
         let export = app.buttons["list.exportCSV"], share = app.buttons["list.shareCSV"]
         XCTAssertTrue(export.waitForExistence(timeout: 5)); XCTAssertTrue(export.isHittable); XCTAssertTrue(export.isEnabled)
         XCTAssertTrue(share.waitForExistence(timeout: 5)); XCTAssertTrue(share.isHittable); XCTAssertTrue(share.isEnabled)
