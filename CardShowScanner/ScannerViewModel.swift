@@ -55,7 +55,7 @@ import AudioToolbox
         selected == nil && !saving && !selectionInProgress && !quickActionCoolingDown && currentAddition != nil
     }
     var canAddAnotherCopy: Bool { canUndoLastAdd }
-    init(provider: (any ScannerProvider)? = nil, pricing: any MarketPricing = SelectedMarketPricing(),
+    init(provider: (any ScannerProvider)? = nil, pricing: any MarketPricing = StandardMarketPricing(),
          confirmationTimeout: Duration = .seconds(4),
          quickActionCooldown: Duration = .milliseconds(500),
          saveCard: @escaping @MainActor (CardCandidate, ScanSession, CardList, ModelContext, String?) throws -> Void = {

@@ -66,7 +66,7 @@
         D16A1F0A7B6E4A8395D1000D /* PricingSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16A1F0A7B6E4A8395D1000E; };
         D16A1F0A7B6E4A8395D1000B /* OpenAPISetResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16A1F0A7B6E4A8395D1000C; };
         D16A1F0A7B6E4A8395D10009 /* OpenAPIMarketPricingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16A1F0A7B6E4A8395D1000A; };
-        D16A1F0A7B6E4A8395D10007 /* PricingSourcePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16A1F0A7B6E4A8395D10008; };
+        D16A1F0A7B6E4A8395D10007 /* MarketPricingInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16A1F0A7B6E4A8395D10008; };
         D16A1F0A7B6E4A8395D10005 /* PricingSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16A1F0A7B6E4A8395D10006; };
         D16A1F0A7B6E4A8395D10003 /* OpenAPISetResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16A1F0A7B6E4A8395D10004; };
         D16A1F0A7B6E4A8395D10001 /* OpenAPIMarketPricing.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16A1F0A7B6E4A8395D10002; };
@@ -202,7 +202,7 @@
         D16A1F0A7B6E4A8395D1000E /* PricingSourceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingSourceTests.swift; sourceTree = "<group>"; };
         D16A1F0A7B6E4A8395D1000C /* OpenAPISetResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAPISetResolverTests.swift; sourceTree = "<group>"; };
         D16A1F0A7B6E4A8395D1000A /* OpenAPIMarketPricingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAPIMarketPricingTests.swift; sourceTree = "<group>"; };
-        D16A1F0A7B6E4A8395D10008 /* PricingSourcePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingSourcePicker.swift; sourceTree = "<group>"; };
+        D16A1F0A7B6E4A8395D10008 /* MarketPricingInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketPricingInfo.swift; sourceTree = "<group>"; };
         D16A1F0A7B6E4A8395D10006 /* PricingSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingSource.swift; sourceTree = "<group>"; };
         D16A1F0A7B6E4A8395D10004 /* OpenAPISetResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAPISetResolver.swift; sourceTree = "<group>"; };
         D16A1F0A7B6E4A8395D10002 /* OpenAPIMarketPricing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAPIMarketPricing.swift; sourceTree = "<group>"; };
@@ -394,7 +394,7 @@
                 D16A1F0A7B6E4A8395D10002 /* OpenAPIMarketPricing.swift */,
                 D16A1F0A7B6E4A8395D10004 /* OpenAPISetResolver.swift */,
                 D16A1F0A7B6E4A8395D10006 /* PricingSource.swift */,
-                D16A1F0A7B6E4A8395D10008 /* PricingSourcePicker.swift */,
+                D16A1F0A7B6E4A8395D10008 /* MarketPricingInfo.swift */,
                 D15A1F0A7B6E4A8395D10002 /* ScannerDatabaseUpdater.swift */,
                 D15A1F0A7B6E4A8395D10006 /* DatabaseUpdater.js */,
                 D14A1F0A7B6E4A8395D10002 /* ListOutcome.swift */,
@@ -665,7 +665,7 @@
                 D16A1F0A7B6E4A8395D10001 /* OpenAPIMarketPricing.swift in Sources */,
                 D16A1F0A7B6E4A8395D10003 /* OpenAPISetResolver.swift in Sources */,
                 D16A1F0A7B6E4A8395D10005 /* PricingSource.swift in Sources */,
-                D16A1F0A7B6E4A8395D10007 /* PricingSourcePicker.swift in Sources */,
+                D16A1F0A7B6E4A8395D10007 /* MarketPricingInfo.swift in Sources */,
                 D15A1F0A7B6E4A8395D10001 /* ScannerDatabaseUpdater.swift in Sources */,
                 D14A1F0A7B6E4A8395D10001 /* ListOutcome.swift in Sources */,
                 C4D311E710AB4F79A8B0000F /* ListDeletionModel.swift in Sources */,
@@ -756,7 +756,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 26;
+				CURRENT_PROJECT_VERSION = 27;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -792,7 +792,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 26;
+				CURRENT_PROJECT_VERSION = 27;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";

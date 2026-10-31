@@ -5,8 +5,8 @@ enum OpenAPIPricingFailure: LocalizedError, Equatable {
     case httpStatus(Int), invalidResponse, responseTooLarge, unsupportedCard, catalogUnavailable
     var errorDescription: String? {
         switch self {
-        case .unsupportedCard: return "Public pricing supports only TCGplayer products in Pokémon, Magic, and Yu-Gi-Oh! Choose Existing TCGTracking for other cards."
-        case .catalogUnavailable: return "The saved catalog cannot locate this card’s set. Refresh the card database or choose Existing TCGTracking."
+        case .unsupportedCard: return "Market pricing is unavailable for this card. Supported catalog games are Pokémon, Magic, and Yu-Gi-Oh! You can save this card unpriced."
+        case .catalogUnavailable: return "The card’s catalog set could not be resolved. Refresh the card database and retry, or save this card unpriced."
         case .httpStatus(let status): return "Public pricing is unavailable (HTTP \(status)). Retry Market Price or save this card unpriced."
         case .invalidResponse: return "Public pricing returned an unsupported response. Retry Market Price or save this card unpriced."
         case .responseTooLarge: return "This public pricing response is too large. You can save this card unpriced."

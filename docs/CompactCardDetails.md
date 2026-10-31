@@ -1,5 +1,7 @@
 # Compact card details
 
+> [Build 27](StandardMarketPricing.md) subsequently standardizes all market quotes on Open API; the source-setting references below describe build 26.
+
 Build 26 replaces the long saved-card edit form with a compact Card Details screen. It retains the indigo accents and the existing list sheet, explicit Save/Cancel actions, row identity, scan order, quantities, offer overrides and storage schema.
 
 The first section shows a card thumbnail, name, set, number and game. Tapping the thumbnail opens larger artwork. The market section presents the per-card value, refresh control and NM/LP/MP/HP/DMG buttons. Cached/offline status and the original provider update date are compact; if no update date was returned, the display says Checked instead. Known zero remains $0.00 and missing quotes remain unavailable. Printing and language use menus, and quantity stays directly editable. Larger accessibility text rearranges the header and condition buttons.

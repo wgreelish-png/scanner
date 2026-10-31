@@ -13,7 +13,7 @@ import Observation
     private var lookup: Task<Void, Never>?
     private var requestID = UUID()
 
-    init(card: CardCandidate, pricing: any MarketPricing = SelectedMarketPricing(), manualPriceAllowed: Bool = true) {
+    init(card: CardCandidate, pricing: any MarketPricing = StandardMarketPricing(), manualPriceAllowed: Bool = true) {
         self.card = card
         self.price = CSVExportService.number(card.marketPrice)
         self.pricing = pricing

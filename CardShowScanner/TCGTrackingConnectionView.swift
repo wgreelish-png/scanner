@@ -1,7 +1,8 @@
 import SwiftUI
 import WebKit
 
-/// Navigation stays on the normal website; pricing shares its persistent session.
+/// Account features share the normal website's persistent session. Market quotes
+/// use the public Open API independently of website authentication.
 struct TCGTrackingConnectionPolicy {
     static let startURL = URL(string: "https://tcgtracking.com/")!
 
@@ -75,7 +76,7 @@ struct TCGTrackingConnectionPolicy {
                             if browser.hasSavedCredentials {
                                 Button("Forget Saved Sign-In", role: .destructive) { browser.forgetSavedSignIn() }
                             }
-                        } footer: { Text("You can return to the scanner without signing in. Prices require internet.") }
+                        } footer: { Text("Website sign-in connects account features. Market prices use Open API independently.") }
                     }
                 }
             }
@@ -220,7 +221,7 @@ struct TCGTrackingConnectionPolicy {
             } catch {
                 guard !Task.isCancelled, pageID == id else { return }
                 pendingCredentials = nil; signingIn = false
-                message = "Check the website to finish signing in, or return without prices."
+                message = "Check the website to finish signing in, or return to the app."
             }
         }
     }
@@ -290,14 +291,14 @@ struct TCGTrackingConnectionPolicy {
         canGoBack = webView.canGoBack
         // WebKit errors can contain request URLs. Keep tokens and form values
         // out of app messages and diagnostics, including on failed sign-in.
-        message = "TCGTracking could not load. Check your connection and reload, or continue without prices."
+        message = "TCGTracking could not load. Check your connection and reload, or return to the app."
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { failed(error) }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { failed(error) }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         loading = false
         pendingCredentials = nil; signingIn = false
-        message = "The website stopped responding. Reload to try again, or continue without prices."
+        message = "The website stopped responding. Reload to try again, or return to the app."
     }
     func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
                  initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType,

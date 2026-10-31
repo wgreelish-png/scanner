@@ -55,7 +55,7 @@ import SwiftData
     var needsSessionSwitch = false
     private let saveCard: @MainActor (CardCandidate, ScanSession, CardList, ModelContext) throws -> Void
 
-    init(card: CardCandidate, pricing: any MarketPricing = SelectedMarketPricing(),
+    init(card: CardCandidate, pricing: any MarketPricing = StandardMarketPricing(),
          saveCard: @escaping @MainActor (CardCandidate, ScanSession, CardList, ModelContext) throws -> Void = {
              try SessionService.add($0, session: $1, list: $2, context: $3)
          }) {

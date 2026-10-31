@@ -7,7 +7,7 @@ Build 23 uses a native bottom tab bar with four destinations. Each tab keeps its
 | Lists | Search saved lists, see card counts and known value, create an empty list with +, review inventory/offers, and swipe to delete or duplicate. |
 | Scan | Start a new saved scan, continue the active session, open existing lists, or view session history. |
 | Research | Search the downloaded catalog with artwork previews, open market details or graded research, and look up a PSA slab. |
-| Settings | Change game, sound, haptics and price source; connect accounts; open offer defaults, scanner database, diagnostics or About/Privacy. |
+| Settings | Change game, sound and haptics; view standard market pricing; connect accounts; open offer defaults, scanner database, diagnostics or About/Privacy. |
 
 The Scan tab is the initial screen. Selecting any tab does not create a session or open a camera. **Start New Scan** explicitly creates a new saved list and retains the existing behavior of finishing another active session without a confirmation prompt. **Continue Scanning** resumes the existing active list. Closing the scanner keeps that session available for later continuation.
 
@@ -23,4 +23,4 @@ Settings keeps common preferences and connection actions visible. Offer rates, d
 
 Two focused UI cases check that cycling tabs creates no lists or camera screen and that an open list remains at the same navigation depth after changing tabs. Existing list, deletion, pricing and Research UI routes now use the tab bar. The navigation and chart cases share one focused feature job so no additional CI runner is added. Simulator behavior and live-iPhone acceptance must be reported separately from static source/resource checks.
 
-On an iPhone, check each tab in light/dark mode and at large text sizes; create, reopen and swipe-delete a test list; open a saved list, switch to Settings and return; explicitly start or continue a scan and verify full-screen capture, confirmation and next-card handoff; open list review from capture and switch tabs; verify the camera stays stopped while viewing another tab; then return and explicitly continue. Confirm CSV exports, saved offers, pricing source and sign-in still work with existing data. Install over the existing app rather than deleting its data.
+On an iPhone, check each tab in light/dark mode and at large text sizes; create, reopen and swipe-delete a test list; open a saved list, switch to Settings and return; explicitly start or continue a scan and verify full-screen capture, confirmation and next-card handoff; open list review from capture and switch tabs; verify the camera stays stopped while viewing another tab; then return and explicitly continue. Confirm CSV exports, saved offers, standard pricing and account sign-in still work with existing data. Install over the existing app rather than deleting its data.

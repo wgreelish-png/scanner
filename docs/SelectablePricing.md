@@ -1,5 +1,7 @@
 # Selectable market pricing — build 16
 
+> Historical build 16 behavior. [Build 27](StandardMarketPricing.md) replaces source selection with standard Open API pricing and retains existing saved data.
+
 Build 21 extends this existing selector with exact-SKU listing context, bounded offline price reuse and verified product-ID set recovery. [Market Details and OppsV2](MarketData.md) documents the supplemental read-only screen and independent API access checks.
 
 Choose **Price source** in Settings → Market pricing, scanner Options, the frozen scan review, Edit Card or manual-card confirmation. **Existing TCGTracking** remains the default and uses the existing website connection. **Open API** requests public condition-level SKU prices directly without website sign-in. The selection persists across launches and applies to subsequent lookups throughout the app. A failed lookup never silently changes providers.

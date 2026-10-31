@@ -484,14 +484,12 @@ struct CardEditorView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var textSize
-    @AppStorage(PricingSource.defaultsKey) private var pricingSource = PricingSource.tcgTracking.rawValue
     @State private var pricing: CardEditorPricingModel
     @State private var quantity: Int
     @State private var error: String?
     @State private var cashOverride: String
     @State private var tradeOverride: String
     @State private var maximumOverride: String
-    @State private var showingConnection = false
     @State private var sheet: Sheet?
     @State private var adjustingPrice = false
     @State private var showingOffers = false
@@ -574,7 +572,6 @@ struct CardEditorView: View {
                 }
             }
             .task { pricing.loadPrintingOptions() }
-            .onChange(of: pricingSource) { _, _ in pricing.pricingSourceChanged() }
             .onDisappear { pricing.cancelLookup() }
             .sheet(item: $sheet) { selected in
                 switch selected {
@@ -584,12 +581,6 @@ struct CardEditorView: View {
                     CardMatchCorrectionSheet(game: pricing.card.identity.game) { candidate in
                         pricing.replaceCard(with: candidate); sheet = nil
                     }
-                }
-            }
-            .fullScreenCover(isPresented: $showingConnection, onDismiss: { pricing.refreshPrice() }) {
-                TCGTrackingConnectionView(continueTitle: "Return to Card") {
-                    guard showingConnection else { return }
-                    OnlineMarketPricing.connectionDidChange(); showingConnection = false
                 }
             }
             .failureAlert($error)
@@ -648,11 +639,6 @@ struct CardEditorView: View {
                     .accessibilityIdentifier("cardEditor.priceStatus")
             }
             if let message = pricing.priceMessage { Text(message).font(.footnote).foregroundStyle(.secondary) }
-            if pricing.priceConnectionRequired {
-                Button("Connect TCGTracking", systemImage: "person.crop.circle") {
-                    focusedField = nil; pricing.cancelLookup(); showingConnection = true
-                }
-            }
             DisclosureGroup("Adjust market price", isExpanded: $adjustingPrice) {
                 TextField("Market price", text: Binding(get: { pricing.price }, set: { pricing.setPrice($0) }))
                     .keyboardType(.decimalPad).focused($focusedField, equals: .market)

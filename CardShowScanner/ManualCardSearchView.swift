@@ -107,9 +107,7 @@ private struct ManualCardConfirmationView: View {
     let onAdded: (CardCandidate) -> Void
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
-    @AppStorage(PricingSource.defaultsKey) private var pricingSource = PricingSource.tcgTracking.rawValue
     @State private var model: ManualCardAddModel
-    @State private var showingConnection = false
     @State private var hasRequestedPrice = false
     init(card: CardCandidate, list: CardList, onAdded: @escaping (CardCandidate) -> Void) {
         self.list = list; self.onAdded = onAdded; _model = State(initialValue: ManualCardAddModel(card: card))
@@ -122,7 +120,6 @@ private struct ManualCardConfirmationView: View {
             Form {
                 Section { CatalogCardPreview(card: model.pricing.card) }
                 Section("Printing & condition") {
-                    PricingSourcePicker(accessibilityID: "catalog.pricingSource")
                     Picker("Type / printing", selection: identityBinding(\.printing)) {
                         ForEach(Array(Set(model.pricing.card.printings + [model.pricing.card.identity.printing])).sorted(), id: \.self) { Text($0) }
                     }.pickerStyle(.menu)
@@ -136,10 +133,7 @@ private struct ManualCardConfirmationView: View {
                     }
                     if let message = model.pricing.priceMessage { Text(message).font(.caption).foregroundStyle(.secondary) }
                     Button("Retry Market Price") { model.pricing.refreshPrice() }.disabled(model.pricing.priceLoading)
-                    if model.pricing.priceConnectionRequired {
-                        Button("Connect TCGTracking") { model.pricing.cancelLookup(); showingConnection = true }
-                    }
-                    Text("Prices require internet. If no quote is available, you can add the card without a market value.").font(.caption).foregroundStyle(.secondary)
+                    Text("Recent quotes are cached. You can add this card unpriced when a quote is unavailable.").font(.caption).foregroundStyle(.secondary)
                 }.disabled(model.isSaving || model.isSaved)
                 if let error = model.error { Section { Text(error).foregroundStyle(.red) } }
                 Section {
@@ -155,17 +149,10 @@ private struct ManualCardConfirmationView: View {
                     hasRequestedPrice = true; model.pricing.refreshPrice()
                 }
                 .onDisappear { model.pricing.cancelLookup() }
-                .onChange(of: pricingSource) { _, _ in model.pricing.pricingSourceChanged() }
                 .confirmationDialog("Finish the other active session?", isPresented: $model.needsSessionSwitch) {
                     Button("Finish & Add to This List") { add(finishingOtherSession: true) }
                     Button("Cancel", role: .cancel) {}
                 } message: { Text("Its list and saved offers will be kept. This card will be added to \(list.name).") }
-                .fullScreenCover(isPresented: $showingConnection, onDismiss: { model.pricing.refreshPrice() }) {
-                    TCGTrackingConnectionView(continueTitle: "Return to Card") {
-                        guard showingConnection else { return }
-                        OnlineMarketPricing.connectionDidChange(); showingConnection = false
-                    }
-                }
         }
     }
     private func identityBinding(_ keyPath: WritableKeyPath<CardIdentity, String>) -> Binding<String> {
