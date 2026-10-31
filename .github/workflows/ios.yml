@@ -78,7 +78,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build and run Research UI checks independently
         id: research_ui_tests
-        run: bash scripts/run_ios_tests.sh CardShowScannerUITests/ResearchUITests
+        run: bash scripts/run_ios_tests.sh CardShowScannerUITests/ResearchUITests CardShowScannerUITests/CardShowInventoryUITests
       - name: Publish Research UI summary
         if: ${{ always() && steps.research_ui_tests.outcome != 'skipped' }}
         run: python3 scripts/report_xcode_test_summary.py NativeTests.log

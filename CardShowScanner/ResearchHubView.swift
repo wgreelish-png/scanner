@@ -34,7 +34,7 @@ struct ResearchHubView: View {
         .navigationTitle("Research")
         .scrollDismissesKeyboard(.interactively)
         .navigationDestination(item: $selectedCard) { card in
-            ResearchCardSelectionView(card: card)
+            CardResearchView(card: card)
         }
         .onAppear {
             isVisible = true
@@ -160,64 +160,6 @@ private struct ResearchSearchTile: View {
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(12).background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
         .contentShape(RoundedRectangle(cornerRadius: 18))
-    }
-}
-
-/// A research draft has no persistence action. A new card always begins at NM;
-/// inherited snapshot prices/SKUs cannot become its selected-condition quote.
-private struct ResearchCardSelectionView: View {
-    @State private var pricing: CardEditorPricingModel
-    init(card: CardCandidate) {
-        var draft = card
-        draft.identity.condition = "Near Mint"
-        draft.identity.skuID = nil; draft.marketPrice = nil; draft.marketPriceMetadata = nil
-        _pricing = State(initialValue: CardEditorPricingModel(card: draft, pricing: OpenAPIMarketPricing.shared,
-                                                            manualPriceAllowed: false))
-    }
-
-    var body: some View {
-        List {
-            Section {
-                HStack(alignment: .top, spacing: 16) {
-                    ResearchHubArtwork(url: pricing.card.imageURL).frame(width: 100, height: 140)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(pricing.card.name).font(.headline)
-                        Text(pricing.card.set).font(.subheadline).foregroundStyle(.secondary)
-                        Text(pricing.card.number).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
-                    }
-                }.padding(.vertical, 8)
-            }
-            Section("Your card") {
-                Picker("Printing", selection: identityBinding(\.printing)) {
-                    ForEach(Array(Set(pricing.card.printings + [pricing.card.identity.printing])).sorted(), id: \.self) {
-                        Text($0).tag($0)
-                    }
-                }.pickerStyle(.menu).accessibilityIdentifier("researchHub.printing")
-                Picker("Condition", selection: identityBinding(\.condition)) {
-                    ForEach(CatalogOptions.conditions, id: \.self) { Text($0).tag($0) }
-                }.pickerStyle(.menu).accessibilityIdentifier("researchHub.condition")
-                LabeledContent("Language", value: pricing.card.identity.language)
-            }
-            Section {
-                NavigationLink { MarketInsightsView(card: pricing.card) } label: {
-                    Label("Market Details & Sales", systemImage: "chart.xyaxis.line")
-                }.accessibilityIdentifier("researchHub.marketDetails")
-                NavigationLink { ResearchView(card: pricing.card) } label: {
-                    Label("Graded Research", systemImage: "seal")
-                }.accessibilityIdentifier("researchHub.gradedResearch")
-            } footer: {
-                Text("Market Details uses the selected printing, condition and language. Choose a grader and grade in Graded Research. Browsing does not add cards or change your lists.")
-            }
-        }
-        .navigationTitle("Card Research").navigationBarTitleDisplayMode(.inline)
-        .onAppear { pricing.loadPrintingOptions() }
-        .onDisappear { pricing.cancelLookup() }
-    }
-
-    private func identityBinding(_ keyPath: WritableKeyPath<CardIdentity, String>) -> Binding<String> {
-        Binding(get: { pricing.card.identity[keyPath: keyPath] }, set: { value in
-            pricing.changeIdentity { $0[keyPath: keyPath] = value }
-        })
     }
 }
 

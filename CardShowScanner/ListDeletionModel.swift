@@ -7,13 +7,14 @@ struct ListDeletionRequest: Identifiable, Equatable, Sendable {
     let id: UUID
     let name: String
     let quantity: Int
+    let isImportedInventory: Bool
 
     @MainActor init(list: CardList) {
-        self.init(id: list.id, name: list.name, quantity: list.quantity)
+        self.init(id: list.id, name: list.name, quantity: list.quantity, isImportedInventory: list.isCardShowInventory)
     }
 
-    init(id: UUID, name: String, quantity: Int) {
-        self.id = id; self.name = name; self.quantity = quantity
+    init(id: UUID, name: String, quantity: Int, isImportedInventory: Bool = false) {
+        self.id = id; self.name = name; self.quantity = quantity; self.isImportedInventory = isImportedInventory
     }
 }
 

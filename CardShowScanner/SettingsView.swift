@@ -5,7 +5,6 @@ struct SettingsView: View {
     @AppStorage("defaultGame") private var game = "Pokémon"
     @AppStorage("sound") private var sound = false
     @AppStorage("haptics") private var haptics = true
-    @AppStorage("tcgTrackingConnectionIntroduced") private var connectionIntroduced = false
     @State private var showingConnection = false
     @State private var returningFromConnection = false
 
@@ -19,13 +18,13 @@ struct SettingsView: View {
                 Toggle("Haptic feedback", isOn: $haptics).accessibilityIdentifier("settings.haptics")
             }
             Section {
-                PricingSourcePicker(accessibilityID: "settings.pricingSource")
+                MarketPricingInfo()
                 Button {
                     guard !showingConnection, !returningFromConnection else { return }
                     showingConnection = true
                     DiagnosticLog.shared.record("connection.opened", ["phase": "settings"])
                 } label: {
-                    SettingsDestinationLabel("TCGTracking sign-in", subtitle: "Website pricing account", symbol: "person.crop.circle", tint: .blue)
+                    SettingsDestinationLabel("TCGTracking sign-in", subtitle: "Website account and IP access", symbol: "person.crop.circle", tint: .blue)
                 }.disabled(returningFromConnection).accessibilityIdentifier("settings.websiteConnection")
                 NavigationLink { ResearchConnectionView() } label: {
                     SettingsDestinationLabel("API connection", subtitle: "Market activity and graded research", symbol: "network", tint: .purple)
@@ -33,7 +32,7 @@ struct SettingsView: View {
             } header: {
                 Text("Prices & connections")
             } footer: {
-                Text("Choose where market quotes come from. Open API pricing works without website sign-in.")
+                Text("Market prices use Open API without website sign-in. Your website connection is used for account features.")
             }
             Section("Manage") {
                 NavigationLink { OfferDefaultsSettingsView() } label: {
@@ -58,8 +57,6 @@ struct SettingsView: View {
             TCGTrackingConnectionView {
                 guard showingConnection, !returningFromConnection else { return }
                 returningFromConnection = true
-                connectionIntroduced = true
-                OnlineMarketPricing.connectionDidChange()
                 showingConnection = false
                 DiagnosticLog.shared.record("connection.continued", ["phase": "settings"])
             }
@@ -252,7 +249,7 @@ private struct AboutPrivacySettingsView: View {
                 LabeledContent("Release", value: appRevision).accessibilityIdentifier("settings.appRevision")
             }
             Section("Market data") {
-                Text("Existing TCGTracking pricing uses your website connection. Open API requests exact condition, printing and language quotes without website sign-in.")
+                Text("Market prices use the TCGTracking Open API for the exact condition, printing and language. Price lookups do not require website sign-in or a Beta API key.")
                 Text("Open API prices are published daily. Up to four recently downloaded sets are cached across app launches and checked every 24 hours. Refresh Market Price checks sooner. Cached quotes retain their original dates; unavailable conditions stay unpriced.")
                 Text("OppsV2 market activity covers active opportunities, so some cards have no activity data. Graded Research remains experimental and has separate product and grade coverage.")
             }

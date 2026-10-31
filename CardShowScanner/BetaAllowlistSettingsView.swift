@@ -31,7 +31,6 @@ struct BetaAllowlistSettingsSection: View {
         }
         .fullScreenCover(isPresented: $signingIn) {
             TCGTrackingConnectionView(continueTitle: "Done") {
-                OnlineMarketPricing.connectionDidChange()
                 signingIn = false
             }
         }

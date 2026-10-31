@@ -53,7 +53,7 @@ import Observation
                 self.details = result
                 if let key = self.selectedVariantKey, result.product.variants[key]?.key == key {
                     // Preserve an explicit valid variant choice on refresh.
-                } else { self.selectedVariantKey = Self.matchingVariant(in: result, for: requested.identity) }
+                } else { self.selectedVariantKey = requested.requiresPrintingSelection == true ? nil : Self.matchingVariant(in: result, for: requested.identity) }
                 self.loading = false
                 DiagnosticLog.shared.record("research.lookup_finished", ["phase": "product"])
                 self.recordSelection()
@@ -65,9 +65,9 @@ import Observation
             }
         }
     }
-    func changeCard(_ card: CardCandidate) {
-        cancel(); self.card = card; selectedVariantKey = nil; details = nil
-        refresh(forceRefresh: false)
+    func changeCard(_ card: CardCandidate, refresh: Bool = true) {
+        cancel(); self.card = card; selectedVariantKey = nil; details = nil; message = nil
+        if refresh { self.refresh(forceRefresh: false) }
     }
     func selectVariant(_ key: String) { selectedVariantKey = key; recordSelection() }
     func selectGrade(grader: String, grade: String) { selectedGrader = grader; selectedGradeLabel = grade; recordSelection() }

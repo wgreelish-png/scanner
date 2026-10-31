@@ -1,6 +1,36 @@
 import XCTest
 
 @MainActor final class MarketEvidenceUITests: XCTestCase {
+    func testCombinedResearchRetainsSharedSelectionAndSwitchesModesWithoutCharts() async throws {
+        continueAfterFailure = false
+        let app = launchEvidence("--uitest-card-research")
+        defer { app.terminate() }
+        XCTAssertTrue(app.navigationBars["Card Research"].waitForExistence(timeout: 10))
+        let modes = app.segmentedControls["cardResearch.section"]
+        XCTAssertTrue(modes.waitForExistence(timeout: 5))
+        let condition = app.buttons["cardResearch.condition.LP"]
+        reveal(condition, in: app); condition.tap()
+        let period = app.segmentedControls["marketDetails.period"]
+        reveal(period, in: app); period.buttons["90D"].tap()
+        modes.buttons["Graded"].tap()
+        let grade = app.buttons["research.grade"]
+        reveal(grade, in: app)
+        XCTAssertTrue(grade.exists)
+        XCTAssertFalse(app.buttons["cardResearch.condition.LP"].exists)
+        scrollToTop(in: app)
+        XCTAssertEqual(app.staticTexts.matching(identifier: "cardResearch.name").count, 1)
+        XCTAssertFalse(app.staticTexts["Evidence at a glance"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["research.historyChart"].exists)
+        modes.buttons["Market"].tap()
+        scrollToTop(in: app)
+        reveal(condition, in: app)
+        XCTAssertTrue(condition.isSelected)
+        reveal(period, in: app)
+        XCTAssertTrue(period.buttons["90D"].isSelected)
+        XCTAssertFalse(app.descendants(matching: .any)["marketEvidence.priceChart"].exists)
+        XCTAssertTrue(app.navigationBars["Card Research"].exists)
+    }
+
     func testMarketEvidenceKeepsReportedZeroDistinctFromMissingAcrossWindows() async throws {
         continueAfterFailure = false
         let app = launchEvidence("--uitest-market-evidence")
@@ -65,6 +95,11 @@ import XCTest
         app.launchArguments = ["-autoDatabaseUpdates", "NO", argument]
         app.launch()
         return app
+    }
+
+    private func scrollToTop(in app: XCUIApplication) {
+        let list = app.collectionViews.firstMatch
+        for _ in 0..<4 { list.swipeDown() }
     }
 
     private func reveal(_ element: XCUIElement, in app: XCUIApplication) {

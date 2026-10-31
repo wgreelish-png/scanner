@@ -9,9 +9,7 @@ struct ScannerView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.dismiss) private var dismiss
-    @AppStorage("tcgTrackingConnectionIntroduced") private var connectionIntroduced = false
     @AppStorage("steadyCardBorder") private var steadyCardBorder = true
-    @AppStorage(PricingSource.defaultsKey) private var pricingSource = PricingSource.tcgTracking.rawValue
     @Query private var sessions: [ScanSession]
     @State private var game: String
     @State private var pendingGame: String?
@@ -20,9 +18,7 @@ struct ScannerView: View {
     @State private var model = ScannerViewModel()
     @State private var mode = "Live"
     @State private var showingConnection = false
-    @State private var showingReviewConnection = false
     @State private var returningFromConnection = false
-    @State private var acknowledgedConnectionInView = false
     @State private var showingListReview = false
     @State private var showingManualSearchPrompt = false
     @State private var showingManualSearch = false
@@ -43,7 +39,7 @@ struct ScannerView: View {
                         Task { @MainActor in
                             guard live.manualSearchSuggested else { return }
                             guard visible, session.isActive, !model.paused, model.selected == nil,
-                                  !showingListReview, !showingConnection, !showingReviewConnection,
+                                  !showingListReview, !showingConnection,
                                   !returningFromConnection, !showingManualSearch else {
                                 live.resumeAfterManualSearchPrompt(); return
                             }
@@ -81,7 +77,7 @@ struct ScannerView: View {
                 .presentationDragIndicator(.visible)
                 .interactiveDismissDisabled()
         }
-        .fullScreenCover(isPresented: $showingConnection, onDismiss: finishConnection) { connectionView(inReview: false) }
+        .fullScreenCover(isPresented: $showingConnection, onDismiss: finishConnection) { connectionView }
         .sheet(isPresented: $showingManualSearch, onDismiss: { startIfReady() }) {
             ManualCardSearchView(list: list, game: session.game ?? game, allowsGameChange: false)
         }
@@ -129,7 +125,6 @@ struct ScannerView: View {
         }
         .onChange(of: mode) { _, _ in restart() }
         .onChange(of: steadyCardBorder) { _, enabled in model.liveProvider?.setSteadyCardBorder(enabled) }
-        .onChange(of: pricingSource) { _, _ in model.pricingSourceChanged() }
         .failureAlert(Binding(get: { model.selected == nil ? model.error : nil }, set: { model.error = $0 }))
     }
     private var cameraHeader: some View {
@@ -151,8 +146,6 @@ struct ScannerView: View {
                 }.accessibilityLabel(model.paused ? "Resume camera" : "Pause camera")
                 Menu {
                     Picker("Game", selection: $game) { ForEach(CatalogOptions.games, id: \.self) { Text($0) } }
-                    PricingSourcePicker(accessibilityID: "scanner.pricingSource")
-                        .disabled(model.selectionInProgress || model.saving)
                     Button("Retry Live Scanner") {
                         model.stop(); model.paused = false
                         startIfReady()
@@ -160,7 +153,7 @@ struct ScannerView: View {
                     Button("Reset Card Recognition", systemImage: "arrow.clockwise") { model.scanNextCard() }
                         .disabled(model.selectionInProgress || model.saving)
                         .accessibilityIdentifier("scanner.resetRecognition")
-                    Button("Connect TCGTracking", systemImage: "person.crop.circle") {
+                    Button("TCGTracking Account", systemImage: "person.crop.circle") {
                         openConnection()
                     }.disabled(model.liveProvider == nil || model.selectionInProgress || model.saving)
                     Button("Check Database Updates", systemImage: "arrow.down.circle") {
@@ -275,8 +268,6 @@ struct ScannerView: View {
                             Image(uiImage: image).resizable().scaledToFit().frame(height: 100)
                                 .accessibilityLabel("Captured card")
                         }
-                        PricingSourcePicker(accessibilityID: "scanReview.pricingSource")
-                            .disabled(model.selectionInProgress || model.saving)
                         if let metadata = card.marketPriceMetadata {
                             Text(metadata.summary).font(.caption).foregroundStyle(.secondary)
                                 .accessibilityIdentifier("scanReview.priceMetadata")
@@ -285,11 +276,6 @@ struct ScannerView: View {
                             .font(.subheadline).foregroundStyle(.secondary)
                         if let message = model.priceMessage {
                             Text(message).font(.caption).foregroundStyle(.secondary)
-                            if model.priceConnectionRequired && model.liveProvider != nil {
-                                Button("Connect TCGTracking", systemImage: "person.crop.circle") {
-                                    openConnection(inReview: true)
-                                }.disabled(model.selectionInProgress || model.saving)
-                            }
                             Button("Retry Market Price") { model.refreshPrice() }.disabled(model.priceLoading || model.selectionInProgress)
                         }
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: dynamicTypeSize.isAccessibilitySize ? 1 : 2), alignment: .leading, spacing: 16) {
@@ -312,9 +298,9 @@ struct ScannerView: View {
                         }
                         if model.priceLoading && !model.selectionInProgress { ProgressView("Checking market value…") }
                         NavigationLink {
-                            MarketInsightsView(card: card)
+                            CardResearchView(card: card)
                         } label: {
-                            Label("Market Details & Sales Activity", systemImage: "chart.xyaxis.line")
+                            Label("Market & Graded Research", systemImage: "magnifyingglass")
                         }.disabled(model.selectionInProgress || model.saving)
                             .accessibilityIdentifier("scanReview.marketDetails")
                     }
@@ -343,30 +329,24 @@ struct ScannerView: View {
                     }.padding().frame(maxWidth: .infinity).background(.regularMaterial)
                 }
                 .failureAlert($model.error)
-                .fullScreenCover(isPresented: $showingReviewConnection, onDismiss: finishConnection) { connectionView(inReview: true) }
         }
     }
 
-    private func connectionView(inReview: Bool) -> some View {
-        TCGTrackingConnectionView(continueTitle: connectionIntroduced ? "Return to Scanner" : "Continue to Scanner") {
-            guard !returningFromConnection,
-                  inReview ? showingReviewConnection : showingConnection else { return }
+    private var connectionView: some View {
+        TCGTrackingConnectionView(continueTitle: "Return to Scanner") {
+            guard !returningFromConnection, showingConnection else { return }
             returningFromConnection = true
-            // This records an explicit setup choice, never authentication success.
-            acknowledgedConnectionInView = true
-            connectionIntroduced = true
-            OnlineMarketPricing.connectionDidChange()
             // The presenting binding owns dismissal. Updating setup state must
             // not invalidate a child environment dismiss action mid-tap.
-            if inReview { showingReviewConnection = false } else { showingConnection = false }
-            DiagnosticLog.shared.record("connection.continued", ["phase": inReview ? "review" : "scanner"])
+            showingConnection = false
+            DiagnosticLog.shared.record("connection.continued", ["phase": "scanner"])
         }
     }
-    private func openConnection(inReview: Bool = false) {
-        guard !returningFromConnection, !showingConnection, !showingReviewConnection,
+    private func openConnection() {
+        guard !returningFromConnection, !showingConnection,
               model.suspendForPricingConnection() else { return }
-        if inReview { showingReviewConnection = true } else { showingConnection = true }
-        DiagnosticLog.shared.record("connection.opened", ["phase": inReview ? "review" : "scanner"])
+        showingConnection = true
+        DiagnosticLog.shared.record("connection.opened", ["phase": "scanner"])
     }
     private func finishConnection() {
         returningFromConnection = false
@@ -384,9 +364,8 @@ struct ScannerView: View {
         DiagnosticLog.shared.record("scanner.manual_search_opened")
     }
     private func startIfReady() {
-        guard visible, session.isActive, !model.paused, !showingConnection, !showingReviewConnection, !showingListReview,
+        guard visible, session.isActive, !model.paused, !showingConnection, !showingListReview,
               !returningFromConnection, !showingManualSearchPrompt, !showingManualSearch else { return }
-        if PricingSource.current == .tcgTracking && model.liveProvider != nil && !connectionIntroduced && !acknowledgedConnectionInView { openConnection(); return }
         model.start(game: session.game ?? game, list: list, context: context, session: session)
     }
 

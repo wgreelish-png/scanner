@@ -114,6 +114,7 @@ enum ScannerUndoFailure: LocalizedError, Equatable {
         }
     }
     static func continueList(_ list: CardList, game: String, context: ModelContext, finishingOtherSession: Bool = false) throws -> ScanSession {
+        guard !list.isCardShowInventory else { throw CardShowInventoryFailure.readOnlyList }
         guard CatalogOptions.games.contains(game), list.cards.allSatisfy({ $0.snapshot.identity.game == game }) else { throw BatchFailure.wrongGame }
         let sessions = try context.fetch(FetchDescriptor<ScanSession>())
         if let existing = sessions.first(where: { $0.listID == list.id }) {
@@ -134,6 +135,7 @@ enum ScannerUndoFailure: LocalizedError, Equatable {
               CatalogOptions.games.contains(game), list.cards.allSatisfy({ $0.snapshot.identity.game == game }) else {
             throw BatchFailure.unavailable
         }
+        guard !list.isCardShowInventory else { throw CardShowInventoryFailure.readOnlyList }
         if let current = try active(context: context), current.id != session.id {
             guard finishingOtherSession else { throw BatchFailure.activeSessionExists }
             current.statusRaw = "completed"; current.completedAt = .now
@@ -143,6 +145,7 @@ enum ScannerUndoFailure: LocalizedError, Equatable {
         try CardListService.save(context)
     }
     static func add(_ card: CardCandidate, session: ScanSession, list: CardList, context: ModelContext, recognitionRef: String? = nil) throws {
+        guard !list.isCardShowInventory else { throw CardShowInventoryFailure.readOnlyList }
         guard session.isActive, session.listID == list.id else { throw BatchFailure.unavailable }
         guard session.game == card.identity.game else { throw BatchFailure.wrongGame }
         try withScanSave(session: session, list: list, context: context) {

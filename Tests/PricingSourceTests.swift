@@ -7,7 +7,7 @@ import XCTest
             name: "Fixture", set: "Fixture", number: "1", marketPrice: nil, confidence: 95, printings: ["Normal"])
     }
 
-    func testMissingUnknownAndCorruptSettingsRetainExistingSource() async {
+    func testMissingLegacyUnknownAndCorruptPreferencesAlwaysUseOpenAPI() async {
         let defaults = UserDefaults.standard, key = PricingSource.defaultsKey
         let previous = defaults.object(forKey: key)
         defer {
@@ -15,136 +15,116 @@ import XCTest
             else { defaults.removeObject(forKey: key) }
         }
         defaults.removeObject(forKey: key)
-        XCTAssertEqual(PricingSource.current, .tcgTracking)
-        let invalidValues: [Any] = ["future-provider", "", 42, ["invalid": "value"]]
-        for invalid in invalidValues {
-            defaults.set(invalid, forKey: key)
-            XCTAssertEqual(PricingSource.current, .tcgTracking)
-        }
-        defaults.set(PricingSource.openAPI.rawValue, forKey: key)
         XCTAssertEqual(PricingSource.current, .openAPI)
-        defaults.set(PricingSource.tcgTracking.rawValue, forKey: key)
-        XCTAssertEqual(PricingSource.current, .tcgTracking)
-        defaults.removeObject(forKey: key)
-        XCTAssertEqual(PricingSource.current, .tcgTracking)
+        let oldValues: [Any] = ["tcgtracking", "openapi", "future-provider", "", 42, ["invalid": "value"]]
+        for value in oldValues {
+            defaults.set(value, forKey: key)
+            XCTAssertEqual(PricingSource.current, .openAPI)
+        }
     }
 
-    func testMetadataUsesProviderUpdateDateAndSurvivesCoding() async throws {
+    func testHistoricalMetadataRemainsDecodableWithOriginalSourceAndDates() async throws {
         let updated = Date(timeIntervalSince1970: 1_000), fetched = Date(timeIntervalSince1970: 2_000)
+        for source in [PricingSource.tcgTracking, .openAPI] {
+            let metadata = MarketPriceMetadata(source: source, updatedAt: updated, fetchedAt: fetched, isCached: true)
+            let encoded = try JSONEncoder().encode(metadata)
+            XCTAssertEqual(try JSONDecoder().decode(MarketPriceMetadata.self, from: encoded), metadata)
+        }
         let metadata = MarketPriceMetadata(source: .openAPI, updatedAt: updated, fetchedAt: fetched)
-        XCTAssertEqual(try JSONDecoder().decode(MarketPriceMetadata.self, from: JSONEncoder().encode(metadata)), metadata)
         XCTAssertEqual(metadata.summary, "Open API • data updated " + updated.formatted(date: .abbreviated, time: .shortened))
-        XCTAssertEqual(MarketPriceMetadata(source: .openAPI, fetchedAt: fetched).summary, "Open API")
         XCTAssertEqual(MarketPriceMetadata(source: .tcgTracking, fetchedAt: fetched).summary, "Existing TCGTracking")
     }
 
-    func testPrepareAndDetailsUseOnlySelectedProviderAndForwardInputs() async throws {
-        let legacy = SourcePricingSpy(price: 1), open = SourcePricingSpy(price: 2)
-        let selection = PricingSourceSelection(.openAPI)
-        let router = SelectedMarketPricing(legacy: legacy, openAPI: open, source: { selection.get() })
-        await router.prepare()
+    func testStandardProviderForwardsPreparationIdentityCandidatesAndRefreshFlag() async throws {
+        let api = SourcePricingSpy(price: 2)
+        let standard = StandardMarketPricing(provider: api)
+        await standard.prepare()
         let selected = card(), candidates = [card("p:2"), selected]
-        let details = try await router.details(for: selected, candidates: candidates, forceRefresh: true)
+        let details = try await standard.details(for: selected, candidates: candidates, forceRefresh: true)
         XCTAssertEqual(details.quote?.marketPrice, 2)
         XCTAssertEqual(details.metadata?.source, .openAPI)
         XCTAssertNil(details.metadata?.updatedAt)
-        let legacyStats = await legacy.statistics(), openStats = await open.statistics()
-        XCTAssertEqual(legacyStats.preparations, 0); XCTAssertTrue(legacyStats.requests.isEmpty)
-        XCTAssertEqual(openStats.preparations, 1); XCTAssertEqual(openStats.requests.count, 1)
-        XCTAssertEqual(openStats.requests[0].card, selected)
-        XCTAssertEqual(openStats.requests[0].candidates, candidates)
-        XCTAssertTrue(openStats.requests[0].forceRefresh)
-        selection.set(.tcgTracking)
-        await router.prepare()
-        let quote = try await router.quote(for: selected)
-        XCTAssertEqual(quote?.marketPrice, 1)
-        let laterLegacy = await legacy.statistics(), laterOpen = await open.statistics()
-        XCTAssertEqual(laterLegacy.preparations, 1); XCTAssertEqual(laterLegacy.requests.count, 1)
-        XCTAssertEqual(laterLegacy.requests[0].candidates, [selected])
-        XCTAssertFalse(laterLegacy.requests[0].forceRefresh)
-        XCTAssertEqual(laterOpen.requests.count, 1)
+        _ = try await standard.quote(for: selected)
+        let stats = await api.statistics()
+        XCTAssertEqual(stats.preparations, 1); XCTAssertEqual(stats.requests.count, 2)
+        XCTAssertEqual(stats.requests[0].card, selected); XCTAssertEqual(stats.requests[0].candidates, candidates)
+        XCTAssertTrue(stats.requests[0].forceRefresh)
+        XCTAssertEqual(stats.requests[1].candidates, [selected]); XCTAssertFalse(stats.requests[1].forceRefresh)
     }
 
-    func testProviderErrorsAndMissingQuotesNeverFallBack() async throws {
-        let legacy = SourcePricingSpy(price: 1), open = SourcePricingSpy(price: nil, failure: .rejected)
-        let router = SelectedMarketPricing(legacy: legacy, openAPI: open, source: { .openAPI })
+    func testErrorsAndMissingQuotesNeverTriggerAnAlternateProviderOrRetry() async throws {
+        let api = SourcePricingSpy(price: nil, failure: .rejected)
+        let standard = StandardMarketPricing(provider: api)
         do {
-            _ = try await router.quote(for: card())
-            XCTFail("The selected provider's error must propagate")
+            _ = try await standard.quote(for: card())
+            XCTFail("A public pricing failure must remain a failure")
         } catch { XCTAssertEqual(error as? SourcePricingFailure, .rejected) }
-        await open.setFailure(nil)
-        let quote = try await router.quote(for: card(), candidates: [card("p:2")])
+        let afterFailure = await api.statistics()
+        XCTAssertEqual(afterFailure.requests.count, 1, "A failed lookup must not retry automatically")
+        await api.setFailure(nil)
+        let quote = try await standard.quote(for: card(), candidates: [card("p:2")])
         XCTAssertNil(quote)
-        let legacyStats = await legacy.statistics(), openStats = await open.statistics()
-        XCTAssertTrue(legacyStats.requests.isEmpty)
-        XCTAssertEqual(openStats.requests.count, 2)
-        XCTAssertEqual(openStats.requests[1].candidates, [card("p:2")])
+        let afterMissing = await api.statistics()
+        XCTAssertEqual(afterMissing.requests.count, 2)
+        XCTAssertEqual(afterMissing.requests[1].candidates, [card("p:2")])
     }
 
-    func testProviderMetadataIsPreservedAcrossCachedLookups() async throws {
+    func testKnownZeroIsPreservedAsAKnownQuote() async throws {
+        let api = SourcePricingSpy(price: 0)
+        let result = try await StandardMarketPricing(provider: api).details(for: card(), candidates: [], forceRefresh: false)
+        XCTAssertEqual(result.quote?.marketPrice, 0)
+        XCTAssertEqual(result.metadata?.source, .openAPI)
+    }
+
+    func testCachedProviderMetadataIsNeverMadeNewerByTheWrapper() async throws {
         let metadata = MarketPriceMetadata(source: .openAPI, updatedAt: Date(timeIntervalSince1970: 100),
-            fetchedAt: Date(timeIntervalSince1970: 200))
-        let open = SourcePricingSpy(price: 2, metadata: metadata)
-        let router = SelectedMarketPricing(legacy: SourcePricingSpy(price: 1), openAPI: open, source: { .openAPI })
-        let first = try await router.details(for: card(), candidates: [], forceRefresh: false)
-        let second = try await router.details(for: card(), candidates: [], forceRefresh: false)
-        XCTAssertEqual(first.metadata, metadata)
-        XCTAssertEqual(second.metadata, metadata, "Reusing cached data must not make its provider date appear newer")
+            fetchedAt: Date(timeIntervalSince1970: 200), isOffline: true, isCached: true)
+        let standard = StandardMarketPricing(provider: SourcePricingSpy(price: 2, metadata: metadata))
+        let first = try await standard.details(for: card(), candidates: [], forceRefresh: false)
+        let second = try await standard.details(for: card(), candidates: [], forceRefresh: false)
+        XCTAssertEqual(first.metadata, metadata); XCTAssertEqual(second.metadata, metadata)
     }
 
-    func testLegacyResponsesReceiveSourceWithoutInventingDataUpdateTime() async throws {
-        let before = Date()
-        let router = SelectedMarketPricing(legacy: SourcePricingSpy(price: 1), openAPI: SourcePricingSpy(price: 2), source: { .tcgTracking })
-        let result = try await router.details(for: card(), candidates: [], forceRefresh: false)
-        let metadata = try XCTUnwrap(result.metadata)
-        XCTAssertEqual(metadata.source, .tcgTracking); XCTAssertNil(metadata.updatedAt)
-        XCTAssertGreaterThanOrEqual(metadata.fetchedAt, before)
-        XCTAssertLessThanOrEqual(metadata.fetchedAt, Date())
-    }
-
-    func testSwitchingSourceRejectsPendingResult() async throws {
-        let pending = PendingSourcePricing(), selection = PricingSourceSelection(.openAPI)
-        let router = SelectedMarketPricing(legacy: SourcePricingSpy(price: 1), openAPI: pending, source: { selection.get() })
-        let selected = card()
-        let task = Task { try await router.details(for: selected, candidates: [selected], forceRefresh: false) }
-        try await waitForRequest(pending)
-        selection.set(.tcgTracking)
-        await pending.resolve()
-        do { _ = try await task.value; XCTFail("A previous source cannot publish after switching") }
-        catch { XCTAssertTrue(error is CancellationError) }
-        let current = try await router.quote(for: selected)
-        XCTAssertEqual(current?.marketPrice, 1)
-    }
-
-    func testCancellationRejectsProviderThatIgnoresCancellation() async throws {
+    func testLegacyPreferenceChangesCannotRedirectAnInFlightPublicQuote() async throws {
+        let defaults = UserDefaults.standard
+        let key = PricingSource.defaultsKey
+        let previous = defaults.object(forKey: key)
+        defer {
+            if let previous { defaults.set(previous, forKey: key) }
+            else { defaults.removeObject(forKey: key) }
+        }
+        defaults.set("tcgtracking", forKey: key)
         let pending = PendingSourcePricing()
-        let router = SelectedMarketPricing(legacy: pending, openAPI: SourcePricingSpy(price: 2), source: { .tcgTracking })
-        let selected = card()
-        let task = Task { try await router.quote(for: selected) }
+        let service = StandardMarketPricing(provider: pending), selected = card()
+        let task = Task { try await service.details(for: selected, candidates: [selected], forceRefresh: false) }
         try await waitForRequest(pending)
-        task.cancel()
+        defaults.set("future-provider", forKey: key)
         await pending.resolve()
+        let result = try await task.value
+        XCTAssertEqual(result.quote?.marketPrice, 99); XCTAssertEqual(result.metadata?.source, .openAPI)
+        XCTAssertEqual(PricingSource.current, .openAPI)
+    }
+
+    func testCancellationRejectsAProviderThatIgnoresCancellation() async throws {
+        let pending = PendingSourcePricing()
+        let standard = StandardMarketPricing(provider: pending), selected = card()
+        let task = Task { try await standard.quote(for: selected) }
+        try await waitForRequest(pending)
+        task.cancel(); await pending.resolve()
         do { _ = try await task.value; XCTFail("Cancelled lookups must not publish a quote") }
         catch { XCTAssertTrue(error is CancellationError) }
     }
 
-    func testSwitchingPreservesIndependentProviderCachesAndRefreshFlags() async throws {
-        let legacy = SourcePricingSpy(price: 1), open = SourcePricingSpy(price: 2)
-        let selection = PricingSourceSelection(.tcgTracking)
-        let router = SelectedMarketPricing(legacy: legacy, openAPI: open, source: { selection.get() })
-        let selected = card()
-        for source in [PricingSource.tcgTracking, .openAPI, .tcgTracking, .openAPI] {
-            selection.set(source)
-            let result = try await router.details(for: selected, candidates: [selected], forceRefresh: false)
-            XCTAssertEqual(result.quote?.marketPrice, source == .tcgTracking ? 1 : 2)
-        }
-        let cachedLegacy = await legacy.statistics(), cachedOpen = await open.statistics()
-        XCTAssertEqual(cachedLegacy.loads, 1); XCTAssertEqual(cachedOpen.loads, 1)
-        _ = try await router.details(for: selected, candidates: [selected], forceRefresh: true)
-        let refreshedLegacy = await legacy.statistics(), refreshedOpen = await open.statistics()
-        XCTAssertEqual(refreshedLegacy.loads, 1); XCTAssertEqual(refreshedOpen.loads, 2)
-        XCTAssertEqual(refreshedLegacy.requests.map(\.forceRefresh), [false, false])
-        XCTAssertEqual(refreshedOpen.requests.map(\.forceRefresh), [false, false, true])
+    func testRepeatLookupsReuseTheSameProviderAndOnlyExplicitRefreshReloads() async throws {
+        let api = SourcePricingSpy(price: 2), selected = card()
+        let standard = StandardMarketPricing(provider: api)
+        for _ in 0..<4 { _ = try await standard.details(for: selected, candidates: [selected], forceRefresh: false) }
+        let cached = await api.statistics()
+        XCTAssertEqual(cached.loads, 1)
+        _ = try await standard.details(for: selected, candidates: [selected], forceRefresh: true)
+        let refreshed = await api.statistics()
+        XCTAssertEqual(refreshed.loads, 2)
+        XCTAssertEqual(refreshed.requests.map(\.forceRefresh), [false, false, false, false, true])
     }
 
     private func waitForRequest(_ provider: PendingSourcePricing) async throws {
@@ -153,17 +133,8 @@ import XCTest
             if started { return }
             try await Task.sleep(for: .milliseconds(10))
         }
-        XCTFail("The pricing request did not start")
-        throw SourcePricingFailure.rejected
+        XCTFail("The pricing request did not start"); throw SourcePricingFailure.rejected
     }
-}
-
-private final class PricingSourceSelection: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: PricingSource
-    init(_ value: PricingSource) { self.value = value }
-    func get() -> PricingSource { lock.lock(); defer { lock.unlock() }; return value }
-    func set(_ value: PricingSource) { lock.lock(); defer { lock.unlock() }; self.value = value }
 }
 
 private enum SourcePricingFailure: Error, Equatable { case rejected }

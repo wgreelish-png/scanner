@@ -13,7 +13,7 @@ import Observation
     private var lookup: Task<Void, Never>?
     private var requestID = UUID()
 
-    init(card: CardCandidate, pricing: any MarketPricing = SelectedMarketPricing(), manualPriceAllowed: Bool = true) {
+    init(card: CardCandidate, pricing: any MarketPricing = StandardMarketPricing(), manualPriceAllowed: Bool = true) {
         self.card = card
         self.price = CSVExportService.number(card.marketPrice)
         self.pricing = pricing
@@ -24,6 +24,21 @@ import Observation
         let previous = Self.priceIdentity(card.identity)
         change(&card.identity)
         if Self.priceIdentity(card.identity) != previous { fetchPrice(forceRefresh: false) }
+    }
+
+    /// A catalog correction replaces only the draft. Keep the owner's selected
+    /// condition/language, and retain the printing only when the new card has it.
+    func replaceCard(with candidate: CardCandidate) {
+        let previous = card.identity
+        cancelLookup()
+        var replacement = candidate
+        replacement.identity.condition = previous.condition
+        replacement.identity.language = previous.language
+        if candidate.printings.contains(previous.printing) {
+            replacement.identity.printing = previous.printing
+        }
+        card = replacement
+        fetchPrice(forceRefresh: false)
     }
 
     func refreshPrice() { fetchPrice(forceRefresh: true) }

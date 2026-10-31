@@ -14,11 +14,9 @@ enum PricingSource: String, CaseIterable, Identifiable, Codable, Hashable, Senda
         }
     }
 
-    static var current: PricingSource {
-        guard let value = UserDefaults.standard.string(forKey: defaultsKey),
-              let source = PricingSource(rawValue: value) else { return .tcgTracking }
-        return source
-    }
+    // Retain both Codable cases for historical price provenance. The old
+    // preference is intentionally ignored and never rewrites saved card data.
+    static var current: PricingSource { .openAPI }
 }
 
 struct MarketPriceMetadata: Codable, Hashable, Sendable {
@@ -40,31 +38,16 @@ struct MarketPriceMetadata: Codable, Hashable, Sendable {
     }
 }
 
-/// Routes each lookup to one provider. Providers retain their own caches and
-/// errors; changing the setting invalidates replies from the previous source.
-struct SelectedMarketPricing: MarketPricing {
-    private let legacy: any MarketPricing
-    private let openAPI: any MarketPricing
-    private let source: @Sendable () -> PricingSource
+/// One production provider for scanner, search and saved-card edits. No website
+/// browser is constructed, warmed up or used as a fallback for market quotes.
+struct StandardMarketPricing: MarketPricing {
+    private let provider: any MarketPricing
 
-    init(legacy: any MarketPricing = OnlineMarketPricing(),
-         openAPI: any MarketPricing = OpenAPIMarketPricing.shared,
-         source: @escaping @Sendable () -> PricingSource = { .current }) {
-        self.legacy = legacy
-        self.openAPI = openAPI
-        self.source = source
-    }
-
-    private func provider(for source: PricingSource) -> any MarketPricing {
-        switch source {
-        case .tcgTracking: return legacy
-        case .openAPI: return openAPI
-        }
-    }
+    init(provider: any MarketPricing = OpenAPIMarketPricing.shared) { self.provider = provider }
 
     func prepare() async {
         guard !Task.isCancelled else { return }
-        await provider(for: source()).prepare()
+        await provider.prepare()
     }
 
     func quote(for card: CardCandidate) async throws -> MarketQuote? {
@@ -77,23 +60,17 @@ struct SelectedMarketPricing: MarketPricing {
 
     func details(for card: CardCandidate, candidates: [CardCandidate], forceRefresh: Bool) async throws -> MarketDetails {
         try Task.checkCancellation()
-        let selected = source()
         var result: MarketDetails
         do {
-            result = try await provider(for: selected).details(for: card, candidates: candidates, forceRefresh: forceRefresh)
+            result = try await provider.details(for: card, candidates: candidates, forceRefresh: forceRefresh)
         } catch {
-            try validateSelection(selected)
+            try Task.checkCancellation()
             throw error
         }
-        try validateSelection(selected)
+        try Task.checkCancellation()
         if result.metadata == nil {
-            result.metadata = MarketPriceMetadata(source: selected, fetchedAt: Date())
+            result.metadata = MarketPriceMetadata(source: .openAPI, fetchedAt: Date())
         }
         return result
-    }
-
-    private func validateSelection(_ selected: PricingSource) throws {
-        try Task.checkCancellation()
-        guard source() == selected else { throw CancellationError() }
     }
 }
