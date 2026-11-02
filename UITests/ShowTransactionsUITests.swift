@@ -41,8 +41,7 @@ import XCTest
         let app = launch()
         defer { app.terminate() }
         tap(app.buttons["show.recordTransaction"], app: app)
-        tap(app.buttons["showTransaction.kind"], app: app)
-        tap(app.buttons["Trade"].firstMatch, app: app)
+        tap(app.buttons["showTransaction.kind.trade"], app: app)
         tap(app.buttons["showTransaction.incomingList"], app: app)
         tap(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Trade 32")).firstMatch, app: app)
         tap(app.buttons["showTransaction.selectInventory"], app: app)
@@ -179,8 +178,7 @@ import XCTest
         let app = launch()
         defer { app.terminate() }
         tap(app.buttons["show.recordTransaction"], app: app)
-        tap(app.buttons["showTransaction.kind"], app: app)
-        tap(app.buttons["Purchase"].firstMatch, app: app)
+        tap(app.buttons["showTransaction.kind.purchase"], app: app)
         tap(app.buttons["showTransaction.incomingList"], app: app)
         tap(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Buy 14")).firstMatch, app: app)
         enter("12", field: app.textFields["showTransaction.amount.incoming"], app: app)
@@ -205,10 +203,90 @@ import XCTest
         assertStock("3", app: app)
     }
 
-    private func launch() -> XCUIApplication {
+    func testLargeIncomingListKeepsInventoryCheckoutAndReceiptActionsReachable() {
+        continueAfterFailure = false
+        let app = launch(arguments: ["--show-transactions-large-incoming"])
+        defer { app.terminate() }
+        tap(app.buttons["show.inventory"], app: app)
+        tap(app.buttons["showInventory.recordTransaction"], app: app)
+        for kind in ["sale", "trade", "purchase"] {
+            XCTAssertTrue(app.buttons["showTransaction.kind." + kind].isHittable)
+        }
+        tap(app.buttons["showTransaction.kind.trade"], app: app)
+        for kind in ["tradeEven", "tradePayCustomer", "tradeReceiveCash"] {
+            XCTAssertTrue(app.buttons["showTransaction.kind." + kind].isHittable)
+        }
+        tap(app.buttons["showTransaction.kind.purchase"], app: app)
+        tap(app.buttons["showTransaction.incomingList"], app: app)
+        tap(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Buy 14")).firstMatch, app: app)
+        assertContains("80 cards · 80 rows", element: app.descendants(matching: .any)["showTransaction.incomingSummary"])
+
+        let incoming = app.descendants(matching: .any)["showTransaction.incomingCards"]
+        XCTAssertTrue(incoming.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Market reference: $20.00 each"].exists,
+                       "Incoming rows start collapsed so the agreed amount stays close to the list picker")
+        tap(incoming, app: app)
+        let firstIncomingPrice = app.staticTexts["Market reference: $20.00 each"]
+        for _ in 0..<3 {
+            if firstIncomingPrice.exists && firstIncomingPrice.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(firstIncomingPrice.isHittable)
+        let record = app.buttons["showTransaction.record"]
+        for _ in 0..<3 {
+            app.swipeUp()
+            XCTAssertTrue(record.isHittable)
+            XCTAssertTrue(record.isEnabled)
+        }
+        record.tap()
+        XCTAssertTrue(app.navigationBars["Show Inventory"].waitForExistence(timeout: 5))
+        let quantity = app.staticTexts["showInventory.quantity"]
+        assertContains("83 cards available", element: quantity)
+        let source = app.buttons["showInventory.importSnapshot"]
+        let inventoryRecord = app.buttons["showInventory.recordTransaction"]
+        for _ in 0..<3 {
+            app.swipeUp()
+            XCTAssertTrue(quantity.isHittable)
+            XCTAssertTrue(source.isHittable)
+            XCTAssertTrue(inventoryRecord.isHittable)
+        }
+        source.tap()
+        XCTAssertTrue(app.navigationBars["Card Show Inventory"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tap(app.buttons["show.history"], app: app)
+        tap(app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "showHistory.receipt.")).firstMatch, app: app)
+        let paid = app.descendants(matching: .any)["showTransaction.receipt.paid"]
+        assertContains("$14.00", element: paid)
+        XCTAssertTrue(paid.isHittable, "Receipt money is shown before the collapsed acquired cards")
+        XCTAssertFalse(app.staticTexts["Market reference: $20.00 each"].exists)
+        tap(app.descendants(matching: .any)["showTransaction.receipt.acquiredCards"], app: app)
+        let undo = app.buttons["showTransaction.undo"]
+        for _ in 0..<3 {
+            app.swipeUp()
+            XCTAssertTrue(undo.isHittable)
+        }
+        undo.tap()
+        let confirm = app.buttons["showTransaction.confirmUndo"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        app.swipeUp()
+        XCTAssertTrue(confirm.isHittable)
+        confirm.tap()
+        let undone = app.descendants(matching: .any)["showTransaction.undone"]
+        for _ in 0..<6 {
+            if undone.exists && undone.isHittable { break }
+            app.swipeDown()
+        }
+        XCTAssertTrue(undone.waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        assertStock("3", app: app)
+    }
+
+    private func launch(arguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         if let path = ProcessInfo.processInfo.environment["DYLD_FALLBACK_LIBRARY_PATH"] { app.launchEnvironment["DYLD_FALLBACK_LIBRARY_PATH"] = path }
-        app.launchArguments = ["--show-transactions-ui-fixture", "--show-transactions-fixture-id=" + UUID().uuidString]
+        app.launchArguments = ["--show-transactions-ui-fixture", "--show-transactions-fixture-id=" + UUID().uuidString] + arguments
         app.launch()
         XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 10))
         return app

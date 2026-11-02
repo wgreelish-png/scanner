@@ -39,6 +39,12 @@ import SwiftData
                 context.insert(list); context.insert(session)
                 let row = try! InventoryCard(card: Self.card(name, price: price))
                 context.insert(row); list.cards.append(row)
+                if ProcessInfo.processInfo.arguments.contains("--show-transactions-large-incoming") {
+                    for index in 1...79 {
+                        let extra = try! InventoryCard(card: Self.card(name + " extra " + String(index), price: 0))
+                        context.insert(extra); list.cards.append(extra)
+                    }
+                }
             }
             try! context.save()
         }

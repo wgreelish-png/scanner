@@ -52,6 +52,9 @@ import XCTest
         assertRow(untouchedName, outcome: "No status", in: app)
         openList(recordedName, in: app)
 
+        let sections = app.segmentedControls["list.section"]
+        XCTAssertTrue(sections.waitForExistence(timeout: 5))
+        sections.buttons["Offer"].tap()
         let nothing = app.buttons["list.nothingHappened"]
         XCTAssertTrue(nothing.waitForExistence(timeout: 5)); nothing.tap()
         assertOutcome("Nothing Happened", in: app)

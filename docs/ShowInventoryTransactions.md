@@ -44,6 +44,10 @@ After implementation, UI regressions cover repeated open/edit/close, invalid inp
 
 Build-37 local checks passed Swift grammar parsing of all 143 files, Xcode app/native/UI source and resource membership, all 47 pinned scanner assets/dependencies, and whitespace validation. Two UI regressions were added and existing sale cases were adapted. No native/UI tests or Xcode build ran here because this Linux workspace has no Swift/Xcode installation. The unchanged JavaScript/Python suites were not rerun. Physical-iPhone resolution of the reported hang remains unverified.
 
+## Compact actions in build 38
+
+[Simple list navigation](SimpleListNavigation.md) restores visible transaction-type buttons, collapses incoming/receipt card rows and keeps Record/Undo controls fixed. Saved lists separate Cards from Offer, with fixed primary actions; working inventory places Source in the toolbar and Record at the bottom. No transaction math or saved data changes are included.
+
 ## Import and source snapshots
 
 The existing TCGTracking location importer remains a read-only snapshot in SwiftData. The first complete saved snapshot seeds working inventory once. Refreshing or removing that source snapshot cannot restock locally sold cards, change local quantities or delete newly acquired cards. The source page labels this distinction, and remains available under Show → Inventory → TCGTracking Source Snapshot. Subsequent website reconciliation and outbound synchronization are deferred; new/changed website rows are not automatically applied to an already established working inventory.

@@ -7,6 +7,7 @@ import UIKit
 @MainActor struct ShowTransactionForm: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Query(sort: \CardList.createdAt, order: .reverse) private var lists: [CardList]
     @State private var store: ShowBudgetStore
     @State private var kind: ShowTransactionKind
@@ -27,6 +28,7 @@ import UIKit
     @State private var note = ""
     @State private var selectingInventory = false
     @State private var editingIncomingList = false
+    @State private var incomingDetailsExpanded = false
     @State private var editingSaleCash = false
     @State private var incomingEditMessage: String?
     @State private var saleReceivedEdited = false
@@ -172,9 +174,15 @@ import UIKit
 
     private var transactionSection: some View {
         Section {
-            Picker("Transaction", selection: $kind) {
-                ForEach(ShowTransactionKind.allCases) { kind in Text(kind.title).tag(kind) }
-            }.pickerStyle(.menu).accessibilityIdentifier("showTransaction.kind")
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Transaction").font(.subheadline).foregroundStyle(.secondary)
+                transactionTypeButtons
+                if isTrade {
+                    Text("Cash difference").font(.subheadline).foregroundStyle(.secondary)
+                    tradeTypeButtons
+                }
+            }.accessibilityElement(children: .contain)
+                .accessibilityIdentifier("showTransaction.kind")
             Picker("Show", selection: $showID) {
                 Text("Choose a show").tag(Optional<UUID>.none)
                 ForEach(store.visibleShows) { show in
@@ -192,6 +200,66 @@ import UIKit
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
+    }
+
+    @ViewBuilder private var transactionTypeButtons: some View {
+        if dynamicTypeSize >= .xxLarge {
+            VStack(spacing: 8) { mainTypeButtons }
+        } else {
+            HStack(spacing: 8) { mainTypeButtons }
+        }
+    }
+
+    @ViewBuilder private var mainTypeButtons: some View {
+        kindButton("Sale", accessibilityLabel: ShowTransactionKind.sale.title,
+                   selected: kind == .sale, identifier: "sale") { kind = .sale }
+        kindButton("Trade", accessibilityLabel: ShowTransactionKind.trade.title,
+                   selected: isTrade, identifier: "trade") {
+            if !isTrade { kind = .trade }
+        }
+        kindButton("Purchase", accessibilityLabel: ShowTransactionKind.purchase.title,
+                   selected: kind == .purchase, identifier: "purchase") { kind = .purchase }
+    }
+
+    @ViewBuilder private var tradeTypeButtons: some View {
+        if dynamicTypeSize >= .xxLarge {
+            VStack(spacing: 8) { tradeCashButtons }
+        } else {
+            HStack(spacing: 8) { tradeCashButtons }
+        }
+    }
+
+    @ViewBuilder private var tradeCashButtons: some View {
+        kindButton("Even", accessibilityLabel: ShowTransactionKind.trade.title,
+                   selected: kind == .trade, identifier: "tradeEven") { kind = .trade }
+        kindButton("Pay Customer", accessibilityLabel: ShowTransactionKind.tradePayCustomer.title,
+                   selected: kind == .tradePayCustomer, identifier: "tradePayCustomer") { kind = .tradePayCustomer }
+        kindButton("Receive Cash", accessibilityLabel: ShowTransactionKind.tradeReceiveCash.title,
+                   selected: kind == .tradeReceiveCash, identifier: "tradeReceiveCash") { kind = .tradeReceiveCash }
+    }
+
+    private func kindButton(_ title: String, accessibilityLabel: String, selected: Bool,
+                            identifier: String, action: @escaping () -> Void) -> some View {
+        Button {
+            endEditing()
+            action()
+        } label: {
+            Text(title).font(.subheadline.weight(selected ? .semibold : .regular))
+                .multilineTextAlignment(.center)
+                .foregroundStyle(selected ? Color.accentColor : Color.primary)
+                .padding(.horizontal, 8).padding(.vertical, 10)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .background(selected ? Color.accentColor.opacity(0.15) : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 10))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(selected ? Color.accentColor : Color.secondary.opacity(0.4), lineWidth: 1)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 10))
+        }.buttonStyle(.plain)
+            .accessibilityLabel(accessibilityLabel)
+            .accessibilityAddTraits(selected ? .isSelected : [])
+            .accessibilityIdentifier("showTransaction.kind." + identifier)
     }
 
     private var incomingSection: some View {
@@ -212,20 +280,32 @@ import UIKit
                 Text("This list already has a completed outcome. Review its existing outcome before recording another transaction.")
                     .font(.caption).foregroundStyle(.orange)
             }
-            if incomingLists.contains(where: { $0.id == incomingListID }) {
+            if let list = incomingLists.first(where: { $0.id == incomingListID }) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(capturedListName ?? list.name).font(.subheadline.weight(.semibold))
+                    Text("\(incoming.reduce(0) { $0 + $1.quantity }) cards · \(incoming.count) rows")
+                        .font(.caption).foregroundStyle(.secondary)
+                }.accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("showTransaction.incomingSummary")
                 Button("Review / Edit Selected List", systemImage: "pencil") {
                     endEditing(); editingIncomingList = true
                 }.frame(minHeight: 44).accessibilityIdentifier("showTransaction.editIncomingList")
             }
             if let incomingEditMessage { Text(incomingEditMessage).font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("showTransaction.incomingEditStatus") }
-            ForEach(incoming) { line in
-                ShowTransactionCardRow(card: line.card, quantity: line.quantity)
-            }
             if incomingLists.isEmpty {
                 Text("Scan cards into a list before recording incoming stock.").foregroundStyle(.secondary)
             } else if incomingListID != nil {
                 Button("Reload Incoming List", action: loadIncoming).frame(minHeight: 44)
                     .accessibilityIdentifier("showTransaction.reloadIncoming")
+            }
+            if !incoming.isEmpty {
+                DisclosureGroup("Selected cards · \(incoming.count) rows", isExpanded: $incomingDetailsExpanded) {
+                    if incomingDetailsExpanded {
+                        ForEach(incoming) { line in
+                            ShowTransactionCardRow(card: line.card, quantity: line.quantity)
+                        }
+                    }
+                }.accessibilityIdentifier("showTransaction.incomingCards")
             }
         } header: {
             Text("Cards coming in")
@@ -402,6 +482,7 @@ import UIKit
     }
 
     private func loadIncoming() {
+        incomingDetailsExpanded = false
         incoming = []; capturedListID = nil; capturedListName = nil
         incomingValueEdited = false; incomingValue = ""; incomingDefault = nil; makeEven = false; incomingEditMessage = nil
         guard let incomingListID else { return }
@@ -650,6 +731,8 @@ import UIKit
     @State private var confirmingUndo = false
     @State private var error: String?
     @State private var isUndoing = false
+    @State private var incomingCardsExpanded = false
+    @State private var outgoingCardsExpanded = false
 
     init(transactionID: UUID, store: ShowBudgetStore = .shared) {
         self.transactionID = transactionID
@@ -662,22 +745,18 @@ import UIKit
         List {
             if let receipt {
                 receiptSection(receipt)
-                if !receipt.incoming.isEmpty { cardsSection("Cards acquired", lines: receipt.incoming) }
-                if !receipt.outgoing.isEmpty { cardsSection("Cards released", lines: receipt.outgoing) }
                 moneySection(receipt)
+                if !receipt.incoming.isEmpty {
+                    cardsSection("Cards acquired", lines: receipt.incoming, expanded: $incomingCardsExpanded,
+                                 identifier: "acquiredCards")
+                }
+                if !receipt.outgoing.isEmpty {
+                    cardsSection("Cards released", lines: receipt.outgoing, expanded: $outgoingCardsExpanded,
+                                 identifier: "releasedCards")
+                }
                 if !receipt.draft.note.isEmpty { Section("Note") { Text(receipt.draft.note) } }
                 if let error {
                     Section { Text(error).foregroundStyle(.orange).accessibilityIdentifier("showTransaction.undoError") }
-                }
-                if receipt.reversedAt == nil {
-                    Section {
-                        Button("Undo Transaction", role: .destructive) { confirmingUndo = true }
-                            .frame(maxWidth: .infinity, minHeight: 64)
-                            .disabled(!store.isLoaded || store.isSaving || isUndoing)
-                            .accessibilityIdentifier("showTransaction.undo")
-                    } footer: {
-                        Text("Review the stock and cash reversal before confirming. The original receipt remains in history.")
-                    }
                 }
             } else {
                 ContentUnavailableView("Transaction unavailable", systemImage: "receipt",
@@ -685,6 +764,20 @@ import UIKit
             }
         }
         .navigationTitle("Transaction Receipt").navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .bottom) {
+            if let receipt, receipt.reversedAt == nil {
+                VStack(spacing: 8) {
+                    Button(role: .destructive) { confirmingUndo = true } label: {
+                        Text("Undo Transaction").frame(maxWidth: .infinity, minHeight: 44)
+                    }
+                        .buttonStyle(.bordered)
+                        .disabled(!store.isLoaded || store.isSaving || isUndoing)
+                        .accessibilityIdentifier("showTransaction.undo")
+                    Text("Review the stock and cash reversal before confirming. The original receipt remains in history.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }.padding(.horizontal, 16).padding(.vertical, 10).background(.regularMaterial)
+            }
+        }
         .sheet(isPresented: $confirmingUndo) {
             if let receipt { undoSheet(receipt) }
         }
@@ -704,11 +797,22 @@ import UIKit
         }
     }
 
-    private func cardsSection(_ title: String, lines: [ShowTransactionCardLine]) -> some View {
-        Section(title) {
-            ForEach(lines, id: \.inventoryID) { line in
-                ShowTransactionCardRow(card: line.card, quantity: line.quantity)
-            }
+    private func cardsSection(_ title: String, lines: [ShowTransactionCardLine], expanded: Binding<Bool>,
+                              identifier: String) -> some View {
+        Section {
+            DisclosureGroup(isExpanded: expanded) {
+                if expanded.wrappedValue {
+                    ForEach(lines, id: \.inventoryID) { line in
+                        ShowTransactionCardRow(card: line.card, quantity: line.quantity)
+                    }
+                }
+            } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                    Text("\(lines.reduce(0) { $0 + $1.quantity }) cards · \(lines.count) rows")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }.accessibilityIdentifier("showTransaction.receipt." + identifier)
         }
     }
 
@@ -735,7 +839,7 @@ import UIKit
             Text("Profit unavailable: acquisition costs are not tracked for this stock.")
                 .font(.caption).foregroundStyle(.secondary)
         } header: { Text("Recorded amounts") } footer: {
-            Text("These are the original receipt amounts. Card prices above are market reference snapshots.")
+            Text("These are the original receipt amounts. Card prices are market reference snapshots.")
         }
     }
 
@@ -760,19 +864,19 @@ import UIKit
                 if let error {
                     Section { Text(error).foregroundStyle(.orange).accessibilityIdentifier("showTransaction.undoError") }
                 }
-                Section {
-                    Button(role: .destructive, action: undo) {
-                        HStack {
-                            Spacer()
-                            if isUndoing { ProgressView() }
-                            Text("Confirm Undo Transaction").font(.headline)
-                            Spacer()
-                        }.frame(minHeight: 64)
-                    }.disabled(isUndoing || store.isSaving || receipt.reversedAt != nil)
-                        .accessibilityIdentifier("showTransaction.confirmUndo")
-                }
             }
             .navigationTitle("Undo Transaction?").navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .bottom) {
+                Button(role: .destructive, action: undo) {
+                    HStack {
+                        if isUndoing { ProgressView() }
+                        Text("Confirm Undo Transaction").font(.headline)
+                    }.frame(maxWidth: .infinity, minHeight: 44)
+                }.buttonStyle(.borderedProminent).tint(.red)
+                    .disabled(isUndoing || store.isSaving || receipt.reversedAt != nil)
+                    .accessibilityIdentifier("showTransaction.confirmUndo")
+                    .padding(.horizontal, 16).padding(.vertical, 10).background(.regularMaterial)
+            }
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { confirmingUndo = false } } }
         }
     }

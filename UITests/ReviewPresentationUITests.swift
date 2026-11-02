@@ -3,13 +3,8 @@ import XCTest
 @MainActor final class ReviewPresentationUITests: XCTestCase {
     func testReviewKeepsExportAndRatesInOptionsAndOutcomesInsideOffer() async throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        if let path = ProcessInfo.processInfo.environment["DYLD_FALLBACK_LIBRARY_PATH"] {
-            app.launchEnvironment["DYLD_FALLBACK_LIBRARY_PATH"] = path
-        }
-        app.launchArguments = ["-autoDatabaseUpdates", "NO", "--uitest-streamlined-review"]
-        app.launch(); defer { app.terminate() }
-        XCTAssertTrue(app.navigationBars["Review & Offer"].waitForExistence(timeout: 10))
+        let app = launch()
+        defer { app.terminate() }
 
         XCTAssertFalse(app.staticTexts["Export inventory"].exists)
         XCTAssertFalse(app.buttons["list.exportCSV"].exists)
@@ -17,6 +12,9 @@ import XCTest
         XCTAssertFalse(app.buttons["Save Offer Estimate"].exists)
         XCTAssertFalse(app.buttons["Session Offer Percentages"].exists)
         XCTAssertFalse(app.textFields["Custom cash offer for the whole list"].exists)
+        XCTAssertFalse(app.textFields["My Card Price"].exists)
+        XCTAssertFalse(app.buttons["list.nothingHappened"].exists)
+        selectOffer(in: app)
 
         let price = app.textFields["My Card Price"]
         reveal(price, in: app); price.tap(); price.typeText("20")
@@ -27,6 +25,11 @@ import XCTest
         done.tap()
         let keyboardDismissed = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.keyboards.firstMatch)
         await fulfillment(of: [keyboardDismissed], timeout: 5)
+        app.segmentedControls["list.section"].buttons["Cards"].tap()
+        XCTAssertFalse(price.exists)
+        selectOffer(in: app)
+        reveal(price, in: app)
+        XCTAssertEqual(price.value as? String, "20", "Switching sections must keep the offer draft")
 
         let options = app.buttons["list.options"]
         XCTAssertTrue(options.isHittable); options.tap()
@@ -49,6 +52,59 @@ import XCTest
         XCTAssertFalse(app.buttons["Session Offer Percentages"].exists)
         XCTAssertFalse(app.textFields["Custom cash offer for the whole list"].exists)
         XCTAssertFalse(app.staticTexts["Export inventory"].exists)
+    }
+
+    func testLongReviewKeepsCardsAndOfferSectionsAndFooterActionsReachable() {
+        continueAfterFailure = false
+        let app = launch(arguments: ["--uitest-long-review"])
+        defer { app.terminate() }
+        let sections = app.segmentedControls["list.section"]
+        XCTAssertTrue(sections.waitForExistence(timeout: 5))
+        XCTAssertTrue(sections.buttons["Cards"].isSelected)
+        XCTAssertEqual(app.staticTexts["list.quantity"].label, "80 cards")
+        XCTAssertTrue(app.staticTexts["list.outcomeValue"].isHittable)
+        XCTAssertFalse(app.textFields["My Card Price"].exists)
+        XCTAssertFalse(app.buttons["list.nothingHappened"].exists)
+        let record = app.buttons["list.recordTransaction"]
+        let scanning = app.buttons["list.continueScanning"]
+        XCTAssertTrue(record.isHittable)
+        XCTAssertTrue(scanning.isHittable)
+        let footerY = record.frame.midY
+        for _ in 0..<4 {
+            app.swipeUp()
+            XCTAssertTrue(sections.isHittable)
+            XCTAssertTrue(record.isHittable)
+            XCTAssertTrue(scanning.isHittable)
+            XCTAssertEqual(record.frame.midY, footerY, accuracy: 1)
+        }
+        record.tap()
+        XCTAssertTrue(app.buttons["Purchase"].firstMatch.waitForExistence(timeout: 5))
+        app.buttons["Cancel"].firstMatch.tap()
+        selectOffer(in: app)
+        let nothing = app.buttons["list.nothingHappened"]
+        reveal(nothing, in: app)
+        XCTAssertTrue(record.isHittable)
+        XCTAssertTrue(scanning.isHittable)
+        XCTAssertFalse(app.buttons["list.exportCSV"].exists)
+        XCTAssertFalse(app.buttons["list.offerPercentages"].exists)
+    }
+
+    private func launch(arguments: [String] = []) -> XCUIApplication {
+        let app = XCUIApplication()
+        if let path = ProcessInfo.processInfo.environment["DYLD_FALLBACK_LIBRARY_PATH"] {
+            app.launchEnvironment["DYLD_FALLBACK_LIBRARY_PATH"] = path
+        }
+        app.launchArguments = ["-autoDatabaseUpdates", "NO", "--uitest-streamlined-review"] + arguments
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Review & Offer"].waitForExistence(timeout: 10))
+        return app
+    }
+
+    private func selectOffer(in app: XCUIApplication) {
+        let sections = app.segmentedControls["list.section"]
+        XCTAssertTrue(sections.waitForExistence(timeout: 5))
+        sections.buttons["Offer"].tap()
+        XCTAssertTrue(sections.buttons["Offer"].isSelected)
     }
 
     private func reveal(_ element: XCUIElement, in app: XCUIApplication,

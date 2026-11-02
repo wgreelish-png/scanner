@@ -32,10 +32,11 @@ import SwiftData
         session.setRates(OfferRates(cash: 70, trade: 80, maximum: 75))
         let context = container.mainContext
         context.insert(list); context.insert(session)
-        for index in 1...2 {
+        let count = ProcessInfo.processInfo.arguments.contains("--uitest-long-review") ? 80 : 2
+        for index in 1...count {
             let card = CardCandidate(identity: CardIdentity(game: "Pokémon", productID: "mock:review:\(index)", printing: "Normal"),
                 name: "Synthetic card \(index)", set: "Synthetic test set", number: String(index),
-                marketPrice: index == 1 ? 25 : 15, confidence: 100, printings: ["Normal"])
+                marketPrice: index == 1 ? 25 : index == 2 ? 15 : 0, confidence: 100, printings: ["Normal"])
             try! CardListService.add(card, to: list, context: context)
             session.record(card)
         }

@@ -88,9 +88,12 @@ private struct ShowHomeRouteCard: View {
 
 @MainActor struct ShowWorkingInventoryView: View {
     @Environment(\.modelContext) private var context
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var visible = false
     @State private var store: ShowBudgetStore
     @State private var search = ""
     @State private var seedError: String?
+    @State private var showingTransaction = false
 
     init(store: ShowBudgetStore = .shared) { _store = State(initialValue: store) }
 
@@ -112,23 +115,20 @@ private struct ShowHomeRouteCard: View {
 
     var body: some View {
         List {
-            Section {
-                VStack(alignment: .leading, spacing: 10) {
-                    Label("Local stock · Works offline", systemImage: "iphone").font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.indigo).accessibilityIdentifier("showInventory.localStock")
-                    Text("\(available.reduce(0) { $0 + $1.quantity }.formatted()) cards available")
-                        .font(.title2.bold()).accessibilityIdentifier("showInventory.quantity")
-                    Text("Sales remove cards from this stock. Purchases and trades add the cards you receive.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }.padding(.vertical, 5)
-            }
             if !store.isLoaded {
                 Section {
                     Text(store.error ?? "Your saved show data could not be opened.").foregroundStyle(.orange)
                     Button("Retry Loading") { store.reload(); seedInventory() }
                         .accessibilityIdentifier("showInventory.retryLoad")
                 }
-            } else if available.isEmpty {
+            }
+            if let seedError {
+                Section {
+                    Text(seedError).font(.footnote).foregroundStyle(.orange)
+                    Button("Retry Preparing Inventory") { seedInventory() }
+                }.accessibilityIdentifier("showInventory.seedError")
+            }
+            if store.isLoaded && available.isEmpty {
                 Section {
                     ContentUnavailableView {
                         Label("No cards in local stock", systemImage: "shippingbox")
@@ -138,9 +138,9 @@ private struct ShowHomeRouteCard: View {
                              : "Your available stock is empty. Record a purchase or a trade to add cards. Previous cards stay in transaction history.")
                     }
                 }
-            } else if filtered.isEmpty {
+            } else if store.isLoaded && filtered.isEmpty {
                 Section { ContentUnavailableView.search(text: search) }
-            } else {
+            } else if store.isLoaded {
                 Section("Available cards") {
                     ForEach(filtered) { item in
                         NavigationLink { ShowWorkingInventoryDetailView(itemID: item.id, store: store) } label: {
@@ -149,32 +149,74 @@ private struct ShowHomeRouteCard: View {
                     }
                 }
             }
-            if let seedError {
-                Section {
-                    Text(seedError).font(.footnote).foregroundStyle(.orange)
-                    Button("Retry Preparing Inventory") { seedInventory() }
-                }.accessibilityIdentifier("showInventory.seedError")
-            }
-            Section {
-                NavigationLink { CardShowInventoryView() } label: {
-                    Label("TCGTracking Source Snapshot", systemImage: "arrow.down.doc")
-                }.accessibilityIdentifier("showInventory.importSnapshot")
-            } footer: {
-                Text("The first import starts local stock once. Refreshing the source snapshot does not restock sold cards or remove cards you bought locally. Saved quantities and values work offline; artwork and research may need internet.")
-            }
         }
         .navigationTitle("Show Inventory").navigationBarTitleDisplayMode(.inline)
         .searchable(text: $search, prompt: "Name, set, or card number")
         .scrollDismissesKeyboard(.interactively)
         .onSubmit(of: .search) { endSearchEditing() }
+        .safeAreaInset(edge: .top, spacing: 0) { inventorySummary }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            TimelineView(.animation(minimumInterval: 60, paused: !visible || scenePhase != .active)) { _ in
+                transactionAction
+            }
+        }
         .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink { CardShowInventoryView() } label: { Text("Source") }
+                    .accessibilityLabel("TCGTracking Source Snapshot")
+                    .accessibilityIdentifier("showInventory.importSnapshot")
+            }
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
                 Button("Done") { endSearchEditing() }.fixedSize().frame(minWidth: 64, minHeight: 44)
                     .accessibilityIdentifier("showInventory.keyboardDone")
             }
         }
-        .onAppear { seedInventory() }
+        .sheet(isPresented: $showingTransaction) { ShowTransactionForm(store: store) }
+        .onAppear { visible = true; seedInventory() }
+        .onDisappear { visible = false }
+    }
+
+    private var inventorySummary: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("\(available.reduce(0) { $0 + $1.quantity }.formatted()) cards available")
+                .font(.headline).monospacedDigit().accessibilityIdentifier("showInventory.quantity")
+            Label("Local stock · Works offline", systemImage: "iphone")
+                .font(.caption).foregroundStyle(.indigo).accessibilityIdentifier("showInventory.localStock")
+                .accessibilityHint("Sales remove cards from this stock. Purchases and trades add the cards you receive. Artwork and research may need internet.")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(.bar)
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
+    private var transactionAction: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                guard store.isLoaded, store.eligibleActiveShow != nil else { return }
+                endSearchEditing()
+                showingTransaction = true
+            } label: {
+                Label("Record Transaction", systemImage: "arrow.left.arrow.right")
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!store.isLoaded || store.eligibleActiveShow == nil)
+            .accessibilityIdentifier("showInventory.recordTransaction")
+            if !store.isLoaded {
+                Text("Load your show data to record transactions.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if store.eligibleActiveShow == nil {
+                Text(store.activeShow == nil
+                     ? "Choose an active show in Show Budget to record."
+                     : "Recording opens on your show's dates.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
     }
 
     private func endSearchEditing() {

@@ -1,3 +1,5 @@
+> Build 38: Cards and Offer are separate sections with fixed Record/Scan actions. Export and percentages stay in the three-dot menu. See [Simple list navigation](SimpleListNavigation.md).
+
 > Build 32 integrates calculated budget cash into the two outcome controls and moves budget details into the dedicated **Show** tab. The separate Record Cash action on list review has been removed.
 
 # Simpler list review and PokéDen app icon
