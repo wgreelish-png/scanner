@@ -69,12 +69,12 @@ import SwiftData
         XCTAssertEqual(value.store.activeShow?.entries.count, 1)
     }
 
-    func testTradeReceivingCashUsesTheGrossSixtyFiveThirtyFiveSplit() throws {
+    func testNewTradeReceivingCashReturnsAllProceedsToBuyingFunds() throws {
         let value = try fixture(), offers = totals(cash: 70, trade: 80)
         let trade = try TradeTransactionCalculator.calculate(totals: offers, input: .init(mode: .tradeAndCash, myCardPrice: 280))
         try record(.tradeAndPurchase, in: value, totals: offers, transaction: trade)
         let totals = try XCTUnwrap(value.store.activeShow).totals()
-        XCTAssertEqual(totals.availableCents, 43_000); XCTAssertEqual(totals.savedCents, 7_000)
+        XCTAssertEqual(totals.availableCents, 50_000); XCTAssertEqual(totals.savedCents, 0)
         XCTAssertEqual(totals.grossReceivedCents, 20_000)
         XCTAssertEqual(value.list.outcomeRecord?.kind, .tradeAndPurchase)
     }
@@ -272,18 +272,18 @@ import SwiftData
         XCTAssertEqual(store.activeShow?.entries.count, 1)
     }
 
-    func testVersionOneBudgetMigratesInMemoryAndNextWriteUsesVersionTwo() throws {
+    func testVersionOneBudgetMigratesInMemoryAndNextWriteUsesVersionThree() throws {
         let old = ShowBudgetBook(shows: [.init(name: "Old show", startingCents: 30_000)])
         var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(old)) as? [String: Any])
         json["version"] = 1
         let disk = Disk(); disk.data = try JSONSerialization.data(withJSONObject: json)
         let bytes = disk.data
         let store = ShowBudgetStore(read: { _ in disk.data }, write: { data, _ in disk.writes += 1; disk.data = data })
-        XCTAssertTrue(store.isLoaded); XCTAssertEqual(store.book.version, 2); XCTAssertEqual(disk.data, bytes)
+        XCTAssertTrue(store.isLoaded); XCTAssertEqual(store.book.version, 3); XCTAssertEqual(disk.data, bytes)
         let id = try XCTUnwrap(store.book.shows.first).id
         try store.update(showID: id, name: "Updated old show", startingCents: 30_000)
         let written = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(disk.data)) as? [String: Any])
-        XCTAssertEqual(written["version"] as? Int, 2)
+        XCTAssertEqual(written["version"] as? Int, 3)
         XCTAssertEqual(store.book.shows.first?.startingCents, 30_000)
     }
 }

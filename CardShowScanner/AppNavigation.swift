@@ -27,7 +27,7 @@ struct HomeView: View {
             .tabItem { Label("Scan", systemImage: "viewfinder") }
             .tag(Section.scan)
 
-            NavigationStack { ShowBudgetView() }
+            NavigationStack { ShowHomeView() }
                 .tabItem { Label("Show", systemImage: "calendar") }
                 .tag(Section.show)
 

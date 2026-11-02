@@ -1,8 +1,7 @@
 import SwiftUI
 import SwiftData
 
-/// Refresh is explicit. The dedicated SwiftData list is available immediately,
-/// including when the website or the phone's connection is unavailable.
+/// Explicitly refreshed source snapshot, separate from Show's local working stock.
 @MainActor struct CardShowInventoryView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.scenePhase) private var scenePhase
@@ -11,6 +10,8 @@ import SwiftData
     @State private var visible = false
     @State private var showingConnection = false
     @State private var copyMessage: String?
+    @State private var removingSnapshot = false
+    @State private var removalError: String?
 
     init(provider: (any CardShowInventoryProviding)? = nil) {
         _model = State(initialValue: CardShowInventoryModel(provider: provider))
@@ -21,12 +22,14 @@ import SwiftData
     var body: some View {
         List {
             Section {
-                Label("Your show inventory", systemImage: "shippingbox.fill")
+                Label("Imported source snapshot", systemImage: "arrow.down.doc.fill")
                     .font(.title3.bold()).foregroundStyle(.indigo)
+                Text("TCGTracking · Card Show location")
+                    .font(.caption).foregroundStyle(.secondary)
                 if let list = savedList {
                     LabeledContent("Cards", value: list.quantity.formatted()).accessibilityIdentifier("cardShowInventory.quantity")
                     LabeledContent("Inventory rows", value: list.cards.count.formatted()).accessibilityIdentifier("cardShowInventory.rows")
-                    LabeledContent("Known market subtotal", value: list.knownValue.money)
+                    LabeledContent("Imported market subtotal", value: list.knownValue.money)
                     if list.unpricedQuantity > 0 {
                         Text("\(list.unpricedQuantity) copies have no market price.").font(.caption).foregroundStyle(.secondary)
                     }
@@ -35,13 +38,13 @@ import SwiftData
                             .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("cardShowInventory.updated")
                     }
                     NavigationLink { CardListView(list: list) } label: {
-                        Label("Open Saved Inventory", systemImage: "rectangle.stack")
+                        Label("Open Imported Snapshot", systemImage: "rectangle.stack")
                     }.accessibilityIdentifier("cardShowInventory.open")
                     Button("Make an Editable Copy", systemImage: "doc.on.doc") { duplicate(list) }
                         .buttonStyle(.borderless).disabled(model.isRefreshing).accessibilityIdentifier("cardShowInventory.copy")
                     if let copyMessage { Text(copyMessage).font(.caption).foregroundStyle(.secondary) }
                 } else {
-                    Text("Import the cards from your TCGTracking Card Show location. The saved list stays available when reception is poor.")
+                    Text("Import your TCGTracking Card Show location to start local show stock. This saved snapshot also stays available when reception is poor.")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
             }
@@ -49,7 +52,7 @@ import SwiftData
                 Button {
                     copyMessage = nil; model.refresh(context: context)
                 } label: {
-                    Label(savedList == nil ? "Import Inventory" : "Refresh Inventory", systemImage: "arrow.clockwise")
+                    Label(savedList == nil ? "Import Source Snapshot" : "Refresh Source Snapshot", systemImage: "arrow.clockwise")
                         .frame(maxWidth: .infinity, minHeight: 44)
                 }.buttonStyle(.borderedProminent).disabled(model.isRefreshing)
                     .accessibilityIdentifier("cardShowInventory.refresh")
@@ -65,10 +68,30 @@ import SwiftData
                     Label(model.needsSignIn ? "Sign In to TCGTracking" : "TCGTracking Account", systemImage: "person.crop.circle")
                 }.buttonStyle(.borderless).disabled(model.isRefreshing).accessibilityIdentifier("cardShowInventory.connect")
             } footer: {
-                Text("Refresh updates this saved copy from the Card Show location. Use an editable copy for local scanning or corrections. Saved card details, quantities and last imported values work offline; artwork and new research may need internet.")
+                Text("Refresh updates this source snapshot only. Local show stock starts from the first import once; later refreshes do not restock sold cards or remove cards you bought locally. Record sales, trades, and purchases from Show home. The saved snapshot works offline; artwork and new research may need internet.")
             }
         }
         .navigationTitle("Card Show Inventory").navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if savedList != nil {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button("Remove Imported Snapshot", systemImage: "trash", role: .destructive) { removingSnapshot = true }
+                            .disabled(model.isRefreshing)
+                    } label: { Image(systemName: "ellipsis.circle") }
+                    .accessibilityLabel("Snapshot options")
+                }
+            }
+        }
+        .confirmationDialog("Remove the imported snapshot?", isPresented: $removingSnapshot, titleVisibility: .visible) {
+            Button("Remove Snapshot", role: .destructive) {
+                guard let savedList else { return }
+                do { _ = try ListBulkDeletionService.delete(ids: [savedList.id], context: context) }
+                catch { removalError = error.localizedDescription }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Your local working stock, transactions and budget are kept. Website inventory is unchanged.") }
+        .failureAlert($removalError)
         .fullScreenCover(isPresented: $showingConnection, onDismiss: {
             visible = true; model.setActive(scenePhase == .active)
             if scenePhase == .active { model.refresh(context: context) }

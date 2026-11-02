@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A small entry point that can live in Lists or the Scan home screen.
+/// A compact balance and schedule entry point for Show home.
 @MainActor struct ShowBudgetSummaryCard: View {
     @State private var store: ShowBudgetStore
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -51,7 +51,7 @@ import SwiftUI
             .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
             .foregroundStyle(.primary)
         }.buttonStyle(.plain).accessibilityIdentifier("budget.summary")
-            .accessibilityHint("Opens your show budget and cash transactions.")
+            .accessibilityHint("Opens your show budget and transaction history.")
     }
 }
 
@@ -62,6 +62,8 @@ import SwiftUI
     @State private var isVisible = false
     @State private var sheet: BudgetDashboardSheet?
     @State private var error: String?
+    @State private var deletingShowID: UUID?
+    @State private var confirmingDelete = false
     init(store: ShowBudgetStore = .shared) { _store = State(initialValue: store) }
 
     var body: some View {
@@ -76,13 +78,20 @@ import SwiftUI
                 case .newShow:
                     BudgetSetupForm(store: store, editing: nil) { _ in sheet = nil }
                 case .edit(let id):
-                    if let show = store.book.shows.first(where: { $0.id == id }) {
+                    if let show = store.visibleShows.first(where: { $0.id == id }) {
                         BudgetSetupForm(store: store, editing: show) { _ in sheet = nil }
                     } else { ContentUnavailableView("Show unavailable", systemImage: "tray") }
                 case .record(let id, let kind):
                     BudgetEntryForm(store: store, showID: id, initialKind: kind) { sheet = nil }
                 }
             }
+        }
+        .confirmationDialog("Delete this show?", isPresented: $confirmingDelete, titleVisibility: .visible) {
+            Button("Delete Show", role: .destructive) { deleteShow() }
+                .accessibilityIdentifier("budget.deleteShowConfirm")
+            Button("Cancel", role: .cancel) { deletingShowID = nil }
+        } message: {
+            Text("The show will leave your show list. Its transactions, cash history, and local card quantities will be kept in Transaction History.")
         }
     }
 
@@ -91,7 +100,7 @@ import SwiftUI
             if !store.isLoaded {
                 BudgetLoadFailure(store: store)
             } else {
-                if !store.book.shows.isEmpty { showSelector }
+                if !store.visibleShows.isEmpty { showSelector }
                 if let show = store.activeShow, let totals = try? show.totals() {
                     balanceSection(show, totals: totals)
                     dateSection(show)
@@ -103,7 +112,7 @@ import SwiftUI
                         ContentUnavailableView {
                             Label("Your show buying budget", systemImage: "wallet.bifold")
                         } description: {
-                            Text("Start with your buying funds. Gross cash received is split 65% for buying and 35% for you. Fees reduce buying funds separately.")
+                            Text("Start with your buying funds. Sales put 65% toward buying and 35% aside for you. Cash received in trades stays available for buying.")
                         } actions: {
                             Button("Set Up Show Budget") { sheet = .newShow }
                                 .buttonStyle(.borderedProminent).accessibilityIdentifier("budget.setup")
@@ -111,7 +120,13 @@ import SwiftUI
                     }
                 }
                 if let error {
-                    Section { Text(error).foregroundStyle(.orange).accessibilityIdentifier("budget.error") }
+                    Section {
+                        Text(error).foregroundStyle(.orange).accessibilityIdentifier("budget.error")
+                        if deletingShowID != nil {
+                            Button("Retry Deleting Show", role: .destructive) { deleteShow() }
+                                .disabled(store.isSaving).accessibilityIdentifier("budget.retryDeleteShow")
+                        }
+                    }
                 }
             }
         }
@@ -125,7 +140,15 @@ import SwiftUI
             }
             if let show = store.activeShow {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Edit") { sheet = .edit(show.id) }.accessibilityIdentifier("budget.editShow")
+                    Menu {
+                        Button("Edit Show", systemImage: "pencil") { sheet = .edit(show.id) }
+                            .accessibilityIdentifier("budget.editShow")
+                        Button("Delete Show", systemImage: "trash", role: .destructive) {
+                            deletingShowID = show.id; confirmingDelete = true
+                        }.disabled(store.isSaving).accessibilityIdentifier("budget.deleteShow")
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }.accessibilityLabel("Show Options").accessibilityIdentifier("budget.showOptions")
                 }
             }
         }
@@ -138,7 +161,7 @@ import SwiftUI
                 catch { self.error = budgetError(error) }
             })) {
                 if store.book.activeShowID == nil { Text("Choose a show").tag(Optional<UUID>.none) }
-                ForEach(store.book.shows.reversed()) { show in Text(show.name).tag(Optional(show.id)) }
+                ForEach(store.visibleShows.reversed()) { show in Text(show.name).tag(Optional(show.id)) }
             }.pickerStyle(.menu).accessibilityIdentifier("budget.show")
         }
     }
@@ -159,7 +182,7 @@ import SwiftUI
                     Text(budgetMoney(totals.savedCents)).font(.headline).monospacedDigit()
                         .accessibilityIdentifier("budget.saved")
                 }.foregroundStyle(.indigo)
-                Text("\(show.reinvestmentPercent)% of gross cash received goes toward buying; \(100 - show.reinvestmentPercent)% is reserved for you. Fees come out of buying funds.")
+                Text("Sales put \(show.reinvestmentPercent)% toward buying and \(100 - show.reinvestmentPercent)% aside for you. Cash received in trades is 100% available for buying. Fees come out of buying funds.")
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(.vertical, 8)
         } header: { Text(show.name) }
@@ -182,7 +205,7 @@ import SwiftUI
     }
 
     private func recordSection(_ show: ShowBudgetEvent) -> some View {
-        Section("Record actual cash") {
+        Section("Record cash only") {
             let layout = dynamicTypeSize.isAccessibilitySize
                 ? AnyLayout(VStackLayout(spacing: 12)) : AnyLayout(HStackLayout(spacing: 12))
             layout {
@@ -190,7 +213,7 @@ import SwiftUI
                 recordButton("Sell", symbol: "arrow.down.left", kind: .sale, showID: show.id, id: "budget.sell")
                 recordButton("Trade", symbol: "arrow.left.arrow.right", kind: .trade, showID: show.id, id: "budget.trade")
             }.padding(.vertical, 4)
-            Text("List outcomes update this budget automatically. Use these actions for cash you have not already recorded.")
+            Text("These actions record cash only. Use Record Transaction on Show home when cards change hands.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -216,20 +239,28 @@ import SwiftUI
             LabeledContent("Cash spent", value: budgetMoney(totals.paidCents))
             LabeledContent("Fees", value: budgetMoney(totals.feesCents))
             LabeledContent("Cash remaining, including savings", value: budgetMoney(totals.cashOnHandCents))
-            Text("Available to buy = starting funds + buying allocation − cash spent − fees. Trade values are excluded; only cash paid or received is recorded.")
+            Text("Available to buy = starting funds + buying allocation − cash spent − fees. Agreed card values and make-even concessions are separate from cash.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
 
     private func entriesSection(_ show: ShowBudgetEvent) -> some View {
         Section("Transactions") {
-            if show.entries.isEmpty { Text("No cash transactions yet.").foregroundStyle(.secondary) }
+            if show.entries.isEmpty { Text("No transactions yet.").foregroundStyle(.secondary) }
             ForEach(show.entries.reversed()) { entry in
-                NavigationLink { BudgetEntryDetail(store: store, showID: show.id, entryID: entry.id) } label: {
+                NavigationLink {
+                    if let transactionID = entry.transactionID {
+                        ShowTransactionDetailView(transactionID: transactionID, store: store)
+                    } else {
+                        BudgetEntryDetail(store: store, showID: show.id, entryID: entry.id)
+                    }
+                } label: {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Text(entry.kind.title).font(.headline)
-                            if entry.voidedAt != nil { Text("Voided").font(.caption).foregroundStyle(.secondary) }
+                            if entry.voidedAt != nil {
+                                Text(entry.transactionID == nil ? "Voided" : "Undone").font(.caption).foregroundStyle(.secondary)
+                            }
                             Spacer()
                             Text(entryCashLabel(entry)).monospacedDigit().strikethrough(entry.voidedAt != nil)
                         }
@@ -241,6 +272,14 @@ import SwiftUI
                 }.accessibilityIdentifier("budget.entry." + entry.id.uuidString)
             }
         }
+    }
+
+    private func deleteShow() {
+        guard let id = deletingShowID else { return }
+        do {
+            try store.deleteShow(showID: id)
+            deletingShowID = nil; error = nil; sheet = nil
+        } catch { self.error = budgetError(error) }
     }
 }
 
@@ -363,7 +402,7 @@ private enum BudgetDashboardSheet: Identifiable {
                     Text("A $200 sale allocates $130 for buying and $70 for you. If that sale has $10 in fees, available buying funds increase by $120.")
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
-                    Text("The split applies to gross cash received. Fees reduce buying funds separately.")
+                    Text("The sale split applies to gross sale proceeds. Cash received in trades is fully available for buying. Fees reduce buying funds separately.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if editing != nil {
@@ -455,7 +494,7 @@ private enum BudgetTradeDirection: String, CaseIterable, Identifiable {
         let name = listName.map { String($0.trimmingCharacters(in: .whitespacesAndNewlines).prefix(250)) }
         let result = ShowBudgetEntry(id: draftID, kind: kind, paidCents: receivesCash || isPureTrade ? 0 : cents,
             grossReceivedCents: receivesCash ? cents : 0, feeCents: fee,
-            reinvestmentPercent: show.reinvestmentPercent, splitBasis: .grossProceeds, recordedAt: recordedAt,
+            reinvestmentPercent: kind == .trade ? 100 : show.reinvestmentPercent, splitBasis: .grossProceeds, recordedAt: recordedAt,
             listID: listID, listName: name?.isEmpty == true ? nil : name, note: note)
         do { try result.validate(); return result }
         catch { return nil }
@@ -511,7 +550,9 @@ private enum BudgetTradeDirection: String, CaseIterable, Identifiable {
                 if receivesCash {
                     TextField("Fees, optional", text: $fees).keyboardType(.decimalPad)
                         .focused($focused, equals: .fees).accessibilityIdentifier("budget.fees")
-                    Text("The split uses the gross amount. Fees are deducted from buying funds separately.")
+                    Text(kind == .trade
+                         ? "Cash received in a trade is 100% available for buying. Fees reduce buying funds separately."
+                         : "The sale split uses the gross amount. Fees reduce buying funds separately.")
                         .font(.caption).foregroundStyle(.secondary)
                 } else if !isPureTrade {
                     Text("Enter the total cash you actually paid, including any purchase fees.")
@@ -565,15 +606,24 @@ private enum BudgetTradeDirection: String, CaseIterable, Identifiable {
     }
 }
 
-@MainActor private struct BudgetEntryDetail: View {
+@MainActor struct BudgetEntryDetail: View {
     let store: ShowBudgetStore
     let showID: UUID
     let entryID: UUID
     @State private var confirmingVoid = false
     @State private var error: String?
+    init(store: ShowBudgetStore, showID: UUID, entryID: UUID) {
+        self.store = store; self.showID = showID; self.entryID = entryID
+    }
     private var entry: ShowBudgetEntry? { store.book.shows.first { $0.id == showID }?.entries.first { $0.id == entryID } }
 
     var body: some View {
+        if let transactionID = entry?.transactionID {
+            ShowTransactionDetailView(transactionID: transactionID, store: store)
+        } else { cashDetails }
+    }
+
+    private var cashDetails: some View {
         List {
             if let entry {
                 Section {

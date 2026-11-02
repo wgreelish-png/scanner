@@ -2,7 +2,7 @@ import XCTest
 
 /// Records only explicit list outcomes through the ordinary saved-list UI.
 @MainActor final class ListOutcomeUITests: XCTestCase {
-    func testExplicitOutcomesPersistAcrossRelaunchAndUnmarkedListStaysUnmarked() async throws {
+    func testTransactionReviewDoesNotRecordUntilConfirmedAndNothingHappenedPersists() async throws {
         continueAfterFailure = false
         let app = XCUIApplication()
         if let path = ProcessInfo.processInfo.environment["DYLD_FALLBACK_LIBRARY_PATH"] {
@@ -32,26 +32,25 @@ import XCTest
         assertRow(recordedName, outcome: "No status", in: app)
         openList(recordedName, in: app)
 
-        // Replacing a recorded outcome is an explicit choice each time. Check
-        // every transaction choice in the reopened row and detail screen.
-        let outcomes = [
-            (id: "purchase", title: "Purchase"),
-            (id: "tradeAndPurchase", title: "Trade + Purchase"),
-            (id: "trade", title: "Trade")
+        // A transaction type opens review. Cancelling an incomplete deal never
+        // moves inventory/cash or labels an empty list as a completed purchase.
+        let choices = [
+            (id: "purchase", title: "Purchase", screen: "Record Purchase"),
+            (id: "tradeAndPurchase", title: "Trade + Cash to Customer", screen: "Record Trade + Pay Customer"),
+            (id: "trade", title: "Trade", screen: "Record Trade")
         ]
-        for outcome in outcomes {
-            let record = app.buttons["list.recordTransaction"]
-            XCTAssertTrue(record.waitForExistence(timeout: 5)); record.tap()
-            let selected = choice(outcome.id, title: outcome.title, in: app)
-            XCTAssertTrue(selected.waitForExistence(timeout: 5)); selected.tap()
-            assertOutcome(outcome.title, in: app)
-            XCTAssertEqual(app.buttons["list.recordTransaction"].label, outcome.title)
-            relaunchToLists(in: app)
-            assertRow(recordedName, outcome: outcome.title, in: app)
-            assertRow(untouchedName, outcome: "No status", in: app)
-            openList(recordedName, in: app)
-            assertOutcome(outcome.title, in: app)
+        for selected in choices {
+            app.buttons["list.recordTransaction"].tap()
+            let action = choice(selected.id, title: selected.title, in: app)
+            XCTAssertTrue(action.waitForExistence(timeout: 5)); action.tap()
+            XCTAssertTrue(app.navigationBars[selected.screen].waitForExistence(timeout: 5))
+            app.buttons["Cancel"].firstMatch.tap()
+            assertOutcome("No status", in: app)
         }
+        relaunchToLists(in: app)
+        assertRow(recordedName, outcome: "No status", in: app)
+        assertRow(untouchedName, outcome: "No status", in: app)
+        openList(recordedName, in: app)
 
         let nothing = app.buttons["list.nothingHappened"]
         XCTAssertTrue(nothing.waitForExistence(timeout: 5)); nothing.tap()

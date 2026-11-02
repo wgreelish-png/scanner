@@ -286,7 +286,7 @@ struct SessionReviewHeader: View {
             } label: { Label("Continue Scanning", systemImage: "viewfinder").frame(minHeight: 44) }
                 .buttonStyle(.bordered).disabled(openingScanner)
             if session.isActive { FinishSessionButton(session: session) }
-            Text("Editing cards and offer percentages updates this review. Record a transaction outcome to mark what happened.")
+            Text("These are offer estimates. Record Transaction selects the actual inventory cards and agreed values, then updates stock and cash together.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

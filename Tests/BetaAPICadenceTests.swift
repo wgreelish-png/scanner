@@ -174,12 +174,16 @@ import XCTest
     }
 
     func testMalformedMissingAndUnvalidatedIndexResponsesNeverBecomeFresh() async throws {
-        let replies: [BetaCadenceLoader.Reply] = [.init(data: Data("{}".utf8)), .init(data: Data("[]".utf8)),
-                                                .init(data: Data("{\"categories\":[]}".utf8)), .init(status: 304)]
-        for reply in replies {
+        let replies: [(BetaCadenceLoader.Reply, BetaAPICadenceFailure)] = [
+            (.init(data: Data("{}".utf8)), .unsupportedIndex),
+            (.init(data: Data("[]".utf8)), .invalidResponse),
+            (.init(data: Data("{\"categories\":[]}".utf8)), .unsupportedIndex),
+            (.init(status: 304), .invalidResponse)
+        ]
+        for (reply, expected) in replies {
             let cadence = coordinator(BetaCadenceClock()), loader = BetaCadenceLoader([reply])
             do { _ = try await cadence.setInfo(family: .opportunities, category: 3, group: 1430, credentials: credentials, loader: loader); XCTFail("Invalid index") }
-            catch { XCTAssertEqual(error as? BetaAPICadenceFailure, .invalidResponse) }
+            catch { XCTAssertEqual(error as? BetaAPICadenceFailure, expected) }
         }
         let clock = BetaCadenceClock(), cadence = coordinator(clock)
         let loader = BetaCadenceLoader([.init(data: try index()), .init(status: 503)])
@@ -187,6 +191,195 @@ import XCTest
         clock.set(Date(timeIntervalSince1970: 87_600))
         do { _ = try await cadence.setInfo(family: .opportunities, category: 3, group: 1430, credentials: credentials, loader: loader); XCTFail("Expired index is not fresh fallback") }
         catch { XCTAssertEqual(error as? BetaAPICadenceFailure, .httpStatus(503)) }
+    }
+
+    func testSharedIndexValidationReportsOnlyFixedStructuralClassifications() throws {
+        typealias Rejection = BetaAPIIndexValidationFailure
+        let cases: [(String, Rejection.Stage, Rejection.Reason, Rejection.Shape?)] = [
+            (#"{}"#, .categories, .missingField, .missing),
+            (#"{"categories":[]}"#, .categories, .unexpectedType, .array),
+            (#"{"categories":null}"#, .categories, .unexpectedType, .null),
+            (#"{"categories":{"private-category":{}}}"#, .category, .invalidIdentifier, nil),
+            (#"{"categories":{"03":{}}}"#, .category, .invalidIdentifier, nil),
+            (#"{"categories":{"0":{}}}"#, .category, .invalidIdentifier, nil),
+            (#"{"categories":{"3":"private-provider-message"}}"#, .category, .unexpectedType, .string),
+            (#"{"categories":{"3":{}}}"#, .sets, .missingField, .missing),
+            (#"{"categories":{"3":{"sets":[]}}}"#, .sets, .unexpectedType, .array),
+            (#"{"categories":{"3":{"sets":null}}}"#, .sets, .unexpectedType, .null),
+            (#"{"categories":{"3":{"sets":{"01430":{}}}}}"#, .set, .invalidIdentifier, nil),
+            (#"{"categories":{"3":{"sets":{"1430":true}}}}"#, .set, .unexpectedType, .boolean),
+            (#"{"categories":{"3":{"sets":{"1430":{"etag":123}}}}}"#, .etag, .unexpectedType, .number),
+            (#"{"categories":{"3":{"sets":{"1430":{"etag":""}}}}}"#, .etag, .invalidValue, .string),
+            (#"{"categories":{"3":{"sets":{"1430":{"etag":"private-provider-message\n"}}}}}"#, .etag, .invalidValue, .string)
+        ]
+        for (body, stage, reason, shape) in cases {
+            XCTAssertThrowsError(try BetaAPICadence.validateIndex(Data(body.utf8))) { error in
+                guard let error = error as? Rejection else { return XCTFail("Typed metadata rejection") }
+                XCTAssertEqual(error.stage, stage); XCTAssertEqual(error.reason, reason); XCTAssertEqual(error.shape, shape)
+                XCTAssertTrue(error.supportsFallback); XCTAssertEqual(error.failure, .unsupportedIndex)
+                let expected = ["domain": "beta_index", "stage": stage.rawValue, "reason": reason.rawValue]
+                    .merging(shape.map { ["shape": $0.rawValue] } ?? [:]) { _, new in new }
+                XCTAssertEqual(error.diagnosticFields, expected)
+                XCTAssertFalse(error.diagnosticFields.description.contains("private-"))
+                XCTAssertFalse(error.diagnosticFields.description.contains("1430"))
+            }
+        }
+        let documented: [String: Any] = ["categories": ["3": ["category_id": 3, "opp_count": 5, "sets": [
+            "1430": ["etag": "data-hash", "opp_count": 5, "updated_at": "2026-10-29T00:00:00Z"],
+            "1431": ["etag": NSNull()], "1432": [:]
+        ]]]]
+        XCTAssertNoThrow(try BetaAPICadence.validateIndex(JSONSerialization.data(withJSONObject: documented)))
+        XCTAssertNoThrow(try BetaAPICadence.validateIndex(Data(#"{"categories":{}}"#.utf8)))
+        XCTAssertNoThrow(try BetaAPICadence.validateIndex(Data(#"{"categories":{"3":{"sets":{}}}}"#.utf8)))
+    }
+
+    func testEnvelopeFailuresAndIndexBoundsNeverSupportFallback() throws {
+        typealias Rejection = BetaAPIIndexValidationFailure
+        let invalidBodies: [(Data, Rejection.Reason, BetaAPICadenceFailure)] = [
+            (Data("private-invalid-json".utf8), .invalidJSON, .invalidResponse),
+            (Data("[]".utf8), .expectedObject, .invalidResponse),
+            (Data(#"{"error":"private-provider-message","categories":{}}"#.utf8), .errorEnvelope, .invalidResponse),
+            (Data(#"{"success":false,"categories":{}}"#.utf8), .errorEnvelope, .invalidResponse),
+            (Data(repeating: 32, count: 8 * 1_024 * 1_024 + 1), .responseTooLarge, .responseTooLarge)
+        ]
+        for (body, reason, failure) in invalidBodies {
+            XCTAssertThrowsError(try BetaAPICadence.validateIndex(body)) { error in
+                guard let error = error as? Rejection else { return XCTFail("Typed envelope rejection") }
+                XCTAssertEqual(error.reason, reason); XCTAssertEqual(error.failure, failure)
+                XCTAssertFalse(error.supportsFallback)
+                XCTAssertFalse(error.diagnosticFields.description.contains("private-"))
+            }
+        }
+        let categories = Dictionary(uniqueKeysWithValues: (1...33).map { (String($0), ["sets": [:]] as [String: Any]) })
+        let groups = Dictionary(uniqueKeysWithValues: (1...50_001).map { (String($0), [:] as [String: String]) })
+        for body in [["categories": categories] as [String: Any], ["categories": ["3": ["sets": groups]]]] {
+            XCTAssertThrowsError(try BetaAPICadence.validateIndex(JSONSerialization.data(withJSONObject: body))) { error in
+                guard let error = error as? Rejection else { return XCTFail("Typed bound rejection") }
+                XCTAssertEqual(error.reason, .tooManyEntries); XCTAssertEqual(error.failure, .invalidResponse)
+                XCTAssertFalse(error.supportsFallback)
+            }
+        }
+        let oversizedTag = try index(String(repeating: "x", count: 513))
+        XCTAssertThrowsError(try BetaAPICadence.validateIndex(oversizedTag)) { error in
+            XCTAssertEqual((error as? Rejection)?.reason, .invalidValue)
+        }
+    }
+
+    func testUnsupportedMetadataIsMemoizedBrieflyAndExplicitRefreshCanRecover() async throws {
+        let clock = BetaCadenceClock(), cadence = coordinator(clock)
+        let loader = BetaCadenceLoader([.init(data: Data(#"{"categories":[]}"#.utf8)), .init(data: try index("recovered"))])
+        for group in [1430, 1431] {
+            do { _ = try await cadence.setInfo(family: .opportunities, category: 3, group: group, credentials: credentials, loader: loader); XCTFail("Unsupported metadata") }
+            catch { XCTAssertEqual(error as? BetaAPICadenceFailure, .unsupportedIndex) }
+        }
+        var requests = await loader.requests; XCTAssertEqual(requests.count, 1)
+        let result = try await cadence.setInfo(family: .opportunities, category: 3, group: 1430, forceRefresh: true, credentials: credentials, loader: loader)
+        XCTAssertEqual(result.dataETag, "recovered")
+        _ = try await cadence.setInfo(family: .opportunities, category: 3, group: 1430, credentials: credentials, loader: loader)
+        requests = await loader.requests; XCTAssertEqual(requests.count, 2)
+        XCTAssertNil(requests.last?.value(forHTTPHeaderField: "If-None-Match"))
+    }
+
+    func testUnsupportedMetadataCooldownExpiresWithoutMakingRejectedDataFresh() async throws {
+        let clock = BetaCadenceClock(), cadence = coordinator(clock)
+        let loader = BetaCadenceLoader([.init(data: Data(#"{"categories":[]}"#.utf8)), .init(data: try index("next-index"))])
+        for time in [1_200.0, 2_099.5] {
+            clock.set(Date(timeIntervalSince1970: time))
+            do { _ = try await cadence.setInfo(family: .opportunities, category: 3, group: 1430, credentials: credentials, loader: loader); XCTFail("Unsupported metadata") }
+            catch { XCTAssertEqual(error as? BetaAPICadenceFailure, .unsupportedIndex) }
+        }
+        var requests = await loader.requests; XCTAssertEqual(requests.count, 1)
+        clock.set(Date(timeIntervalSince1970: 2_100))
+        let result = try await cadence.setInfo(family: .opportunities, category: 3, group: 1430, credentials: credentials, loader: loader)
+        XCTAssertEqual(result.dataETag, "next-index"); XCTAssertEqual(result.checkedAt, clock.now())
+        requests = await loader.requests; XCTAssertEqual(requests.count, 2)
+    }
+
+    func testFailedExplicitRetryDoesNotLeaveAnUnsupportedMetadataShortcut() async throws {
+        let cadence = coordinator(BetaCadenceClock())
+        let loader = BetaCadenceLoader([.init(data: Data(#"{"categories":[]}"#.utf8)), .init(status: 403),
+                                       .init(data: try index("authorized-retry"))])
+        do { _ = try await cadence.setInfo(family: .opportunities, category: 3, group: 1430, credentials: credentials, loader: loader); XCTFail("Unsupported metadata") }
+        catch { XCTAssertEqual(error as? BetaAPICadenceFailure, .unsupportedIndex) }
+        do { _ = try await cadence.setInfo(family: .opportunities, category: 3, group: 1430, forceRefresh: true, credentials: credentials, loader: loader); XCTFail("Explicit authorization failure") }
+        catch { XCTAssertEqual(error as? BetaAPICadenceFailure, .httpStatus(403)) }
+        let result = try await cadence.setInfo(family: .opportunities, category: 3, group: 1430, credentials: credentials, loader: loader)
+        XCTAssertEqual(result.dataETag, "authorized-retry")
+        let requests = await loader.requests; XCTAssertEqual(requests.count, 3)
+    }
+
+    func testUnsupportedMetadataFailuresRemainSeparateByFamilyAndCredential() async throws {
+        let cadence = coordinator(BetaCadenceClock())
+        let loader = BetaCadenceLoader([.init(data: Data(#"{"categories":[]}"#.utf8)),
+                                       .init(data: try index("research")), .init(data: try index("rotated"))])
+        do { _ = try await cadence.setInfo(family: .opportunities, category: 3, group: 1430, credentials: credentials, loader: loader); XCTFail("Unsupported metadata") }
+        catch { XCTAssertEqual(error as? BetaAPICadenceFailure, .unsupportedIndex) }
+        let research = try await cadence.setInfo(family: .research, category: 3, group: 1430, credentials: credentials, loader: loader)
+        let rotated = try await cadence.setInfo(family: .opportunities, category: 3, group: 1430,
+            credentials: .init(shipperID: credentials.shipperID, apiKey: "rotated-key"), loader: loader)
+        XCTAssertEqual(research.dataETag, "research"); XCTAssertEqual(rotated.dataETag, "rotated")
+        do { _ = try await cadence.setInfo(family: .opportunities, category: 3, group: 1430, credentials: credentials, loader: loader); XCTFail("Original rejection remains memoized") }
+        catch { XCTAssertEqual(error as? BetaAPICadenceFailure, .unsupportedIndex) }
+        let requests = await loader.requests; XCTAssertEqual(requests.count, 3)
+    }
+
+    func testUnsupportedMetadataFailureCacheIsBoundedAndClearable() async throws {
+        let clock = BetaCadenceClock(), cadence = coordinator(clock)
+        let loader = BetaCadenceLoader(Array(repeating: .init(data: Data(#"{"categories":[]}"#.utf8)), count: 9)
+            + [.init(data: try index("evicted-retry")), .init(data: try index("cleared-retry"))])
+        for number in 0..<9 {
+            clock.set(Date(timeIntervalSince1970: 1_200 + Double(number)))
+            let account = DirectResearchCredentials(shipperID: credentials.shipperID, apiKey: "fixture-key-\(number)")
+            do { _ = try await cadence.setInfo(family: .opportunities, category: 3, group: 1430, credentials: account, loader: loader); XCTFail("Unsupported metadata") }
+            catch { XCTAssertEqual(error as? BetaAPICadenceFailure, .unsupportedIndex) }
+        }
+        let oldest = DirectResearchCredentials(shipperID: credentials.shipperID, apiKey: "fixture-key-0")
+        let retried = try await cadence.setInfo(family: .opportunities, category: 3, group: 1430, credentials: oldest, loader: loader)
+        XCTAssertEqual(retried.dataETag, "evicted-retry")
+        await cadence.clear()
+        let latest = DirectResearchCredentials(shipperID: credentials.shipperID, apiKey: "fixture-key-8")
+        let cleared = try await cadence.setInfo(family: .opportunities, category: 3, group: 1430, credentials: latest, loader: loader)
+        XCTAssertEqual(cleared.dataETag, "cleared-retry")
+        let requests = await loader.requests; XCTAssertEqual(requests.count, 11)
+    }
+
+    func testInvalidJSONErrorEnvelopesAndUnvalidated304AreNeverMemoizedAsUnsupported() async throws {
+        let replies: [(BetaCadenceLoader.Reply, BetaAPICadenceFailure)] = [
+            (.init(data: Data("private-invalid-json".utf8)), .invalidResponse),
+            (.init(data: Data(#"{"error":"private-provider-message","categories":[]}"#.utf8)), .invalidResponse),
+            (.init(data: Data(#"{"success":false,"categories":[]}"#.utf8)), .invalidResponse),
+            (.init(status: 304), .invalidResponse), (.init(status: 401), .httpStatus(401)),
+            (.init(status: 403), .httpStatus(403)), (.init(status: 429), .httpStatus(429)), (.init(status: 503), .httpStatus(503))
+        ]
+        for (reply, expected) in replies {
+            let cadence = coordinator(BetaCadenceClock()), loader = BetaCadenceLoader([reply, .init(data: try index("valid-retry"))])
+            do { _ = try await cadence.setInfo(family: .opportunities, category: 3, group: 1430, credentials: credentials, loader: loader); XCTFail("Metadata failure") }
+            catch { XCTAssertEqual(error as? BetaAPICadenceFailure, expected) }
+            let result = try await cadence.setInfo(family: .opportunities, category: 3, group: 1430, credentials: credentials, loader: loader)
+            XCTAssertEqual(result.dataETag, "valid-retry")
+            let requests = await loader.requests; XCTAssertEqual(requests.count, 2)
+        }
+    }
+
+    func testUnsupportedRefreshDiscardsThePreviousIndexAndNeverPersistsRejectedData() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("BetaRejectedIndexTests-" + UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let clock = BetaCadenceClock(), disk = BetaAPIDiskCache(directory: directory)
+        let cadence = BetaAPICadence(now: { clock.now() }, wait: { clock.waitAndAdvance($0) }, disk: disk)
+        let loader = BetaCadenceLoader([.init(data: try index("old-data"), headers: ["ETag": "\"old-http\""]),
+            .init(data: Data(#"{"categories":[]}"#.utf8), headers: ["ETag": "\"rejected-http\""]),
+            .init(data: try index("new-data"))])
+        _ = try await cadence.setInfo(family: .opportunities, category: 3, group: 1430, credentials: credentials, loader: loader)
+        do { _ = try await cadence.setInfo(family: .opportunities, category: 3, group: 1430, forceRefresh: true, credentials: credentials, loader: loader); XCTFail("Unsupported refreshed index") }
+        catch { XCTAssertEqual(error as? BetaAPICadenceFailure, .unsupportedIndex) }
+        let saved = await disk.entry(for: BetaAPICadence.account(for: credentials) + ":opportunities", kind: .index)
+        XCTAssertNil(saved)
+        clock.set(Date(timeIntervalSince1970: 2_100))
+        let replacement = try await cadence.setInfo(family: .opportunities, category: 3, group: 1430, credentials: credentials, loader: loader)
+        XCTAssertEqual(replacement.dataETag, "new-data")
+        let requests = await loader.requests
+        XCTAssertEqual(requests[1].value(forHTTPHeaderField: "If-None-Match"), "\"old-http\"")
+        XCTAssertNil(requests[2].value(forHTTPHeaderField: "If-None-Match"))
     }
 
     func testConcurrentMetadataLoadsShareOneRequestAndOneCanceledWaiterDoesNotCancelItsPeer() async throws {
@@ -262,6 +455,20 @@ import XCTest
         let replacement = BetaCadenceLoader([.init(data: try index("new-hash"))])
         let result = try await cadence.setInfo(family: .opportunities, category: 3, group: 1430, credentials: credentials, loader: replacement)
         XCTAssertEqual(result.dataETag, "new-hash")
+        let requests = await replacement.requests; XCTAssertEqual(requests.count, 1)
+    }
+
+    func testCanceledUnsupportedMetadataCannotSeedTheFailureCache() async throws {
+        let cadence = coordinator(BetaCadenceClock()), loader = ControlledBetaCadenceLoader()
+        let savedCredentials = credentials
+        let pending = Task { try await cadence.setInfo(family: .opportunities, category: 3, group: 1430, credentials: savedCredentials, loader: loader) }
+        try await loader.waitForRequests(1); pending.cancel(); await settle()
+        await loader.completeFirst(with: Data(#"{"categories":[]}"#.utf8))
+        do { _ = try await pending.value; XCTFail("Canceled metadata validation") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        let replacement = BetaCadenceLoader([.init(data: try index("current-index"))])
+        let result = try await cadence.setInfo(family: .opportunities, category: 3, group: 1430, credentials: credentials, loader: replacement)
+        XCTAssertEqual(result.dataETag, "current-index")
         let requests = await replacement.requests; XCTAssertEqual(requests.count, 1)
     }
 

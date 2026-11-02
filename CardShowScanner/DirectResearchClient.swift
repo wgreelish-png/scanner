@@ -163,7 +163,7 @@ struct DirectResearchClient: ResearchProviding {
                 return ResearchFailure.invalidResponse
             case .responseTooLarge: return ResearchFailure.responseTooLarge
             case .networkUnavailable: return ResearchFailure.networkUnavailable
-            case .invalidRequest, .invalidResponse: return ResearchFailure.invalidResponse
+            case .invalidRequest, .invalidResponse, .unsupportedIndex: return ResearchFailure.invalidResponse
             }
         }
         return ResearchFailure.networkUnavailable

@@ -28,16 +28,21 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
     typealias Clock = @MainActor () -> Date
 
     static let shared = ShowBudgetStore()
-    static let maximumBytes = 8 * 1_024 * 1_024
+    static let maximumBytes = 32 * 1_024 * 1_024
 
     private(set) var book = ShowBudgetBook()
     private(set) var error: String?
     private(set) var isLoaded = false
     private(set) var isSaving = false
 
+    var inventory: [ShowInventoryItem] { book.inventory }
+    var transactions: [ShowTransactionReceipt] { book.transactions }
+    var visibleShows: [ShowBudgetEvent] { book.shows.filter { $0.deletedAt == nil } }
+    var inventorySourceLocationID: Int? { book.inventorySourceLocationID }
+
     var activeShow: ShowBudgetEvent? {
         guard isLoaded, let id = book.activeShowID else { return nil }
-        return book.shows.first { $0.id == id }
+        return book.shows.first { $0.id == id && $0.deletedAt == nil }
     }
 
     private let url: URL
@@ -94,7 +99,10 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
     @discardableResult
     func create(name: String, startingCents: Int64, startDate: Date? = nil, endDate: Date? = nil) throws -> UUID {
         try requireWritable()
-        let show = ShowBudgetEvent(name: name.trimmingCharacters(in: .whitespacesAndNewlines), startingCents: startingCents,
+        guard visibleShows.count < ShowBudgetBook.maximumShows, book.shows.count < ShowBudgetBook.maximumStoredShows else {
+            throw ShowBudgetFailure.capacityExceeded
+        }
+        let show = ShowBudgetEvent(name: name.trimmingCharacters(in: .whitespacesAndNewlines), startingCents: startingCents, createdAt: now(),
                                    startDate: startDate, endDate: endDate)
         var next = book
         next.shows.append(show)
@@ -105,7 +113,7 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
 
     func select(showID: UUID?) throws {
         try requireWritable()
-        guard showID == nil || book.shows.contains(where: { $0.id == showID }) else {
+        guard showID == nil || book.shows.contains(where: { $0.id == showID && $0.deletedAt == nil }) else {
             throw ShowBudgetStoreFailure.showNotFound
         }
         guard book.activeShowID != showID else { return }
@@ -116,13 +124,13 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
 
     func update(showID: UUID, name: String, startingCents: Int64) throws {
         try requireWritable()
-        guard let show = book.shows.first(where: { $0.id == showID }) else { throw ShowBudgetStoreFailure.showNotFound }
+        guard let show = book.shows.first(where: { $0.id == showID && $0.deletedAt == nil }) else { throw ShowBudgetStoreFailure.showNotFound }
         try update(showID: showID, name: name, startingCents: startingCents, startDate: show.startDate, endDate: show.endDate)
     }
 
     func update(showID: UUID, name: String, startingCents: Int64, startDate: Date?, endDate: Date?) throws {
         try requireWritable()
-        guard let index = book.shows.firstIndex(where: { $0.id == showID }) else {
+        guard let index = book.shows.firstIndex(where: { $0.id == showID && $0.deletedAt == nil }) else {
             throw ShowBudgetStoreFailure.showNotFound
         }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -137,6 +145,7 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
 
     func record(_ entry: ShowBudgetEntry, showID: UUID) throws {
         try requireWritable()
+        guard entry.transactionID == nil else { throw ShowTransactionFailure.inventoryLinkedEntry }
         guard let index = book.shows.firstIndex(where: { $0.id == showID }) else {
             throw ShowBudgetStoreFailure.showNotFound
         }
@@ -145,6 +154,9 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
                 guard show.id == showID, existing == entry else { throw ShowBudgetStoreFailure.conflictingEntry }
                 return // The exact same confirmation/retry has already committed.
             }
+        }
+        if let listID = entry.listID, transaction(forListID: listID) != nil {
+            throw ShowTransactionFailure.incomingListAlreadyUsed
         }
         // Recheck at commit time: an open form or a midnight boundary must not
         // post cash outside the scheduled days. Exact committed retries above
@@ -165,6 +177,9 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
         guard let entry = book.shows[show].entries.firstIndex(where: { $0.id == entryID }) else {
             throw ShowBudgetStoreFailure.entryNotFound
         }
+        guard book.shows[show].entries[entry].transactionID == nil else {
+            throw ShowTransactionFailure.inventoryLinkedEntry
+        }
         guard book.shows[show].entries[entry].voidedAt == nil else { return }
         var next = book
         next.shows[show].entries[entry].voidedAt = now
@@ -176,6 +191,9 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
     /// today's date is checked, so old committed cash is never charged twice.
     func applyListOutcome(_ request: ListBudgetOutcomeRequest) throws -> BudgetListOutcomeUpdate {
         try requireWritable()
+        guard transaction(forListID: request.listID) == nil else {
+            throw ShowTransactionFailure.incomingListAlreadyUsed
+        }
         guard !request.listName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               request.listName.count <= 250 else { throw ShowBudgetFailure.invalidBook }
         let candidate = BudgetListOutcomeUpdate(id: UUID(), listID: request.listID,
@@ -228,7 +246,7 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
         if let target, let index = next.shows.firstIndex(where: { $0.id == target.id }) {
             let receipt = ShowBudgetEntry(id: candidate.id, kind: request.kind == .purchase ? .purchase : .trade,
                 paidCents: request.paidCents, grossReceivedCents: request.receivedCents,
-                reinvestmentPercent: target.reinvestmentPercent, splitBasis: .grossProceeds,
+                reinvestmentPercent: request.kind == .tradeAndPurchase ? 100 : target.reinvestmentPercent, splitBasis: .grossProceeds,
                 recordedAt: request.recordedAt, listID: request.listID, listName: request.listName,
                 note: "Recorded from list outcome", outcomeOperationID: candidate.id)
             next.shows[index].entries.append(receipt)
@@ -255,6 +273,155 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
         var next = book
         next.listOutcomeUpdates?[index].mirrored = true
         try commit(next)
+    }
+
+    /// Import a remote inventory mirror once. Keep sold-out lots so a later
+    /// screen refresh cannot resurrect stock or overwrite local transactions.
+    func seedInventory(_ seeds: [ShowInventorySeed], sourceLocationID: Int) throws {
+        try requireWritable()
+        if let original = book.inventorySourceLocationID {
+            guard original == sourceLocationID else { throw ShowTransactionFailure.inventoryLocationConflict }
+            return
+        }
+        guard seeds.count <= ShowBudgetBook.maximumInventorySeeds,
+              seeds.count <= ShowBudgetBook.maximumInventoryItems - book.inventory.count else {
+            throw ShowBudgetFailure.capacityExceeded
+        }
+        guard sourceLocationID > 0, Set(seeds.map(\.sourceInventoryID)).count == seeds.count,
+              seeds.allSatisfy({ $0.sourceInventoryID > 0 }),
+              seeds.allSatisfy({ (0...ShowBudgetBook.maximumQuantity).contains($0.quantity) && ShowTransactionMath.validCard($0.card) }) else {
+            throw ShowTransactionFailure.invalidInventory
+        }
+        var next = book
+        let timestamp = now()
+        next.inventorySourceLocationID = sourceLocationID
+        next.inventory.append(contentsOf: seeds.map {
+            ShowInventoryItem(card: $0.card, quantity: $0.quantity, sourceInventoryID: $0.sourceInventoryID,
+                sourceLocationID: sourceLocationID, acquiredAt: timestamp)
+        })
+        try commit(next)
+        DiagnosticLog.shared.record("show_inventory.seeded", ["records": String(seeds.count)])
+    }
+
+    func transaction(forListID listID: UUID) -> ShowTransactionReceipt? {
+        book.transactions.first { $0.incomingListID == listID && $0.reversedAt == nil }
+    }
+
+    /// Card movement, the immutable receipt, and its cash projection all share
+    /// the same atomic JSON write. Nothing is published when that write fails.
+    @discardableResult
+    func recordTransaction(_ draft: ShowTransactionDraft, showID: UUID) throws -> ShowTransactionReceipt {
+        try requireWritable()
+        if let existing = book.transactions.first(where: { $0.id == draft.id }) {
+            guard existing.showID == showID, existing.draft == draft else { throw ShowBudgetStoreFailure.conflictingEntry }
+            return existing
+        }
+        guard let showIndex = book.shows.firstIndex(where: { $0.id == showID && $0.deletedAt == nil }) else {
+            throw ShowBudgetStoreFailure.showNotFound
+        }
+        let show = book.shows[showIndex]
+        guard show.applies(on: now(), calendar: calendar) else { throw ShowBudgetStoreFailure.outsideShowDates }
+        let amounts = try ShowTransactionMath.calculate(draft, saleReinvestmentPercent: show.reinvestmentPercent)
+        if let listID = draft.incomingListID {
+            guard transaction(forListID: listID) == nil else { throw ShowTransactionFailure.incomingListAlreadyUsed }
+            let legacyCash = book.shows.flatMap(\.entries).contains {
+                $0.transactionID == nil && $0.listID == listID && $0.voidedAt == nil &&
+                    ($0.paidCents > 0 || $0.grossReceivedCents > 0 || $0.kind == .purchase || $0.kind == .trade)
+            }
+            let legacyOutcome = (book.listOutcomeUpdates ?? []).contains {
+                $0.listID == listID && ($0.outcomeKind == .purchase || $0.outcomeKind == .trade || $0.outcomeKind == .tradeAndPurchase)
+            }
+            guard !legacyCash, !legacyOutcome else { throw ShowTransactionFailure.legacyListOutcomeExists }
+        }
+        guard !book.shows.contains(where: { $0.entries.contains(where: { $0.id == draft.id }) }) else {
+            throw ShowBudgetStoreFailure.conflictingEntry
+        }
+        guard book.transactions.count < ShowBudgetBook.maximumTransactions,
+              draft.incoming.count <= ShowBudgetBook.maximumInventoryItems - book.inventory.count else {
+            throw ShowBudgetFailure.capacityExceeded
+        }
+        var next = book
+        var outgoing: [ShowTransactionCardLine] = []
+        for selection in draft.outgoing {
+            guard let index = next.inventory.firstIndex(where: { $0.id == selection.inventoryID }),
+                  next.inventory[index].quantity >= selection.quantity else { throw ShowTransactionFailure.insufficientStock }
+            let item = next.inventory[index]
+            next.inventory[index].quantity -= selection.quantity
+            outgoing.append(ShowTransactionCardLine(inventoryID: item.id, card: item.card, quantity: selection.quantity))
+        }
+        let timestamp = now()
+        var incoming: [ShowTransactionCardLine] = []
+        for row in draft.incoming {
+            let item = ShowInventoryItem(card: row.card, quantity: row.quantity,
+                acquiredByTransactionID: draft.id, acquiredAt: timestamp)
+            next.inventory.append(item)
+            incoming.append(ShowTransactionCardLine(inventoryID: item.id, card: item.card, quantity: item.quantity))
+        }
+        let receipt = ShowTransactionReceipt(id: draft.id, showID: show.id, showName: show.name,
+            kind: draft.kind, recordedAt: timestamp, incomingListID: draft.incomingListID,
+            incomingListName: draft.incomingListName, incoming: incoming, outgoing: outgoing,
+            incomingValueCents: draft.incomingValueCents, outgoingValueCents: draft.outgoingValueCents,
+            paidCents: amounts.paidCents, receivedCents: amounts.receivedCents,
+            reinvestedCents: amounts.reinvestedCents, savedCents: amounts.savedCents,
+            concessionCents: amounts.concessionCents, reversedAt: nil, draft: draft)
+        next.transactions.append(receipt)
+        next.shows[showIndex].entries.append(ShowBudgetEntry(id: receipt.id, kind: draft.kind.budgetKind,
+            paidCents: amounts.paidCents, grossReceivedCents: amounts.receivedCents,
+            reinvestmentPercent: draft.kind == .sale ? show.reinvestmentPercent : 100,
+            recordedAt: timestamp, listID: draft.incomingListID, listName: draft.incomingListName,
+            note: draft.note, transactionID: receipt.id))
+        try commit(next)
+        return receipt
+    }
+
+    /// Undo is available after show dates and deletion. Lots retain their own
+    /// identity, so unrelated copies cannot conceal a later dependent sale.
+    func undoTransaction(_ id: UUID) throws {
+        try requireWritable()
+        guard let index = book.transactions.firstIndex(where: { $0.id == id }) else {
+            throw ShowTransactionFailure.transactionNotFound
+        }
+        let receipt = book.transactions[index]
+        guard receipt.reversedAt == nil else { return }
+        let acquired = Set(receipt.incoming.map(\.inventoryID))
+        guard !book.transactions.contains(where: { $0.id != id && $0.reversedAt == nil &&
+            $0.outgoing.contains(where: { acquired.contains($0.inventoryID) }) }) else {
+            throw ShowTransactionFailure.dependentStockUsed
+        }
+        guard let show = book.shows.firstIndex(where: { $0.id == receipt.showID }),
+              let entry = book.shows[show].entries.firstIndex(where: { $0.transactionID == id }) else {
+            throw ShowBudgetFailure.invalidBook
+        }
+        var next = book
+        for line in receipt.incoming {
+            guard let stock = next.inventory.firstIndex(where: { $0.id == line.inventoryID }),
+                  next.inventory[stock].quantity == line.quantity else { throw ShowTransactionFailure.dependentStockUsed }
+            next.inventory[stock].quantity = 0
+        }
+        for line in receipt.outgoing {
+            guard let stock = next.inventory.firstIndex(where: { $0.id == line.inventoryID }) else { throw ShowBudgetFailure.invalidBook }
+            let restored = next.inventory[stock].quantity.addingReportingOverflow(line.quantity)
+            guard !restored.overflow, restored.partialValue <= ShowBudgetBook.maximumQuantity else { throw ShowBudgetFailure.arithmeticOverflow }
+            next.inventory[stock].quantity = restored.partialValue
+        }
+        let reversedAt = max(now(), receipt.recordedAt)
+        next.transactions[index].reversedAt = reversedAt
+        next.shows[show].entries[entry].voidedAt = reversedAt
+        try commit(next)
+        DiagnosticLog.shared.record("show_transaction.undone", ["reason": receipt.kind.rawValue,
+            "records": String(receipt.incoming.count + receipt.outgoing.count)])
+    }
+
+    /// Deleting a show hides its settings; stock and audit receipts stay durable.
+    func deleteShow(showID: UUID) throws {
+        try requireWritable()
+        guard let index = book.shows.firstIndex(where: { $0.id == showID }) else { throw ShowBudgetStoreFailure.showNotFound }
+        guard book.shows[index].deletedAt == nil else { return }
+        var next = book
+        next.shows[index].deletedAt = max(now(), next.shows[index].createdAt)
+        if next.activeShowID == showID { next.activeShowID = nil }
+        try commit(next)
+        DiagnosticLog.shared.record("show.deleted", ["reason": "history_preserved"])
     }
 
     private func requireWritable() throws {

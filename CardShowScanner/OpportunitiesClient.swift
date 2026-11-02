@@ -48,13 +48,23 @@ struct DirectOpportunitiesClient: OpportunitiesProviding {
         let checked = try checkedCredentials()
         let identity = try await OpportunitiesRequestIdentity.resolve(card, using: resolver)
         let account = BetaAPICadence.account(for: checked)
-        let index: BetaAPISetInfo?
+        var index: BetaAPISetInfo?
         do {
             index = try await cadence?.setInfo(family: .opportunities, category: identity.category, group: identity.group,
                 forceRefresh: forceRefresh, credentials: checked, loader: loader)
         } catch {
             try Task.checkCancellation()
-            throw OpportunitiesTransport.cadenceFailure(error)
+            if error is CancellationError { throw CancellationError() }
+            guard error as? BetaAPICadenceFailure == .unsupportedIndex else {
+                throw OpportunitiesTransport.cadenceFailure(error)
+            }
+            // The index supplies refresh hints, not the card's identity. A
+            // changed index structure must not prevent the documented exact
+            // set request. The returned shard still has to pass every identity
+            // and SKU check; authentication/HTTP/envelope errors never use this path.
+            index = nil
+            await ServiceDiagnosticFields.record("opportunities.index_unavailable", method: .direct,
+                phase: .opportunitiesMeta, error: error)
         }
         let request = Self.request(path: "/v1/\(identity.category)/sets/\(identity.group)", credentials: checked)
         return try await OpportunitiesTransport.load(request: request, key: account + ":\(identity.category):\(identity.group)",
@@ -66,7 +76,8 @@ struct DirectOpportunitiesClient: OpportunitiesProviding {
     }
 
     /// Authenticated OppsV2 metadata checks this service's entitlement/allowlist.
-    /// A successful response says nothing about coverage for an individual SKU.
+    /// Validate the same complete index used by lookups. A successful response
+    /// still says nothing about coverage for an individual SKU.
     func testConnection() async throws {
         try Task.checkCancellation()
         let checked = try checkedCredentials()
@@ -75,9 +86,13 @@ struct DirectOpportunitiesClient: OpportunitiesProviding {
         let (data, response) = try await OpportunitiesTransport.fetch(Self.request(path: "/v1/meta", credentials: checked),
             loader: loader, method: .direct, phase: .opportunitiesMeta, cadence: cadence, credentials: checked)
         try await OpportunitiesTransport.checkStatus(response, method: .direct, account: account, cache: cache, now: now())
-        guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              object["error"] == nil, (object["success"] as? Bool) != false,
-              object["categories"] is [String: Any] else { throw OpportunitiesFailure.invalidResponse }
+        guard response.statusCode == 200 else { throw OpportunitiesFailure.invalidResponse }
+        do { try BetaAPICadence.validateIndex(data) }
+        catch let error as BetaAPIIndexValidationFailure {
+            await ServiceDiagnosticFields.record("beta.index_rejected", method: .direct,
+                phase: .opportunitiesMeta, error: error)
+            throw OpportunitiesTransport.cadenceFailure(error.failure)
+        }
         try Task.checkCancellation()
     }
 
@@ -167,7 +182,7 @@ private enum OpportunitiesTransport {
                      decode: @Sendable (Data) throws -> OpportunitiesDetails) async throws -> OpportunitiesDetails {
         try Task.checkCancellation()
         let lookup = try await cache.lookup(key: key, account: account, now: now(), index: index, daily: cadence != nil,
-                                           forceRequest: method == .server && forceRefresh)
+            forceRequest: forceRefresh && (method == .server || (cadence != nil && index == nil)))
         try Task.checkCancellation()
         switch lookup {
         case .fresh(let entry):
@@ -287,7 +302,7 @@ private enum OpportunitiesTransport {
         guard let failure = error as? BetaAPICadenceFailure else { return .networkUnavailable }
         switch failure {
         case .invalidRequest: return .directNotConfigured
-        case .invalidResponse: return .invalidResponse
+        case .invalidResponse, .unsupportedIndex: return .invalidResponse
         case .responseTooLarge: return .responseTooLarge
         case .networkUnavailable: return .networkUnavailable
         case .httpStatus(401): return .directAuthorizationRequired

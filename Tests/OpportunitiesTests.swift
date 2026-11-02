@@ -24,15 +24,27 @@ import XCTest
         result.merge(fields) { _, new in new }; return result
     }
     private func fixture(category: Int = 3, group: Int = 1430, product: Int = 42,
-                         skus: [String: [String: Any]]? = nil, normalized: Bool = false, missingProduct: Bool = false) throws -> Data {
+                         skus: [String: [String: Any]]? = nil, normalized: Bool = false,
+                         missingProduct: Bool = false, dataETag: String? = nil) throws -> Data {
         let selected: [String: Any] = ["product_id": product, "name": "Fixture", "skus": skus ?? ["101": sku()]]
-        var body: [String: Any] = ["meta": ["category_id": category, "group_id": group, "schema_version": "2.0", "generated_at": "2026-10-29T02:00:00Z"]]
+        var meta: [String: Any] = ["category_id": category, "group_id": group, "schema_version": "2.0", "generated_at": "2026-10-29T02:00:00Z"]
+        if let dataETag { meta["etag"] = dataETag }
+        var body: [String: Any] = ["meta": meta]
         if normalized { body["product"] = selected }
         else { body["products"] = missingProduct ? [:] : ["42": selected] }
         return try JSONSerialization.data(withJSONObject: body)
     }
     private func decode(_ data: Data, card selected: CardCandidate? = nil) throws -> OpportunitiesDetails {
         try OpportunitiesDetails.decodeSet(data, for: selected ?? card(), expectedCategoryID: 3, expectedGroupID: 1430, expectedProductID: 42)
+    }
+    private var unsupportedIndex: Data { Data(#"{"categories":[{"id":3}]}"#.utf8) }
+    private func index(_ dataETag: String? = nil, group: String = "1430") throws -> Data {
+        var set: [String: Any] = [:]
+        if let dataETag { set["etag"] = dataETag }
+        return try JSONSerialization.data(withJSONObject: ["categories": ["3": ["sets": [group: set]]]])
+    }
+    private func cadence(_ clock: OpportunitiesClock) -> BetaAPICadence {
+        BetaAPICadence(now: { clock.now() }, wait: { _ in throw URLError(.timedOut) })
     }
 
     func testFixedDirectRequestExactSKUAndReportedSalesDoNotChangeSavedPrice() async throws {
@@ -59,6 +71,132 @@ import XCTest
         XCTAssertEqual(result.sku.marketplaces["tcgplayer"]?.listings.first?.shipping, 1)
         XCTAssertEqual(result.sku.timestamps?.tcgSalesUpdatedAt, "2026-10-29T01:00:00Z")
         XCTAssertEqual(saved.marketPrice, 7); XCTAssertEqual(saved.identity.skuID, "100")
+    }
+
+    func testUnsupportedIndexStillFetchesKnownExactSetAndSelectsExactSKU() async throws {
+        let clock = OpportunitiesClock(instant), saved = card()
+        let body = try fixture(skus: ["100": sku("100", fields: ["language": "Japanese"]), "101": sku()])
+        let loader = OpportunitiesLoader([.init(data: unsupportedIndex), .init(data: body)])
+        let client = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader,
+            cache: OpportunitiesSetCache(), cadence: cadence(clock), now: { clock.now() })
+
+        let result = try await client.opportunities(for: saved, forceRefresh: false)
+
+        XCTAssertEqual(result.selectedSKUID, "101")
+        XCTAssertEqual(result.sku.finish, saved.identity.printing)
+        XCTAssertEqual(result.sku.language, "English")
+        XCTAssertEqual(saved.identity.skuID, "100"); XCTAssertEqual(saved.marketPrice, 7)
+        let requests = await loader.requests
+        XCTAssertEqual(requests.map { $0.url?.absoluteString }, ["https://beta.tcgtracking.com/v1/meta", "https://beta.tcgtracking.com/v1/3/sets/1430"])
+        XCTAssertTrue(requests.allSatisfy { $0.httpMethod == "GET" && $0.url?.query == nil })
+        XCTAssertEqual(requests.last?.value(forHTTPHeaderField: "X-Api-Key"), credentials.apiKey)
+    }
+
+    func testUnsupportedIndexNeverRelaxesReturnedSetProductOrSKUCoverage() async throws {
+        let cases: [(Data, OpportunitiesFailure)] = [
+            (try fixture(group: 1431), .invalidResponse),
+            (try fixture(product: 43), .invalidResponse),
+            (try fixture(skus: ["101": sku(fields: ["language": "Japanese"])]), .skuNotCovered)
+        ]
+        for (body, expected) in cases {
+            let clock = OpportunitiesClock(instant), loader = OpportunitiesLoader([.init(data: unsupportedIndex), .init(data: body)])
+            let client = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader,
+                cache: OpportunitiesSetCache(), cadence: cadence(clock), now: { clock.now() })
+            do { _ = try await client.opportunities(for: card(), forceRefresh: false); XCTFail("Exact identity is required") }
+            catch { XCTAssertEqual(error as? OpportunitiesFailure, expected) }
+            let requests = await loader.requests
+            XCTAssertEqual(requests.map { $0.url?.path }, ["/v1/meta", "/v1/3/sets/1430"])
+        }
+    }
+
+    func testUnsupportedIndexCooldownReusesDailySnapshotWithoutRenewingItsCheckTime() async throws {
+        let clock = OpportunitiesClock(instant), cache = OpportunitiesSetCache()
+        let loader = OpportunitiesLoader([.init(data: unsupportedIndex), .init(data: try fixture(), headers: ["ETag": "\"shard-http\""]),
+            .init(data: unsupportedIndex)])
+        let client = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader,
+            cache: cache, cadence: cadence(clock), now: { clock.now() })
+        _ = try await client.opportunities(for: card(), forceRefresh: false)
+        clock.set(instant.addingTimeInterval(600))
+        _ = try await client.opportunities(for: card(), forceRefresh: false)
+        var requests = await loader.requests
+        XCTAssertEqual(requests.count, 2, "The unsupported-index cooldown and fresh body avoid both downloads")
+
+        clock.set(instant.addingTimeInterval(3_601))
+        let reused = try await client.opportunities(for: card(), forceRefresh: false)
+        XCTAssertEqual(reused.selectedSKUID, "101")
+        requests = await loader.requests
+        XCTAssertEqual(requests.map { $0.url?.path }, ["/v1/meta", "/v1/3/sets/1430", "/v1/meta"], "A failed metadata retry still reuses the daily body")
+        let account = BetaAPICadence.account(for: credentials)
+        let lookup = try await cache.lookup(key: account + ":3:1430", account: account, now: clock.now(), daily: true)
+        guard case .fresh(let entry) = lookup else { return XCTFail("The daily snapshot should remain cached") }
+        XCTAssertEqual(entry.checkedAt, instant, "Unavailable metadata must not claim that an old shard was revalidated")
+        XCTAssertEqual(entry.etag, "\"shard-http\"")
+    }
+
+    func testManualRefreshAfterUnsupportedIndexRevalidatesFreshShardUsingOnlyItsHTTPETag() async throws {
+        let clock = OpportunitiesClock(instant)
+        let loader = OpportunitiesLoader([
+            .init(data: try index("data-hash"), headers: ["ETag": "\"index-http\""]),
+            .init(data: try fixture(dataETag: "data-hash"), headers: ["ETag": "\"shard-http\""]),
+            .init(data: unsupportedIndex), .init(status: 304)
+        ])
+        let client = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader,
+            cache: OpportunitiesSetCache(), cadence: cadence(clock), now: { clock.now() })
+        let first = try await client.opportunities(for: card(), forceRefresh: false)
+        clock.set(instant.addingTimeInterval(1))
+        let refreshed = try await client.opportunities(for: card(), forceRefresh: true)
+        XCTAssertEqual(refreshed.selectedSKUID, first.selectedSKUID)
+        XCTAssertEqual(refreshed.sku.pricing?.marketSKU, first.sku.pricing?.marketSKU)
+        _ = try await client.opportunities(for: card(), forceRefresh: false)
+
+        let requests = await loader.requests
+        XCTAssertEqual(requests.map { $0.url?.path }, ["/v1/meta", "/v1/3/sets/1430", "/v1/meta", "/v1/3/sets/1430"])
+        XCTAssertEqual(requests[2].value(forHTTPHeaderField: "If-None-Match"), "\"index-http\"")
+        XCTAssertEqual(requests[3].value(forHTTPHeaderField: "If-None-Match"), "\"shard-http\"")
+        XCTAssertEqual(requests[3].value(forHTTPHeaderField: "Cache-Control"), "no-cache")
+        XCTAssertFalse(requests.contains { $0.value(forHTTPHeaderField: "If-None-Match") == "data-hash" })
+    }
+
+    func testUnsupportedIndexCannotKeepAnOlderIndexHashAuthoritative() async throws {
+        let clock = OpportunitiesClock(instant)
+        let changed = try fixture(skus: ["101": sku(fields: ["pricing": ["market_sku": 12]])], dataETag: "new-data")
+        let loader = OpportunitiesLoader([
+            .init(data: try index("old-data"), headers: ["ETag": "\"index-http\""]),
+            .init(data: try fixture(dataETag: "old-data"), headers: ["ETag": "\"old-shard-http\""]),
+            .init(data: unsupportedIndex), .init(data: changed, headers: ["ETag": "\"new-shard-http\""])
+        ])
+        let client = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader,
+            cache: OpportunitiesSetCache(), cadence: cadence(clock), now: { clock.now() })
+        _ = try await client.opportunities(for: card(), forceRefresh: false)
+        clock.set(instant.addingTimeInterval(1))
+        let refreshed = try await client.opportunities(for: card(), forceRefresh: true)
+        XCTAssertEqual(refreshed.sku.pricing?.marketSKU, 12, "The unsupported index cannot enforce its previously cached data hash")
+        let reused = try await client.opportunities(for: card(), forceRefresh: false)
+        XCTAssertEqual(reused.sku.pricing?.marketSKU, 12)
+        let requests = await loader.requests
+        XCTAssertEqual(requests.map { $0.url?.path }, ["/v1/meta", "/v1/3/sets/1430", "/v1/meta", "/v1/3/sets/1430"])
+        XCTAssertEqual(requests[3].value(forHTTPHeaderField: "If-None-Match"), "\"old-shard-http\"")
+    }
+
+    func testStrictMetadataFailuresNeverFallBackToTheExactSet() async throws {
+        let cases: [(OpportunitiesLoader.Reply, OpportunitiesFailure)] = [
+            (.init(status: 401), .directAuthorizationRequired),
+            (.init(status: 429), .rateLimited),
+            (.init(data: Data(#"{"categories":{},"error":"denied"}"#.utf8)), .invalidResponse),
+            (.init(data: Data("{".utf8)), .invalidResponse),
+            (.init(data: try index(), url: URL(string: "https://untrusted.example/meta")), .invalidResponse),
+            (.init(status: 304), .invalidResponse),
+            (.init(data: try index(group: "1431")), .notCovered)
+        ]
+        for (reply, expected) in cases {
+            let clock = OpportunitiesClock(instant), loader = OpportunitiesLoader([reply, .init(data: try fixture())])
+            let client = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader,
+                cache: OpportunitiesSetCache(), cadence: cadence(clock), now: { clock.now() })
+            do { _ = try await client.opportunities(for: card(), forceRefresh: false); XCTFail("Metadata failure must propagate") }
+            catch { XCTAssertEqual(error as? OpportunitiesFailure, expected) }
+            let requests = await loader.requests
+            XCTAssertEqual(requests.map { $0.url?.path }, ["/v1/meta"], "A strict metadata failure cannot authorize a shard request")
+        }
     }
 
     func testMissingValuesStayMissingAndBlendedAverageDoesNotBecomeSoldAverage() throws {
@@ -128,15 +266,37 @@ import XCTest
     }
 
     func testDirectMetaTestsOpportunitiesIndependentlyFromResearch() async throws {
-        let loader = OpportunitiesLoader([.init(data: Data("{\"categories\":{}}".utf8))])
-        try await DirectOpportunitiesClient(credentials: credentials, loader: loader, cache: OpportunitiesSetCache(), cadence: nil).testConnection()
+        let clock = OpportunitiesClock(instant), empty = Data(#"{"categories":{}}"#.utf8)
+        let loader = OpportunitiesLoader([.init(data: empty), .init(data: empty)])
+        let client = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader,
+            cache: OpportunitiesSetCache(), cadence: cadence(clock), now: { clock.now() })
+        try await client.testConnection()
+        do { _ = try await client.opportunities(for: card(), forceRefresh: false); XCTFail("Connection success does not establish card coverage") }
+        catch { XCTAssertEqual(error as? OpportunitiesFailure, .notCovered) }
         let requests = await loader.requests
         XCTAssertEqual(requests.first?.url?.absoluteString, "https://beta.tcgtracking.com/v1/meta")
         XCTAssertEqual(requests.first?.value(forHTTPHeaderField: "X-Api-Key"), credentials.apiKey)
+        XCTAssertEqual(requests.map { $0.url?.path }, ["/v1/meta", "/v1/meta"])
         for reply in [OpportunitiesLoader.Reply(data: Data("{}".utf8)), .init(data: Data("[]".utf8)),
-                      .init(data: Data("{\"categories\":{}}".utf8), url: URL(string: "https://untrusted.example/meta"))] {
+                      .init(data: empty, url: URL(string: "https://untrusted.example/meta"))] {
             do { try await DirectOpportunitiesClient(credentials: credentials, loader: OpportunitiesLoader([reply]), cache: OpportunitiesSetCache(), cadence: nil).testConnection(); XCTFail("Malformed meta") }
             catch { XCTAssertEqual(error as? OpportunitiesFailure, .invalidResponse) }
+        }
+        let invalidNestedIndices = [
+            Data(#"{"categories":{"invalid":{"sets":{}}}}"#.utf8),
+            Data(#"{"categories":{"3":{"sets":[]}}}"#.utf8),
+            Data(#"{"categories":{"3":{"sets":{"1430":{"etag":true}}}}}"#.utf8)
+        ]
+        for invalid in invalidNestedIndices {
+            let nestedLoader = OpportunitiesLoader([.init(data: invalid), .init(data: try index()), .init(data: try fixture())])
+            let nested = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: nestedLoader,
+                cache: OpportunitiesSetCache(), cadence: cadence(clock), now: { clock.now() })
+            do { try await nested.testConnection(); XCTFail("The full index parser must reject malformed nested fields") }
+            catch { XCTAssertEqual(error as? OpportunitiesFailure, .invalidResponse) }
+            let result = try await nested.opportunities(for: card(), forceRefresh: false)
+            XCTAssertEqual(result.selectedSKUID, "101")
+            let nestedRequests = await nestedLoader.requests
+            XCTAssertEqual(nestedRequests.map { $0.url?.path }, ["/v1/meta", "/v1/meta", "/v1/3/sets/1430"], "Connection tests cannot seed a weaker metadata cache")
         }
     }
 
@@ -287,6 +447,14 @@ private struct OpportunitiesResolver: OpenAPISetResolving {
     let group: Int?
     init(_ group: Int?) { self.group = group }
     func setID(for card: CardCandidate) async throws -> Int? { group }
+}
+
+private final class OpportunitiesClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: Date
+    init(_ current: Date) { self.current = current }
+    func now() -> Date { lock.lock(); defer { lock.unlock() }; return current }
+    func set(_ value: Date) { lock.lock(); defer { lock.unlock() }; current = value }
 }
 
 private actor OpportunitiesLoader: ResearchHTTPDataLoading {

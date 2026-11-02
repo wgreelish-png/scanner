@@ -7,6 +7,14 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        A90717DCF440AD5FD6AE25E9 /* ShowTransactionsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0180A5CE6C4A3D46B9ED12F7; };
+        2EAD0ADE92CA2346EEF2327D /* ShowTransactionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1B319E579B6A9D538F28151; };
+        EC28EBB95E75520305533F00 /* ShowTransactionListServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC7CE12E338618499E0D2A95; };
+        FCAADE71DB3E63AA8B8352C9 /* ShowTransactions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 360EF494FAC319736F8B081F; };
+        9EC2DA0831A11221594B46F6 /* ShowTransactionViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 958524B6EDC4D2C1187E78D9; };
+        BF769D45548AEEABC714F740 /* ShowTransactionListService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B81BD8D65B48E5C9D72DC72; };
+        50FC1EEE419A88DD8FC595BE /* ShowTransactionFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = A890E2B15B87335999932FA5; };
+        F862B3B0E218E039ABDF4981 /* ShowHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C043F6008576FD39EDDBE3D8; };
         39A818178C4D91A3A4E3BACD /* BetaAllowlistIPHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6737A2B0DA486F3F88FD3828; };
         81BCE8BEA4843F2835A4E27D /* BetaAllowlistIPHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76A3261E80910BF4890B42C3; };
         EDC132897E3F407AA270ABE9 /* ListBulkDeletionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 430DE836C6389FEB23E9E725; };
@@ -169,6 +177,14 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        0180A5CE6C4A3D46B9ED12F7 /* ShowTransactionsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowTransactionsUITests.swift; sourceTree = "<group>"; };
+        C1B319E579B6A9D538F28151 /* ShowTransactionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowTransactionsTests.swift; sourceTree = "<group>"; };
+        BC7CE12E338618499E0D2A95 /* ShowTransactionListServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowTransactionListServiceTests.swift; sourceTree = "<group>"; };
+        360EF494FAC319736F8B081F /* ShowTransactions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowTransactions.swift; sourceTree = "<group>"; };
+        958524B6EDC4D2C1187E78D9 /* ShowTransactionViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowTransactionViews.swift; sourceTree = "<group>"; };
+        9B81BD8D65B48E5C9D72DC72 /* ShowTransactionListService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowTransactionListService.swift; sourceTree = "<group>"; };
+        A890E2B15B87335999932FA5 /* ShowTransactionFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowTransactionFixtures.swift; sourceTree = "<group>"; };
+        C043F6008576FD39EDDBE3D8 /* ShowHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowHomeView.swift; sourceTree = "<group>"; };
         6737A2B0DA486F3F88FD3828 /* BetaAllowlistIPHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BetaAllowlistIPHistoryTests.swift; sourceTree = "<group>"; };
         76A3261E80910BF4890B42C3 /* BetaAllowlistIPHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BetaAllowlistIPHistory.swift; sourceTree = "<group>"; };
         430DE836C6389FEB23E9E725 /* ListBulkDeletionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListBulkDeletionUITests.swift; sourceTree = "<group>"; };
@@ -344,6 +360,7 @@
         C4D311E710AB4F79A8B00003 /* UITests */ = {
             isa = PBXGroup;
             children = (
+                0180A5CE6C4A3D46B9ED12F7 /* ShowTransactionsUITests.swift */,
                 430DE836C6389FEB23E9E725 /* ListBulkDeletionUITests.swift */,
                 ADB4ECED8C2078FE86B93E06 /* ReviewPresentationUITests.swift */,
                 06D0F73C9B90723592633A6C /* CardShowInventoryUITests.swift */,
@@ -368,6 +385,8 @@
 		59830EBC3A4184110566BF1A /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+                C1B319E579B6A9D538F28151 /* ShowTransactionsTests.swift */,
+                BC7CE12E338618499E0D2A95 /* ShowTransactionListServiceTests.swift */,
                 6737A2B0DA486F3F88FD3828 /* BetaAllowlistIPHistoryTests.swift */,
                 9992990386EE2965C7A395DF /* ListBulkDeletionTests.swift */,
                 CFC605F1D18B6AD2354280DB /* ListBudgetOutcomeTests.swift */,
@@ -423,6 +442,11 @@
 		878A52FC5FF6A57D50B7B870 /* CardShowScanner */ = {
 			isa = PBXGroup;
 			children = (
+                360EF494FAC319736F8B081F /* ShowTransactions.swift */,
+                958524B6EDC4D2C1187E78D9 /* ShowTransactionViews.swift */,
+                9B81BD8D65B48E5C9D72DC72 /* ShowTransactionListService.swift */,
+                A890E2B15B87335999932FA5 /* ShowTransactionFixtures.swift */,
+                C043F6008576FD39EDDBE3D8 /* ShowHomeView.swift */,
                 76A3261E80910BF4890B42C3 /* BetaAllowlistIPHistory.swift */,
                 262B89E423EBFC24B13A5E9B /* ListBulkDeletion.swift */,
                 06675DF2DAB7D9AF5D84CB98 /* ListBudgetOutcome.swift */,
@@ -653,6 +677,7 @@
             isa = PBXSourcesBuildPhase;
             buildActionMask = 2147483647;
             files = (
+                A90717DCF440AD5FD6AE25E9 /* ShowTransactionsUITests.swift in Sources */,
                 EDC132897E3F407AA270ABE9 /* ListBulkDeletionUITests.swift in Sources */,
                 5BA1EAA709E5DEEF6392A917 /* ReviewPresentationUITests.swift in Sources */,
                 A28CFF7A7CFD4567124E3092 /* CardShowInventoryUITests.swift in Sources */,
@@ -667,6 +692,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                2EAD0ADE92CA2346EEF2327D /* ShowTransactionsTests.swift in Sources */,
+                EC28EBB95E75520305533F00 /* ShowTransactionListServiceTests.swift in Sources */,
                 39A818178C4D91A3A4E3BACD /* BetaAllowlistIPHistoryTests.swift in Sources */,
                 7AE60614920D383322EA9D25 /* ListBulkDeletionTests.swift in Sources */,
                 435709511C7F8A06CDB2950C /* ListBudgetOutcomeTests.swift in Sources */,
@@ -721,6 +748,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                FCAADE71DB3E63AA8B8352C9 /* ShowTransactions.swift in Sources */,
+                9EC2DA0831A11221594B46F6 /* ShowTransactionViews.swift in Sources */,
+                BF769D45548AEEABC714F740 /* ShowTransactionListService.swift in Sources */,
+                50FC1EEE419A88DD8FC595BE /* ShowTransactionFixtures.swift in Sources */,
+                F862B3B0E218E039ABDF4981 /* ShowHomeView.swift in Sources */,
                 81BCE8BEA4843F2835A4E27D /* BetaAllowlistIPHistory.swift in Sources */,
                 FE687C12767D86085F33F461 /* ListBulkDeletion.swift in Sources */,
                 F5F4B8A2C7718B18F9BCE655 /* ListBudgetOutcome.swift in Sources */,
@@ -861,7 +893,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 33;
+				CURRENT_PROJECT_VERSION = 35;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -898,7 +930,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 33;
+				CURRENT_PROJECT_VERSION = 35;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";

@@ -1,5 +1,7 @@
 # Automatic outcome cash and show dates
 
+Build 35 supersedes the new-deal outcome chooser with [stock-aware transaction review](ShowInventoryTransactions.md). Existing outcomes/receipts remain readable and protected against double posting. Incoming trades default to the editable Trade Offer; new trade cash received is 100% available for buying, while historical allocation snapshots stay unchanged. Nothing Happened and legacy recovery remain available. The following describes the retained build-32 journal and its original policy.
+
 Build 32 uses the calculated cash automatically when an outcome is explicitly recorded in list review. It does not require a second Record Cash action or a confirmation of a custom amount.
 
 | Outcome | Budget effect |

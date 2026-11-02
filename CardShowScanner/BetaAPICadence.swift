@@ -1,10 +1,41 @@
 import Foundation
+import CoreFoundation
 import CryptoKit
 
 enum BetaAPIFamily: String, Sendable { case opportunities, research }
 
 enum BetaAPICadenceFailure: Error, Equatable, Sendable {
-    case invalidRequest, invalidResponse, responseTooLarge, networkUnavailable, httpStatus(Int)
+    case invalidRequest, invalidResponse, unsupportedIndex, responseTooLarge, networkUnavailable, httpStatus(Int)
+}
+
+/// Metadata diagnostics contain fixed classifications, never provider text or
+/// identifiers. Only an unsupported index can leave the exact-set route usable.
+struct BetaAPIIndexValidationFailure: Error, Equatable, Sendable {
+    enum Stage: String, Sendable { case envelope, categories, category, sets, set, etag }
+    enum Reason: String, Sendable {
+        case responseTooLarge = "response_too_large", invalidJSON = "invalid_json", expectedObject = "expected_object"
+        case errorEnvelope = "error_envelope", missingField = "missing_field", unexpectedType = "unexpected_type"
+        case invalidIdentifier = "invalid_identifier", tooManyEntries = "too_many_entries", invalidValue = "invalid_value"
+    }
+    enum Shape: String, Sendable { case missing, object, array, null, string, number, boolean }
+    let stage: Stage
+    let reason: Reason
+    let shape: Shape?
+
+    init(stage: Stage, reason: Reason, shape: Shape? = nil) {
+        self.stage = stage; self.reason = reason; self.shape = shape
+    }
+
+    var supportsFallback: Bool { stage != .envelope && reason != .tooManyEntries }
+    var failure: BetaAPICadenceFailure {
+        if reason == .responseTooLarge { return .responseTooLarge }
+        return supportsFallback ? .unsupportedIndex : .invalidResponse
+    }
+    var diagnosticFields: [String: String] {
+        var fields = ["domain": "beta_index", "stage": stage.rawValue, "reason": reason.rawValue]
+        if let shape { fields["shape"] = shape.rawValue }
+        return fields
+    }
 }
 
 struct BetaAPISetInfo: Equatable, Sendable {
@@ -18,6 +49,7 @@ struct BetaAPISetInfo: Equatable, Sendable {
 actor BetaAPICadence {
     static let shared = BetaAPICadence(disk: .shared)
     static let indexLifetime: TimeInterval = 24 * 60 * 60
+    static let unsupportedIndexLifetime: TimeInterval = 15 * 60
     private let now: @Sendable () -> Date
     private let wait: @Sendable (TimeInterval) async throws -> Void
     private let disk: BetaAPIDiskCache?
@@ -174,6 +206,7 @@ actor BetaAPICadence {
         var waiters: [UUID: CheckedContinuation<IndexEntry, Error>]
     }
     private var indices: [String: IndexEntry] = [:]
+    private var unsupportedIndices: [String: Date] = [:]
     private var pending: [String: Pending] = [:]
     private var epoch = UUID()
 
@@ -182,6 +215,13 @@ actor BetaAPICadence {
         try Task.checkCancellation()
         guard (1...3).contains(category), group > 0 else { throw BetaAPICadenceFailure.invalidRequest }
         let key = Self.account(for: credentials) + ":" + family.rawValue
+        if forceRefresh { unsupportedIndices[key] = nil }
+        else if let rejectedAt = unsupportedIndices[key] {
+            if now() >= rejectedAt, now().timeIntervalSince(rejectedAt) < Self.unsupportedIndexLifetime {
+                throw BetaAPICadenceFailure.unsupportedIndex
+            }
+            unsupportedIndices[key] = nil
+        }
         let currentEpoch = epoch
         if indices[key] == nil, let saved = await disk?.entry(for: key, kind: .index),
            let decoded = try? Self.decodeIndex(saved.data, httpETag: saved.httpETag, checkedAt: saved.checkedAt) {
@@ -238,13 +278,33 @@ actor BetaAPICadence {
             try Task.checkCancellation()
             guard let request = pending[key], request.generation == generation else { return }
             indices[key] = result
+            unsupportedIndices[key] = nil
             trimIndices(keeping: key)
             pending[key] = nil
             for continuation in request.waiters.values { continuation.resume(returning: result) }
         } catch {
+            guard pending[key]?.generation == generation else { return }
+            var failure: Error = Task.isCancelled ? CancellationError() : error
+            if !Task.isCancelled, let validation = error as? BetaAPIIndexValidationFailure {
+                await ServiceDiagnosticFields.record("beta.index_rejected", method: .direct,
+                    phase: family == .opportunities ? .opportunitiesMeta : .researchMeta, error: validation)
+                guard pending[key]?.generation == generation else { return }
+                if Task.isCancelled { failure = CancellationError() }
+                else {
+                    failure = validation.failure
+                    if validation.supportsFallback {
+                        // Keep only the classification briefly. Neither the rejected
+                        // body nor a prior index may validate a shard as fresh.
+                        indices[key] = nil
+                        unsupportedIndices[key] = now()
+                        trimUnsupportedIndices(keeping: key)
+                        await disk?.remove(for: key, kind: .index)
+                    }
+                }
+            }
             guard let request = pending[key], request.generation == generation else { return }
             pending[key] = nil
-            let failure: Error = Task.isCancelled ? CancellationError() : error
+            if Task.isCancelled { failure = CancellationError() }
             for continuation in request.waiters.values { continuation.resume(throwing: failure) }
         }
     }
@@ -259,36 +319,90 @@ actor BetaAPICadence {
         while indices.count > 8, let oldest = indices.filter({ $0.key != key }).min(by: { $0.value.checkedAt < $1.value.checkedAt })?.key { indices[oldest] = nil }
     }
 
+    private func trimUnsupportedIndices(keeping key: String) {
+        while unsupportedIndices.count > 8, let oldest = unsupportedIndices.filter({ $0.key != key }).min(by: { $0.value < $1.value })?.key {
+            unsupportedIndices[oldest] = nil
+        }
+    }
+
     private nonisolated static func safeETag(_ text: String?) -> String? {
         guard let text, !text.isEmpty, text.utf8.count <= 512,
               !text.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return nil }
         return text
     }
     private nonisolated static func decodeIndex(_ data: Data, httpETag: String?, checkedAt: Date) throws -> IndexEntry {
-        guard data.count <= 8 * 1_024 * 1_024,
-              let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              body["error"] == nil, (body["success"] as? Bool) != false,
-              let categories = body["categories"] as? [String: Any], categories.count <= 32 else { throw BetaAPICadenceFailure.invalidResponse }
+        IndexEntry(data: data, httpETag: httpETag, checkedAt: checkedAt, sets: try parseIndex(data))
+    }
+
+    nonisolated static func validateIndex(_ data: Data) throws { _ = try parseIndex(data) }
+
+    private nonisolated static func indexShape(_ value: Any?) -> BetaAPIIndexValidationFailure.Shape {
+        guard let value else { return .missing }
+        if value is NSNull { return .null }
+        if value is [String: Any] { return .object }
+        if value is [Any] { return .array }
+        if value is String { return .string }
+        if let number = value as? NSNumber { return CFGetTypeID(number) == CFBooleanGetTypeID() ? .boolean : .number }
+        return .object
+    }
+
+    private nonisolated static func parseIndex(_ data: Data) throws -> [String: SetIndex] {
+        typealias Rejection = BetaAPIIndexValidationFailure
+        guard data.count <= 8 * 1_024 * 1_024 else { throw Rejection(stage: .envelope, reason: .responseTooLarge) }
+        let object: Any
+        do { object = try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) }
+        catch { throw Rejection(stage: .envelope, reason: .invalidJSON) }
+        guard let body = object as? [String: Any] else {
+            throw Rejection(stage: .envelope, reason: .expectedObject, shape: indexShape(object))
+        }
+        guard body["error"] == nil, (body["success"] as? Bool) != false else {
+            throw Rejection(stage: .envelope, reason: .errorEnvelope)
+        }
+        guard let categories = body["categories"] as? [String: Any] else {
+            throw Rejection(stage: .categories, reason: body["categories"] == nil ? .missingField : .unexpectedType,
+                            shape: indexShape(body["categories"]))
+        }
+        guard categories.count <= 32 else { throw Rejection(stage: .categories, reason: .tooManyEntries) }
         var sets: [String: SetIndex] = [:]
         for (category, value) in categories {
-            guard let number = Int(category), number > 0, String(number) == category,
-                  let value = value as? [String: Any], let groups = value["sets"] as? [String: Any], groups.count <= 50_000 else { throw BetaAPICadenceFailure.invalidResponse }
+            guard let number = Int(category), number > 0, String(number) == category else {
+                throw Rejection(stage: .category, reason: .invalidIdentifier)
+            }
+            guard let value = value as? [String: Any] else {
+                throw Rejection(stage: .category, reason: .unexpectedType, shape: indexShape(value))
+            }
+            guard let groups = value["sets"] as? [String: Any] else {
+                throw Rejection(stage: .sets, reason: value["sets"] == nil ? .missingField : .unexpectedType,
+                                shape: indexShape(value["sets"]))
+            }
+            guard groups.count <= 50_000 else { throw Rejection(stage: .sets, reason: .tooManyEntries) }
             for (group, value) in groups {
-                guard let number = Int(group), number > 0, String(number) == group,
-                      let value = value as? [String: Any] else { throw BetaAPICadenceFailure.invalidResponse }
+                guard let number = Int(group), number > 0, String(number) == group else {
+                    throw Rejection(stage: .set, reason: .invalidIdentifier)
+                }
+                guard let value = value as? [String: Any] else {
+                    throw Rejection(stage: .set, reason: .unexpectedType, shape: indexShape(value))
+                }
                 let hash: String?
                 if value["etag"] == nil || value["etag"] is NSNull { hash = nil }
-                else { guard let text = value["etag"] as? String, let checked = safeETag(text) else { throw BetaAPICadenceFailure.invalidResponse }; hash = checked }
+                else {
+                    guard let text = value["etag"] as? String else {
+                        throw Rejection(stage: .etag, reason: .unexpectedType, shape: indexShape(value["etag"]))
+                    }
+                    guard let checked = safeETag(text) else { throw Rejection(stage: .etag, reason: .invalidValue, shape: .string) }
+                    hash = checked
+                }
                 sets[category + ":" + group] = SetIndex(dataETag: hash)
             }
         }
-        return IndexEntry(data: data, httpETag: httpETag, checkedAt: checkedAt, sets: sets)
+        return sets
     }
 
     /// Clearing saved data intentionally preserves the shipper's request budget.
     func clear() async {
         epoch = UUID()
         indices.removeAll()
+        unsupportedIndices.removeAll()
         for request in pending.values {
             request.task?.cancel()
             for continuation in request.waiters.values { continuation.resume(throwing: CancellationError()) }

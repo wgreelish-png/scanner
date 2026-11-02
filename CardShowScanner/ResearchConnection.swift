@@ -359,7 +359,7 @@ private enum ResearchConnectionProbe: Sendable {
             await BetaIPAllowlistSync.shared.prepareForDirectRequest()
             try Task.checkCancellation()
             try await DirectOpportunitiesClient(credentials: credentials).testConnection()
-            return "Connected directly to TCGTracking Market Activity from this network. Save Connection to use these settings. OppsV2 covers active opportunities; exact card coverage is checked in Market Details."
+            return "Market Activity access and set index verified from this network. Save Connection to use these settings. OppsV2 covers active opportunities; exact card coverage is checked in Market Details."
         case .server(let connection):
             let health = try await Self.serverHealth(connection)
             return "Connected to your server. Raw market activity: \(health.marketActivityStatus). Save Connection to use these settings. OppsV2 covers active opportunities; exact card coverage is checked in Market Details."

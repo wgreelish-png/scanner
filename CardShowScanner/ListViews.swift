@@ -18,7 +18,7 @@ struct CSVDocument: FileDocument {
     }
 }
 
-struct SavedListsView: View {
+@MainActor struct SavedListsView: View {
     var onOpenScan: (() -> Void)? = nil
     @Environment(\.modelContext) private var context
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -33,63 +33,20 @@ struct SavedListsView: View {
     @State private var selectingLists = false
     @State private var selectedListIDs = Set<UUID>()
     @State private var pendingBulkDeletion: ListBulkDeletionRequest?
+    @State private var transactionStore = ShowBudgetStore.shared
     @FocusState private var nameFocused: Bool
 
     private var filtered: [CardList] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        return lists.filter { !$0.isCardShowInventory && (query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.outcomeTitle.localizedCaseInsensitiveContains(query)) }
+        return lists.filter { !$0.isCardShowInventory && (query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || ShowTransactionListService.outcomeTitle(for: $0, store: transactionStore).localizedCaseInsensitiveContains(query)) }
     }
 
-    private var importedInventory: CardList? { lists.first { $0.isCardShowInventory } }
     private var visibleSelectionIDs: Set<UUID> {
-        var result = Set(filtered.map(\.id))
-        if let importedInventory, search.isEmpty || "Card Show Inventory".localizedCaseInsensitiveContains(search) {
-            result.insert(importedInventory.id)
-        }
-        return result
+        Set(filtered.map(\.id))
     }
 
     var body: some View {
         List {
-            Section {
-                if selectingLists, let importedInventory {
-                    Button { toggleSelection(importedInventory.id) } label: {
-                        HStack {
-                            selectionMark(importedInventory.id)
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text("Card Show Inventory").font(.headline)
-                                Text("\(importedInventory.quantity) cards · Saved copy").font(.caption).foregroundStyle(.secondary)
-                            }
-                        }.frame(maxWidth: .infinity, minHeight: 52, alignment: .leading).contentShape(Rectangle())
-                    }.buttonStyle(.borderless).accessibilityIdentifier("savedLists.selectImported")
-                        .accessibilityAddTraits(selectedListIDs.contains(importedInventory.id) ? .isSelected : [])
-                } else {
-                    NavigationLink { CardShowInventoryView() } label: {
-                    HStack(spacing: 14) {
-                        Image(systemName: "shippingbox.fill").font(.title2).foregroundStyle(.indigo)
-                            .frame(width: 44, height: 52)
-                            .background(Color.indigo.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-                            .accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text("Card Show Inventory").font(.headline)
-                            if let importedInventory {
-                                Text("\(importedInventory.quantity) cards · Saved on this iPhone").font(.caption).foregroundStyle(.secondary)
-                            } else {
-                                Text("Import your TCGTracking location.").font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    }.padding(.vertical, 3)
-                }.accessibilityIdentifier("savedLists.cardShowInventory")
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        if let importedInventory {
-                            Button("Remove Saved Copy", role: .destructive) {
-                                guard pendingDeletion == nil else { return }
-                                pendingDeletion = ListDeletionRequest(list: importedInventory)
-                            }.accessibilityIdentifier("savedLists.removeCardShowInventory")
-                        }
-                    }
-                }
-            }
             Section {
                 let layout = dynamicTypeSize.isAccessibilitySize
                     ? AnyLayout(VStackLayout(alignment: .leading, spacing: 14))
@@ -97,15 +54,15 @@ struct SavedListsView: View {
                 layout {
                     VStack(alignment: .leading, spacing: 5) {
                         Text("Lists").font(.caption).foregroundStyle(.secondary)
-                        Text(lists.count.formatted()).font(.title2.bold()).accessibilityIdentifier("savedLists.count")
+                        Text(lists.filter { !$0.isCardShowInventory }.count.formatted()).font(.title2.bold()).accessibilityIdentifier("savedLists.count")
                     }.frame(maxWidth: .infinity, alignment: .leading)
                     VStack(alignment: .leading, spacing: 5) {
                         Text("Cards").font(.caption).foregroundStyle(.secondary)
-                        Text(lists.reduce(0) { $0 + $1.quantity }.formatted()).font(.title2.bold())
+                        Text(lists.filter { !$0.isCardShowInventory }.reduce(0) { $0 + $1.quantity }.formatted()).font(.title2.bold())
                     }.frame(maxWidth: .infinity, alignment: .leading)
                     VStack(alignment: .leading, spacing: 5) {
                         Text("Known value").font(.caption).foregroundStyle(.secondary)
-                        Text(lists.reduce(Decimal.zero) { $0 + $1.knownValue }.money)
+                        Text(lists.filter { !$0.isCardShowInventory }.reduce(Decimal.zero) { $0 + $1.knownValue }.money)
                             .font(.headline).monospacedDigit()
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }.padding(.vertical, 8)
@@ -220,7 +177,7 @@ struct SavedListsView: View {
                                 Text("\(list.quantity) cards • \(list.knownValue.money) known subtotal")
                                     .font(.caption).foregroundStyle(.secondary)
                                 HStack(spacing: 8) {
-                                    Text(list.outcomeTitle).font(.caption.weight(.medium))
+                                    Text(ShowTransactionListService.outcomeTitle(for: list, store: transactionStore)).font(.caption.weight(.medium))
                                         .accessibilityIdentifier("savedList.outcome." + list.id.uuidString)
                                     Text("·")
                                     Text(list.createdAt.formatted(date: .abbreviated, time: .omitted))
@@ -313,11 +270,12 @@ struct ListDeletionConfirmationView: View {
     }
 }
 
-struct CardListView: View {
+@MainActor struct CardListView: View {
     private enum ReviewDestination: Hashable {
         case scanner(UUID)
         case savedOffers(UUID)
     }
+    private struct ReceiptRoute: Identifiable { let id: UUID }
     @Bindable var list: CardList
     @Environment(\.modelContext) private var context
     @Environment(\.scenePhase) private var scenePhase
@@ -346,6 +304,10 @@ struct CardListView: View {
     @State private var outcomeBudgetMessage: String?
     @State private var pendingOutcomeBudget = false
     @State private var isVisible = false
+    @State private var transactionStore = ShowBudgetStore.shared
+    @State private var newTransactionKind: ShowTransactionKind?
+    @State private var receiptRoute: ReceiptRoute?
+    private var inventoryTransaction: ShowTransactionReceipt? { transactionStore.transaction(forListID: list.id) }
     private var reviewSession: ScanSession? { session ?? sessions.first { $0.listID == list.id } }
     var filtered: [InventoryCard] {
         list.orderedCards.filter { search.isEmpty || [$0.snapshot.name, $0.snapshot.set, $0.snapshot.number, $0.snapshot.identity.productID].contains { $0.localizedCaseInsensitiveContains(search) } }
@@ -485,7 +447,7 @@ struct CardListView: View {
                             }
                         }
                         Button("Clear List Outcome", systemImage: "arrow.uturn.backward") { recordOutcome(nil) }
-                            .disabled(list.transactionOutcomeData == nil || savingOutcome || pendingOutcomeBudget)
+                            .disabled(list.transactionOutcomeData == nil || savingOutcome || pendingOutcomeBudget || inventoryTransaction != nil)
                             .accessibilityIdentifier("list.clearOutcome")
                     } label: {
                         Image(systemName: "ellipsis.circle")
@@ -506,6 +468,15 @@ struct CardListView: View {
             }
             .sheet(isPresented: $showingOfferRates) {
                 if let session = reviewSession { SessionRatesView(session: session) }
+            }
+            .sheet(item: $newTransactionKind) { kind in
+                ShowTransactionForm(store: transactionStore, initialKind: kind, initialListID: list.id)
+            }
+            .sheet(item: $receiptRoute) { route in
+                NavigationStack {
+                    ShowTransactionDetailView(transactionID: route.id, store: transactionStore)
+                        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { receiptRoute = nil } } }
+                }
             }
             .sheet(isPresented: $showingInventoryImport) {
                 NavigationStack {
@@ -534,16 +505,16 @@ struct CardListView: View {
     }
     private func listOutcomeActions(totals: OfferTotals, transaction: TradeTransactionResult?) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Calculated cash updates your show budget when it applies today.")
+            Text("Record the deal to update your show inventory and budget together.")
                 .font(.caption).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text("Outcome")
                     Spacer(minLength: 12)
-                    Text(list.outcomeTitle).accessibilityIdentifier("list.outcomeValue")
+                    Text(ShowTransactionListService.outcomeTitle(for: list, store: transactionStore)).accessibilityIdentifier("list.outcomeValue")
                 }.accessibilityElement(children: .contain)
-                if let record = list.outcomeRecord {
-                    Text("Recorded \(record.recordedAt.formatted(date: .abbreviated, time: .shortened))")
+                if let recordedAt = inventoryTransaction?.recordedAt ?? list.outcomeRecord?.recordedAt {
+                    Text("Recorded \(recordedAt.formatted(date: .abbreviated, time: .shortened))")
                         .font(.caption).foregroundStyle(.secondary)
                         .accessibilityIdentifier("list.outcomeRecordedAt")
                 }
@@ -561,20 +532,21 @@ struct CardListView: View {
                 }
             }
             Button {
-                choosingOutcome = true
+                if let receipt = inventoryTransaction { receiptRoute = ReceiptRoute(id: receipt.id) }
+                else { choosingOutcome = true }
             } label: {
-                Label(recordedTransaction?.title ?? "Record Transaction",
-                      systemImage: recordedTransaction == nil ? "checkmark.circle" : "checkmark.circle.fill")
+                Label(inventoryTransaction == nil ? (recordedTransaction?.title ?? "Record Transaction") : "View Transaction",
+                      systemImage: inventoryTransaction == nil && recordedTransaction == nil ? "checkmark.circle" : "checkmark.circle.fill")
                     .frame(maxWidth: .infinity, minHeight: 44)
             }.buttonStyle(.borderedProminent)
                 .disabled(savingOutcome || pendingOutcomeBudget)
                 .accessibilityIdentifier("list.recordTransaction")
-                .accessibilityHint("Choose Purchase, Trade + Purchase, or Trade for this list.")
+                .accessibilityHint("Review a purchase or trade using this scanned list.")
                 .confirmationDialog("Record Transaction", isPresented: $choosingOutcome, titleVisibility: .visible) {
-                    ForEach([ListOutcomeKind.purchase, .tradeAndPurchase, .trade]) { kind in
-                        Button(kind.title) { recordOutcome(kind, totals: totals, transaction: transaction) }
-                            .accessibilityIdentifier("list.outcome." + kind.rawValue)
-                    }
+                    Button("Purchase") { newTransactionKind = .purchase }.accessibilityIdentifier("list.outcome.purchase")
+                    Button("Trade") { newTransactionKind = .trade }.accessibilityIdentifier("list.outcome.trade")
+                    Button("Trade + Cash to Customer") { newTransactionKind = .tradePayCustomer }.accessibilityIdentifier("list.outcome.tradeAndPurchase")
+                    Button("Trade + Cash to Me") { newTransactionKind = .tradeReceiveCash }
                     Button("Cancel", role: .cancel) {}
                 }
             Button {
@@ -584,7 +556,7 @@ struct CardListView: View {
                       ? "checkmark.circle.fill" : "minus.circle")
                     .frame(maxWidth: .infinity, minHeight: 44)
             }.buttonStyle(.bordered).tint(list.outcomeRecord?.kind == .nothingHappened ? Color.orange : Color.gray)
-                .disabled(savingOutcome || pendingOutcomeBudget)
+                .disabled(savingOutcome || pendingOutcomeBudget || inventoryTransaction != nil)
                 .accessibilityIdentifier("list.nothingHappened")
                 .accessibilityHint("Record that this deal did not go ahead.")
 
