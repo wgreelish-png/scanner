@@ -8,17 +8,29 @@ Select an active show, choose the transaction type and review the cards and amou
 
 | Type | Stock movements | Cash and buying funds |
 | --- | --- | --- |
-| Sale | Selected quantities leave available stock. | Enter actual proceeds. The show’s sale split defaults to 65% buying / 35% saved. |
+| Sale | Selected quantities leave available stock. | Starts with each selected copy’s market value rounded to the nearest dollar; edit the actual proceeds if needed. The show’s sale split defaults to 65% buying / 35% saved. |
 | Purchase | The whole selected scanned list enters stock. | Defaults to that list’s calculated Cash Offer, including its percentages and overrides. Cash paid reduces buying funds in full. |
 | Trade | Incoming scanned list enters stock; selected stock leaves. | Equal agreed values exchange no cash. Explicit Make Even Trade permits an unequal exchange and records its concession. |
 | Trade + Pay Customer | Incoming list enters; selected stock leaves. | $35 incoming / $5 outgoing pays $30. |
 | Trade + Receive Cash | Incoming list enters; selected stock leaves. | $5 incoming / $30 outgoing receives $25. All $25 returns to buying funds. |
 
-Trades start with the incoming list’s calculated **Trade Offer**, editable before recording. The outgoing value starts from selected cards’ saved market references and is also editable. These agreed values determine the cash difference directly. A partial/unpriced list has no automatic full-list offer; an explicitly entered agreed total is required. A known zero remains zero.
+Trades start with the incoming list’s calculated **Trade Offer**, editable before recording. The outgoing value starts from selected cards’ saved market references rounded to the nearest dollar per copy and is also editable. These agreed values determine the cash difference directly. A partial/unpriced list has no automatic full-list offer; an explicitly entered agreed total is required. A known zero remains zero.
 
 For $32 incoming versus $35 outgoing, **Make Even Trade** records $0 cash and a $3 concession. It preserves the card’s $35 market reference. The difference is not reported as realized loss or profit: reliable acquisition-cost accounting is not available for this stock. Receipts retain the original agreed amounts, market reference snapshots, cash split and quantities after prices or source lists change.
 
 The list review Record Transaction action opens the same stock-aware checkout with that list selected. Completed lists link to their receipt; Nothing Happened and Clear Outcome cannot independently reverse its cash. Existing legacy outcomes, manually linked cash and undecodable nonempty legacy markers prevent a second acquisition. Undo/review the prior transaction or deliberately clear its legacy outcome before using that list again. Offer calculations and card edits alone never record a deal.
+
+## Checkout corrections in build 36
+
+**Record Transaction** stays in a fixed top bar with the cash total. **Select Inventory Cards** opens a separate searchable inventory with thumbnails, available quantities, selection markers and quantity controls. Done returns to checkout; its selected cards stay in a compact expandable summary. Search keyboard Done dismisses the keyboard while retaining the query, both here and in Show Inventory. No stock or money changes during selection.
+
+Sales automatically sum the selected copies’ market prices rounded to whole dollars individually: two $8.28 cards and one $6.77 card start at $23. Standard nearest-dollar rounding applies ($0.49 becomes $0 and $0.50 becomes $1); missing prices require an explicit total. Changing the total retains that amount when the selection changes. **Use Rounded Market Total** restores automatic updates.
+
+If the received amount differs from the rounded suggestion, all cards share one percentage of their original market value. A $100 card and two $25 cards sold for $120 use 80%: $80 and $40 for those rows. Cent remainders are allocated deterministically so row totals equal the actual proceeds exactly. Checkout and the saved receipt show the percentage and an expandable allocation breakdown. The default rounded suggestion keeps its individually rounded card amounts. Unknown prices or a zero market total cannot support a proportional nonzero allocation. Original market references remain unchanged; the existing show cash split still uses the actual total received.
+
+**Review / Edit Selected List** opens the existing list editor from checkout. Done returns to the same deal and reloads saved card, quantity, name and offer changes. Automatic incoming amounts recalculate; a manually negotiated amount is retained with a review message. Changed inputs clear a previous Make Even Trade confirmation. Other selections, the selected show and the note stay in place. The editor hides transaction/outcome actions to avoid starting another checkout. Returning from editing never records the transaction.
+
+Sale allocations derive from the immutable receipt card references and its actual cash total, so they remain available across relaunches without changing financial format v3 or rewriting any historical cash/stock entries.
 
 ## Import and source snapshots
 
@@ -45,3 +57,7 @@ All implementation finishes before checks run. Native cases cover exact cash/con
 Xcode/native execution and physical-iPhone acceptance remain separate from portable source/resource checks. On the phone, compare stock and budget before/after each type in the table, including the exact $32/$35, $35/$5 and $5/$30 examples. Sell only one copy from a multi-copy row, relaunch and confirm its remaining quantity. Undo each transaction and verify its original show’s cash split and stock return once. Try undoing a purchase whose acquired card was later sold. Delete a disposable show and verify stock/history remain. Refresh the website snapshot after a local sale and verify that sold copies stay unavailable. Repeat basic transaction/history use offline. Preserve the current installation while checking migration.
 
 After implementation completed, local checks passed 151 JavaScript tests, 27 Python helper tests, grammar parsing of 141 Swift files, Xcode membership for 80 app / 49 native-test / 12 UI-test sources, all 47 pinned scanner assets/dependencies, and shell/whitespace validation. Twenty-five new native cases and two transaction UI cases are registered; existing navigation/outcome UI tests were adapted to explicit transaction review. These native/UI cases and the unsigned Xcode build have not run in this Linux workspace. They use the existing CI jobs; no additional simulator job was added. Actual iPhone transactions, v1/v2 financial migration, and offline/relaunch behavior still need device acceptance.
+
+Build 36 adds native regression coverage for whole-dollar defaults, common market percentages, exact/repeatable cent allocation, missing versus zero prices, receipt allocations after relaunch/undo, and editing incoming list snapshots. UI regressions cover the separate selector, search keyboard dismissal, the pinned automatic checkout and returning from list edits while retaining negotiated cash. These tests are registered for Xcode; native/UI execution and phone acceptance remain pending until run on macOS/device.
+
+Build-36 local verification passed grammar parsing of 143 Swift files, Xcode target membership (81 app / 50 native-test / 12 UI-test sources), all 47 pinned scanner assets/dependencies, and shell/whitespace checks. Six native cases and two UI cases were added; the existing two transaction UI cases now use the separate selector. Xcode/native/UI execution and physical-iPhone behavior remain unverified for build 36. The unchanged JavaScript/Python suites were not rerun for this Swift-only change; their build-35 results above remain historical.

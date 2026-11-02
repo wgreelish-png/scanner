@@ -7,10 +7,13 @@ import XCTest
         defer { app.terminate() }
         assertStock("3", app: app)
         tap(app.buttons["show.recordTransaction"], app: app)
+        tap(app.buttons["showTransaction.selectInventory"], app: app)
         let stock = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "showTransaction.stock."))
         XCTAssertEqual(stock.count, 2)
         let selected = stock.allElementsBoundByIndex
         for row in selected { tap(row, app: app) }
+        tap(app.buttons["showInventorySelection.done"], app: app)
+        XCTAssertEqual(app.textFields["showTransaction.amount.sale"].value as? String, "40.00")
         enter("100", field: app.textFields["showTransaction.amount.sale"], app: app)
         app.buttons["showTransaction.keyboardDone"].tap()
         tap(app.buttons["showTransaction.record"], app: app)
@@ -40,8 +43,10 @@ import XCTest
         tap(app.buttons["Trade"].firstMatch, app: app)
         tap(app.buttons["showTransaction.incomingList"], app: app)
         tap(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Trade 32")).firstMatch, app: app)
+        tap(app.buttons["showTransaction.selectInventory"], app: app)
         let stockA = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "showTransaction.stock.", "Stock A")).firstMatch
         tap(stockA, app: app)
+        tap(app.buttons["showInventorySelection.done"], app: app)
         tap(app.buttons["showTransaction.makeEven"], app: app)
         let paid = app.descendants(matching: .any)["showTransaction.preview.paid"]
         let received = app.descendants(matching: .any)["showTransaction.preview.received"]
@@ -56,6 +61,63 @@ import XCTest
             app.swipeUp()
         }
         assertContains("$3.00", element: concession)
+    }
+
+    func testInventorySearchDoneDismissesKeyboardAndReturnsToPinnedAutomaticCheckout() {
+        continueAfterFailure = false
+        let app = launch()
+        defer { app.terminate() }
+        tap(app.buttons["show.recordTransaction"], app: app)
+        tap(app.buttons["showTransaction.selectInventory"], app: app)
+        let search = app.searchFields.firstMatch
+        tap(search, app: app); search.typeText("Stock A")
+        tap(app.buttons["showInventorySelection.keyboardDone"], app: app)
+        let dismissed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.keyboards.firstMatch)
+        XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
+        XCTAssertEqual(search.value as? String, "Stock A")
+        let stockA = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "showTransaction.stock.", "Stock A")).firstMatch
+        tap(stockA, app: app)
+        tap(app.buttons["showInventorySelection.done"], app: app)
+        let record = app.buttons["showTransaction.record"]
+        XCTAssertTrue(record.waitForExistence(timeout: 5)); XCTAssertTrue(record.isHittable); XCTAssertTrue(record.isEnabled)
+        XCTAssertEqual(app.textFields["showTransaction.amount.sale"].value as? String, "35.00")
+        // Checkout is pinned even when the form is scrolled to its final note.
+        app.swipeUp(); app.swipeUp()
+        XCTAssertTrue(record.isHittable)
+        app.buttons["Cancel"].tap()
+        assertBalances(available: "$300.00", saved: "$0.00", app: app)
+        assertStock("3", app: app)
+    }
+
+    func testEditingIncomingListReturnsToSameDealWithoutRecordingAndKeepsNegotiatedAmount() {
+        continueAfterFailure = false
+        let app = launch()
+        defer { app.terminate() }
+        tap(app.buttons["show.recordTransaction"], app: app)
+        tap(app.buttons["showTransaction.kind"], app: app)
+        tap(app.buttons["Purchase"].firstMatch, app: app)
+        tap(app.buttons["showTransaction.incomingList"], app: app)
+        tap(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Buy 14")).firstMatch, app: app)
+        enter("12", field: app.textFields["showTransaction.amount.incoming"], app: app)
+        tap(app.buttons["showTransaction.keyboardDone"], app: app)
+        app.swipeDown()
+        tap(app.buttons["showTransaction.editIncomingList"], app: app)
+        XCTAssertFalse(app.buttons["list.recordTransaction"].exists)
+        let options = app.navigationBars.buttons["list.options"]
+        XCTAssertTrue(options.waitForExistence(timeout: 5))
+        options.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        app.buttons["Rename"].tap()
+        let rename = app.alerts["Rename List"]
+        XCTAssertTrue(rename.waitForExistence(timeout: 5))
+        enter("Edited purchase", field: rename.textFields.firstMatch, app: app)
+        rename.buttons["Save"].tap()
+        tap(app.buttons["showTransaction.returnFromEdit"], app: app)
+        assertContains("Your agreed total was kept", element: app.staticTexts["showTransaction.incomingEditStatus"])
+        XCTAssertEqual(app.textFields["showTransaction.amount.incoming"].value as? String, "12")
+        XCTAssertTrue(app.buttons["showTransaction.record"].isHittable)
+        app.buttons["Cancel"].tap()
+        assertBalances(available: "$300.00", saved: "$0.00", app: app)
+        assertStock("3", app: app)
     }
 
     private func launch() -> XCUIApplication {
@@ -83,7 +145,11 @@ import XCTest
         XCTAssertTrue(text.contains(value), "Expected \(value), received \(text)", file: file, line: line)
     }
     private func enter(_ value: String, field: XCUIElement, app: XCUIApplication) {
-        tap(field, app: app); field.typeText(value)
+        tap(field, app: app)
+        if let existing = field.value as? String, existing != field.placeholderValue, !existing.isEmpty {
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: existing.count))
+        }
+        field.typeText(value)
     }
     private func tap(_ element: XCUIElement, app: XCUIApplication) {
         for _ in 0..<10 {

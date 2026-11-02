@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
 /// Show activity uses local working stock; the imported website list remains a source snapshot.
 @MainActor struct ShowHomeView: View {
@@ -164,7 +165,20 @@ private struct ShowHomeRouteCard: View {
         }
         .navigationTitle("Show Inventory").navigationBarTitleDisplayMode(.inline)
         .searchable(text: $search, prompt: "Name, set, or card number")
+        .scrollDismissesKeyboard(.interactively)
+        .onSubmit(of: .search) { endSearchEditing() }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { endSearchEditing() }.fixedSize().frame(minWidth: 64, minHeight: 44)
+                    .accessibilityIdentifier("showInventory.keyboardDone")
+            }
+        }
         .onAppear { seedInventory() }
+    }
+
+    private func endSearchEditing() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
     private func seedInventory() {

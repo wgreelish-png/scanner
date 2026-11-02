@@ -19,6 +19,18 @@ enum ShowTransactionListFailure: LocalizedError, Equatable {
 /// owns completed acquisitions, so there is no second financial projection or
 /// mutation of a scanner's physical rows after a successful transaction.
 @MainActor enum ShowTransactionListService {
+    struct IncomingSnapshot: Equatable {
+        let listID: UUID
+        let name: String
+        let cards: [ShowIncomingCard]
+        let defaultValueCents: Int64?
+    }
+
+    static func incomingSnapshot(for list: CardList, kind: ShowTransactionKind,
+                                 context: ModelContext) throws -> IncomingSnapshot {
+        IncomingSnapshot(listID: list.id, name: list.name, cards: try incomingCards(for: list),
+            defaultValueCents: try defaultIncomingValue(for: list, kind: kind, context: context))
+    }
     static func incomingCards(for list: CardList) throws -> [ShowIncomingCard] {
         guard !list.isCardShowInventory, !list.cards.isEmpty, list.cards.count <= 10_000 else {
             throw ShowTransactionListFailure.invalidCards

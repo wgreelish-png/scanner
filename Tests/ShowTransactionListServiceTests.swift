@@ -203,6 +203,30 @@ import SwiftData
         XCTAssertEqual(budgetStore(fixture.disk).book, committed)
     }
 
+    func testEditingListRefreshesCardsNameQuantitiesAndCalculatedOfferBeforeRecording() throws {
+        let fixture = try fixture()
+        let session = ScanSession(listName: fixture.list.name)
+        session.listID = fixture.list.id; session.setRates(.init(cash: 70, trade: 80, maximum: 75))
+        fixture.context.insert(session); try fixture.context.save()
+        let before = try ShowTransactionListService.incomingSnapshot(for: fixture.list, kind: .trade, context: fixture.context)
+        XCTAssertEqual(before.defaultValueCents, 16_000)
+        fixture.list.name = "Edited list"
+        let row = try XCTUnwrap(fixture.list.cards.first)
+        row.quantity = 3
+        var changed = row.snapshot
+        changed.identity.condition = "Lightly Played"; changed.marketPrice = 50
+        try row.update(changed)
+        try fixture.context.save()
+        let after = try ShowTransactionListService.incomingSnapshot(for: fixture.list, kind: .trade, context: fixture.context)
+        XCTAssertEqual(after.name, "Edited list"); XCTAssertEqual(after.cards.first?.quantity, 3)
+        XCTAssertEqual(after.cards.first?.card.identity.condition, "Lightly Played")
+        XCTAssertEqual(after.defaultValueCents, 12_000)
+        XCTAssertNotEqual(before, after)
+        XCTAssertTrue(fixture.store.transactions.isEmpty)
+        XCTAssertTrue(fixture.store.inventory.isEmpty)
+        XCTAssertEqual(try XCTUnwrap(fixture.store.activeShow).totals().availableCents, 30_000)
+    }
+
     func testConsumedIncomingListCannotBeRecordedAgainWithANewOperationID() throws {
         let fixture = try fixture(), draft = try purchase(fixture.list)
         _ = try ShowTransactionListService.record(draft, showID: fixture.showID,

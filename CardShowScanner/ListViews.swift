@@ -281,6 +281,7 @@ struct ListDeletionConfirmationView: View {
     @Environment(\.scenePhase) private var scenePhase
     var session: ScanSession? = nil
     var onContinueScanning: (() -> Void)? = nil
+    var transactionEditing = false
     @Query private var sessions: [ScanSession]
     @State private var continueGame = "Pokémon"
     @State private var confirmContinue = false
@@ -341,7 +342,7 @@ struct ListDeletionConfirmationView: View {
                     SessionReviewHeader(session: session, list: list,
                         onContinue: { continueScanning(session) },
                         onSavedOffers: { open(.savedOffers(session.id), session: session) },
-                        outcomeActions: { totals, transaction in AnyView(listOutcomeActions(totals: totals, transaction: transaction)) })
+                        outcomeActions: transactionEditing ? nil : { totals, transaction in AnyView(listOutcomeActions(totals: totals, transaction: transaction)) })
                         .buttonStyle(.borderless)
                 }
                 else {
@@ -349,7 +350,7 @@ struct ListDeletionConfirmationView: View {
                     LabeledContent("Known market subtotal", value: list.knownValue.money)
                     if list.unpricedQuantity > 0 { Text("Partial valuation: \(list.unpricedQuantity) copies have no price.").foregroundStyle(.orange) }
                     Text("Cash on purchase: " + currentOfferTotals.cash.money).font(.caption).foregroundStyle(.secondary)
-                    listOutcomeActions(totals: currentOfferTotals, transaction: nil)
+                    if !transactionEditing { listOutcomeActions(totals: currentOfferTotals, transaction: nil) }
                     if !list.isCardShowInventory {
                         Picker("Game for continued scanning", selection: $continueGame) {
                             ForEach(CatalogOptions.games, id: \.self) { Text($0) }
@@ -446,9 +447,11 @@ struct ListDeletionConfirmationView: View {
                                 }
                             }
                         }
-                        Button("Clear List Outcome", systemImage: "arrow.uturn.backward") { recordOutcome(nil) }
-                            .disabled(list.transactionOutcomeData == nil || savingOutcome || pendingOutcomeBudget || inventoryTransaction != nil)
-                            .accessibilityIdentifier("list.clearOutcome")
+                        if !transactionEditing {
+                            Button("Clear List Outcome", systemImage: "arrow.uturn.backward") { recordOutcome(nil) }
+                                .disabled(list.transactionOutcomeData == nil || savingOutcome || pendingOutcomeBudget || inventoryTransaction != nil)
+                                .accessibilityIdentifier("list.clearOutcome")
+                        }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                             .frame(width: 44, height: 44).contentShape(Rectangle())
