@@ -130,7 +130,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build and run show budget UI check independently
         id: budget_ui_tests
-        run: bash scripts/run_ios_tests.sh CardShowScannerUITests/ShowBudgetUITests
+        run: bash scripts/run_ios_tests.sh CardShowScannerUITests/ShowBudgetUITests CardShowScannerUITests/ShowTransactionsUITests
       - name: Publish show budget UI summary
         if: ${{ always() && steps.budget_ui_tests.outcome != 'skipped' }}
         run: python3 scripts/report_xcode_test_summary.py NativeTests.log

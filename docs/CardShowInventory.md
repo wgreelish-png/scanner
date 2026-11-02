@@ -1,5 +1,7 @@
 # Card Show inventory
 
+Build 35 moves the primary inventory into **Show → Inventory** and adds [local sales, trades, purchases and Undo](ShowInventoryTransactions.md). The website copy described below is now labeled **TCGTracking Source Snapshot**. Its initial contents seed working inventory once; subsequent source refreshes preserve locally sold quantities and locally acquired cards. Outbound synchronization and automatic reconciliation are deferred. The source snapshot and working inventory intentionally remain distinct.
+
 Build 29 adds **Lists → Card Show Inventory**. Import connects to the existing TCGTracking website sign-in, finds the active location named exactly **Card Show** and saves a dedicated list on this iPhone. **Card Show Need To Price** is a different location and is never included by a partial name match. The location ID is discovered from the account rather than hardcoded.
 
 1. Open Card Show Inventory and tap **Import Inventory**.

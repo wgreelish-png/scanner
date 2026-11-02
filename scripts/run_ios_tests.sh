@@ -5,7 +5,7 @@ SCANNER_TEST_TARGET="${1:?Expected an allowlisted native or UI suite}"
 SCANNER_TEST_SELECTION=(-only-testing:"$SCANNER_TEST_TARGET")
 for SCANNER_ALLOWED_TARGET in "$@"; do
   case "$SCANNER_ALLOWED_TARGET" in
-    CardShowScannerTests|CardShowScannerUITests|CardShowScannerUITests/ResearchUITests|CardShowScannerUITests/MarketEvidenceUITests|CardShowScannerUITests/AppNavigationUITests|CardShowScannerUITests/ShowBudgetUITests|CardShowScannerUITests/CardShowInventoryUITests|CardShowScannerUITests/ReviewPresentationUITests|CardShowScannerUITests/ListBulkDeletionUITests) ;;
+    CardShowScannerTests|CardShowScannerUITests|CardShowScannerUITests/ResearchUITests|CardShowScannerUITests/MarketEvidenceUITests|CardShowScannerUITests/AppNavigationUITests|CardShowScannerUITests/ShowBudgetUITests|CardShowScannerUITests/ShowTransactionsUITests|CardShowScannerUITests/CardShowInventoryUITests|CardShowScannerUITests/ReviewPresentationUITests|CardShowScannerUITests/ListBulkDeletionUITests) ;;
     *) echo "Unknown test target" >&2; exit 2 ;;
   esac
 done
@@ -21,6 +21,7 @@ if [ "$SCANNER_TEST_TARGET" = CardShowScannerUITests ]; then
   SCANNER_TEST_SELECTION+=(-skip-testing:CardShowScannerUITests/MarketEvidenceUITests)
   SCANNER_TEST_SELECTION+=(-skip-testing:CardShowScannerUITests/AppNavigationUITests)
   SCANNER_TEST_SELECTION+=(-skip-testing:CardShowScannerUITests/ShowBudgetUITests)
+  SCANNER_TEST_SELECTION+=(-skip-testing:CardShowScannerUITests/ShowTransactionsUITests)
   SCANNER_TEST_SELECTION+=(-skip-testing:CardShowScannerUITests/CardShowInventoryUITests)
   SCANNER_TEST_SELECTION+=(-skip-testing:CardShowScannerUITests/ReviewPresentationUITests)
   SCANNER_TEST_SELECTION+=(-skip-testing:CardShowScannerUITests/ListBulkDeletionUITests)

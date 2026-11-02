@@ -1,0 +1,648 @@
+import SwiftUI
+import SwiftData
+
+/// A transaction is confirmed once, using one stable command identity. The
+/// selected scan list is a snapshot; recording never edits its rows or prices.
+@MainActor struct ShowTransactionForm: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var context
+    @Query(sort: \CardList.createdAt, order: .reverse) private var lists: [CardList]
+    @State private var store: ShowBudgetStore
+    @State private var kind: ShowTransactionKind
+    @State private var incomingListID: UUID?
+    @State private var showID: UUID?
+    @State private var draftID = UUID()
+    @State private var incoming: [ShowIncomingCard] = []
+    @State private var capturedListID: UUID?
+    @State private var capturedListName: String?
+    @State private var outgoingQuantities: [UUID: Int] = [:]
+    @State private var incomingValue = ""
+    @State private var outgoingValue = ""
+    @State private var saleReceived = ""
+    @State private var incomingDefault: Int64?
+    @State private var incomingValueEdited = false
+    @State private var outgoingValueEdited = false
+    @State private var makeEven = false
+    @State private var note = ""
+    @State private var inventorySearch = ""
+    @State private var error: String?
+    @State private var isRecording = false
+    @State private var didPrepare = false
+    @FocusState private var focused: MoneyField?
+
+    private enum MoneyField: Hashable { case incoming, outgoing, sale }
+
+    init(store: ShowBudgetStore = .shared, initialKind: ShowTransactionKind = .sale,
+         initialListID: UUID? = nil) {
+        _store = State(initialValue: store)
+        _kind = State(initialValue: initialKind)
+        _incomingListID = State(initialValue: initialListID)
+    }
+
+    private var isTrade: Bool { kind != .sale && kind != .purchase }
+    private var selectedShow: ShowBudgetEvent? { store.visibleShows.first { $0.id == showID } }
+    private var incomingLists: [CardList] { lists.filter { !$0.isCardShowInventory } }
+    private var availableInventory: [ShowInventoryItem] { store.inventory.filter { $0.quantity > 0 } }
+    private var displayedInventory: [ShowInventoryItem] {
+        let query = inventorySearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        return availableInventory.filter {
+            query.isEmpty || $0.card.name.localizedCaseInsensitiveContains(query) ||
+                $0.card.set.localizedCaseInsensitiveContains(query) ||
+                $0.card.number.localizedCaseInsensitiveContains(query)
+        }
+    }
+    private var outgoingReference: Int64? {
+        let selections = outgoingQuantities.filter { $0.value > 0 }
+        guard !selections.isEmpty else { return nil }
+        var total = Decimal.zero
+        for (id, quantity) in selections {
+            guard let item = store.inventory.first(where: { $0.id == id }),
+                  let price = item.card.marketPrice else { return nil }
+            total += price * Decimal(quantity)
+        }
+        return showTransactionCents(total)
+    }
+    private var preview: ShowTransactionAmounts? {
+        guard let draft = try? preparedDraft() else { return nil }
+        return try? ShowTransactionMath.calculate(draft, saleReinvestmentPercent: selectedShow?.reinvestmentPercent ?? 65)
+    }
+    private var previewMessage: String? {
+        do {
+            _ = try ShowTransactionMath.calculate(preparedDraft(), saleReinvestmentPercent: selectedShow?.reinvestmentPercent ?? 65)
+            return nil
+        } catch { return error.localizedDescription }
+    }
+    private var canRecord: Bool {
+        guard let showID else { return false }
+        return store.isLoaded && !store.isSaving && !isRecording && store.canRecord(showID: showID) && preview != nil
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                transactionSection
+                if kind != .sale { incomingSection }
+                if kind != .purchase { outgoingSection }
+                valuesSection
+                previewSection
+                Section {
+                    TextField("Note, optional", text: $note, axis: .vertical)
+                        .lineLimit(2...4).accessibilityIdentifier("showTransaction.note")
+                }
+                if let error {
+                    Section { Text(error).foregroundStyle(.orange).accessibilityIdentifier("showTransaction.error") }
+                }
+                Section {
+                    Button(action: record) {
+                        HStack {
+                            Spacer()
+                            if isRecording { ProgressView() }
+                            Text("Record Transaction").font(.headline)
+                            Spacer()
+                        }.frame(minHeight: 64)
+                    }.buttonStyle(.borderedProminent).disabled(!canRecord)
+                        .accessibilityIdentifier("showTransaction.record")
+                    Text("Recording updates your local show stock and show budget together.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Record \(kind.title)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { focused = nil }
+                        .frame(minWidth: 64, minHeight: 44).accessibilityIdentifier("showTransaction.keyboardDone")
+                }
+            }
+            .onAppear(perform: prepare)
+            .onChange(of: incomingListID) { _, _ in loadIncoming() }
+            .onChange(of: kind) { previous, next in
+                makeEven = false
+                if previous == .purchase || next == .purchase { incomingValueEdited = false }
+                updateIncomingDefault()
+            }
+            .onChange(of: outgoingQuantities) { _, _ in
+                makeEven = false
+                if !outgoingValueEdited { outgoingValue = outgoingReference.map(showTransactionInput) ?? "" }
+            }
+        }
+    }
+
+    private var transactionSection: some View {
+        Section {
+            Picker("Transaction", selection: $kind) {
+                ForEach(ShowTransactionKind.allCases) { kind in Text(kind.title).tag(kind) }
+            }.pickerStyle(.menu).accessibilityIdentifier("showTransaction.kind")
+            Picker("Show", selection: $showID) {
+                Text("Choose a show").tag(Optional<UUID>.none)
+                ForEach(store.visibleShows) { show in
+                    Text(show.name).tag(Optional(show.id)).disabled(!store.canRecord(showID: show.id))
+                }
+            }.pickerStyle(.menu).accessibilityIdentifier("showTransaction.show")
+            if !store.isLoaded {
+                Text(store.error ?? "Your saved show budget must be available before recording.")
+                    .font(.caption).foregroundStyle(.orange)
+            } else if let showID, !store.canRecord(showID: showID) {
+                Text("This show is outside its recording dates. Choose an active show before recording.")
+                    .font(.caption).foregroundStyle(.orange)
+            } else if showID == nil {
+                Text("Choose an active show. You can create a show in Show Budget.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var incomingSection: some View {
+        Section {
+            Picker("Incoming scanned list", selection: $incomingListID) {
+                Text("Choose a list").tag(Optional<UUID>.none)
+                ForEach(incomingLists) { list in
+                    let used = store.transaction(forListID: list.id) != nil
+                    let legacy = hasLegacyOutcome(list)
+                    Text(list.name + (used || legacy ? " · Already recorded" : " · \(list.quantity) cards"))
+                        .tag(Optional(list.id)).disabled(used || legacy || list.quantity <= 0)
+                }
+            }.pickerStyle(.menu).accessibilityIdentifier("showTransaction.incomingList")
+            if let incomingListID, store.transaction(forListID: incomingListID) != nil {
+                Text("This list already belongs to a recorded transaction. Undo that transaction before using the list again.")
+                    .font(.caption).foregroundStyle(.orange)
+            } else if let list = incomingLists.first(where: { $0.id == incomingListID }), hasLegacyOutcome(list) {
+                Text("This list already has a completed outcome. Review its existing outcome before recording another transaction.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            ForEach(incoming) { line in
+                ShowTransactionCardRow(card: line.card, quantity: line.quantity)
+            }
+            if incomingLists.isEmpty {
+                Text("Scan cards into a list before recording incoming stock.").foregroundStyle(.secondary)
+            } else if incomingListID != nil {
+                Button("Reload Incoming List", action: loadIncoming).frame(minHeight: 44)
+                    .accessibilityIdentifier("showTransaction.reloadIncoming")
+            }
+        } header: {
+            Text("Cards coming in")
+        } footer: {
+            Text("The whole selected list becomes local stock. Your scanned list and its market reference prices stay as saved.")
+        }
+    }
+
+    private var outgoingSection: some View {
+        Section {
+            if availableInventory.isEmpty {
+                Text("No local stock is available. Import your Card Show Inventory or record a purchase first.")
+                    .foregroundStyle(.secondary)
+            } else {
+                TextField("Find a card in your stock", text: $inventorySearch)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .frame(minHeight: 44).accessibilityIdentifier("showTransaction.inventorySearch")
+                ForEach(displayedInventory) { item in outgoingRow(item) }
+                if displayedInventory.isEmpty { Text("No matching cards.").foregroundStyle(.secondary) }
+            }
+            if !outgoingQuantities.isEmpty {
+                LabeledContent("Selected quantity", value: outgoingQuantities.values.reduce(0, +).formatted())
+                Button("Clear Selection") { outgoingQuantities.removeAll() }.frame(minHeight: 44)
+            }
+        } header: { Text(kind == .sale ? "Cards being sold" : "Cards going out") }
+    }
+
+    private func outgoingRow(_ item: ShowInventoryItem) -> some View {
+        let quantity = outgoingQuantities[item.id] ?? 0
+        return VStack(alignment: .leading, spacing: 6) {
+            Button {
+                if quantity > 0 { outgoingQuantities.removeValue(forKey: item.id) }
+                else { outgoingQuantities[item.id] = 1 }
+            } label: {
+                HStack(spacing: 12) {
+                    ShowTransactionCardRow(card: item.card, quantity: item.quantity, quantityTitle: "Available")
+                    Image(systemName: quantity > 0 ? "checkmark.circle.fill" : "circle")
+                        .font(.title2).foregroundStyle(quantity > 0 ? Color.indigo : Color.secondary)
+                }.frame(minHeight: 64).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+                .accessibilityLabel("\(item.card.name), \(item.quantity) available")
+                .accessibilityAddTraits(quantity > 0 ? .isSelected : [])
+                .accessibilityIdentifier("showTransaction.stock." + item.id.uuidString)
+            if quantity > 0 {
+                Stepper("Quantity: \(quantity)", value: Binding(
+                    get: { outgoingQuantities[item.id] ?? 1 },
+                    set: { outgoingQuantities[item.id] = $0 }
+                ), in: 1...item.quantity).frame(minHeight: 64)
+                    .accessibilityIdentifier("showTransaction.quantity." + item.id.uuidString)
+            }
+        }.padding(.vertical, 4)
+    }
+
+    private var valuesSection: some View {
+        Section {
+            if kind == .sale {
+                amountField("Actual cash received", text: $saleReceived, field: .sale)
+                Text("Enter the total the customer actually paid for all selected cards.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                amountField(kind == .purchase ? "Actual cash paid" : "Agreed incoming card value",
+                            text: Binding(get: { incomingValue }, set: {
+                    incomingValue = $0; incomingValueEdited = true; makeEven = false
+                }), field: .incoming)
+                if let incomingDefault {
+                    LabeledContent(kind == .purchase ? "Calculated Cash Offer" : "Calculated Trade Offer",
+                                   value: showTransactionMoney(incomingDefault))
+                    if incomingValueEdited {
+                        Button(kind == .purchase ? "Use Calculated Cash Offer" : "Use Calculated Trade Offer") {
+                            incomingValueEdited = false
+                            incomingValue = showTransactionInput(incomingDefault)
+                            makeEven = false
+                        }.frame(minHeight: 44)
+                    }
+                } else {
+                    Text("A complete calculated offer is unavailable. Enter the agreed total explicitly.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if isTrade {
+                    amountField("Agreed outgoing card value", text: Binding(get: { outgoingValue }, set: {
+                        outgoingValue = $0; outgoingValueEdited = true; makeEven = false
+                    }), field: .outgoing)
+                    if let outgoingReference {
+                        LabeledContent("Outgoing market reference", value: showTransactionMoney(outgoingReference))
+                        if outgoingValueEdited {
+                            Button("Use Market Reference Total") {
+                                outgoingValueEdited = false
+                                outgoingValue = showTransactionInput(outgoingReference)
+                                makeEven = false
+                            }.frame(minHeight: 44)
+                        }
+                    } else {
+                        Text("Some outgoing cards have no market price. Enter their agreed total explicitly.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if kind == .trade { evenTradeControl }
+                    Text("Agreed card values determine the cash difference. Market reference prices on the cards stay unchanged.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        } header: { Text(kind == .sale || kind == .purchase ? "Actual cash" : "Agreed card values") }
+    }
+
+    private func amountField(_ title: String, text: Binding<String>, field: MoneyField) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.subheadline)
+            HStack {
+                Text("USD").foregroundStyle(.secondary)
+                TextField("0.00", text: text).keyboardType(.decimalPad).focused($focused, equals: field)
+                    .monospacedDigit().accessibilityLabel(title)
+                    .accessibilityIdentifier("showTransaction.amount." + String(describing: field))
+            }.frame(minHeight: 64)
+        }
+    }
+
+    @ViewBuilder private var evenTradeControl: some View {
+        if let incomingCents = ShowBudgetMoney.parse(incomingValue),
+           let outgoingCents = ShowBudgetMoney.parse(outgoingValue), incomingCents != outgoingCents {
+            if makeEven {
+                Label("Even trade · No cash changes hands", systemImage: "equal.circle.fill")
+                    .foregroundStyle(.indigo).accessibilityIdentifier("showTransaction.evenConfirmed")
+                LabeledContent(outgoingCents > incomingCents ? "Value conceded" : "Extra incoming value",
+                               value: showTransactionMoney(abs(outgoingCents - incomingCents)))
+                Button("Review Cash Difference") { makeEven = false }.frame(minHeight: 44)
+            } else {
+                Text("These agreed values differ by \(showTransactionMoney(abs(outgoingCents - incomingCents))). Choose a cash trade type or explicitly make an even trade.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Make Even Trade") { focused = nil; makeEven = true }
+                    .frame(minHeight: 64).accessibilityIdentifier("showTransaction.makeEven")
+            }
+        }
+    }
+
+    private var previewSection: some View {
+        Section {
+            if let preview {
+                LabeledContent("Cash you pay", value: showTransactionMoney(preview.paidCents))
+                    .accessibilityIdentifier("showTransaction.preview.paid")
+                LabeledContent("Cash you receive", value: showTransactionMoney(preview.receivedCents))
+                    .accessibilityIdentifier("showTransaction.preview.received")
+                LabeledContent("Added to buying funds", value: showTransactionMoney(preview.reinvestedCents))
+                LabeledContent("Saved for you", value: showTransactionMoney(preview.savedCents))
+                if preview.concessionCents != 0 {
+                    LabeledContent(preview.concessionCents > 0 ? "Value conceded" : "Extra incoming value",
+                                   value: showTransactionMoney(abs(preview.concessionCents)))
+                }
+                if kind == .sale {
+                    let percent = selectedShow?.reinvestmentPercent ?? 65
+                    Text("This show's sale split: \(percent)% for buying and \(100 - percent)% saved for you.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if kind == .tradeReceiveCash {
+                    Text("All cash received from this trade goes to buying funds.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } else if let previewMessage {
+                Text(previewMessage).font(.subheadline).foregroundStyle(.secondary)
+            }
+            Text("Profit unavailable: acquisition costs are not tracked for this stock.")
+                .font(.caption).foregroundStyle(.secondary)
+        } header: { Text("Transaction preview") }
+    }
+
+    private func prepare() {
+        guard !didPrepare else { return }
+        didPrepare = true
+        var inventoryError: String?
+        do { try ShowInventoryBridge.seedFromImportedList(context: context, store: store) }
+        catch { inventoryError = error.localizedDescription }
+        showID = store.eligibleActiveShow?.id ?? store.visibleShows.first(where: { store.canRecord(showID: $0.id) })?.id
+        if incomingListID != nil { loadIncoming() }
+        if let inventoryError { error = inventoryError }
+    }
+
+    private func loadIncoming() {
+        incoming = []; capturedListID = nil; capturedListName = nil
+        incomingValueEdited = false; incomingValue = ""; incomingDefault = nil; makeEven = false
+        guard let incomingListID else { return }
+        guard let list = incomingLists.first(where: { $0.id == incomingListID }) else {
+            error = "This scanned list is no longer available. Choose another list."
+            return
+        }
+        do {
+            incoming = try ShowTransactionListService.incomingCards(for: list)
+            capturedListID = list.id; capturedListName = list.name
+            error = nil
+            updateIncomingDefault()
+        } catch { self.error = error.localizedDescription }
+    }
+
+    private func updateIncomingDefault() {
+        guard kind != .sale, let incomingListID,
+              let list = incomingLists.first(where: { $0.id == incomingListID }) else { return }
+        do {
+            incomingDefault = try ShowTransactionListService.defaultIncomingValue(for: list, kind: kind, context: context)
+            if !incomingValueEdited { incomingValue = incomingDefault.map(showTransactionInput) ?? "" }
+        } catch {
+            incomingDefault = nil
+            if !incomingValueEdited { incomingValue = "" }
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func preparedDraft() throws -> ShowTransactionDraft {
+        var draft = ShowTransactionDraft(id: draftID, kind: kind, note: note)
+        if kind != .sale {
+            guard let incomingListID, capturedListID == incomingListID, !incoming.isEmpty else {
+                throw ShowTransactionInputFailure.chooseIncoming
+            }
+            guard store.transaction(forListID: incomingListID) == nil else {
+                throw ShowTransactionFailure.incomingListAlreadyUsed
+            }
+            if let list = incomingLists.first(where: { $0.id == incomingListID }), hasLegacyOutcome(list) {
+                throw ShowTransactionFailure.legacyListOutcomeExists
+            }
+            guard let amount = ShowBudgetMoney.parse(incomingValue) else {
+                throw ShowTransactionInputFailure.invalidAmount(kind == .purchase ? "cash paid" : "incoming card value")
+            }
+            draft.incomingListID = capturedListID; draft.incomingListName = capturedListName
+            draft.incoming = incoming; draft.incomingValueCents = amount
+        }
+        if kind != .purchase {
+            draft.outgoing = outgoingQuantities.filter { $0.value > 0 }.sorted { $0.key.uuidString < $1.key.uuidString }
+                .map { ShowTransactionSelection(inventoryID: $0.key, quantity: $0.value) }
+            guard !draft.outgoing.isEmpty else { throw ShowTransactionInputFailure.chooseOutgoing }
+            for selection in draft.outgoing {
+                guard let stock = store.inventory.first(where: { $0.id == selection.inventoryID }),
+                      stock.quantity >= selection.quantity else { throw ShowTransactionFailure.insufficientStock }
+            }
+        }
+        if kind == .sale {
+            guard let amount = ShowBudgetMoney.parse(saleReceived) else {
+                throw ShowTransactionInputFailure.invalidAmount("actual cash received")
+            }
+            draft.saleReceivedCents = amount
+        } else if isTrade {
+            guard let amount = ShowBudgetMoney.parse(outgoingValue) else {
+                throw ShowTransactionInputFailure.invalidAmount("outgoing card value")
+            }
+            draft.outgoingValueCents = amount; draft.makeEven = makeEven
+            if kind == .trade && !makeEven && draft.incomingValueCents != amount {
+                throw ShowTransactionInputFailure.confirmEvenTrade
+            }
+            if kind == .tradePayCustomer && draft.incomingValueCents <= amount {
+                throw ShowTransactionInputFailure.cashDirection("Pay Customer requires incoming value greater than outgoing value.")
+            }
+            if kind == .tradeReceiveCash && amount <= draft.incomingValueCents {
+                throw ShowTransactionInputFailure.cashDirection("Receive Cash requires outgoing value greater than incoming value.")
+            }
+        }
+        return draft
+    }
+
+    private func record() {
+        focused = nil
+        guard !isRecording, let showID else { return }
+        isRecording = true
+        defer { isRecording = false }
+        do {
+            let draft = try preparedDraft()
+            _ = try ShowTransactionListService.record(draft, showID: showID, context: context, store: store)
+            dismiss()
+        } catch { self.error = error.localizedDescription }
+    }
+
+    private func hasLegacyOutcome(_ list: CardList) -> Bool {
+        list.transactionOutcomeData != nil && list.outcomeRecord?.kind != .nothingHappened
+    }
+}
+
+/// Historical card and money snapshots remain readable after source lists,
+/// shows, or working inventory have changed.
+@MainActor struct ShowTransactionDetailView: View {
+    let transactionID: UUID
+    @State private var store: ShowBudgetStore
+    @State private var confirmingUndo = false
+    @State private var error: String?
+    @State private var isUndoing = false
+
+    init(transactionID: UUID, store: ShowBudgetStore = .shared) {
+        self.transactionID = transactionID
+        _store = State(initialValue: store)
+    }
+
+    private var receipt: ShowTransactionReceipt? { store.transactions.first { $0.id == transactionID } }
+
+    var body: some View {
+        List {
+            if let receipt {
+                receiptSection(receipt)
+                if !receipt.incoming.isEmpty { cardsSection("Cards acquired", lines: receipt.incoming) }
+                if !receipt.outgoing.isEmpty { cardsSection("Cards released", lines: receipt.outgoing) }
+                moneySection(receipt)
+                if !receipt.draft.note.isEmpty { Section("Note") { Text(receipt.draft.note) } }
+                if let error {
+                    Section { Text(error).foregroundStyle(.orange).accessibilityIdentifier("showTransaction.undoError") }
+                }
+                if receipt.reversedAt == nil {
+                    Section {
+                        Button("Undo Transaction", role: .destructive) { confirmingUndo = true }
+                            .frame(maxWidth: .infinity, minHeight: 64)
+                            .disabled(!store.isLoaded || store.isSaving || isUndoing)
+                            .accessibilityIdentifier("showTransaction.undo")
+                    } footer: {
+                        Text("Review the stock and cash reversal before confirming. The original receipt remains in history.")
+                    }
+                }
+            } else {
+                ContentUnavailableView("Transaction unavailable", systemImage: "receipt",
+                                       description: Text("This transaction could not be found in your saved history."))
+            }
+        }
+        .navigationTitle("Transaction Receipt").navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $confirmingUndo) {
+            if let receipt { undoSheet(receipt) }
+        }
+    }
+
+    private func receiptSection(_ receipt: ShowTransactionReceipt) -> some View {
+        Section {
+            LabeledContent("Transaction", value: receipt.kind.title)
+            LabeledContent("Show", value: receipt.showName)
+            LabeledContent("Recorded", value: receipt.recordedAt.formatted(date: .abbreviated, time: .shortened))
+            if let name = receipt.incomingListName { LabeledContent("Incoming list", value: name) }
+            if let reversedAt = receipt.reversedAt {
+                Label("Undone", systemImage: "arrow.uturn.backward.circle.fill").foregroundStyle(.secondary)
+                    .accessibilityIdentifier("showTransaction.undone")
+                LabeledContent("Undone on", value: reversedAt.formatted(date: .abbreviated, time: .shortened))
+            }
+        }
+    }
+
+    private func cardsSection(_ title: String, lines: [ShowTransactionCardLine]) -> some View {
+        Section(title) {
+            ForEach(lines, id: \.inventoryID) { line in
+                ShowTransactionCardRow(card: line.card, quantity: line.quantity)
+            }
+        }
+    }
+
+    private func moneySection(_ receipt: ShowTransactionReceipt) -> some View {
+        Section {
+            if receipt.kind != .sale && receipt.kind != .purchase {
+                LabeledContent("Agreed incoming card value", value: showTransactionMoney(receipt.incomingValueCents))
+                LabeledContent("Agreed outgoing card value", value: showTransactionMoney(receipt.outgoingValueCents))
+            }
+            LabeledContent("Cash paid", value: showTransactionMoney(receipt.paidCents))
+                .accessibilityIdentifier("showTransaction.receipt.paid")
+            LabeledContent("Cash received", value: showTransactionMoney(receipt.receivedCents))
+                .accessibilityIdentifier("showTransaction.receipt.received")
+            LabeledContent("Allocated for buying", value: showTransactionMoney(receipt.reinvestedCents))
+            LabeledContent("Saved for you", value: showTransactionMoney(receipt.savedCents))
+            if receipt.concessionCents != 0 {
+                LabeledContent(receipt.concessionCents > 0 ? "Value conceded · No cash" : "Extra incoming value · No cash",
+                               value: showTransactionMoney(abs(receipt.concessionCents)))
+                    .accessibilityIdentifier("showTransaction.receipt.concession")
+            }
+            Text("Profit unavailable: acquisition costs are not tracked for this stock.")
+                .font(.caption).foregroundStyle(.secondary)
+        } header: { Text("Recorded amounts") } footer: {
+            Text("These are the original receipt amounts. Card prices above are market reference snapshots.")
+        }
+    }
+
+    private func undoSheet(_ receipt: ShowTransactionReceipt) -> some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text("Undo reverses this transaction's local stock and budget changes. Its receipt stays in history.")
+                }
+                Section("Stock reversal") {
+                    LabeledContent("Cards returned to stock", value: receipt.outgoing.reduce(0) { $0 + $1.quantity }.formatted())
+                    LabeledContent("Acquired cards removed", value: receipt.incoming.reduce(0) { $0 + $1.quantity }.formatted())
+                    Text("If acquired stock has been used in a later transaction, undo that later transaction first.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Cash reversal") {
+                    LabeledContent("Cash paid reversed", value: showTransactionMoney(receipt.paidCents))
+                    LabeledContent("Cash received reversed", value: showTransactionMoney(receipt.receivedCents))
+                    LabeledContent("Buying allocation removed", value: showTransactionMoney(receipt.reinvestedCents))
+                    LabeledContent("Savings removed", value: showTransactionMoney(receipt.savedCents))
+                }
+                if let error {
+                    Section { Text(error).foregroundStyle(.orange).accessibilityIdentifier("showTransaction.undoError") }
+                }
+                Section {
+                    Button(role: .destructive, action: undo) {
+                        HStack {
+                            Spacer()
+                            if isUndoing { ProgressView() }
+                            Text("Confirm Undo Transaction").font(.headline)
+                            Spacer()
+                        }.frame(minHeight: 64)
+                    }.disabled(isUndoing || store.isSaving || receipt.reversedAt != nil)
+                        .accessibilityIdentifier("showTransaction.confirmUndo")
+                }
+            }
+            .navigationTitle("Undo Transaction?").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { confirmingUndo = false } } }
+        }
+    }
+
+    private func undo() {
+        guard !isUndoing else { return }
+        isUndoing = true
+        defer { isUndoing = false }
+        do {
+            try store.undoTransaction(transactionID)
+            error = nil
+            confirmingUndo = false
+        } catch { self.error = error.localizedDescription }
+    }
+}
+
+private struct ShowTransactionCardRow: View {
+    let card: CardCandidate
+    let quantity: Int
+    var quantityTitle = "Quantity"
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            AsyncImage(url: card.imageURL) { phase in
+                if let image = phase.image { image.resizable().scaledToFit() }
+                else {
+                    RoundedRectangle(cornerRadius: 6).fill(.quaternary)
+                        .overlay { Image(systemName: "rectangle.portrait").foregroundStyle(.secondary) }
+                }
+            }.frame(width: 54, height: 76).clipShape(RoundedRectangle(cornerRadius: 6)).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(card.name).font(.headline).foregroundStyle(.primary)
+                Text([card.set, card.number.isEmpty ? "" : "#" + card.number].filter { !$0.isEmpty }.joined(separator: " · "))
+                    .font(.caption).foregroundStyle(.secondary)
+                Text(card.identity.printing + " · " + card.identity.condition)
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("\(quantityTitle): \(quantity)").font(.subheadline).foregroundStyle(.primary)
+                Text(card.marketPrice.map { "Market reference: " + $0.money + " each" } ?? "Market reference unavailable")
+                    .font(.caption).foregroundStyle(.secondary)
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        }.padding(.vertical, 4)
+    }
+}
+
+private enum ShowTransactionInputFailure: LocalizedError {
+    case chooseIncoming, chooseOutgoing, invalidAmount(String), confirmEvenTrade, cashDirection(String)
+    var errorDescription: String? {
+        switch self {
+        case .chooseIncoming: return "Choose a nonempty scanned list for the incoming cards."
+        case .chooseOutgoing: return "Select cards and quantities from your local stock."
+        case .invalidAmount(let label): return "Enter \(label) in USD with up to two decimal places."
+        case .confirmEvenTrade: return "Choose a cash trade type or tap Make Even Trade to confirm no cash changes hands."
+        case .cashDirection(let message): return message
+        }
+    }
+}
+
+private func showTransactionMoney(_ cents: Int64) -> String { ShowBudgetMoney.decimal(cents).money }
+private func showTransactionInput(_ cents: Int64) -> String {
+    String(cents / 100) + "." + String(format: "%02lld", cents % 100)
+}
+private func showTransactionCents(_ amount: Decimal) -> Int64? {
+    guard !amount.isNaN, amount >= 0, amount <= ShowBudgetMoney.decimal(ShowBudgetMoney.maximumCents) else { return nil }
+    var scaled = amount * 100
+    var rounded = Decimal.zero
+    NSDecimalRound(&rounded, &scaled, 0, .plain)
+    let cents = NSDecimalNumber(decimal: rounded).int64Value
+    return ShowBudgetMoney.isValid(cents) ? cents : nil
+}

@@ -67,6 +67,7 @@ extension CardList {
     /// from view dismissal, calculator changes, scanning, or offer persistence.
     static func set(_ kind: ListOutcomeKind?, for list: CardList, context: ModelContext, now: Date = .now,
                     save: @MainActor (ModelContext) throws -> Void = { try $0.save() }) throws {
+        guard ShowBudgetStore.shared.transaction(forListID: list.id) == nil else { throw ShowTransactionListFailure.alreadyRecorded }
         if let kind, list.outcomeRecord?.kind == kind { return }
         if kind == nil, list.transactionOutcomeData == nil { return }
         let next = try kind.map { try JSONEncoder().encode(ListOutcomeRecord(kind: $0, recordedAt: now)) }

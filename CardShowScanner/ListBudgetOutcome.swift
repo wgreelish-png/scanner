@@ -94,6 +94,7 @@ struct ListBudgetOutcomeRequest {
                        for list: CardList, context: ModelContext, store: ShowBudgetStore? = nil,
                        save: Save? = nil) throws -> ListBudgetOutcomeResult {
         let store = store ?? .shared
+        guard store.transaction(forListID: list.id) == nil else { throw ShowTransactionListFailure.alreadyRecorded }
         guard !context.hasChanges else { throw ListBudgetOutcomeFailure.unsavedChanges }
         let listID = list.id
         guard let current = try context.fetch(FetchDescriptor<CardList>(predicate: #Predicate { $0.id == listID })).first,

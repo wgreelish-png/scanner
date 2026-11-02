@@ -15,7 +15,7 @@ import XCTest
         let originalCount = count.label
 
         selectTab("Show", in: app)
-        XCTAssertTrue(app.navigationBars["Show Budget"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 5))
         selectTab("Research", in: app)
         XCTAssertTrue(app.buttons["home.psaResearch"].waitForExistence(timeout: 5))
         selectTab("Settings", in: app)
@@ -79,12 +79,19 @@ import XCTest
         let app = launch()
         defer { app.terminate() }
         selectTab("Lists", in: app)
-        let inventory = app.buttons["savedLists.cardShowInventory"]
-        XCTAssertTrue(inventory.waitForExistence(timeout: 5)); inventory.tap()
-        XCTAssertTrue(app.navigationBars["Card Show Inventory"].waitForExistence(timeout: 5))
+        let name = "UITest Return " + String(UUID().uuidString.prefix(8))
+        app.buttons["savedLists.newList"].tap()
+        let field = app.textFields["savedLists.newName"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5)); field.tap(); field.typeText(name + "\n")
+        app.buttons["savedLists.create"].tap()
+        let row = app.cells.containing(.staticText, identifier: name).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
+        XCTAssertTrue(app.navigationBars[name].waitForExistence(timeout: 5))
 
         selectTab("Show", in: app)
-        XCTAssertTrue(app.navigationBars["Show Budget"].waitForExistence(timeout: 5))
+        let inventory = app.buttons["show.inventory"]
+        XCTAssertTrue(inventory.waitForExistence(timeout: 5)); inventory.tap()
+        XCTAssertTrue(app.navigationBars["Show Inventory"].waitForExistence(timeout: 5))
         selectTab("Scan", in: app)
         let existing = app.buttons["home.openExistingLists"]
         for _ in 0..<5 {
@@ -100,7 +107,7 @@ import XCTest
         XCTAssertFalse(app.navigationBars["Show Budget"].isHittable)
         XCTAssertFalse(app.buttons["scanner.options"].exists)
         XCTAssertFalse(app.navigationBars["Choose the Card"].exists)
-        XCTAssertTrue(app.buttons["savedLists.cardShowInventory"].exists)
+        XCTAssertFalse(app.buttons["savedLists.cardShowInventory"].exists)
     }
 
     private func launch() -> XCUIApplication {
