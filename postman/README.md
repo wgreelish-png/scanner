@@ -1,5 +1,7 @@
 # TCGTracking Research diagnostics in Postman
 
+For estimating offline pricing download/storage size, import the separate [Pricing Cache Measurement collection](TCGTracking-Pricing-Cache-Measurement.postman_collection.json). It needs no credentials. Start with a 12-set Pokémon sample in Collection Runner, then use full mode if desired. Copy `tcgt_cache_summary` when it finishes; see [measurement instructions and limits](../docs/PricingCacheMeasurement.md).
+
 These three read-only requests reproduce the app's Direct Research path and the public set-list check. They do not scan cards, alter inventory, change prices, or resolve PSA certificate numbers.
 
 ## Import and run

@@ -24,13 +24,69 @@ import XCTest
     }
 
     func testCompletePaginationAndDistinctInventoryIDsForSameSKU() async throws {
-        let first = (1...500).map { row($0) }, last = [row(501)]
+        var first = (1...500).map { row($0) }
+        first[14] = row(15, quantity: 4, price: ["unavailable": true])
+        let last = [row(501, price: "12not-money")]
         let loader = InventoryImportLoader([.init(try locations()), .init(try page(first, total: 501, pages: 2)),
             .init(try page(last, number: 2, total: 501, pages: 2))])
         let result = try await client(loader).fetch(expectedLocationID: 42)
         XCTAssertEqual(result.rows.count, 501)
         XCTAssertEqual(Set(result.rows.map(\.inventoryID)).count, 501)
         XCTAssertEqual(Set(result.rows.map { $0.card.identity.skuID }).count, 1)
+        XCTAssertEqual(result.rows.map(\.inventoryID), Array(1...501))
+        XCTAssertEqual(result.rows.reduce(0) { $0 + $1.quantity }, 504)
+        XCTAssertEqual(result.rows[14].quantity, 4)
+        XCTAssertNil(result.rows[14].card.marketPrice)
+        XCTAssertNil(result.rows[500].card.marketPrice)
+        XCTAssertEqual(result.rows[13].card.marketPrice, Decimal(string: "3.50"))
+    }
+
+    func testLiteralJSONNumericAndStringQuotesImportWithoutLosingDecimalPrecision() async throws {
+        let literals = ["0", #""0""#, "6.77", #""6.77""#, "8.28", #""8.28""#, "8.6",
+            "0.1234567890123456789012345678", "1e-9", "6.77e-7", "677e-2", "8.600000000000001", "3.50", "6.77", "8.28"]
+        let expected = ["0", "0", "6.77", "6.77", "8.28", "8.28", "8.6", "0.1234567890123456789012345678",
+            "0.000000001", "0.000000677", "6.77", "8.600000000000001", "3.50", "6.77", "8.28"]
+        let body = try pageWithLiteralPrices(literals)
+        let loader = InventoryImportLoader([.init(try locations()), .init(body)])
+        let result = try await client(loader).fetch(expectedLocationID: 42)
+        XCTAssertEqual(result.rows.map(\.inventoryID), Array(1...literals.count))
+        XCTAssertEqual(result.rows.map { $0.card.marketPrice }, expected.map { Decimal(string: $0) })
+        let decoded = try CardShowInventoryDecoder.page(body, location: .init(id: 42, name: "Card Show"), requestedPage: 1)
+        XCTAssertEqual(decoded.marketPriceDiagnosticFields,
+            ["priced_records": "15", "unpriced_records": "0", "invalid_price_records": "0"])
+    }
+
+    func testMissingBlankAndMalformedOptionalQuotesKeepEveryRowWithUnavailablePrices() async throws {
+        var missing = row(6)
+        missing.removeValue(forKey: "market_price")
+        var rows = [row(1, price: "0"), row(2, price: 0), row(3, price: NSNull()), row(4, price: ""),
+                    row(5, price: " \t\n "), missing]
+        let malformed: [Any] = ["12not-money", true, false, ["amount": "6.77"], [], -1, "-0.01", "NaN",
+            "Infinity", "-Infinity", "6.77\njunk", "6.77.1", "6.77usd", "+6.77", "6,77", "1e2",
+            "0.000000001", "1000000000000", String(repeating: "9", count: 129)]
+        rows += malformed.enumerated().map { row($0.offset + 7, price: $0.element) }
+        let body = try page(rows)
+        let loader = InventoryImportLoader([.init(try locations()), .init(body)])
+        let result = try await client(loader).fetch(expectedLocationID: 42)
+        XCTAssertEqual(result.rows.map(\.inventoryID), Array(1...rows.count))
+        XCTAssertEqual(result.rows[0].card.marketPrice, 0)
+        XCTAssertEqual(result.rows[1].card.marketPrice, 0)
+        XCTAssertTrue(result.rows.dropFirst(2).allSatisfy { $0.card.marketPrice == nil },
+            "Unavailable market quotes must not become zero or use my_price/low_price")
+        let decoded = try CardShowInventoryDecoder.page(body, location: .init(id: 42, name: "Card Show"), requestedPage: 1)
+        XCTAssertEqual(decoded.marketPriceDiagnosticFields, ["priced_records": "2", "unpriced_records": String(rows.count - 2),
+            "invalid_price_records": String(malformed.count)])
+    }
+
+    func testOutOfRangeNumericQuotesStayUnavailableWithoutBecomingZero() async throws {
+        let body = try pageWithLiteralPrices(["1e-129", "1e127", "-6.77", "1000000000000"])
+        let loader = InventoryImportLoader([.init(try locations()), .init(body)])
+        let result = try await client(loader).fetch(expectedLocationID: 42)
+        XCTAssertEqual(result.rows.count, 4)
+        XCTAssertTrue(result.rows.allSatisfy { $0.card.marketPrice == nil })
+        let decoded = try CardShowInventoryDecoder.page(body, location: .init(id: 42, name: "Card Show"), requestedPage: 1)
+        XCTAssertEqual(decoded.marketPriceDiagnosticFields,
+            ["priced_records": "0", "unpriced_records": "4", "invalid_price_records": "4"])
     }
 
     func testMissingAmbiguousAndChangedLocationsDoNotRequestStock() async throws {
@@ -50,9 +106,9 @@ import XCTest
 
     func testRejectsOtherLocationsAndMalformedRowsInsteadOfPartiallyImporting() async throws {
         let changes: [[String: Any]] = [
-            ["location_id": 43], ["quantity": -1], ["quantity": true], ["product_id": 0], ["sku_id": NSNull()],
-            ["condition_name": NSNull()], ["variant_name": ""], ["market_price": "12not-money"],
-            ["market_price": true], ["inventory_type": "custom"]
+            ["inventory_id": NSNull()], ["location_id": 43], ["quantity": -1], ["quantity": true],
+            ["quantity": 1.5], ["quantity": "1.0"], ["quantity": 1_000_001], ["product_id": 0], ["sku_id": NSNull()],
+            ["condition_name": NSNull()], ["variant_name": ""], ["inventory_type": "custom"]
         ]
         for change in changes {
             let invalid = row(2).merging(change) { _, new in new }
@@ -198,6 +254,8 @@ import XCTest
         let event = try XCTUnwrap(events.first { $0["event"] as? String == "card_show_inventory.page_decoded" })
         let fields = try XCTUnwrap(event["fields"] as? [String: String])
         XCTAssertEqual(fields["page"], "1"); XCTAssertEqual(fields["records"], "2"); XCTAssertEqual(fields["total"], "2")
+        XCTAssertEqual(fields["priced_records"], "2"); XCTAssertEqual(fields["unpriced_records"], "0")
+        XCTAssertEqual(fields["invalid_price_records"], "0")
         XCTAssertTrue(events.contains { $0["event"] as? String == "card_show_inventory.snapshot_decoded" })
         XCTAssertFalse(text.contains("Synthetic inventory card")); XCTAssertFalse(text.contains("Synthetic set"))
     }
@@ -234,6 +292,14 @@ import XCTest
     private func page(_ rows: [[String: Any]], number: Int = 1, total: Int? = nil, pages: Int = 1) throws -> Data {
         try JSONSerialization.data(withJSONObject: ["success": true, "items": rows, "total": total ?? rows.count,
             "stock_total": total ?? rows.count, "custom_total": 0, "inventory_type": "stock", "page": number, "pages": pages, "limit": 500])
+    }
+    private func pageWithLiteralPrices(_ literals: [String]) throws -> Data {
+        let rows = literals.indices.map { row($0 + 1, price: "SYNTHETIC_PRICE_LITERAL_\($0)") }
+        var json = String(decoding: try page(rows), as: UTF8.self)
+        for (index, literal) in literals.enumerated() {
+            json = json.replacingOccurrences(of: "\"SYNTHETIC_PRICE_LITERAL_\(index)\"", with: literal)
+        }
+        return Data(json.utf8)
     }
     private func assertFailure(_ failure: CardShowInventoryFailure, operation: () async throws -> CardShowInventorySnapshot,
                                file: StaticString = #filePath, line: UInt = #line) async {

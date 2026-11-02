@@ -54,6 +54,14 @@ extension BetaIPAllowlistSync {
     private var evaluation: Task<Void, Never>?
     private var timeout: Task<Void, Never>?
     private var expectedShipperID = ""
+    private let history: any BetaAllowlistIPHistoryStoring
+    private var previousPhoneIP: String?
+    private var pendingHistory: (shipperID: String, ip: String)?
+
+    init(history: (any BetaAllowlistIPHistoryStoring)? = nil) {
+        self.history = history ?? BetaAllowlistIPHistoryStore()
+        super.init()
+    }
 
     static func allowsPage(_ url: URL?) -> Bool {
         // URL.path can normalize a trailing slash on Apple platforms. Match the
@@ -70,6 +78,13 @@ extension BetaIPAllowlistSync {
             return .init(status: .accessDenied)
         }
         expectedShipperID = credentials.shipperID
+        do {
+            if let pendingHistory, pendingHistory.shipperID == credentials.shipperID {
+                try history.remember(pendingHistory.ip, for: pendingHistory.shipperID)
+                self.pendingHistory = nil
+            }
+            previousPhoneIP = try history.previousIP(for: credentials.shipperID)
+        } catch { return .init(status: .historyUnavailable) }
         let id = UUID(); generation = id
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
@@ -103,7 +118,7 @@ extension BetaIPAllowlistSync {
 
     private func finish(_ result: Result<BetaAllowlistSyncResult, Error>) {
         generation = nil; evaluation?.cancel(); evaluation = nil; timeout?.cancel(); timeout = nil
-        navigation = nil; expectedShipperID = ""
+        navigation = nil; expectedShipperID = ""; previousPhoneIP = nil
         if let view = webView {
             view.navigationDelegate = nil; view.uiDelegate = nil
             view.evaluateJavaScript("globalThis.__CardShowBetaAllowlistAbort?.abort();")
@@ -129,13 +144,13 @@ extension BetaIPAllowlistSync {
               let source = try? String(contentsOf: url, encoding: .utf8) else {
             finish(.success(.init(status: .pageChanged))); return
         }
-        let shipper = expectedShipperID
+        let shipper = expectedShipperID, previous = previousPhoneIP
         let store = ResearchConnectionStore()
         evaluation = Task { [weak self, weak webView] in
             guard let self, let webView else { return }
             do {
                 let value = try await webView.callAsyncJavaScript(source,
-                    arguments: ["operation": "probe", "expectedIP": "", "expectedShipperID": shipper],
+                    arguments: ["operation": "probe", "expectedIP": "", "expectedShipperID": shipper, "previousIP": previous ?? ""],
                     in: nil, contentWorld: .page)
                 try Task.checkCancellation()
                 guard self.isCurrent(id, view: webView) else { return }
@@ -150,10 +165,18 @@ extension BetaIPAllowlistSync {
                       probe["shipperID"] as? String == shipper else {
                     self.finish(.success(.init(status: .pageChanged))); return
                 }
-                if BetaAllowlistAddress.isCurrentSingleton(allowed, detectedIP: ip) {
-                    self.finish(.success(.init(status: .alreadyCurrent, ip: canonicalIP))); return
+                let merged: [String]
+                do { merged = try BetaAllowlistPhoneUpdate.target(allowed, previousIP: previous, currentIP: ip) }
+                catch BetaAllowlistMergeFailure.capacityReached {
+                    self.finish(.success(.init(status: .capacityReached))); return
                 }
-                // Revalidate immediately before the single replacement POST.
+                catch { self.finish(.success(.init(status: .pageChanged))); return }
+                if BetaAllowlistPhoneUpdate.sameAddresses(allowed, merged) {
+                    self.finish(.success(self.rememberConfirmed(.init(status: .alreadyCurrent, ip: canonicalIP), shipperID: shipper)))
+                    return
+                }
+                // The provider accepts a full-list POST; the bundled script
+                // merges only the recorded phone address into the latest page.
                 // A separate empty-list save must never be sent.
                 guard self.isCurrent(id, view: webView),
                       try ResearchAccessMethod.selected(store: store) == .direct,
@@ -161,11 +184,12 @@ extension BetaIPAllowlistSync {
                     self.finish(.failure(CancellationError())); return
                 }
                 let saved = try await webView.callAsyncJavaScript(source,
-                    arguments: ["operation": "save", "expectedIP": ip, "expectedShipperID": shipper],
+                    arguments: ["operation": "save", "expectedIP": ip, "expectedShipperID": shipper, "previousIP": previous ?? ""],
                     in: nil, contentWorld: .page)
                 try Task.checkCancellation()
                 guard self.isCurrent(id, view: webView) else { return }
-                self.finish(.success(Self.result(from: saved, confirmedIP: canonicalIP)))
+                let result = Self.result(from: saved, confirmedIP: canonicalIP, previousIP: previous, protectedIPs: allowed)
+                self.finish(.success(self.rememberConfirmed(result, shipperID: shipper)))
             } catch {
                 guard self.generation == id else { return }
                 self.finish(Task.isCancelled ? .failure(CancellationError()) : .success(.init(status: .networkFailed)))
@@ -173,13 +197,28 @@ extension BetaIPAllowlistSync {
         }
     }
 
-    static func result(from value: Any?, confirmedIP: String? = nil) -> BetaAllowlistSyncResult {
+    private func rememberConfirmed(_ result: BetaAllowlistSyncResult, shipperID: String) -> BetaAllowlistSyncResult {
+        guard result.status == .saved || result.status == .alreadyCurrent, let ip = result.ip else { return result }
+        if let previousPhoneIP, BetaAllowlistAddress.matches(previousPhoneIP, ip) { return result }
+        do {
+            try history.remember(ip, for: shipperID)
+            if pendingHistory?.shipperID == shipperID { pendingHistory = nil }
+            return result
+        } catch {
+            pendingHistory = (shipperID, ip)
+            return .init(status: .historyUnavailable)
+        }
+    }
+
+    static func result(from value: Any?, confirmedIP: String? = nil, previousIP: String? = nil,
+                       protectedIPs: [String] = []) -> BetaAllowlistSyncResult {
         guard let object = value as? [String: Any], let raw = object["status"] as? String else {
             return .init(status: .pageChanged)
         }
         let status: BetaAllowlistSyncResult.Status
         switch raw {
         case "saved": status = .saved
+        case "capacity_reached": status = .capacityReached
         case "already_current": status = .alreadyCurrent
         case "sign_in_required": status = .signInRequired
         case "account_mismatch": status = .accountMismatch
@@ -191,7 +230,7 @@ extension BetaIPAllowlistSync {
         }
         if status == .saved || status == .alreadyCurrent {
             guard let confirmedIP, let returned = object["allowedIPs"] as? [String],
-                  BetaAllowlistAddress.isCurrentSingleton(returned, detectedIP: confirmedIP) else {
+                  BetaAllowlistPhoneUpdate.confirms(returned, protected: protectedIPs, previousIP: previousIP, currentIP: confirmedIP) else {
                 return .init(status: .saveFailed)
             }
             return .init(status: status, ip: confirmedIP)

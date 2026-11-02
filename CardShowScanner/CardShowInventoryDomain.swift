@@ -114,6 +114,30 @@ enum CardShowInventoryDecoder {
         let pages: Int
         let total: Int
         let rows: [CardShowInventoryRow]
+        let invalidPriceRecords: Int
+
+        var marketPriceDiagnosticFields: [String: String] {
+            let priced = rows.filter { $0.card.marketPrice != nil }.count
+            return ["priced_records": String(priced), "unpriced_records": String(rows.count - priced),
+                    "invalid_price_records": String(invalidPriceRecords)]
+        }
+    }
+
+    /// Decode numeric quotes from their JSON tokens rather than from an
+    /// NSNumber's binary floating-point rendering. All inventory validation
+    /// still uses the existing bounded envelope/row decoder below.
+    private struct MarketPrices: Decodable {
+        let items: [MarketPriceValue]
+    }
+
+    private struct MarketPriceValue: Decodable {
+        let value: Decimal?
+        private enum CodingKeys: String, CodingKey { case marketPrice = "market_price" }
+
+        init(from decoder: any Decoder) throws {
+            let fields = try decoder.container(keyedBy: CodingKeys.self)
+            value = try? fields.decode(Decimal.self, forKey: .marketPrice)
+        }
     }
 
     static func location(_ data: Data, expectedID: Int?) throws -> CardShowInventoryLocation {
@@ -187,10 +211,17 @@ enum CardShowInventoryDecoder {
             if let customTotal = body["custom_total"], integer(customTotal) != 0 {
                 throw CardShowInventoryValidationFailure(.pagination, .customTotal)
             }
+            guard let prices = try? JSONDecoder().decode(MarketPrices.self, from: data),
+                  prices.items.count == items.count else {
+                throw CardShowInventoryValidationFailure(.pagination, .itemsShape)
+            }
             var seen = Set<Int>()
+            var invalidPriceRecords = 0
             let rows = try items.enumerated().map { index, item -> CardShowInventoryRow in
                 do {
-                    let row = try inventoryRow(item, location: location)
+                    let price = marketPrice(item["market_price"], numericPrice: prices.items[index].value)
+                    if price.invalid { invalidPriceRecords += 1 }
+                    let row = try inventoryRow(item, location: location, marketPrice: price.value)
                     guard seen.insert(row.inventoryID).inserted else {
                         throw CardShowInventoryValidationFailure(.row, .duplicateInventory)
                     }
@@ -199,13 +230,14 @@ enum CardShowInventoryDecoder {
                     error.recordIndex = index; throw error
                 }
             }
-            return .init(page: page, pages: pages, total: total, rows: rows)
+            return .init(page: page, pages: pages, total: total, rows: rows, invalidPriceRecords: invalidPriceRecords)
         } catch var error as CardShowInventoryValidationFailure {
             error.page = requestedPage; throw error
         }
     }
 
-    private static func inventoryRow(_ item: [String: Any], location: CardShowInventoryLocation) throws -> CardShowInventoryRow {
+    private static func inventoryRow(_ item: [String: Any], location: CardShowInventoryLocation,
+                                     marketPrice: Decimal?) throws -> CardShowInventoryRow {
         guard let inventoryID = integer(item["inventory_id"]), inventoryID > 0 else { throw invalidRow(.inventoryID) }
         guard integer(item["location_id"]) == location.id else { throw invalidRow(.locationMismatch) }
         guard let quantity = integer(item["quantity"]), (0...1_000_000).contains(quantity) else { throw invalidRow(.quantity) }
@@ -229,7 +261,6 @@ enum CardShowInventoryDecoder {
             guard let returned = text(item["ext_number"], maximum: 100) else { throw invalidRow(.number) }
             number = returned
         }
-        let price = try marketPrice(item["market_price"])
         let image: URL?
         if item["image_url"] == nil || item["image_url"] is NSNull || item["image_url"] as? String == "" { image = nil }
         else {
@@ -241,7 +272,7 @@ enum CardShowInventoryDecoder {
         }
         let card = CardCandidate(identity: .init(game: normalizedGame(game), productID: "p:\(productID)", skuID: String(skuID),
             printing: printing, language: language, condition: condition), name: name, set: set, number: number,
-            marketPrice: price, imageURL: image, confidence: 0, printings: [printing])
+            marketPrice: marketPrice, imageURL: image, confidence: 0, printings: [printing])
         return .init(inventoryID: inventoryID, card: card, quantity: quantity)
     }
 
@@ -275,17 +306,37 @@ enum CardShowInventoryDecoder {
               !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return nil }
         return value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
-    private static func marketPrice(_ value: Any?) throws -> Decimal? {
-        guard let value, !(value is NSNull) else { return nil }
+    /// An optional quote cannot invalidate an otherwise complete inventory row.
+    /// Validate the entire token before Decimal parsing, which otherwise accepts
+    /// numeric prefixes. Unusable quotes stay unavailable, distinct from zero.
+    private static func marketPrice(_ value: Any?, numericPrice: Decimal?) -> (value: Decimal?, invalid: Bool) {
+        guard let value, !(value is NSNull) else { return (nil, false) }
         let raw: String
-        if let value = value as? String { raw = value }
-        else if let value = value as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID() { raw = value.stringValue }
-        else { throw invalidRow(.price) }
-        guard raw.range(of: #"^\d{1,12}(?:\.\d{1,8})?$"#, options: .regularExpression) != nil,
-              let price = Decimal(string: raw, locale: Locale(identifier: "en_US_POSIX")), !price.isNaN else {
-            throw invalidRow(.price)
+        let pattern: String
+        let isNumeric: Bool
+        if let value = value as? String {
+            raw = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if raw.isEmpty { return (nil, false) }
+            pattern = #"[0-9]{1,12}(?:\.[0-9]{1,8})?"#
+            isNumeric = false
+        } else if let value = value as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID() {
+            raw = value.stringValue
+            // JSON numeric values may use exponent notation or more decimal
+            // places than price strings, especially for small market values.
+            pattern = #"[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?"#
+            isNumeric = true
+        } else { return (nil, true) }
+        guard raw.utf8.count <= 128,
+              raw.range(of: pattern, options: .regularExpression) == (raw.startIndex..<raw.endIndex) else {
+            return (nil, true)
         }
-        return price
+        let decoded = isNumeric ? numericPrice : Decimal(string: raw, locale: Locale(identifier: "en_US_POSIX"))
+        guard let price = decoded, !price.isNaN, price >= 0, price < Decimal(1_000_000_000_000) else {
+            return (nil, true)
+        }
+        let mantissa = raw.prefix { $0 != "e" && $0 != "E" }
+        if price == 0 && mantissa.utf8.contains(where: { (49...57).contains($0) }) { return (nil, true) }
+        return (price, false)
     }
     private static func invalidRow(_ reason: CardShowInventoryValidationFailure.Reason) -> CardShowInventoryValidationFailure {
         .init(.row, reason)

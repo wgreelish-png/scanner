@@ -2,6 +2,40 @@ import XCTest
 @testable import CardShowScanner
 
 final class BetaAllowlistPolicyTests: XCTestCase {
+    func testPhoneMergePreservesOtherEntriesAndUnknownPriorHistoryOnlyAddsCurrent() throws {
+        XCTAssertEqual(try BetaAllowlistPhoneUpdate.target(["9.9.9.9", "1.1.1.1", "8.8.4.4"],
+            previousIP: "1.1.1.1", currentIP: "8.8.8.8"), ["9.9.9.9", "8.8.4.4", "8.8.8.8"])
+        XCTAssertEqual(try BetaAllowlistPhoneUpdate.target(["9.9.9.9", "1.1.1.1"],
+            previousIP: nil, currentIP: "8.8.8.8"), ["9.9.9.9", "1.1.1.1", "8.8.8.8"])
+        XCTAssertEqual(try BetaAllowlistPhoneUpdate.target(["9.9.9.9", "8.8.8.8"],
+            previousIP: "8.8.8.8", currentIP: "8.8.8.8"), ["9.9.9.9", "8.8.8.8"])
+        XCTAssertEqual(try BetaAllowlistPhoneUpdate.target(["9.9.9.9", "1.1.1.1", "8.8.8.8"],
+            previousIP: "1.1.1.1", currentIP: "8.8.8.8"), ["9.9.9.9", "8.8.8.8"])
+    }
+
+    func testFullAllowlistNeverEvictsAnotherAddress() throws {
+        let existing = (1...10).map { "8.8.4.\($0)" }
+        XCTAssertThrowsError(try BetaAllowlistPhoneUpdate.target(existing, previousIP: nil, currentIP: "8.8.8.8")) {
+            XCTAssertEqual($0 as? BetaAllowlistMergeFailure, .capacityReached)
+        }
+        let replaced = try BetaAllowlistPhoneUpdate.target(existing, previousIP: existing[4], currentIP: "8.8.8.8")
+        XCTAssertEqual(replaced.count, 10)
+        XCTAssertTrue(Set(existing.filter { $0 != existing[4] }).isSubset(of: Set(replaced)))
+    }
+
+    func testPhoneMergeKeepsUnfamiliarEntriesAndMatchesEquivalentIPv6() throws {
+        let old = "2606:4700:4700::1111", expanded = "2606:4700:4700:0000:0000:0000:0000:1111"
+        let preserved = "8.8.4.0/24"
+        XCTAssertEqual(try BetaAllowlistPhoneUpdate.target([preserved, expanded, "9.9.9.9"],
+            previousIP: old, currentIP: "8.8.8.8"), [preserved, "9.9.9.9", "8.8.8.8"])
+        XCTAssertTrue(BetaAllowlistPhoneUpdate.confirms([preserved, "9.9.9.9", "8.8.8.8", "1.1.1.1"],
+            protected: [preserved, expanded, "9.9.9.9"], previousIP: old, currentIP: "8.8.8.8"))
+        XCTAssertFalse(BetaAllowlistPhoneUpdate.confirms(["8.8.8.8"],
+            protected: [preserved, expanded, "9.9.9.9"], previousIP: old, currentIP: "8.8.8.8"))
+        XCTAssertThrowsError(try BetaAllowlistPhoneUpdate.target(["9.9.9.9"], previousIP: "invalid", currentIP: "8.8.8.8"))
+        XCTAssertThrowsError(try BetaAllowlistPhoneUpdate.target(["9.9.9.9\n1.1.1.1"], previousIP: nil, currentIP: "8.8.8.8"))
+    }
+
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
     func testPublicIPv4AndAnycastAssignmentsAreAccepted() {

@@ -27,7 +27,7 @@ function fixture(options = {}) {
     async fetch(url, request) {
       requests.push({ url, ...request });
       if (options.fetch) return options.fetch(url, request);
-      return new Response(options.rawBody ?? JSON.stringify(options.body ?? { ok: true, allowed_ips: [options.ip ?? fixtureIP] }), {
+      return new Response(options.rawBody ?? JSON.stringify(options.body ?? { ok: true, allowed_ips: JSON.parse(request.body).allowed_ips.split('\n') }), {
         status: options.status ?? 200,
         headers: { 'Content-Type': options.contentType ?? 'application/json; charset=UTF-8', ...options.headers }
       });
@@ -36,12 +36,12 @@ function fixture(options = {}) {
   if (!options.noToken) vm.runInContext(`const CSRF_TOKEN = ${JSON.stringify(options.token ?? fixtureToken)};`, context);
   if (!options.noIP) vm.runInContext(`const DETECTED_IP = ${JSON.stringify(options.ip ?? fixtureIP)};`, context);
   if (!options.noShipper) vm.runInContext(`const SHIPPER_ID = ${JSON.stringify(options.shipperID ?? 4881)};`, context);
-  const execute = vm.runInContext(`(async function(operation, expectedIP, expectedShipperID) { ${source}\n})`, context);
+  const execute = vm.runInContext(`(async function(operation, expectedIP, expectedShipperID, previousIP) { ${source}\n})`, context);
   return {
     context, requests, input, location, timers,
-    async run(operation = 'probe', expectedIP = options.ip ?? fixtureIP, expectedShipperID = '4881') {
+    async run(operation = 'probe', expectedIP = options.ip ?? fixtureIP, expectedShipperID = '4881', previousIP = options.previousIP ?? '') {
       // JSON removes VM-realm prototypes while preserving the exact public result.
-      return JSON.parse(JSON.stringify(await execute(operation, expectedIP, expectedShipperID)));
+      return JSON.parse(JSON.stringify(await execute(operation, expectedIP, expectedShipperID, previousIP)));
     },
     fireTimeout() { for (const timer of [...timers.values()]) timer.fn(); }
   };
@@ -56,9 +56,9 @@ test('probe reads the real page IP and existing addresses without writing or exp
   assert.equal(JSON.stringify(await f.run()).includes(fixtureToken), false);
 });
 
-test('save replaces previous addresses atomically with one exact current IP using the website session', async () => {
-  const f = fixture();
-  assert.deepEqual(await f.run('save'), { status: 'saved', ip: fixtureIP, allowedIPs: [fixtureIP] });
+test('save removes only the recorded phone IP and preserves other addresses in the single website request', async () => {
+  const f = fixture({ previousIP: '198.51.100.19' });
+  assert.deepEqual(await f.run('save'), { status: 'saved', ip: fixtureIP, allowedIPs: ['2001:db8::5', fixtureIP] });
   assert.equal(f.requests.length, 1);
   const request = f.requests[0];
   assert.equal(request.url, 'https://tcgtracking.com/apiforbeta');
@@ -67,19 +67,19 @@ test('save replaces previous addresses atomically with one exact current IP usin
   assert.equal(request.redirect, 'error');
   assert.equal(request.cache, 'no-store');
   assert.deepEqual({ ...request.headers }, { 'Content-Type': 'application/json', 'X-CSRF-Token': fixtureToken });
-  assert.deepEqual(JSON.parse(request.body), { action: 'save_ips', allowed_ips: fixtureIP, csrf_token: fixtureToken });
-  assert.equal(f.input.value, fixtureIP);
+  assert.deepEqual(JSON.parse(request.body), { action: 'save_ips', allowed_ips: '2001:db8::5\n' + fixtureIP, csrf_token: fixtureToken });
+  assert.equal(f.input.value, '2001:db8::5\n' + fixtureIP);
   assert.equal(f.timers.size, 0);
   assert.equal(f.context.__CardShowBetaAllowlistAbort, undefined);
 });
 
-test('an already-current singleton skips POST, but an additional old address is replaced', async () => {
+test('an already-current IP skips POST and retains every other address when no previous IP is known', async () => {
   const current = fixture({ allowedText: `\n${fixtureIP}\r\n` });
   assert.deepEqual(await current.run('save'), { status: 'already_current', ip: fixtureIP, allowedIPs: [fixtureIP] });
   assert.equal(current.requests.length, 0);
   const extra = fixture({ allowedText: `${fixtureIP}\n198.51.100.19` });
-  assert.equal((await extra.run('save')).status, 'saved');
-  assert.equal(extra.requests.length, 1);
+  assert.deepEqual(await extra.run('save'), { status: 'already_current', ip: fixtureIP, allowedIPs: [fixtureIP, '198.51.100.19'] });
+  assert.equal(extra.requests.length, 0);
 });
 
 test('an empty existing allowlist is populated without an intermediate clear request', async () => {
@@ -91,20 +91,20 @@ test('an empty existing allowlist is populated without an intermediate clear req
 
 test('IPv6 is preserved exactly as detected by the provider, including compressed and embedded IPv4 forms', async () => {
   for (const ip of ['2001:db8:0:1::abcd', '2001:0DB8:0:0:0:0:0:1', '::ffff:192.0.2.128']) {
-    const f = fixture({ ip });
+    const f = fixture({ ip, allowedText: '' });
     assert.equal((await f.run()).ip, ip);
     assert.equal((await f.run('save')).status, 'saved');
     assert.equal(JSON.parse(f.requests[0].body).allowed_ips, ip);
   }
 });
 
-test('equivalent expanded, uppercase and mapped IPv6 responses preserve the provider-confirmed singleton', async () => {
+test('equivalent expanded, uppercase and mapped IPv6 responses preserve the provider-confirmed current IP', async () => {
   for (const [ip, returned] of [
     ['2606:4700:4700::abcd', '2606:4700:4700:0000:0000:0000:0000:ABCD'],
     ['2606:4700:4700:0:0:0:0:1111', '2606:4700:4700::1111'],
     ['::ffff:8.8.8.8', '8.8.8.8']
   ]) {
-    const f = fixture({ ip, body: { ok: true, allowed_ips: [returned] } });
+    const f = fixture({ ip, allowedText: '', body: { ok: true, allowed_ips: [returned] } });
     assert.deepEqual(await f.run('save'), { status: 'saved', ip, allowedIPs: [returned] });
     assert.equal(f.input.value, returned);
     assert.equal(f.requests.length, 1);
@@ -215,7 +215,7 @@ test('rate limits expose only a bounded numeric wait, never provider error text'
   }
 });
 
-test('HTTP 200 is insufficient: only an explicit success with the exact singleton is accepted', async () => {
+test('HTTP 200 is insufficient: the complete merged allowlist must be confirmed', async () => {
   const bodies = [{ ok: false, error: 'private-token' }, { ok: 'true', allowed_ips: [fixtureIP] },
     { ok: true }, { ok: true, allowed_ips: [] }, { ok: true, allowed_ips: [fixtureIP, '198.51.100.1'] },
     { ok: true, allowed_ips: ['198.51.100.1'] }, { success: true, allowed_ips: [fixtureIP] }];
@@ -286,7 +286,7 @@ test('a response from a previous page cannot update the current form or report c
   const f = fixture({ fetch: async () => new Promise(resolve => { complete = resolve; }) });
   const pending = f.run('save');
   f.location.href = 'https://tcgtracking.com/login.php';
-  complete(new Response(JSON.stringify({ ok: true, allowed_ips: [fixtureIP] }),
+  complete(new Response(JSON.stringify({ ok: true, allowed_ips: ['198.51.100.19', '2001:db8::5', fixtureIP] }),
     { status: 200, headers: { 'Content-Type': 'application/json' } }));
   assert.deepEqual(await pending, { status: 'page_changed' });
   assert.equal(f.input.value, '198.51.100.19\n2001:db8::5');
@@ -296,4 +296,82 @@ test('cancellation remains safe after navigation and does not require a valid to
   const f = fixture({ href: 'about:blank', noToken: true, noInput: true });
   assert.deepEqual(await f.run('cancel'), { status: 'cancelled' });
   assert.equal(f.requests.length, 0);
+});
+
+test('first updated run adds the phone IP without guessing which existing address belonged to it', async () => {
+  const f = fixture();
+  assert.deepEqual(await f.run('save'), { status: 'saved', ip: fixtureIP,
+    allowedIPs: ['198.51.100.19', '2001:db8::5', fixtureIP] });
+  assert.equal(JSON.parse(f.requests[0].body).allowed_ips, '198.51.100.19\n2001:db8::5\n' + fixtureIP);
+});
+
+test('save rereads the form after probe and preserves newly added other-device entries', async () => {
+  const f = fixture({ previousIP: '198.51.100.19' });
+  await f.run('probe');
+  f.input.value += '\n198.51.100.88';
+  assert.deepEqual(await f.run('save'), { status: 'saved', ip: fixtureIP,
+    allowedIPs: ['2001:db8::5', '198.51.100.88', fixtureIP] });
+  assert.equal(f.requests.length, 1);
+});
+
+test('when current IP is already present, only the recorded different previous IP is removed', async () => {
+  const f = fixture({ previousIP: '198.51.100.19',
+    allowedText: `${fixtureIP}\n198.51.100.19\n2001:db8::5` });
+  assert.deepEqual(await f.run('save'), { status: 'saved', ip: fixtureIP,
+    allowedIPs: [fixtureIP, '2001:db8::5'] });
+  assert.equal(JSON.parse(f.requests[0].body).allowed_ips, `${fixtureIP}\n2001:db8::5`);
+});
+
+test('same previous and current IP leaves all other addresses untouched and skips POST', async () => {
+  const f = fixture({ previousIP: fixtureIP, allowedText: `198.51.100.19\n${fixtureIP}\n2001:db8::5` });
+  assert.deepEqual(await f.run('save'), { status: 'already_current', ip: fixtureIP,
+    allowedIPs: ['198.51.100.19', fixtureIP, '2001:db8::5'] });
+  assert.equal(f.requests.length, 0);
+});
+
+test('capacity blocks adding an unknown phone address without evicting another device', async () => {
+  const otherIPs = Array.from({ length: 10 }, (_, index) => `198.51.100.${index + 1}`);
+  const full = fixture({ allowedText: otherIPs.join('\n') });
+  assert.deepEqual(await full.run('save'), { status: 'capacity_reached' });
+  assert.equal(full.requests.length, 0); assert.equal(full.input.value, otherIPs.join('\n'));
+  const replaceOwn = fixture({ allowedText: otherIPs.join('\n'), previousIP: otherIPs[4] });
+  const result = await replaceOwn.run('save');
+  assert.equal(result.status, 'saved'); assert.equal(result.allowedIPs.length, 10);
+  assert.deepEqual(result.allowedIPs, [...otherIPs.filter(value => value !== otherIPs[4]), fixtureIP]);
+});
+
+test('canonical previous IPv6 and mapped spellings remove only the equivalent recorded address', async () => {
+  for (const [previousIP, stored] of [
+    ['2606:4700:4700::1111', '2606:4700:4700:0:0:0:0:1111'],
+    ['8.8.8.8', '::ffff:8.8.8.8']
+  ]) {
+    const f = fixture({ previousIP, allowedText: `${stored}\n198.51.100.19` });
+    assert.deepEqual(await f.run('save'), { status: 'saved', ip: fixtureIP,
+      allowedIPs: ['198.51.100.19', fixtureIP] });
+  }
+});
+
+test('existing range or unfamiliar entries are preserved verbatim rather than discarded', async () => {
+  const f = fixture({ previousIP: '198.51.100.19',
+    allowedText: '198.51.100.0/24\nprovider-managed-entry\n198.51.100.19' });
+  assert.deepEqual(await f.run('save'), { status: 'saved', ip: fixtureIP,
+    allowedIPs: ['198.51.100.0/24', 'provider-managed-entry', fixtureIP] });
+});
+
+test('provider reordering and duplicate normalization are accepted only when every address survives', async () => {
+  const f = fixture({ allowedText: '198.51.100.19\n198.51.100.19',
+    body: { ok: true, allowed_ips: [fixtureIP, '198.51.100.19'] } });
+  assert.deepEqual(await f.run('save'), { status: 'saved', ip: fixtureIP,
+    allowedIPs: [fixtureIP, '198.51.100.19'] });
+  const missingOther = fixture({ body: { ok: true, allowed_ips: [fixtureIP] } });
+  assert.deepEqual(await missingOther.run('save'), { status: 'save_failed' });
+  assert.equal(missingOther.input.value, '198.51.100.19\n2001:db8::5');
+});
+
+test('invalid previous history cannot remove or rewrite existing addresses', async () => {
+  for (const previousIP of ['198.51.100.0/24', 'https://evil.example', '198.51.100.1\n198.51.100.2']) {
+    const f = fixture({ previousIP });
+    assert.deepEqual(await f.run('save'), { status: 'page_changed' });
+    assert.equal(f.requests.length, 0);
+  }
 });

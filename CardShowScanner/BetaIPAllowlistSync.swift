@@ -4,6 +4,8 @@ import Combine
 struct BetaAllowlistSyncResult: Equatable, Sendable {
     enum Status: String, Sendable {
         case saved
+        case capacityReached = "capacity_reached"
+        case historyUnavailable = "history_unavailable"
         case alreadyCurrent = "already_current"
         case signInRequired = "sign_in_required"
         case accountMismatch = "account_mismatch"
@@ -23,15 +25,15 @@ struct BetaAllowlistSyncResult: Equatable, Sendable {
 }
 
 @MainActor protocol BetaAllowlistSyncRunning: AnyObject {
-    /// Detects the website's current public IP and atomically replaces its saved
-    /// allowlist when needed. It must never clear the list in a separate request.
+    /// Detects the current phone address, replaces only its recorded previous
+    /// address and preserves the account's other entries in the same save.
     func run() async throws -> BetaAllowlistSyncResult
     /// Immediately retires the page and any pending native continuation.
     func cancel()
 }
 
-/// Owns foreground-only checks. Neither IPs nor website authentication material
-/// are persisted here; only the user's enabled preference survives relaunches.
+/// Owns foreground-only checks. The runner keeps only per-account phone IP
+/// history in device-only Keychain; website authentication never enters it.
 @MainActor final class BetaIPAllowlistSync: ObservableObject {
     static let enabledKey = "betaAutomaticIPAllowlist"
     enum Configuration: Equatable, Sendable { case direct, server, missing, unavailable }
@@ -185,8 +187,14 @@ struct BetaAllowlistSyncResult: Equatable, Sendable {
             policy.recordSuccess(at: current)
             lastIP = canonical; lastCheckedAt = current
             status = result.status == .saved
-                ? "The allowlist now contains only this phone’s current public IP."
-                : "This phone’s current public IP is already the only allowed address."
+                ? "This iPhone’s IP was updated. Other allowed addresses were preserved."
+                : "This iPhone’s current public IP is already allowed."
+        case .capacityReached:
+            policy.recordFailure(at: current)
+            status = "The allowlist is full. Remove an unused address on TCGTracking before adding this iPhone; other addresses were kept."
+        case .historyUnavailable:
+            policy.recordFailure(at: current)
+            status = "This iPhone’s saved IP history is unavailable. Unlock the phone and recheck before relying on automatic updates."
         case .signInRequired:
             policy.recordFailure(at: current)
             needsSignIn = true

@@ -27,7 +27,7 @@ struct BetaAllowlistSettingsSection: View {
                     .accessibilityIdentifier("betaAllowlist.signIn")
             }
         } header: { Text("Automatic Beta IP access") } footer: {
-            Text("While this app is active, it checks on launch, when you return, after network changes, and once a minute. It replaces ALL allowed IP addresses with this iPhone’s current public IP. Other phones and servers will lose access. Requires a signed-in TCGTracking website session for the same Shipper ID. Checks stop when you leave the app.")
+            Text("While this app is active, it checks on launch, when you return, after network changes, and once a minute. It replaces only the previous IP recorded by this iPhone and preserves other allowed addresses. The first check adds this phone without removing existing entries. Requires a signed-in TCGTracking website session for the same Shipper ID. Checks stop when you leave the app.")
         }
         .fullScreenCover(isPresented: $signingIn) {
             TCGTrackingConnectionView(continueTitle: "Done") {

@@ -1,7 +1,8 @@
 /* Function body for WKWebView.callAsyncJavaScript in WKContentWorld.page.
- * `operation`, `expectedIP` and `expectedShipperID` are structured native arguments. The real signed-in
+ * `operation`, `expectedIP`, `previousIP` and `expectedShipperID` are structured native arguments. The real signed-in
  * /apiforbeta page supplies its fresh CSRF token and server-detected public IP.
- * A save replaces the allowlist in ONE request; it never sends an empty list.
+ * A save merges the phone's previous/current IP into the latest form in ONE request;
+ * every other address is preserved and an empty allowlist is never sent.
  * Return only bounded, classified results, never cookies, tokens or raw errors.
  */
 const endpoint = 'https://tcgtracking.com/apiforbeta';
@@ -70,9 +71,37 @@ const allowedIPs = input.value.split(/\r?\n/).map(value => value.trim()).filter(
 if (allowedIPs.length > 10 || allowedIPs.some(value => value.length > 100)) return failed('page_changed');
 if (operation === 'probe') return { status: 'ready', ip, allowedIPs, shipperID };
 if (!validIP(expectedIP) || expectedIP !== ip) return failed('page_changed');
-if (allowedIPs.length === 1 && normalizedIP(allowedIPs[0]) === normalizedIP(ip)) {
+// The native device/account-scoped history is the only authority for removal.
+// An empty history on the first updated run must never infer an old address.
+const prior = typeof previousIP === 'string' ? previousIP : '';
+if (prior && !validIP(prior)) return failed('page_changed');
+const currentIdentity = normalizedIP(ip);
+const previousIdentity = prior ? normalizedIP(prior) : null;
+const replacement = allowedIPs.filter(value =>
+  !(previousIdentity && previousIdentity !== currentIdentity && normalizedIP(value) === previousIdentity));
+if (!replacement.some(value => normalizedIP(value) === currentIdentity)) replacement.push(ip);
+if (replacement.length > 10) return failed('capacity_reached');
+if (replacement.length === allowedIPs.length && replacement.every((value, index) => value === allowedIPs[index])) {
   return { status: 'already_current', ip, allowedIPs };
 }
+// Unknown/range-style existing entries are protected verbatim. Compare concrete
+// IP spellings canonically, but never discard an entry we cannot parse as an IP.
+function identity(value) { return normalizedIP(value) ?? 'raw:' + value; }
+function confirmsReplacement(values) {
+  if (!Array.isArray(values) || values.length > 10 || values.some(value =>
+      typeof value !== 'string' || !value || value.length > 100 || value.trim() !== value)) return false;
+  const actual = new Set(values.map(identity));
+  const wanted = new Set(replacement.map(identity));
+  return actual.size === wanted.size && [...wanted].every(value => actual.has(value));
+}
+const originalText = input.value;
+function currentPageMatches() {
+  return location.href === endpoint && document.readyState === 'complete' &&
+    document.getElementById('allowedIpsInput') === input && input.value === originalText &&
+    typeof DETECTED_IP === 'string' && DETECTED_IP === ip && String(SHIPPER_ID) === shipperID &&
+    typeof CSRF_TOKEN === 'string' && CSRF_TOKEN === token;
+}
+
 
 const maximumBytes = 65_536;
 const controller = new AbortController();
@@ -86,10 +115,11 @@ function retryDetails(response) {
   return seconds > 0 ? { retryAfterSeconds: Math.min(seconds, 86_400) } : {};
 }
 try {
+  if (!currentPageMatches()) return failed('page_changed');
   const response = await fetch(endpoint, {
     method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error',
     headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
-    body: JSON.stringify({ action: 'save_ips', allowed_ips: ip, csrf_token: token }),
+    body: JSON.stringify({ action: 'save_ips', allowed_ips: replacement.join('\n'), csrf_token: token }),
     signal: controller.signal
   });
   if (response.redirected) return failed('sign_in_required');
@@ -134,16 +164,13 @@ try {
   }
   let data;
   try { data = JSON.parse(text); } catch { return failed('save_failed'); }
-  if (data?.ok !== true || !Array.isArray(data.allowed_ips) ||
-      data.allowed_ips.length !== 1 || normalizedIP(data.allowed_ips[0]) !== normalizedIP(ip)) {
+  if (data?.ok !== true || !confirmsReplacement(data.allowed_ips)) {
     return failed('save_failed');
   }
-  if (controller.signal.aborted || location.href !== endpoint ||
-      document.getElementById('allowedIpsInput') !== input ||
-      typeof DETECTED_IP !== 'string' || DETECTED_IP !== ip || String(SHIPPER_ID) !== shipperID) {
+  if (controller.signal.aborted || !currentPageMatches()) {
     return failed('page_changed');
   }
-  input.value = data.allowed_ips[0];
+  input.value = data.allowed_ips.join('\n');
   return { status: 'saved', ip, allowedIPs: data.allowed_ips };
 } catch {
   return failed('network_failed');

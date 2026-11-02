@@ -8,7 +8,7 @@
 		<true/>
 	</dict>
 	<key>ScannerWorkflowRevision</key>
-	<string>show-budget-outcomes</string>
+	<string>device-ip-inventory</string>
 	<key>UIRequiresFullScreen</key>
 	<true/>
 	<key>UISupportedInterfaceOrientations</key>

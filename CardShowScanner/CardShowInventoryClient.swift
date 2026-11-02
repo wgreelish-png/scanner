@@ -113,8 +113,10 @@ extension CardShowInventoryHTTPDataLoading { func cancel() {} }
     }
 
     private func recordPage(_ page: CardShowInventoryDecoder.Page) {
-        log.record("card_show_inventory.page_decoded", ["phase": "stock", "page": String(page.page),
-            "records": String(page.rows.count), "total": String(page.total)])
+        var fields = ["phase": "stock", "page": String(page.page),
+            "records": String(page.rows.count), "total": String(page.total)]
+        fields.merge(page.marketPriceDiagnosticFields) { _, value in value }
+        log.record("card_show_inventory.page_decoded", fields)
     }
 
     func cancel() {
