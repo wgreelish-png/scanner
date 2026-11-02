@@ -14,15 +14,20 @@ import XCTest
         XCTAssertFalse(BetaAllowlistWebRunner.allowsPage(nil))
     }
 
-    func testSuccessfulSaveNeedsExactlyTheConfirmedPublicIP() {
-        let ip = "8.8.8.8"
-        let saved: [String: Any] = ["status": "saved", "allowedIPs": [ip]]
-        XCTAssertEqual(BetaAllowlistWebRunner.result(from: saved, confirmedIP: ip), .init(status: .saved, ip: ip))
+    func testSuccessfulSaveProtectsOtherAddressesAndRemovesOnlyRecordedPreviousIP() {
+        let ip = "8.8.8.8", previous = "1.1.1.1", other = "9.9.9.9"
+        let saved: [String: Any] = ["status": "saved", "allowedIPs": [other, ip]]
+        XCTAssertEqual(BetaAllowlistWebRunner.result(from: saved, confirmedIP: ip, previousIP: previous,
+            protectedIPs: [other, previous]), .init(status: .saved, ip: ip))
         XCTAssertEqual(BetaAllowlistWebRunner.result(from: saved).status, .saveFailed)
-        for list in [[], ["1.1.1.1"], [ip, "1.1.1.1"], ["10.0.0.1"], ["8.8.8.8/32"]] {
-            XCTAssertEqual(BetaAllowlistWebRunner.result(from: ["status": "saved", "allowedIPs": list], confirmedIP: ip).status, .saveFailed)
+        for list in [[], [other], [ip], [other, previous, ip], ["10.0.0.1"], ["8.8.8.8/32"]] {
+            XCTAssertEqual(BetaAllowlistWebRunner.result(from: ["status": "saved", "allowedIPs": list],
+                confirmedIP: ip, previousIP: previous, protectedIPs: [other, previous]).status, .saveFailed)
         }
-        XCTAssertEqual(BetaAllowlistWebRunner.result(from: ["status": "saved", "allowedIPs": ["127.0.0.1"]], confirmedIP: "127.0.0.1").status, .saveFailed)
+        XCTAssertEqual(BetaAllowlistWebRunner.result(from: ["status": "saved", "allowedIPs": [ip, other]], confirmedIP: ip),
+                       .init(status: .saved, ip: ip), "Unrelated addresses must no longer be rejected as a non-singleton")
+        XCTAssertEqual(BetaAllowlistWebRunner.result(from: ["status": "saved", "allowedIPs": ["127.0.0.1"]],
+            confirmedIP: "127.0.0.1").status, .saveFailed)
     }
 
     func testConfirmedIPv6MayUseEquivalentProviderNotation() {
@@ -38,7 +43,7 @@ import XCTest
         }
         for (wire, status) in [("sign_in_required", BetaAllowlistSyncResult.Status.signInRequired),
                                ("account_mismatch", .accountMismatch), ("access_denied", .accessDenied),
-                               ("network_failed", .networkFailed)] {
+                               ("network_failed", .networkFailed), ("capacity_reached", .capacityReached)] {
             XCTAssertEqual(BetaAllowlistWebRunner.result(from: ["status": wire, "error": "fixture-secret"]), .init(status: status))
         }
     }

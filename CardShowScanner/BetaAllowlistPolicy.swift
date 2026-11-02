@@ -5,8 +5,8 @@ import Darwin
 import Glibc
 #endif
 
-/// Accept only a concrete, public network address before replacing an account's
-/// allowlist. Host names, network ranges and interface-scoped addresses are not
+/// Accept only a concrete, public network address before updating the phone's
+/// allowlist entry. Host names, network ranges and interface-scoped addresses are not
 /// substitutes for the address detected by the provider for this connection.
 struct BetaAllowlistAddress {
     static func canonical(_ raw: String) -> String? {
@@ -125,4 +125,51 @@ struct BetaAllowlistSyncPolicy: Sendable {
     mutating func resetForForeground() {
         nextCheckAt = nil
     }
+}
+
+/// A phone address is an account-scoped value, not ownership of the entire
+/// account allowlist. Unknown entries remain protected rather than discarded.
+enum BetaAllowlistMergeFailure: Error, Equatable {
+    case invalidList, capacityReached
+}
+
+enum BetaAllowlistPhoneUpdate {
+    static func target(_ existing: [String], previousIP: String?, currentIP: String) throws -> [String] {
+        guard validList(existing), let current = BetaAllowlistAddress.canonical(currentIP),
+              previousIP == nil || BetaAllowlistAddress.canonical(previousIP!) != nil else {
+            throw BetaAllowlistMergeFailure.invalidList
+        }
+        let previous = previousIP.flatMap(BetaAllowlistAddress.canonical)
+        var updated = existing.filter { value in
+            previous == nil || previous == current || !BetaAllowlistAddress.matches(value, previous!)
+        }
+        if !updated.contains(where: { BetaAllowlistAddress.matches($0, current) }) { updated.append(current) }
+        guard updated.count <= 10 else { throw BetaAllowlistMergeFailure.capacityReached }
+        return updated
+    }
+
+    static func sameAddresses(_ lhs: [String], _ rhs: [String]) -> Bool {
+        validList(lhs) && validList(rhs) && Set(lhs.map(identity)) == Set(rhs.map(identity))
+    }
+
+    /// The script independently verifies its exact merged POST response. Native
+    /// additionally protects every entry observed before that save, tolerating
+    /// any additional entries that appeared in a newer page snapshot.
+    static func confirms(_ returned: [String], protected: [String], previousIP: String?, currentIP: String) -> Bool {
+        guard validList(returned), validList(protected),
+              let current = BetaAllowlistAddress.canonical(currentIP),
+              returned.contains(where: { BetaAllowlistAddress.matches($0, current) }),
+              let expected = try? target(protected, previousIP: previousIP, currentIP: currentIP) else { return false }
+        if let previous = previousIP.flatMap(BetaAllowlistAddress.canonical), previous != current,
+           returned.contains(where: { BetaAllowlistAddress.matches($0, previous) }) { return false }
+        return Set(expected.map(identity)).isSubset(of: Set(returned.map(identity)))
+    }
+
+    private static func validList(_ values: [String]) -> Bool {
+        values.count <= 10 && values.allSatisfy {
+            !$0.isEmpty && $0.count <= 100 && $0 == $0.trimmingCharacters(in: .whitespacesAndNewlines) &&
+                !$0.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+        }
+    }
+    private static func identity(_ value: String) -> String { BetaAllowlistAddress.canonical(value) ?? value }
 }
