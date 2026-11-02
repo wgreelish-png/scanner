@@ -2,6 +2,30 @@ import XCTest
 @testable import CardShowScanner
 
 @MainActor final class ScannerDiagnosticsTests: XCTestCase {
+    func testBetaIndexDiagnosticsKeepOnlyFixedFieldAndShapeClassifications() throws {
+        let failure = BetaAPIIndexValidationFailure(stage: .sets, reason: .unexpectedType, shape: .array)
+        let fields = ServiceDiagnosticFields.failure(failure)
+        XCTAssertEqual(fields, ["domain": "beta_index", "stage": "sets", "reason": "unexpected_type", "shape": "array"])
+        XCTAssertEqual(ServiceDiagnosticFields.failure(BetaAPICadenceFailure.unsupportedIndex),
+            ["domain": "beta", "reason": "unsupported_index"])
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = "BetaIndexDiagnostics." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let log = DiagnosticLog(directory: directory, defaults: defaults)
+        log.record("beta.index_rejected", fields.merging(["body": "PRIVATE_BODY", "api_key": "PRIVATE_KEY"]) { _, new in new })
+        log.record("beta.index_rejected", ["shape": "PRIVATE_SHAPE"])
+        let exported = try log.export()
+        defer { try? FileManager.default.removeItem(at: exported.deletingLastPathComponent()) }
+        let text = try String(contentsOf: exported, encoding: .utf8)
+        XCTAssertFalse(text.contains("PRIVATE_"))
+        let rows = try text.split(separator: "\n").map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
+        let events = rows.filter { $0["event"] as? String == "beta.index_rejected" }
+        XCTAssertEqual(events.first?["fields"] as? [String: String], fields)
+        XCTAssertEqual((events.last?["fields"] as? [String: String])?.count, 0)
+    }
+
     func testInventoryDiagnosticFailuresDistinguishResponseAuthAndPersistence() {
         XCTAssertEqual(ServiceDiagnosticFields.failure(CardShowInventoryFailure.invalidResponse),
                        ["domain": "inventory", "reason": "invalid_response"])

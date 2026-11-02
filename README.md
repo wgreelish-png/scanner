@@ -46,6 +46,8 @@ Build 33 corrects [automatic Beta IP management](docs/AutomaticBetaIP.md): keep 
 
 Build-33 local checks passed 151 JavaScript tests, 24 pricing-measurement Postman script tests, grammar parsing of 133 Swift files, app/native/UI target membership and all 47 pinned scanner assets. New native inventory/IP cases are registered but have not run locally; Xcode compilation, native tests, live Postman measurements and physical-iPhone import/IP behavior remain unverified for this build.
 
+Build 34 repairs [Opportunities metadata handling](docs/MarketData.md): a structurally unsupported HTTP-200 index no longer blocks an independently validated exact-set lookup. Test Market Activity uses the same complete index validator as lookups, and fixed schema stage/reason/shape diagnostics identify failures without response contents. Daily cache times, HTTP versus data ETags, authentication and rate limits remain enforced. Swift grammar, target/resource membership and asset checks passed after implementation. Seventeen new native regression cases are registered; Xcode/native and iPhone verification remain pending for this build.
+
 Open `CardShowScanner.xcodeproj` in Xcode 16+, select **CardShowScanner**, and Run. Set personal signing using the local configuration instructions below. Use a physical iPhone for live camera verification.
 
 For the final personal-use installation, select **CardShowScanner Personal**: Run uses Release without attaching a debugger, with the same bundle ID and your ignored signing configuration. [Final phone test and weekly Personal Team refresh](docs/PersonalIPhone.md) explains how to keep the app/data installed; free signing normally expires after seven days.
