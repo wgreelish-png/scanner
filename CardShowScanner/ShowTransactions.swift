@@ -1,5 +1,85 @@
 import Foundation
 
+struct ShowSaleAllocation: Equatable, Identifiable, Sendable {
+    let inventoryID: UUID
+    let quantity: Int
+    let receivedCents: Int64
+    var id: UUID { inventoryID }
+}
+
+/// Derived from immutable card references and the actual receipt total. Default
+/// tags round each copy to a dollar; negotiated totals use one market percentage.
+enum ShowSaleMath {
+    static func suggestedTotal(_ lines: [ShowTransactionCardLine]) -> Int64? {
+        guard !lines.isEmpty else { return nil }
+        var total: Int64 = 0
+        for line in lines {
+            guard line.quantity > 0, let price = line.card.marketPrice, !price.isNaN, price >= 0 else { return nil }
+            var raw = price, rounded = Decimal.zero
+            NSDecimalRound(&rounded, &raw, 0, .plain)
+            let value = rounded * Decimal(line.quantity) * 100
+            guard !value.isNaN, value <= Decimal(ShowBudgetMoney.maximumCents) else { return nil }
+            let cents = NSDecimalNumber(decimal: value).int64Value
+            let sum = total.addingReportingOverflow(cents)
+            guard ShowBudgetMoney.isValid(cents), !sum.overflow, ShowBudgetMoney.isValid(sum.partialValue) else { return nil }
+            total = sum.partialValue
+        }
+        return total
+    }
+
+    static func marketTotal(_ lines: [ShowTransactionCardLine]) -> Decimal? {
+        guard !lines.isEmpty else { return nil }
+        var total = Decimal.zero
+        for line in lines {
+            guard line.quantity > 0, let price = line.card.marketPrice, !price.isNaN, price >= 0 else { return nil }
+            total += price * Decimal(line.quantity)
+            guard !total.isNaN else { return nil }
+        }
+        return total
+    }
+
+    static func marketPercentage(_ lines: [ShowTransactionCardLine], receivedCents: Int64) -> Decimal? {
+        guard ShowBudgetMoney.isValid(receivedCents), let market = marketTotal(lines), market > 0 else { return nil }
+        let percentage = ShowBudgetMoney.decimal(receivedCents) / market * 100
+        return percentage.isNaN ? nil : percentage
+    }
+
+    static func allocations(_ lines: [ShowTransactionCardLine], receivedCents: Int64) -> [ShowSaleAllocation]? {
+        guard ShowBudgetMoney.isValid(receivedCents), Set(lines.map(\.inventoryID)).count == lines.count,
+              let market = marketTotal(lines) else { return nil }
+        if suggestedTotal(lines) == receivedCents {
+            var result: [ShowSaleAllocation] = []
+            for line in lines {
+                guard let value = suggestedTotal([line]) else { return nil }
+                result.append(ShowSaleAllocation(inventoryID: line.inventoryID, quantity: line.quantity, receivedCents: value))
+            }
+            return result
+        }
+        guard market > 0 else { return nil }
+        var cents: [Int64] = [], fractions: [Decimal] = []
+        var allocated: Int64 = 0
+        for line in lines {
+            guard let price = line.card.marketPrice else { return nil }
+            let exact = Decimal(receivedCents) * price * Decimal(line.quantity) / market
+            guard !exact.isNaN, exact >= 0, exact <= Decimal(receivedCents) else { return nil }
+            var raw = exact, floor = Decimal.zero
+            NSDecimalRound(&floor, &raw, 0, .down)
+            let value = NSDecimalNumber(decimal: floor).int64Value
+            cents.append(value); fractions.append(exact - floor); allocated += value
+        }
+        let remainder = receivedCents - allocated
+        guard remainder >= 0, remainder <= Int64(lines.count) else { return nil }
+        let order = lines.indices.sorted {
+            fractions[$0] == fractions[$1]
+                ? lines[$0].inventoryID.uuidString < lines[$1].inventoryID.uuidString
+                : fractions[$0] > fractions[$1]
+        }
+        for index in order.prefix(Int(remainder)) { cents[index] += 1 }
+        return lines.indices.map { ShowSaleAllocation(inventoryID: lines[$0].inventoryID,
+            quantity: lines[$0].quantity, receivedCents: cents[$0]) }
+    }
+}
+
 enum ShowTransactionKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case sale, trade, tradePayCustomer, tradeReceiveCash, purchase
     var id: String { rawValue }

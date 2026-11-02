@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        4E123B9ED458A13766DE4274 /* ShowSaleMathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72A8B627A2A6961AA19DE950; };
+        9596DE673738CE821C601700 /* ShowInventorySelectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 758F4BCDDEB78781602E5EAE; };
         A90717DCF440AD5FD6AE25E9 /* ShowTransactionsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0180A5CE6C4A3D46B9ED12F7; };
         2EAD0ADE92CA2346EEF2327D /* ShowTransactionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1B319E579B6A9D538F28151; };
         EC28EBB95E75520305533F00 /* ShowTransactionListServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC7CE12E338618499E0D2A95; };
@@ -177,6 +179,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        72A8B627A2A6961AA19DE950 /* ShowSaleMathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowSaleMathTests.swift; sourceTree = "<group>"; };
+        758F4BCDDEB78781602E5EAE /* ShowInventorySelectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowInventorySelectionView.swift; sourceTree = "<group>"; };
         0180A5CE6C4A3D46B9ED12F7 /* ShowTransactionsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowTransactionsUITests.swift; sourceTree = "<group>"; };
         C1B319E579B6A9D538F28151 /* ShowTransactionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowTransactionsTests.swift; sourceTree = "<group>"; };
         BC7CE12E338618499E0D2A95 /* ShowTransactionListServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowTransactionListServiceTests.swift; sourceTree = "<group>"; };
@@ -385,6 +389,7 @@
 		59830EBC3A4184110566BF1A /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+                72A8B627A2A6961AA19DE950 /* ShowSaleMathTests.swift */,
                 C1B319E579B6A9D538F28151 /* ShowTransactionsTests.swift */,
                 BC7CE12E338618499E0D2A95 /* ShowTransactionListServiceTests.swift */,
                 6737A2B0DA486F3F88FD3828 /* BetaAllowlistIPHistoryTests.swift */,
@@ -442,6 +447,7 @@
 		878A52FC5FF6A57D50B7B870 /* CardShowScanner */ = {
 			isa = PBXGroup;
 			children = (
+                758F4BCDDEB78781602E5EAE /* ShowInventorySelectionView.swift */,
                 360EF494FAC319736F8B081F /* ShowTransactions.swift */,
                 958524B6EDC4D2C1187E78D9 /* ShowTransactionViews.swift */,
                 9B81BD8D65B48E5C9D72DC72 /* ShowTransactionListService.swift */,
@@ -692,6 +698,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                4E123B9ED458A13766DE4274 /* ShowSaleMathTests.swift in Sources */,
                 2EAD0ADE92CA2346EEF2327D /* ShowTransactionsTests.swift in Sources */,
                 EC28EBB95E75520305533F00 /* ShowTransactionListServiceTests.swift in Sources */,
                 39A818178C4D91A3A4E3BACD /* BetaAllowlistIPHistoryTests.swift in Sources */,
@@ -748,6 +755,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                9596DE673738CE821C601700 /* ShowInventorySelectionView.swift in Sources */,
                 FCAADE71DB3E63AA8B8352C9 /* ShowTransactions.swift in Sources */,
                 9EC2DA0831A11221594B46F6 /* ShowTransactionViews.swift in Sources */,
                 BF769D45548AEEABC714F740 /* ShowTransactionListService.swift in Sources */,
@@ -893,7 +901,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 35;
+				CURRENT_PROJECT_VERSION = 36;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -930,7 +938,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 35;
+				CURRENT_PROJECT_VERSION = 36;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";

@@ -122,6 +122,31 @@ import XCTest
         XCTAssertEqual(try XCTUnwrap(restarted.activeShow).totals(), totals)
     }
 
+    func testNegotiatedSaleAllocationsSurviveRelaunchUsingOriginalMarketSnapshots() throws {
+        let disk = Disk(), ledger = store(disk)
+        try ledger.seedInventory([
+            .init(sourceInventoryID: 1, card: card("A", price: 100), quantity: 1),
+            .init(sourceInventoryID: 2, card: card("B", price: 25), quantity: 2)
+        ], sourceLocationID: 9)
+        let showID = try ledger.create(name: "Synthetic show", startingCents: 30_000)
+        let draft = ShowTransactionDraft(kind: .sale,
+            outgoing: ledger.inventory.map { .init(inventoryID: $0.id, quantity: $0.quantity) },
+            saleReceivedCents: 12_000)
+        let receipt = try ledger.recordTransaction(draft, showID: showID)
+        let before = try XCTUnwrap(ShowSaleMath.allocations(receipt.outgoing, receivedCents: receipt.receivedCents))
+        XCTAssertEqual(ShowSaleMath.marketPercentage(receipt.outgoing, receivedCents: receipt.receivedCents), 80)
+        XCTAssertEqual(before.map(\.receivedCents).sorted(), [4_000, 8_000])
+        let restarted = store(disk)
+        let saved = try XCTUnwrap(restarted.transactions.first)
+        XCTAssertEqual(ShowSaleMath.allocations(saved.outgoing, receivedCents: saved.receivedCents), before)
+        XCTAssertEqual(saved.outgoing.map { $0.card.marketPrice }.compactMap { $0 }.sorted(), [25, 100])
+        XCTAssertEqual(try XCTUnwrap(restarted.activeShow).totals().availableCents, 37_800)
+        XCTAssertEqual(try XCTUnwrap(restarted.activeShow).totals().savedCents, 4_200)
+        try restarted.undoTransaction(saved.id)
+        XCTAssertEqual(restarted.inventory.reduce(0) { $0 + $1.quantity }, 3)
+        XCTAssertEqual(try XCTUnwrap(restarted.activeShow).totals().availableCents, 30_000)
+    }
+
     func testFailedWriterPublishesNoPartialRecordUndoOrDeletionAndRetriesWork() throws {
         let value = try fixture(), draft = purchase()
         let original = value.store.book, originalBytes = value.disk.data
