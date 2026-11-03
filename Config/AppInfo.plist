@@ -10,7 +10,7 @@
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Connect to the label printer you select to print card price tags while the app is open.</string>
 	<key>ScannerWorkflowRevision</key>
-	<string>letratag-price-tags</string>
+	<string>inventory-cost-profit</string>
 	<key>UIRequiresFullScreen</key>
 	<true/>
 	<key>UISupportedInterfaceOrientations</key>

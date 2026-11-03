@@ -1,6 +1,147 @@
 import XCTest
 
 @MainActor final class ShowTransactionsUITests: XCTestCase {
+    func testPurchasedCostQuickSaleProfitAndUndoPersistAcrossRelaunch() {
+        continueAfterFailure = false
+        let app = launch(arguments: ["--show-cost-profit-ui-fixture"])
+        defer { app.terminate() }
+        tap(app.buttons["show.recordTransaction"], app: app)
+        tap(app.buttons["showTransaction.kind.purchase"], app: app)
+        tap(app.buttons["showTransaction.incomingList"], app: app)
+        tap(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Profit Example")).firstMatch, app: app)
+        let paid = app.textFields["showTransaction.amount.incoming"]
+        reveal(paid, app: app)
+        XCTAssertEqual(paid.value as? String, "7.00", "Purchase cost comes from the actual 70% cash offer")
+        tap(app.buttons["showTransaction.record"], app: app)
+        XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 5))
+        assertBalances(available: "$293.00", saved: "$0.00", app: app)
+        assertStock("4", app: app)
+
+        tap(app.buttons["show.inventory"], app: app)
+        let acquired = inventory("Profit Example", app: app)
+        reveal(acquired, app: app)
+        let inventoryID = String(acquired.identifier.dropFirst("showInventory.item.".count))
+        XCTAssertNotNil(UUID(uuidString: inventoryID))
+        tap(acquired, app: app)
+        assertRevealedContains("$7.00", identifier: "inventory.cost", app: app)
+        let source = app.buttons["inventory.acquisitionReceipt"]
+        reveal(source, app: app)
+        assertContains("Purchase Receipt", element: source)
+        tap(source, app: app)
+        assertRevealedContains("$7.00", identifier: "showTransaction.receipt.paid", app: app)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+
+        tap(app.buttons["quickSell.sell"], app: app)
+        assertRevealedContains("1", identifier: "showTransaction.selectedQuantity", app: app)
+        reveal(app.buttons["showTransaction.editSaleAmount"], app: app)
+        assertSaleAmount("10.00", app: app)
+        reveal(app.buttons["showTransaction.editSaleFee"], app: app)
+        XCTAssertEqual(app.buttons["showTransaction.editSaleFee"].value as? String, "$0.00")
+        assertRevealedContains("$7.00", identifier: "showTransaction.preview.cost", app: app)
+        assertRevealedContains("$3.00", identifier: "showTransaction.preview.profit", app: app)
+        tap(app.buttons["showTransaction.record"], app: app)
+        XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["quickSell.sell"].isEnabled)
+        returnToShow(app: app)
+        assertBalances(available: "$299.50", saved: "$3.50", app: app)
+        assertStock("3", app: app)
+        assertProfit(sales: "$10.00", fees: "$0.00", cost: "$7.00", knownProfit: "$3.00", app: app)
+
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 10))
+        assertBalances(available: "$299.50", saved: "$3.50", app: app)
+        assertStock("3", app: app)
+        assertProfit(sales: "$10.00", fees: "$0.00", cost: "$7.00", knownProfit: "$3.00", app: app)
+        tap(app.buttons["show.history"], app: app)
+        tap(app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "showHistory.receipt.")).firstMatch, app: app)
+        assertRevealedContains("$10.00", identifier: "showTransaction.receipt.received", app: app)
+        assertRevealedContains("$7.00", identifier: "showTransaction.receipt.cost", app: app)
+        assertRevealedContains("$0.00", identifier: "showTransaction.receipt.fees", app: app)
+        assertRevealedContains("$3.00", identifier: "showTransaction.receipt.profit", app: app)
+        tap(app.descendants(matching: .any)["showTransaction.receipt.releasedCards"], app: app)
+        tap(app.buttons["showTransaction.receipt.source." + inventoryID], app: app)
+        assertRevealedContains("$7.00", identifier: "showTransaction.receipt.paid", app: app)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        undoTransaction(app: app)
+        returnToShow(app: app)
+        assertBalances(available: "$293.00", saved: "$0.00", app: app)
+        assertStock("4", app: app)
+        assertProfit(sales: "$0.00", fees: "$0.00", cost: "$0.00", knownProfit: "$0.00", app: app)
+
+        tap(app.buttons["show.inventory"], app: app)
+        tap(app.buttons["showInventory.item." + inventoryID], app: app)
+        assertRevealedContains("$7.00", identifier: "inventory.cost", app: app)
+        tap(app.buttons["inventory.acquisitionReceipt"], app: app)
+        undoTransaction(app: app)
+        returnToShow(app: app)
+        assertBalances(available: "$300.00", saved: "$0.00", app: app)
+        assertStock("3", app: app)
+    }
+
+    func testLegacyCostZeroAndUnknownStayDistinctAndQuickSaleFeeDebitsCashOnce() {
+        continueAfterFailure = false
+        let app = launch(arguments: ["--show-cost-profit-ui-fixture"])
+        defer { app.terminate() }
+        tap(app.buttons["show.inventory"], app: app)
+        let row = inventory("Stock A", app: app)
+        reveal(row, app: app)
+        let inventoryID = String(row.identifier.dropFirst("showInventory.item.".count))
+        tap(row, app: app)
+        assertRevealedContains("Cost unknown", identifier: "inventory.cost", app: app)
+        tap(app.buttons["inventory.editCost"], app: app)
+        enter("0", field: app.textFields["inventory.costAmount"], app: app)
+        tap(app.buttons["inventory.saveCost"], app: app)
+        assertRevealedContains("$0.00", identifier: "inventory.cost", app: app)
+        returnToShow(app: app)
+        assertBalances(available: "$300.00", saved: "$0.00", app: app)
+
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 10))
+        tap(app.buttons["show.inventory"], app: app)
+        tap(app.buttons["showInventory.item." + inventoryID], app: app)
+        assertRevealedContains("$0.00", identifier: "inventory.cost", app: app)
+        tap(app.buttons["inventory.editCost"], app: app)
+        tap(app.buttons["inventory.clearCost"], app: app)
+        assertRevealedContains("Cost unknown", identifier: "inventory.cost", app: app)
+        tap(app.buttons["quickSell.sell"], app: app)
+        assertRevealedContains("1", identifier: "showTransaction.selectedQuantity", app: app)
+        reveal(app.buttons["showTransaction.editSaleAmount"], app: app)
+        assertSaleAmount("35.00", app: app)
+        tap(app.buttons["showTransaction.editSaleFee"], app: app)
+        enter("1", field: app.textFields["showTransaction.amount.saleFee"], app: app)
+        tap(app.buttons["showTransaction.saleFee.done"], app: app)
+        XCTAssertEqual(app.buttons["showTransaction.editSaleFee"].value as? String, "$1.00")
+        assertRevealedContains("Unknown", identifier: "showTransaction.preview.cost", app: app)
+        assertRevealedContains("Unknown", identifier: "showTransaction.preview.profit", app: app)
+        tap(app.buttons["showTransaction.record"], app: app)
+        XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["quickSell.sell"].isEnabled, "One of the two legacy copies remains available")
+        assertRevealedContains("Cost unknown", identifier: "inventory.cost", app: app)
+        returnToShow(app: app)
+        assertBalances(available: "$321.75", saved: "$12.25", app: app)
+        assertStock("2", app: app)
+        assertProfit(sales: "$35.00", fees: "$1.00", cost: "$0.00", knownProfit: "$0.00", unknown: "1", app: app)
+
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 10))
+        assertBalances(available: "$321.75", saved: "$12.25", app: app)
+        assertStock("2", app: app)
+        assertProfit(sales: "$35.00", fees: "$1.00", cost: "$0.00", knownProfit: "$0.00", unknown: "1", app: app)
+        tap(app.buttons["show.history"], app: app)
+        tap(app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "showHistory.receipt.")).firstMatch, app: app)
+        assertRevealedContains("$35.00", identifier: "showTransaction.receipt.received", app: app)
+        assertRevealedContains("Unknown", identifier: "showTransaction.receipt.cost", app: app)
+        assertRevealedContains("$1.00", identifier: "showTransaction.receipt.fees", app: app)
+        assertRevealedContains("Unknown", identifier: "showTransaction.receipt.profit", app: app)
+        undoTransaction(app: app)
+        returnToShow(app: app)
+        assertBalances(available: "$300.00", saved: "$0.00", app: app)
+        assertStock("3", app: app)
+        tap(app.buttons["show.inventory"], app: app)
+        tap(app.buttons["showInventory.item." + inventoryID], app: app)
+        assertRevealedContains("Cost unknown", identifier: "inventory.cost", app: app)
+    }
+
     func testMultiCardSaleAndUndoPersistInventoryAndBudgetAcrossRelaunch() throws {
         continueAfterFailure = false
         let app = launch()
@@ -371,6 +512,49 @@ import XCTest
     }
     private func stock(_ name: String, app: XCUIApplication) -> XCUIElement {
         app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "showTransaction.stock.", name)).firstMatch
+    }
+    private func inventory(_ name: String, app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "showInventory.item.", name)).firstMatch
+    }
+    private func reveal(_ element: XCUIElement, app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        for _ in 0..<10 {
+            if element.exists && element.isHittable { return }
+            app.swipeUp()
+        }
+        XCTFail("Expected transaction detail was not visible: \(element.identifier)", file: file, line: line)
+    }
+    private func assertRevealedContains(_ value: String, identifier: String, app: XCUIApplication,
+                                        file: StaticString = #filePath, line: UInt = #line) {
+        let element = app.descendants(matching: .any)[identifier]
+        reveal(element, app: app, file: file, line: line)
+        assertContains(value, element: element, file: file, line: line)
+    }
+    private func returnToShow(app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        for _ in 0..<4 {
+            if app.navigationBars["Show"].exists { return }
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+        }
+        XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 5), file: file, line: line)
+    }
+    private func undoTransaction(app: XCUIApplication) {
+        tap(app.buttons["showTransaction.undo"], app: app)
+        tap(app.buttons["showTransaction.confirmUndo"], app: app)
+        for _ in 0..<6 {
+            let undone = app.descendants(matching: .any)["showTransaction.undone"]
+            if undone.exists && undone.isHittable { break }
+            app.swipeDown()
+        }
+        assertRevealedContains("Undone", identifier: "showTransaction.undone", app: app)
+    }
+    private func assertProfit(sales: String, fees: String, cost: String, knownProfit: String,
+                              unknown: String? = nil, app: XCUIApplication) {
+        tap(app.buttons["show.profit"], app: app)
+        assertRevealedContains(sales, identifier: "profit.sales", app: app)
+        assertRevealedContains(fees, identifier: "profit.fees", app: app)
+        assertRevealedContains(cost, identifier: "profit.cost", app: app)
+        assertRevealedContains(knownProfit, identifier: "profit.knownProfit", app: app)
+        if let unknown { assertRevealedContains(unknown, identifier: "profit.unknown", app: app) }
+        app.navigationBars.buttons.element(boundBy: 0).tap()
     }
     private func assertContains(_ value: String, element: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertTrue(element.waitForExistence(timeout: 5), file: file, line: line)

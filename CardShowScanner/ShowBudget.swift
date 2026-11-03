@@ -102,7 +102,7 @@ struct ShowBudgetEntry: Codable, Equatable, Identifiable, Sendable {
             guard outcomeOperationID == id, listID != nil else { throw ShowBudgetFailure.invalidEntry }
         }
         if let transactionID {
-            guard transactionID == id, outcomeOperationID == nil, feeCents == 0 else { throw ShowBudgetFailure.invalidEntry }
+            guard transactionID == id, outcomeOperationID == nil, kind == .sale || feeCents == 0 else { throw ShowBudgetFailure.invalidEntry }
         }
         switch kind {
         case .purchase:
@@ -252,6 +252,7 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
     static let maximumTransactionCards = 10_000
     static let maximumInventoryItems = 50_000
     static let maximumTransactions = 20_000
+    static let maximumCostAdjustments = 50_000
     static let maximumQuantity = 1_000_000
     var version: Int
     var shows: [ShowBudgetEvent]
@@ -260,17 +261,28 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
     var inventory: [ShowInventoryItem]
     var transactions: [ShowTransactionReceipt]
     var inventorySourceLocationID: Int?
+    var costAdjustments: [ShowInventoryCostAdjustment]
+    var costLedgerBaseline: [ShowCostStockState]
+    var costMutations: [ShowCostLedgerMutation]
+    var legacyTransactionIDs: [UUID]
+    var legacyReversedTransactionIDs: [UUID]
 
-    init(version: Int = 3, shows: [ShowBudgetEvent] = [], activeShowID: UUID? = nil,
+    init(version: Int = 4, shows: [ShowBudgetEvent] = [], activeShowID: UUID? = nil,
          listOutcomeUpdates: [BudgetListOutcomeUpdate]? = nil, inventory: [ShowInventoryItem] = [],
-         transactions: [ShowTransactionReceipt] = [], inventorySourceLocationID: Int? = nil) {
+         transactions: [ShowTransactionReceipt] = [], inventorySourceLocationID: Int? = nil,
+         costAdjustments: [ShowInventoryCostAdjustment] = [], costLedgerBaseline: [ShowCostStockState] = [],
+         costMutations: [ShowCostLedgerMutation] = [], legacyTransactionIDs: [UUID] = [],
+         legacyReversedTransactionIDs: [UUID] = []) {
         self.version = version; self.shows = shows; self.activeShowID = activeShowID
         self.listOutcomeUpdates = listOutcomeUpdates
         self.inventory = inventory; self.transactions = transactions; self.inventorySourceLocationID = inventorySourceLocationID
+        self.costAdjustments = costAdjustments
+        self.costLedgerBaseline = costLedgerBaseline; self.costMutations = costMutations
+        self.legacyTransactionIDs = legacyTransactionIDs; self.legacyReversedTransactionIDs = legacyReversedTransactionIDs
     }
 
     func validate() throws {
-        guard version == 3 else { throw ShowBudgetFailure.invalidVersion }
+        guard version == 4 else { throw ShowBudgetFailure.invalidVersion }
         guard shows.count <= Self.maximumStoredShows,
               shows.filter({ $0.deletedAt == nil }).count <= Self.maximumShows,
               shows.reduce(0, { $0 + $1.entries.count }) <= Self.maximumEntriesTotal else { throw ShowBudgetFailure.capacityExceeded }
@@ -307,18 +319,33 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case version, shows, activeShowID, listOutcomeUpdates, inventory, transactions, inventorySourceLocationID
+        case version, shows, activeShowID, listOutcomeUpdates, inventory, transactions, inventorySourceLocationID, costAdjustments,
+             costLedgerBaseline, costMutations, legacyTransactionIDs, legacyReversedTransactionIDs
     }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         let storedVersion = try values.decode(Int.self, forKey: .version)
-        guard (1...3).contains(storedVersion) else { throw ShowBudgetFailure.invalidVersion }
+        guard (1...4).contains(storedVersion) else { throw ShowBudgetFailure.invalidVersion }
         shows = try values.decode([ShowBudgetEvent].self, forKey: .shows)
         activeShowID = try values.decodeIfPresent(UUID.self, forKey: .activeShowID)
         listOutcomeUpdates = try values.decodeIfPresent([BudgetListOutcomeUpdate].self, forKey: .listOutcomeUpdates)
         inventory = try values.decodeIfPresent([ShowInventoryItem].self, forKey: .inventory) ?? []
         transactions = try values.decodeIfPresent([ShowTransactionReceipt].self, forKey: .transactions) ?? []
         inventorySourceLocationID = try values.decodeIfPresent(Int.self, forKey: .inventorySourceLocationID)
+        costAdjustments = try values.decodeIfPresent([ShowInventoryCostAdjustment].self, forKey: .costAdjustments) ?? []
+        if storedVersion == 4 {
+            // Required metadata distinguishes a migrated unknown checkpoint from
+            // a damaged v4 ledger with its accounting or journal removed.
+            costLedgerBaseline = try values.decode([ShowCostStockState].self, forKey: .costLedgerBaseline)
+            costMutations = try values.decode([ShowCostLedgerMutation].self, forKey: .costMutations)
+            legacyTransactionIDs = try values.decode([UUID].self, forKey: .legacyTransactionIDs)
+            legacyReversedTransactionIDs = try values.decode([UUID].self, forKey: .legacyReversedTransactionIDs)
+        } else {
+            costLedgerBaseline = inventory.map(ShowCostStockState.init)
+            costMutations = []
+            legacyTransactionIDs = transactions.map(\.id)
+            legacyReversedTransactionIDs = transactions.filter { $0.reversedAt != nil }.map(\.id)
+        }
         if storedVersion == 1 {
             guard (listOutcomeUpdates ?? []).isEmpty,
                   shows.allSatisfy({ $0.entries.allSatisfy { $0.outcomeOperationID == nil } }) else { throw ShowBudgetFailure.invalidVersion }
@@ -330,7 +357,13 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
                 throw ShowBudgetFailure.invalidVersion
             }
         }
-        version = 3
+        if storedVersion < 4 {
+            guard costAdjustments.isEmpty, inventory.allSatisfy({ $0.remainingCostCents == nil }),
+                  transactions.allSatisfy({ $0.accounting == nil && $0.draft.feeCents == 0 }) else {
+                throw ShowBudgetFailure.invalidVersion
+            }
+        }
+        version = 4
         try validate()
     }
     func encode(to encoder: Encoder) throws {
@@ -343,6 +376,11 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
         try values.encode(inventory, forKey: .inventory)
         try values.encode(transactions, forKey: .transactions)
         try values.encodeIfPresent(inventorySourceLocationID, forKey: .inventorySourceLocationID)
+        try values.encode(costAdjustments, forKey: .costAdjustments)
+        try values.encode(costLedgerBaseline, forKey: .costLedgerBaseline)
+        try values.encode(costMutations, forKey: .costMutations)
+        try values.encode(legacyTransactionIDs, forKey: .legacyTransactionIDs)
+        try values.encode(legacyReversedTransactionIDs, forKey: .legacyReversedTransactionIDs)
     }
 
     private func validateTransactions() throws {
@@ -350,9 +388,17 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
         guard inventory.count <= Self.maximumInventoryItems, transactions.count <= Self.maximumTransactions else {
             throw ShowBudgetFailure.capacityExceeded
         }
+        guard costAdjustments.count <= Self.maximumCostAdjustments else { throw ShowBudgetFailure.capacityExceeded }
+        guard Set(costAdjustments.map(\.id)).count == costAdjustments.count else { throw ShowBudgetFailure.duplicateIdentity }
         guard Set(inventory.map(\.id)).count == inventory.count,
               Set(transactions.map(\.id)).count == transactions.count else { throw ShowBudgetFailure.invalidBook }
         let stock = Dictionary(uniqueKeysWithValues: inventory.map { ($0.id, $0) })
+        for adjustment in costAdjustments {
+            try adjustment.validate()
+            guard let item = stock[adjustment.inventoryID], adjustment.recordedAt >= item.acquiredAt else {
+                throw ShowTransactionFailure.invalidCost
+            }
+        }
         let receipts = Dictionary(uniqueKeysWithValues: transactions.map { ($0.id, $0) })
         let positions = Dictionary(uniqueKeysWithValues: transactions.enumerated().map { ($0.element.id, $0.offset) })
         let entries = shows.flatMap { show in show.entries.map { (show.id, $0) } }
@@ -361,6 +407,8 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
         var sources = Set<Int>(), activeLists = Set<UUID>(), consumed: [UUID: Int] = [:]
         for item in inventory {
             guard (0...Self.maximumQuantity).contains(item.quantity), ShowTransactionMath.validCard(item.card),
+                  item.remainingCostCents.map(ShowBudgetMoney.isValid) ?? true,
+                  item.quantity != 0 || item.remainingCostCents == nil || item.remainingCostCents == 0,
                   item.acquiredAt.timeIntervalSince1970.isFinite else { throw ShowTransactionFailure.invalidInventory }
             if let transaction = item.acquiredByTransactionID {
                 guard item.sourceInventoryID == nil, item.sourceLocationID == nil,
@@ -378,6 +426,7 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
             guard let (showID, entry) = cash[receipt.id], showID == receipt.showID,
                   entry.transactionID == receipt.id, entry.kind == receipt.kind.budgetKind,
                   entry.paidCents == receipt.paidCents, entry.grossReceivedCents == receipt.receivedCents,
+                  entry.feeCents == receipt.feeCents,
                   entry.recordedAt == receipt.recordedAt, entry.voidedAt == receipt.reversedAt,
                   entry.listID == receipt.incomingListID, entry.listName == receipt.incomingListName,
                   entry.note == receipt.draft.note, entry.splitBasis == .grossProceeds,
@@ -424,5 +473,6 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
                 throw ShowBudgetFailure.invalidBook
             }
         }
+        try validateCostLedger()
     }
 }

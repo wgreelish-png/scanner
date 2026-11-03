@@ -16,7 +16,7 @@ Select an active show, choose the transaction type and review the cards and amou
 
 Trades start with the incoming list’s calculated **Trade Offer**, editable before recording. The outgoing value starts from selected cards’ saved market references rounded to the nearest dollar per copy and is also editable. These agreed values determine the cash difference directly. A partial/unpriced list has no automatic full-list offer; an explicitly entered agreed total is required. A known zero remains zero.
 
-For $32 incoming versus $35 outgoing, **Make Even Trade** records $0 cash and a $3 concession. It preserves the card’s $35 market reference. The difference is not reported as realized loss or profit: reliable acquisition-cost accounting is not available for this stock. Receipts retain the original agreed amounts, market reference snapshots, cash split and quantities after prices or source lists change.
+For $32 incoming versus $35 outgoing, **Make Even Trade** records $0 cash and a $3 concession. It preserves the card’s $35 market reference. Build 40 carries the original outgoing acquisition cost into the incoming cards; the value concession does not create realized profit or a cash-budget change. Unknown outgoing cost stays unknown. Receipts retain the original agreed amounts, market reference snapshots, cash split and quantities after prices or source lists change.
 
 The list review Record Transaction action opens the same stock-aware checkout with that list selected. Completed lists link to their receipt; Nothing Happened and Clear Outcome cannot independently reverse its cash. Existing legacy outcomes, manually linked cash and undecodable nonempty legacy markers prevent a second acquisition. Undo/review the prior transaction or deliberately clear its legacy outcome before using that list again. Offer calculations and card edits alone never record a deal.
 
@@ -47,6 +47,14 @@ Build-37 local checks passed Swift grammar parsing of all 143 files, Xcode app/n
 ## Compact actions in build 38
 
 [Simple list navigation](SimpleListNavigation.md) restores visible transaction-type buttons, collapses incoming/receipt card rows and keeps Record/Undo controls fixed. Saved lists separate Cards from Offer, with fixed primary actions; working inventory places Source in the toolbar and Record at the bottom. No transaction math or saved data changes are included.
+
+## Quick Sell, cost and profit in build 40
+
+Open a working-inventory card and tap **Sell This Card** to start the existing checkout with that exact lot selected at quantity one. Use Select Inventory Cards for bundles. Cost & acquisition shows the remaining lot's actual cost and its original Purchase or Trade receipt. Unknown cost and explicitly entered zero are distinct.
+
+New purchases allocate actual cash paid using calculated Cash Offer weights and reviewed overrides. Trades carry outgoing cost forward, adjusted for actual cash paid/received. Sales record optional fees, the cost of the exact copies sold and realized profit. Fees reduce buying funds once; cost is not deducted from cash again at sale. **Sales & Profit** reports all shows or one show, clearly excluding missing costs from its known subtotal. See [the accounting rules, $7/$10 example and phone checks](CostProfitTrackingPlan.md).
+
+Build 40 uses financial format v4 with an audited cost mutation journal. Existing v1-v3 cash, stock, receipts and lists are preserved; old costs remain unknown. Remaining cost corrections do not rewrite completed receipts. Undo restores consumed cost, original quantities, fees and cash; dependent lot guards remain in place. Earlier format references below document builds 35–38.
 
 ## Import and source snapshots
 

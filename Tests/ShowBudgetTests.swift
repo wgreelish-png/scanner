@@ -68,7 +68,7 @@ final class ShowBudgetTests: XCTestCase {
         body["shows"] = shows
         body["version"] = 1
         let reopened = try JSONDecoder().decode(ShowBudgetBook.self, from: JSONSerialization.data(withJSONObject: body))
-        XCTAssertEqual(reopened.version, 3)
+        XCTAssertEqual(reopened.version, 4)
         let restored = try XCTUnwrap(reopened.shows.first)
         XCTAssertNil(restored.startDate); XCTAssertNil(restored.endDate)
         XCTAssertEqual(restored.createdAt, original.createdAt); XCTAssertEqual(restored.entries, original.entries)
@@ -98,13 +98,38 @@ final class ShowBudgetTests: XCTestCase {
         body["version"] = 2
         body.removeValue(forKey: "inventory"); body.removeValue(forKey: "transactions")
         let migrated = try JSONDecoder().decode(ShowBudgetBook.self, from: JSONSerialization.data(withJSONObject: body))
-        XCTAssertEqual(migrated.version, 3)
+        XCTAssertEqual(migrated.version, 4)
         XCTAssertEqual(migrated.shows, [original]); XCTAssertEqual(migrated.activeShowID, original.id)
         XCTAssertTrue(migrated.inventory.isEmpty); XCTAssertTrue(migrated.transactions.isEmpty)
         XCTAssertNil(migrated.inventorySourceLocationID)
         XCTAssertEqual(try migrated.shows[0].totals().reinvestedCents, 6_500)
         XCTAssertEqual(try migrated.shows[0].totals().savedCents, 3_500)
         XCTAssertEqual(try JSONDecoder().decode(ShowBudgetBook.self, from: JSONEncoder().encode(migrated)), migrated)
+    }
+
+    func testLegacyCashLedgersMigrateWithoutRewritingHistoricalFeesSplitsOrVoids() throws {
+        var voided = entry(.sale, received: 1_234, fees: 34, percent: 20)
+        voided.voidedAt = instant.addingTimeInterval(1)
+        let original = show([
+            entry(.sale, received: 20_000, fees: 1_000),
+            entry(.sale, received: 10_000, fees: 300, percent: 40, basis: .netProceeds),
+            entry(.trade, received: 5_000, fees: 200),
+            entry(.purchase, paid: 3_000), voided
+        ])
+        let encodedShows = try JSONSerialization.jsonObject(with: JSONEncoder().encode([original]))
+        let originalTotals = try original.totals()
+        for version in 1...3 {
+            let legacy: [String: Any] = ["version": version, "shows": encodedShows, "activeShowID": original.id.uuidString]
+            let migrated = try JSONDecoder().decode(ShowBudgetBook.self,
+                from: JSONSerialization.data(withJSONObject: legacy))
+            XCTAssertEqual(migrated.version, 4)
+            XCTAssertEqual(migrated.shows, [original], "Version \(version) must retain receipt snapshots")
+            XCTAssertEqual(migrated.activeShowID, original.id)
+            let totals = try XCTUnwrap(migrated.shows.first).totals()
+            XCTAssertEqual(totals, originalTotals, "Version \(version) must preserve historical cash")
+            XCTAssertEqual(totals.availableCents + totals.savedCents, totals.cashOnHandCents)
+            XCTAssertEqual(try JSONDecoder().decode(ShowBudgetBook.self, from: JSONEncoder().encode(migrated)), migrated)
+        }
     }
 
     func testThreeHundredBudgetAndTwoHundredSaleAddsOneHundredThirtyAndSavesSeventy() throws {
@@ -280,7 +305,7 @@ final class ShowBudgetTests: XCTestCase {
         let event = show([entry(.sale, received: 10_000)])
         let data = try JSONEncoder().encode(ShowBudgetBook(shows: [event], activeShowID: event.id))
         let initial = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        var version = initial; version["version"] = 4
+        var version = initial; version["version"] = 5
         XCTAssertThrowsError(try JSONDecoder().decode(ShowBudgetBook.self, from: JSONSerialization.data(withJSONObject: version)))
         for (key, value) in [("splitBasis", "estimated" as Any), ("kind", "unknown" as Any), ("paidCents", -1 as Any)] {
             var object = initial
@@ -294,7 +319,7 @@ final class ShowBudgetTests: XCTestCase {
 
     func testBookAndEventBoundsRejectInvalidStateRatherThanTruncateHistory() throws {
         XCTAssertThrowsError(try ShowBudgetBook(activeShowID: UUID()).validate())
-        XCTAssertThrowsError(try ShowBudgetBook(version: 4).validate())
+        XCTAssertThrowsError(try ShowBudgetBook(version: 5).validate())
         XCTAssertThrowsError(try ShowBudgetEvent(name: "  ", startingCents: 0).validate())
         XCTAssertThrowsError(try ShowBudgetEvent(name: "Valid", startingCents: -1).validate())
         XCTAssertThrowsError(try ShowBudgetEvent(name: "Valid", startingCents: 0, reinvestmentPercent: 101).validate())

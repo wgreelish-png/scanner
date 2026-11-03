@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        8CBE0342160496BADCF753CD /* ShowCostLedgerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EA711B3EA33421026DBF608; };
+        30E802590E9701FA25C00105 /* ShowCostBasisTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5B11344F2E70DB142E50992; };
+        652F5D3544431F0B3304E984 /* ShowProfitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ED3CDEC25A18BE21BBD47D7; };
+        51E1F2D8F1DEEBDDA174DDA9 /* ShowCostBasis.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6EBCF01DACF9149115887B1; };
         8D750EE27D3FF03F55170917 /* PriceTagTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 501146FA7FBAA2D3E7998CE1; };
         EB09CB0554F9605F58E44C1C /* LetraTagProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E9C3AEA955E796FF2F0329E; };
         247E44EDBF276442C8F1C1C4 /* PriceTag.swift in Sources */ = {isa = PBXBuildFile; fileRef = A18624CC7C1C0179E49AA726; };
@@ -185,6 +189,10 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        2EA711B3EA33421026DBF608 /* ShowCostLedgerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowCostLedgerTests.swift; sourceTree = "<group>"; };
+        E5B11344F2E70DB142E50992 /* ShowCostBasisTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowCostBasisTests.swift; sourceTree = "<group>"; };
+        9ED3CDEC25A18BE21BBD47D7 /* ShowProfitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowProfitView.swift; sourceTree = "<group>"; };
+        E6EBCF01DACF9149115887B1 /* ShowCostBasis.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowCostBasis.swift; sourceTree = "<group>"; };
         501146FA7FBAA2D3E7998CE1 /* PriceTagTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PriceTagTests.swift; sourceTree = "<group>"; };
         9E9C3AEA955E796FF2F0329E /* LetraTagProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LetraTagProtocolTests.swift; sourceTree = "<group>"; };
         A18624CC7C1C0179E49AA726 /* PriceTag.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PriceTag.swift; sourceTree = "<group>"; };
@@ -401,6 +409,8 @@
 		59830EBC3A4184110566BF1A /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+                2EA711B3EA33421026DBF608 /* ShowCostLedgerTests.swift */,
+                E5B11344F2E70DB142E50992 /* ShowCostBasisTests.swift */,
                 501146FA7FBAA2D3E7998CE1 /* PriceTagTests.swift */,
                 9E9C3AEA955E796FF2F0329E /* LetraTagProtocolTests.swift */,
                 72A8B627A2A6961AA19DE950 /* ShowSaleMathTests.swift */,
@@ -461,6 +471,8 @@
 		878A52FC5FF6A57D50B7B870 /* CardShowScanner */ = {
 			isa = PBXGroup;
 			children = (
+                9ED3CDEC25A18BE21BBD47D7 /* ShowProfitView.swift */,
+                E6EBCF01DACF9149115887B1 /* ShowCostBasis.swift */,
                 A18624CC7C1C0179E49AA726 /* PriceTag.swift */,
                 9CD6B0804E6B42A3E52259DC /* LetraTagProtocol.swift */,
                 1B7523211C1FD923F6A337C0 /* LetraTagPrinter.swift */,
@@ -716,6 +728,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                8CBE0342160496BADCF753CD /* ShowCostLedgerTests.swift in Sources */,
+                30E802590E9701FA25C00105 /* ShowCostBasisTests.swift in Sources */,
                 8D750EE27D3FF03F55170917 /* PriceTagTests.swift in Sources */,
                 EB09CB0554F9605F58E44C1C /* LetraTagProtocolTests.swift in Sources */,
                 4E123B9ED458A13766DE4274 /* ShowSaleMathTests.swift in Sources */,
@@ -775,6 +789,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                652F5D3544431F0B3304E984 /* ShowProfitView.swift in Sources */,
+                51E1F2D8F1DEEBDDA174DDA9 /* ShowCostBasis.swift in Sources */,
                 247E44EDBF276442C8F1C1C4 /* PriceTag.swift in Sources */,
                 0176105FE68CE005C8DDFC5F /* LetraTagProtocol.swift in Sources */,
                 0DA68F6542046E44CFE8C1CB /* LetraTagPrinter.swift in Sources */,
@@ -925,7 +941,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 39;
+				CURRENT_PROJECT_VERSION = 40;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -962,7 +978,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 39;
+				CURRENT_PROJECT_VERSION = 40;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
