@@ -62,6 +62,8 @@ Build 40 adds **Quick Sell** from an inventory card and [cost and profit trackin
 
 Build 41 removes the experimental label-printing feature, its setup/inventory actions, protocol and rendering code, permissions and printer-only tests. Local verification passed grammar parsing of 147 Swift files, all target/resource assignments, 47 scanner assets, no remaining printer references and portrait/foreground metadata. Build 40's macOS rerun passed 681 native tests and the Release iPhone build; build 41's Xcode rerun and physical-iPhone checks remain separate.
 
+Build 42 adds [inventory label printing](docs/InventoryLabelPrinting.md): individual or searchable batch selection, Price only/Card details templates, editable local asking prices, copy controls and actual raster previews. A saved queue tracks each physical label, blocks automatic retry of uncertain output and works offline. Settings provides an explicit NIIMBOT D110 Bluetooth connection; printing is foreground-only and independent of stock/financial records. Physical iPhone/D110 compatibility and output remain pending acceptance.
+
 Open `CardShowScanner.xcodeproj` in Xcode 16+, select **CardShowScanner**, and Run. Set personal signing using the local configuration instructions below. Use a physical iPhone for live camera verification.
 
 For the final personal-use installation, select **CardShowScanner Personal**: Run uses Release without attaching a debugger, with the same bundle ID and your ignored signing configuration. [Final phone test and weekly Personal Team refresh](docs/PersonalIPhone.md) explains how to keep the app/data installed; free signing normally expires after seven days.

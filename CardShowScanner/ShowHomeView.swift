@@ -98,6 +98,7 @@ private struct ShowHomeRouteCard: View {
     @State private var search = ""
     @State private var seedError: String?
     @State private var showingTransaction = false
+    @State private var showingLabels = false
 
     init(store: ShowBudgetStore = .shared) { _store = State(initialValue: store) }
 
@@ -166,6 +167,14 @@ private struct ShowHomeRouteCard: View {
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button("Print Price Tags", systemImage: "printer") { showingLabels = true }
+                        .disabled(!store.isLoaded || available.isEmpty)
+                        .accessibilityIdentifier("showInventory.printLabels")
+                } label: { Image(systemName: "ellipsis.circle").frame(width: 44, height: 44) }
+                    .accessibilityLabel("Inventory options").accessibilityIdentifier("showInventory.options")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink { CardShowInventoryView() } label: { Text("Source") }
                     .accessibilityLabel("TCGTracking Source Snapshot")
                     .accessibilityIdentifier("showInventory.importSnapshot")
@@ -177,6 +186,7 @@ private struct ShowHomeRouteCard: View {
             }
         }
         .sheet(isPresented: $showingTransaction) { ShowTransactionForm(store: store) }
+        .sheet(isPresented: $showingLabels) { InventoryLabelFlowView(inventory: store.inventory) }
         .onAppear { visible = true; seedInventory() }
         .onDisappear { visible = false }
     }
@@ -262,6 +272,7 @@ private struct ShowWorkingInventoryRow: View {
     @State private var visible = false
     @State private var showingTransaction = false
     @State private var showingCostEditor = false
+    @State private var showingLabel = false
     private var item: ShowInventoryItem? { store.inventory.first { $0.id == itemID } }
 
     var body: some View {
@@ -321,6 +332,17 @@ private struct ShowWorkingInventoryRow: View {
                 }
             } else { ContentUnavailableView("Card unavailable", systemImage: "shippingbox") }
         }.navigationTitle("Card Details").navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button("Print Price Tag", systemImage: "printer") { showingLabel = true }
+                        .disabled(!store.isLoaded || (item?.quantity ?? 0) <= 0)
+                        .accessibilityIdentifier("inventory.printLabel")
+                } label: { Image(systemName: "ellipsis.circle").frame(width: 44, height: 44) }
+                    .accessibilityLabel("Card options").accessibilityIdentifier("inventory.options")
+            }
+        }
+        .sheet(isPresented: $showingLabel) { InventoryLabelFlowView(inventory: store.inventory, initialInventoryID: itemID) }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             TimelineView(.animation(minimumInterval: 60, paused: !visible || scenePhase != .active)) { _ in
                 quickSellAction
