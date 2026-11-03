@@ -64,6 +64,8 @@ Build 41 removes the experimental label-printing feature, its setup/inventory ac
 
 Build 42 adds [inventory label printing](docs/InventoryLabelPrinting.md): individual or searchable batch selection, Price only/Card details templates, editable local asking prices, copy controls and actual raster previews. A saved queue tracks each physical label, blocks automatic retry of uncertain output and works offline. Settings provides an explicit NIIMBOT D110 Bluetooth connection; printing is foreground-only and independent of stock/financial records. Physical iPhone/D110 compatibility and output remain pending acceptance.
 
+Build 43 applies the [final sticker rules](docs/TagPricingRules.md): 2 for $1 below $0.75, $1 through $0.99, whole-dollar floor below $100 and $5 floor at $100+. Pricing review uses asymmetric approval-based thresholds, competitiveness flags, actual-cost profit floors, bounded offers and bundle checks. Approval history survives queue cleanup, manual prices stay intact, unchanged stickers avoid reprints, and approved stickers become checkout suggestions. Unknown cost/profit remains a review item. Existing inventory/financial snapshots and printer transport are preserved.
+
 Open `CardShowScanner.xcodeproj` in Xcode 16+, select **CardShowScanner**, and Run. Set personal signing using the local configuration instructions below. Use a physical iPhone for live camera verification.
 
 For the final personal-use installation, select **CardShowScanner Personal**: Run uses Release without attaching a debugger, with the same bundle ID and your ignored signing configuration. [Final phone test and weekly Personal Team refresh](docs/PersonalIPhone.md) explains how to keep the app/data installed; free signing normally expires after seven days.

@@ -22,11 +22,11 @@ import XCTest
 
         let edit = app.buttons["labels.edit." + inventoryID]
         tap(edit, app: app)
-        XCTAssertEqual(app.textFields["labels.editor.price"].value as? String, "35.00")
+        XCTAssertEqual(app.textFields["labels.editor.price"].value as? String, "35")
         XCTAssertEqual(app.textFields["labels.editor.copies"].value as? String, "1")
         enter("12", field: app.textFields["labels.editor.price"], app: app)
         tap(app.buttons["labels.editor.cancel"], app: app)
-        assertContains("$35.00", element: edit)
+        assertContains("$35", element: edit)
 
         tap(edit, app: app)
         enter("", field: app.textFields["labels.editor.price"], app: app)
@@ -40,12 +40,12 @@ import XCTest
         tap(app.buttons["labels.editor.preview"], app: app)
         let preview = app.images["labels.bitmapPreview"].firstMatch
         reveal(preview, app: app)
-        XCTAssertTrue((preview.value as? String ?? "").contains("$0.00"))
+        XCTAssertTrue((preview.value as? String ?? "").contains("$0"))
         tap(app.buttons["labels.editor.save"], app: app)
-        assertContains("$0.00", element: edit)
+        assertContains("$0", element: edit)
         assertContains("2 labels", element: app.staticTexts["labels.totalCount"])
         tap(app.buttons["labels.continueReview"], app: app)
-        assertContains("$0.00", element: app.descendants(matching: .any)["labels.review.price." + inventoryID])
+        assertContains("$0", element: app.descendants(matching: .any)["labels.review.price." + inventoryID])
         assertContains("2", element: app.descendants(matching: .any)["labels.review.copies." + inventoryID])
         tap(app.buttons["labels.close"], app: app)
 
@@ -87,6 +87,13 @@ import XCTest
         tap(app.buttons["labels.oneEach"], app: app)
         assertContains("2 labels", element: app.staticTexts["labels.totalCount"])
 
+        tap(app.buttons["labels.edit." + stockAID], app: app)
+        enter("32.50", field: app.textFields["labels.editor.price"], app: app)
+        XCTAssertFalse(app.buttons["labels.editor.save"].isEnabled, "Individual tags reject cents")
+        enter("32", field: app.textFields["labels.editor.price"], app: app)
+        tap(app.buttons["labels.editor.keyboardDone"], app: app)
+        tap(app.buttons["labels.editor.save"], app: app)
+
         tap(app.buttons["labels.style"], app: app)
         tap(app.buttons["Price only"], app: app)
         tap(app.buttons["labels.paper"], app: app)
@@ -97,13 +104,15 @@ import XCTest
         XCTAssertTrue((preview.value as? String ?? "").contains("40 × 12 mm"))
         tap(app.buttons["labels.continueReview"], app: app)
         assertContains("2", element: app.descendants(matching: .any)["labels.reviewCount"])
-        let prices = [(stockAID, "$35.00"), (stockBID, "$5.00")]
+        let prices = [(stockAID, "$32"), (stockBID, "$5")]
         for (id, price) in prices {
             let amount = app.descendants(matching: .any)["labels.review.price." + id]
             reveal(amount, app: app)
             assertContains(price, element: amount)
             assertContains("1", element: app.descendants(matching: .any)["labels.review.copies." + id])
         }
+        XCTAssertFalse(app.buttons["labels.prepare"].isEnabled, "Unknown costs require explicit manual review")
+        tap(app.switches["labels.acknowledgePricingWarnings"], app: app)
         XCTAssertTrue(app.buttons["labels.prepare"].isHittable, "The final action stays available after reviewing every label")
         tap(app.buttons["labels.prepare"], app: app)
         assertUnstartedQueue(app: app)
@@ -127,6 +136,44 @@ import XCTest
         tap(queued, app: app)
         XCTAssertTrue(app.navigationBars["Queued Label"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.images["labels.bitmapPreview"].waitForExistence(timeout: 5))
+        assertNoBluetoothPrompt(app: app)
+    }
+
+    func testKeepingExistingStickerPersistsApprovalWithoutReprintingUnchangedPrice() {
+        continueAfterFailure = false
+        let app = launch()
+        defer { app.terminate() }
+        tap(app.buttons["show.inventory"], app: app)
+        let stockAID = inventoryID(of: inventory("Stock A", app: app))
+        openBatch(app: app)
+        tap(app.buttons["labels.select." + stockAID], app: app)
+        tap(app.buttons["labels.continueSelection"], app: app)
+        assertContains("1 labels", element: app.staticTexts["labels.totalCount"])
+        tap(app.buttons["labels.continueReview"], app: app)
+        tap(app.switches["labels.keepExistingSticker." + stockAID], app: app)
+        tap(app.switches["labels.acknowledgePricingWarnings"], app: app)
+        tap(app.buttons["labels.prepare"], app: app)
+        assertContains("Approved prices saved. No individual labels need printing.",
+            element: app.staticTexts["labels.approvedNotice"])
+        XCTAssertTrue(app.navigationBars["Review Labels"].exists)
+        XCTAssertFalse(app.navigationBars["Label Print Queue"].exists)
+        tap(app.buttons["labels.close"], app: app)
+        assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
+
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 10))
+        tap(app.buttons["show.inventory"], app: app)
+        openBatch(app: app)
+        tap(app.buttons["labels.select." + stockAID], app: app)
+        tap(app.buttons["labels.continueSelection"], app: app)
+        assertContains("0 labels", element: app.staticTexts["labels.totalCount"])
+        tap(app.buttons["labels.continueReview"], app: app)
+        tap(app.switches["labels.acknowledgePricingWarnings"], app: app)
+        tap(app.buttons["labels.prepare"], app: app)
+        assertContains("Approved prices saved. No individual labels need printing.",
+            element: app.staticTexts["labels.approvedNotice"])
+        XCTAssertFalse(app.navigationBars["Label Print Queue"].exists)
         assertNoBluetoothPrompt(app: app)
     }
 

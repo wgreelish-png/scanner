@@ -9,7 +9,7 @@ import UIKit
         return ShowInventoryItem(card: card, quantity: quantity, remainingCostCents: 700)
     }
 
-    func testDefaultsUseOneCopyAndRoundedSavedMarketWithoutMutatingStockOrActualCost() throws {
+    func testDefaultsUseOneCopyAndWholeDollarSavedMarketWithoutMutatingStockOrActualCost() throws {
         let item = stock(), original = item
         var draft = InventoryLabelDraft(item: item)
         XCTAssertEqual(draft.id, item.id)
@@ -17,26 +17,62 @@ import UIKit
         XCTAssertEqual(draft.priceCents, 1_000)
         XCTAssertEqual(draft.condition, "NM")
         XCTAssertEqual(draft.style, .cardDetails)
-        draft.askingPriceText = "32.50"; draft.copies = 2; draft.style = .priceOnly
+        draft.askingPriceText = "32"; draft.copies = 2; draft.style = .priceOnly
         try draft.validate()
-        XCTAssertEqual(draft.priceCents, 3_250)
+        XCTAssertEqual(draft.priceCents, 3_200)
         XCTAssertEqual(item, original)
         XCTAssertEqual(item.quantity, 3)
         XCTAssertEqual(item.remainingCostCents, 700)
         XCTAssertEqual(item.card.marketPrice, 10.49)
     }
 
-    func testMissingInvalidAndKnownZeroPricesStayDistinctAndRoundingUsesNearestDollar() throws {
+    func testMissingAndInvalidMarketsRemainUnavailableInsteadOfBecomingBulkOrZero() throws {
         for price in [nil, Decimal(-1), Decimal.nan] {
             let draft = InventoryLabelDraft(item: stock(price: price))
+            XCTAssertFalse(draft.isBulk)
             XCTAssertNil(draft.priceCents)
+            XCTAssertNil(draft.tag)
             XCTAssertThrowsError(try draft.validate())
         }
-        for (price, cents) in [(Decimal.zero, Int64(0)), (Decimal(string: "0.49")!, 0),
-                               (Decimal(string: "0.50")!, 100), (Decimal(string: "10.50")!, 1_100)] {
+    }
+
+    func testKnownMarketsBelowSeventyFiveCentsUseBulkWithoutAnIndividualLabelPrice() throws {
+        for price in [Decimal.zero, Decimal(string: "0.49")!, Decimal(string: "0.50")!, Decimal(string: "0.74")!] {
             let draft = InventoryLabelDraft(item: stock(price: price))
+            XCTAssertTrue(draft.isBulk)
+            XCTAssertNil(draft.priceCents)
+            XCTAssertEqual(draft.tag, .twoForOne)
+            XCTAssertEqual(draft.priceText, "2 for $1")
+            XCTAssertThrowsError(try draft.validate()) {
+                XCTAssertEqual($0 as? InventoryLabelFailure, .bulkCategory)
+            }
+            XCTAssertThrowsError(try InventoryLabelRenderer.render(draft)) {
+                XCTAssertEqual($0 as? InventoryLabelFailure, .bulkCategory)
+            }
+        }
+    }
+
+    func testIndividualDefaultsUseOneDollarBelowOneAndFloorWholeDollarsAboveIt() throws {
+        for (price, cents) in [(Decimal(string: "0.75")!, Int64(100)), (Decimal(string: "0.99")!, 100),
+                               (Decimal(string: "10.50")!, 1_000)] {
+            let draft = InventoryLabelDraft(item: stock(price: price))
+            XCTAssertFalse(draft.isBulk)
             XCTAssertEqual(draft.priceCents, cents)
+            XCTAssertEqual(draft.tag, .individual(cents))
             XCTAssertNoThrow(try draft.validate())
+        }
+    }
+
+    func testManualCentsPriceIsPreservedForReviewButCannotProduceAnIndividualLabel() throws {
+        var draft = InventoryLabelDraft(item: stock())
+        draft.askingPriceText = "32.50"
+        XCTAssertEqual(draft.priceCents, 3_250)
+        XCTAssertNil(draft.tag)
+        XCTAssertThrowsError(try draft.validate()) {
+            XCTAssertEqual($0 as? InventoryLabelFailure, .wholeDollarRequired)
+        }
+        XCTAssertThrowsError(try InventoryLabelRenderer.render(draft)) {
+            XCTAssertEqual($0 as? InventoryLabelFailure, .wholeDollarRequired)
         }
     }
 
@@ -101,14 +137,15 @@ import UIKit
     }
 
     func testLongUnicodeNamesAndMaximumPriceRemainBoundedAcrossBothStyles() throws {
+        let maximumWholeTierCents = ShowBudgetMoney.maximumCents / 500 * 500
         for style in InventoryLabelStyle.allCases {
             var draft = InventoryLabelDraft(item: stock(name: String(repeating: "超長いカード e\u{301} 🃏 ", count: 100), number: "99/102"))
             draft.style = style
-            draft.askingPriceText = InventoryLabelDraft.inputText(ShowBudgetMoney.maximumCents)
+            draft.askingPriceText = InventoryLabelDraft.inputText(maximumWholeTierCents)
             let bitmap = try InventoryLabelRenderer.render(draft)
             XCTAssertEqual(bitmap.raster.data.count, 240 * 12)
             XCTAssertLessThanOrEqual(draft.cardName.count, 500)
-            XCTAssertEqual(draft.priceCents, ShowBudgetMoney.maximumCents)
+            XCTAssertEqual(draft.priceCents, maximumWholeTierCents)
         }
     }
 

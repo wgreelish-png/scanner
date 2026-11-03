@@ -1,6 +1,6 @@
 # Inventory labels — build 42
 
-Create price labels from saved working inventory without an internet request. Label prices are independent of saved market quotes, acquisition costs, quantities, checkout amounts and show budgets.
+Create price labels from saved working inventory without an internet request. Build 43 adds [final sticker rules, profit protection and durable approvals](TagPricingRules.md). Draft edits remain separate from financial records; explicit approval activates the sticker as a checkout suggestion, while each sale still records its actual cash amount.
 
 ## Prepare labels
 
@@ -8,9 +8,9 @@ Create price labels from saved working inventory without an internet request. La
 - A batch: **Show → Inventory → ••• → Print Price Tags**. Search and select available cards, then continue.
 - Choose **Price only** for a large asking price, or **Card details** for name/number, price and condition. Long names truncate; asking prices remain complete.
 - Select the paper loaded in the printer: **30 × 14 mm**, **40 × 12 mm**, or **50 × 14 mm**. The supported head prints a 12 mm strip at eight dots per millimetre; larger stock retains its physical margins.
-- Asking price starts at the last saved market value rounded to the nearest dollar. Missing prices require input; explicitly entered $0 is valid. Edit prices/copies in the isolated editor, then Save. Cancel leaves the draft unchanged.
+- New prices follow the final tiers: below $0.75 goes to the 2 for $1 bulk category, $0.75–$0.99 becomes $1, values below $100 round down to dollars, and $100+ rounds down to $5. Bulk cards receive no individual tags. Approved/manual prices stay selected until reviewed. Edit whole-dollar prices/copies in the isolated editor; cost/profit warnings require explicit review.
 - Each selected lot starts at one copy. **Match Stock Quantities** explicitly requests one label per available copy; **One Each** restores one per lot. The app reports quantities exceeding 100 labels per lot or 250 total instead of silently reducing them.
-- Review the actual monochrome bitmap, price, copies and paper before **Prepare Queue**. Preparing does not start the printer.
+- Review the actual monochrome bitmap, price, copies, profit information and paper before approving and preparing changed labels. An unchanged existing sticker can be retained without reprinting. Preparing never starts the printer.
 
 The preview is decoded from the same packed bits sent to the printer. It does not depend on artwork downloads or current API quotes. Label paper choice is explicit: the baseline printer does not reliably report its physical sticker size.
 
@@ -48,4 +48,4 @@ After implementation, local checks passed grammar parsing of all **157 Swift fil
 4. Stop during a copy, disconnect/power off, open another tab and leave the foreground. Check physical output before retrying the uncertain copy. Verify no automatic restart when reopening.
 5. Complete a small batch, relaunch, inspect saved progress and retry only selected unsuccessful copies. Repeat preparation and printing offline using saved inventory.
 
-Repricing history, persistent asking prices, price rules, quick reprint and barcode/QR scan-to-sell are later features. This release does not restore the removed printer integration.
+Build 43 implements persistent approvals, current pricing rules and review thresholds. Quick reprint and barcode/QR scan-to-sell remain later features. This release does not restore the removed printer integration.

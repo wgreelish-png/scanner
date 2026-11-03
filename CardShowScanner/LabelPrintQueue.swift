@@ -28,12 +28,14 @@ struct LabelQueueEntry: Codable, Equatable, Identifiable, Sendable {
     let paperSize: InventoryLabelSize
     let style: InventoryLabelStyle
     let raster: LabelRaster
+    /// Optional for saved queues from before durable pricing approvals existed.
+    let pricingRevisionID: UUID?
     var state: LabelQueueState
     var lastIssue: LabelPrinterIssue?
 
     var priceText: String { ShowBudgetMoney.decimal(priceCents).money }
 
-    init(draft: InventoryLabelDraft, raster: LabelRaster, copyNumber: Int) throws {
+    init(draft: InventoryLabelDraft, raster: LabelRaster, copyNumber: Int, pricingRevisionID: UUID? = nil) throws {
         try draft.validate()
         try raster.validate()
         guard let cents = draft.priceCents, (1...draft.copies).contains(copyNumber) else {
@@ -47,6 +49,7 @@ struct LabelQueueEntry: Codable, Equatable, Identifiable, Sendable {
         self.paperSize = draft.paperSize
         self.style = draft.style
         self.raster = raster
+        self.pricingRevisionID = pricingRevisionID
         self.state = .pending
         self.lastIssue = nil
         try validate()
@@ -103,7 +106,10 @@ private struct LabelQueueFile: Codable {
     typealias Reader = @MainActor (URL) throws -> Data?
     typealias Writer = @MainActor (Data, URL) throws -> Void
 
-    static let shared = LabelPrintQueue()
+    static let shared = LabelPrintQueue(onChanged: { entries in
+        do { try TagApprovalStore.shared.observeCompletedQueue(entries) }
+        catch { DiagnosticLog.shared.record("tag_approval.print_history", ["reason": "save_failed"]) }
+    }, approvalIssue: { TagPricingContext.printingIssue(for: $0) })
     static let maximumLabels = 250
     static let maximumBytes = 8 * 1_024 * 1_024
 
@@ -121,14 +127,20 @@ private struct LabelQueueFile: Codable {
     private let url: URL
     private let read: Reader
     private let write: Writer
+    @ObservationIgnored private let onChanged: @MainActor ([LabelQueueEntry]) -> Void
+    @ObservationIgnored private let approvalIssue: @MainActor (LabelQueueEntry) -> String?
     private var stopRequested = false
     private var activeSessionID: UUID?
     @ObservationIgnored private weak var activePrinter: (any LabelPrinterSending)?
 
-    init(url: URL? = nil, read: Reader? = nil, write: Writer? = nil) {
+    init(url: URL? = nil, read: Reader? = nil, write: Writer? = nil,
+         onChanged: @escaping @MainActor ([LabelQueueEntry]) -> Void = { _ in },
+         approvalIssue: @escaping @MainActor (LabelQueueEntry) -> String? = { _ in nil }) {
         self.url = url ?? Self.defaultURL
         self.read = read ?? Self.readFile
         self.write = write ?? Self.writeFile
+        self.onChanged = onChanged
+        self.approvalIssue = approvalIssue
         reload()
     }
 
@@ -162,6 +174,7 @@ private struct LabelQueueFile: Codable {
             entries = next
             isLoaded = true
             error = nil
+            onChanged(next)
         } catch {
             isLoaded = false
             self.error = (error as? LabelPrintQueueFailure)?.errorDescription
@@ -197,6 +210,13 @@ private struct LabelQueueFile: Codable {
 
         while !stopRequested && !Task.isCancelled,
               let index = entries.firstIndex(where: { $0.state == .pending }) {
+            if let issue = approvalIssue(entries[index]) {
+                var rejected = entries
+                rejected[index].state = .failed
+                rejected[index].lastIssue = .invalidLabel
+                do { try commit(rejected); error = issue } catch { }
+                return
+            }
             var sending = entries
             sending[index].state = .sending
             sending[index].lastIssue = nil
@@ -308,6 +328,7 @@ private struct LabelQueueFile: Codable {
             entries = next
             isLoaded = true
             error = nil
+            onChanged(next)
         } catch {
             isLoaded = false
             self.error = LabelPrintQueueFailure.saveFailed.errorDescription

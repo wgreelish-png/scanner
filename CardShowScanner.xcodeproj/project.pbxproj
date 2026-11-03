@@ -7,6 +7,17 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        393AE5C288A5FC43AA7D5448 /* TagPricingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2171833FA659BC9E338B00E5; };
+        E8B53AEA497E49D189E33055 /* TagPricingContextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C3CD437015E83BBC95643DE; };
+        73DDC6C24F21E5C680ACC7F6 /* TagBundlePricingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F6FC82C6444D5C7169CB8C7; };
+        2EF371D80A5D78F322D8F5A3 /* TagApprovalStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F1ED60734D18EB3991C1E03; };
+        C98D4B97BC1DBAB8E048DEEC /* RepricingPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FEA9BB5ECA6753145C08285; };
+        BBD5304A1E1B353A28D23271 /* TagPricingViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 409B430835C7E717156A4F88; };
+        6437ED9B75D0870D7BDB9797 /* TagPricingContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39EE94AD6D3F16F8CA8F5C4A; };
+        DD7978FE0A92A6C1C345EA4D /* TagPricing.swift in Sources */ = {isa = PBXBuildFile; fileRef = E130CEA62DE0B4A702CFA70A; };
+        78C47D389776A5CFA39668DC /* TagBundlePricing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AE84F4AE537D15833D75A70; };
+        0CCD61129E14827A956CF412 /* TagApprovalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB8C8715E353B862FB495D11; };
+        A010F88FDCBFC3852A75AC09 /* RepricingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = A94FD7F38C66C5FA086B4C6C; };
         B7CECD2CC03A26EC34B15868 /* InventoryLabelsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 646D15CFFA029575D106B91E; };
         E8D243F21174DBD7E78ED9C2 /* NiimbotProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56D60BD16FDD19AF38CCD570; };
         F9A62D43CC797A646D8C4017 /* LabelPrintQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C33015E72EC423950F0E61C; };
@@ -193,6 +204,17 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        2171833FA659BC9E338B00E5 /* TagPricingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagPricingTests.swift; sourceTree = "<group>"; };
+        7C3CD437015E83BBC95643DE /* TagPricingContextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagPricingContextTests.swift; sourceTree = "<group>"; };
+        3F6FC82C6444D5C7169CB8C7 /* TagBundlePricingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagBundlePricingTests.swift; sourceTree = "<group>"; };
+        7F1ED60734D18EB3991C1E03 /* TagApprovalStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagApprovalStoreTests.swift; sourceTree = "<group>"; };
+        5FEA9BB5ECA6753145C08285 /* RepricingPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepricingPolicyTests.swift; sourceTree = "<group>"; };
+        409B430835C7E717156A4F88 /* TagPricingViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagPricingViews.swift; sourceTree = "<group>"; };
+        39EE94AD6D3F16F8CA8F5C4A /* TagPricingContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagPricingContext.swift; sourceTree = "<group>"; };
+        E130CEA62DE0B4A702CFA70A /* TagPricing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagPricing.swift; sourceTree = "<group>"; };
+        3AE84F4AE537D15833D75A70 /* TagBundlePricing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagBundlePricing.swift; sourceTree = "<group>"; };
+        BB8C8715E353B862FB495D11 /* TagApprovalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagApprovalStore.swift; sourceTree = "<group>"; };
+        A94FD7F38C66C5FA086B4C6C /* RepricingPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepricingPolicy.swift; sourceTree = "<group>"; };
         646D15CFFA029575D106B91E /* InventoryLabelsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InventoryLabelsUITests.swift; sourceTree = "<group>"; };
         56D60BD16FDD19AF38CCD570 /* NiimbotProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NiimbotProtocolTests.swift; sourceTree = "<group>"; };
         4C33015E72EC423950F0E61C /* LabelPrintQueueTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabelPrintQueueTests.swift; sourceTree = "<group>"; };
@@ -418,6 +440,11 @@
 		59830EBC3A4184110566BF1A /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+                2171833FA659BC9E338B00E5 /* TagPricingTests.swift */,
+                7C3CD437015E83BBC95643DE /* TagPricingContextTests.swift */,
+                3F6FC82C6444D5C7169CB8C7 /* TagBundlePricingTests.swift */,
+                7F1ED60734D18EB3991C1E03 /* TagApprovalStoreTests.swift */,
+                5FEA9BB5ECA6753145C08285 /* RepricingPolicyTests.swift */,
                 56D60BD16FDD19AF38CCD570 /* NiimbotProtocolTests.swift */,
                 4C33015E72EC423950F0E61C /* LabelPrintQueueTests.swift */,
                 58527D29B178E9291E13EEB6 /* InventoryLabelTests.swift */,
@@ -481,6 +508,12 @@
 		878A52FC5FF6A57D50B7B870 /* CardShowScanner */ = {
 			isa = PBXGroup;
 			children = (
+                409B430835C7E717156A4F88 /* TagPricingViews.swift */,
+                39EE94AD6D3F16F8CA8F5C4A /* TagPricingContext.swift */,
+                E130CEA62DE0B4A702CFA70A /* TagPricing.swift */,
+                3AE84F4AE537D15833D75A70 /* TagBundlePricing.swift */,
+                BB8C8715E353B862FB495D11 /* TagApprovalStore.swift */,
+                A94FD7F38C66C5FA086B4C6C /* RepricingPolicy.swift */,
                 C45F2902A14F50D9D5EC623B /* NiimbotProtocol.swift */,
                 95CBAF8C5BE3E61C6D035D92 /* NiimbotPrinter.swift */,
                 FC7CB98C1ADF14B28350C401 /* LabelPrintingViews.swift */,
@@ -741,6 +774,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                393AE5C288A5FC43AA7D5448 /* TagPricingTests.swift in Sources */,
+                E8B53AEA497E49D189E33055 /* TagPricingContextTests.swift in Sources */,
+                73DDC6C24F21E5C680ACC7F6 /* TagBundlePricingTests.swift in Sources */,
+                2EF371D80A5D78F322D8F5A3 /* TagApprovalStoreTests.swift in Sources */,
+                C98D4B97BC1DBAB8E048DEEC /* RepricingPolicyTests.swift in Sources */,
                 E8D243F21174DBD7E78ED9C2 /* NiimbotProtocolTests.swift in Sources */,
                 F9A62D43CC797A646D8C4017 /* LabelPrintQueueTests.swift in Sources */,
                 04CB15B40E469B9093E2B509 /* InventoryLabelTests.swift in Sources */,
@@ -803,6 +841,12 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                BBD5304A1E1B353A28D23271 /* TagPricingViews.swift in Sources */,
+                6437ED9B75D0870D7BDB9797 /* TagPricingContext.swift in Sources */,
+                DD7978FE0A92A6C1C345EA4D /* TagPricing.swift in Sources */,
+                78C47D389776A5CFA39668DC /* TagBundlePricing.swift in Sources */,
+                0CCD61129E14827A956CF412 /* TagApprovalStore.swift in Sources */,
+                A010F88FDCBFC3852A75AC09 /* RepricingPolicy.swift in Sources */,
                 CDDA1A2E575809F0879AD797 /* NiimbotProtocol.swift in Sources */,
                 9738F6B29A8DBA6A9C494C6D /* NiimbotPrinter.swift in Sources */,
                 4EECBFDB71BD85E3B4F84ED1 /* LabelPrintingViews.swift in Sources */,
@@ -957,7 +1001,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 42;
+				CURRENT_PROJECT_VERSION = 43;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -994,7 +1038,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 42;
+				CURRENT_PROJECT_VERSION = 43;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";

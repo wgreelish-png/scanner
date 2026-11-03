@@ -15,7 +15,7 @@ import XCTest
             name: name, set: "Fixture set", number: "42", marketPrice: 12,
             confidence: 100, printings: ["Holofoil"])
         var draft = InventoryLabelDraft(item: ShowInventoryItem(card: card, quantity: 1))
-        draft.askingPriceText = "14.50"
+        draft.askingPriceText = "14.00"
         draft.copies = copies
         draft.paperSize = paperSize
         draft.style = style
@@ -43,7 +43,7 @@ import XCTest
         XCTAssertEqual(entries.map(\.copyNumber), [1, 2, 3])
         XCTAssertEqual(Set(entries.map(\.id)).count, 3)
         XCTAssertEqual(Set(entries.map(\.inventoryID)).count, 1)
-        XCTAssertTrue(entries.allSatisfy { $0.priceCents == 1_450 })
+        XCTAssertTrue(entries.allSatisfy { $0.priceCents == 1_400 })
         XCTAssertTrue(entries.allSatisfy { $0.paperSize == .small30x14 && $0.style == .cardDetails })
         let restored = self.queue(storage)
         XCTAssertEqual(restored.entries, entries)
@@ -63,6 +63,54 @@ import XCTest
                 XCTAssertEqual(restored.entries.first?.raster.width, paperSize.headDots)
                 XCTAssertEqual(restored.entries.first?.raster.height, paperSize.feedDots)
             }
+        }
+    }
+
+    func testLegacyCentsSnapshotWithoutPricingRevisionRestoresWithoutChangingSavedBytes() throws {
+        let original = try labels(copies: 1)[0]
+        let encoded = try JSONEncoder().encode(LabelQueueTestDocument(entries: [original]))
+        var document = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var rows = try XCTUnwrap(document["entries"] as? [[String: Any]])
+        rows[0]["priceCents"] = 1_450
+        rows[0].removeValue(forKey: "pricingRevisionID")
+        XCTAssertNil(rows[0]["pricingRevisionID"])
+        document["entries"] = rows
+        let bytes = try JSONSerialization.data(withJSONObject: document)
+        let storage = LabelQueueTestStorage(bytes: bytes), queue = queue(storage)
+        let restored = try XCTUnwrap(queue.entries.first)
+        XCTAssertTrue(queue.isLoaded)
+        XCTAssertTrue(queue.canStart)
+        XCTAssertEqual(restored.id, original.id)
+        XCTAssertEqual(restored.priceCents, 1_450)
+        XCTAssertEqual(restored.raster, original.raster)
+        XCTAssertEqual(restored.state, .pending)
+        XCTAssertNil(restored.pricingRevisionID)
+        XCTAssertEqual(storage.bytes, bytes)
+        XCTAssertEqual(storage.writeAttempts, 0)
+    }
+
+    func testNewQueueEntryRejectsFractionalDollarPrices() throws {
+        let card = CardCandidate(identity: .init(game: "Pokémon", productID: "p:42", printing: "Holofoil"),
+            name: "Fixture card", set: "Fixture set", number: "42", marketPrice: 12,
+            confidence: 100, printings: ["Holofoil"])
+        var draft = InventoryLabelDraft(item: ShowInventoryItem(card: card, quantity: 1))
+        draft.askingPriceText = "14.50"
+        let raster = try labels(copies: 1)[0].raster
+        XCTAssertThrowsError(try LabelQueueEntry(draft: draft, raster: raster, copyNumber: 1)) {
+            XCTAssertEqual($0 as? InventoryLabelFailure, .wholeDollarRequired)
+        }
+    }
+
+    func testNewQueueEntryRejectsCardsInTheBulkCategory() throws {
+        let card = CardCandidate(identity: .init(game: "Pokémon", productID: "p:42", printing: "Holofoil"),
+            name: "Fixture card", set: "Fixture set", number: "42", marketPrice: Decimal(string: "0.50"),
+            confidence: 100, printings: ["Holofoil"])
+        let draft = InventoryLabelDraft(item: ShowInventoryItem(card: card, quantity: 1))
+        let raster = try labels(copies: 1)[0].raster
+        XCTAssertTrue(draft.isBulk)
+        XCTAssertNil(draft.priceCents)
+        XCTAssertThrowsError(try LabelQueueEntry(draft: draft, raster: raster, copyNumber: 1)) {
+            XCTAssertEqual($0 as? InventoryLabelFailure, .bulkCategory)
         }
     }
 

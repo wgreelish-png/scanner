@@ -186,7 +186,10 @@ private struct ShowHomeRouteCard: View {
             }
         }
         .sheet(isPresented: $showingTransaction) { ShowTransactionForm(store: store) }
-        .sheet(isPresented: $showingLabels) { InventoryLabelFlowView(inventory: store.inventory) }
+        .sheet(isPresented: $showingLabels) {
+            InventoryLabelFlowView(inventory: store.inventory,
+                marketQuotes: TagPricingContext.currentQuotes(inventory: store.inventory, context: context))
+        }
         .onAppear { visible = true; seedInventory() }
         .onDisappear { visible = false }
     }
@@ -266,6 +269,7 @@ private struct ShowWorkingInventoryRow: View {
 }
 
 @MainActor struct ShowWorkingInventoryDetailView: View {
+    @Environment(\.modelContext) private var context
     @Environment(\.scenePhase) private var scenePhase
     let itemID: UUID
     let store: ShowBudgetStore
@@ -342,7 +346,10 @@ private struct ShowWorkingInventoryRow: View {
                     .accessibilityLabel("Card options").accessibilityIdentifier("inventory.options")
             }
         }
-        .sheet(isPresented: $showingLabel) { InventoryLabelFlowView(inventory: store.inventory, initialInventoryID: itemID) }
+        .sheet(isPresented: $showingLabel) {
+            InventoryLabelFlowView(inventory: store.inventory, initialInventoryID: itemID,
+                marketQuotes: TagPricingContext.currentQuotes(inventory: store.inventory, context: context))
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             TimelineView(.animation(minimumInterval: 60, paused: !visible || scenePhase != .active)) { _ in
                 quickSellAction

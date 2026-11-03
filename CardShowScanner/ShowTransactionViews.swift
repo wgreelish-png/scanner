@@ -39,6 +39,7 @@ import UIKit
     @State private var error: String?
     @State private var isRecording = false
     @State private var didPrepare = false
+    @State private var tagApprovals = TagApprovalStore.shared
     @FocusState private var focused: MoneyField?
     private let initialInventoryID: UUID?
 
@@ -62,7 +63,10 @@ import UIKit
         }
     }
     private var outgoingReference: Int64? { ShowSaleMath.suggestedTotal(selectedLines) }
-    private var saleText: String { saleReceivedEdited ? saleReceived : outgoingReference.map(showTransactionInput) ?? "" }
+    private var stickerSuggestion: TagSaleSuggestion? {
+        TagPricingContext.saleSuggestion(lines: selectedLines, inventory: store.inventory, store: tagApprovals)
+    }
+    private var saleText: String { saleReceivedEdited ? saleReceived : stickerSuggestion.map { showTransactionInput($0.totalCents) } ?? "" }
     private var outgoingText: String { outgoingValueEdited ? outgoingValue : outgoingReference.map(showTransactionInput) ?? "" }
     private var evaluatedPreview: (amounts: ShowTransactionAmounts?, accounting: ShowTransactionAccounting?, message: String?) {
         do {
@@ -142,7 +146,7 @@ import UIKit
             .onChange(of: outgoingQuantities) { _, _ in
                 makeEven = false
                 if !outgoingValueEdited { outgoingValue = outgoingReference.map(showTransactionInput) ?? "" }
-                if !saleReceivedEdited { saleReceived = outgoingReference.map(showTransactionInput) ?? "" }
+                if !saleReceivedEdited { saleReceived = stickerSuggestion.map { showTransactionInput($0.totalCents) } ?? "" }
             }
         }
         .sheet(isPresented: $editingSaleCash, onDismiss: {
@@ -443,18 +447,26 @@ import UIKit
                 }.accessibilityLabel("Edit actual cash received")
                     .accessibilityValue(saleText)
                     .accessibilityIdentifier("showTransaction.editSaleAmount")
-                if let suggested = outgoingReference {
-                    LabeledContent("Rounded market total", value: showTransactionMoney(suggested))
-                    Text("Each card defaults to its market value rounded to the nearest dollar.")
+                if let suggestion = stickerSuggestion {
+                    let suggested = suggestion.totalCents
+                    LabeledContent(suggestion.usesApprovedPrices ? "Approved sticker total" : "Rounded market total", value: showTransactionMoney(suggested))
+                    Text(suggestion.usesApprovedPrices
+                         ? "Approved prices are active in checkout. Review the actual amount paid before recording."
+                         : "Cards without an approved sticker retain their saved market-based checkout suggestion.")
                         .font(.caption).foregroundStyle(.secondary)
                     if saleReceivedEdited {
-                        Button("Use Rounded Market Total") {
+                        Button(suggestion.usesApprovedPrices ? "Use Approved Sticker Total" : "Use Rounded Market Total") {
                             saleReceivedEdited = false; saleReceived = showTransactionInput(suggested)
                         }.accessibilityIdentifier("showTransaction.resetSaleTotal")
                     }
                 }
                 if let cash = ShowBudgetMoney.parse(saleText) {
-                    ShowSaleBreakdownView(lines: selectedLines, receivedCents: cash)
+                    ShowSaleBreakdownView(lines: selectedLines, receivedCents: cash,
+                        approvedAllocations: saleReceivedEdited ? nil : stickerSuggestion?.allocations)
+                }
+                if !tagApprovals.isLoaded {
+                    Text(tagApprovals.error ?? "Saved sticker prices are unavailable. Enter the actual cash explicitly.")
+                        .font(.caption).foregroundStyle(.orange)
                 }
                 Text("Enter the total the customer actually paid for all selected cards.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -698,6 +710,12 @@ import UIKit
             }
             draft.saleReceivedCents = amount
             draft.feeCents = saleFeeCents
+            if !saleReceivedEdited, let suggestion = stickerSuggestion {
+                let allocations = Dictionary(uniqueKeysWithValues: suggestion.allocations.map { ($0.inventoryID, $0.receivedCents) })
+                for index in draft.outgoing.indices {
+                    draft.outgoing[index].allocatedProceedsCents = allocations[draft.outgoing[index].inventoryID]
+                }
+            }
         } else if isTrade {
             guard let amount = ShowBudgetMoney.parse(outgoingText) else {
                 throw ShowTransactionInputFailure.invalidAmount("outgoing card value")
@@ -894,11 +912,12 @@ import UIKit
 @MainActor private struct ShowSaleBreakdownView: View {
     let lines: [ShowTransactionCardLine]
     let receivedCents: Int64
+    var approvedAllocations: [ShowSaleAllocation]? = nil
     @State private var expanded = false
 
     var body: some View {
         if !lines.isEmpty {
-            if ShowSaleMath.suggestedTotal(lines) != receivedCents,
+            if approvedAllocations == nil, ShowSaleMath.suggestedTotal(lines) != receivedCents,
                let percent = ShowSaleMath.marketPercentage(lines, receivedCents: receivedCents) {
                 LabeledContent("Sale percentage of market", value: CSVExportService.number(OfferCalculator.cents(percent)) + "%")
                     .accessibilityIdentifier("showTransaction.salePercentage")
@@ -909,7 +928,7 @@ import UIKit
                 // A collapsed disclosure must not sort thousands of allocations
                 // when a keyboard or unrelated checkout field changes.
                 if expanded {
-                    if let allocations = ShowSaleMath.allocations(lines, receivedCents: receivedCents) {
+                    if let allocations = approvedAllocations ?? ShowSaleMath.allocations(lines, receivedCents: receivedCents) {
                         let cardsByID = Dictionary(uniqueKeysWithValues: lines.map { ($0.inventoryID, $0.card) })
                         ForEach(allocations) { allocation in
                             if let card = cardsByID[allocation.inventoryID] {

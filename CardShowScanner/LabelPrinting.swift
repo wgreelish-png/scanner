@@ -35,31 +35,64 @@ struct InventoryLabelDraft: Codable, Equatable, Identifiable, Sendable {
     var copies: Int = 1
     var style: InventoryLabelStyle = .cardDetails
     var paperSize: InventoryLabelSize = .small30x14
+    var marketValue: Decimal?
+    var profitInputs: TagProfitInputs
+    var isBulk = false
+    var isManualOverride = false
     static let maximumCopies = 100
 
-    init(item: ShowInventoryItem) {
+    init(item: ShowInventoryItem, preferences: TagPricingPreferences = .init(), approval: TagApprovalRecord? = nil) {
         id = item.id
         cardName = Self.singleLine(item.card.name, maximumCharacters: 500)
         cardNumber = Self.singleLine(item.card.number, maximumCharacters: 100)
         condition = Self.shortCondition(item.card.identity.condition)
-        askingPriceText = ""
-        if let price = item.card.marketPrice, !price.isNaN, price >= 0 {
-            var value = price, rounded = Decimal.zero
-            NSDecimalRound(&rounded, &value, 0, .plain)
-            let cents = rounded * 100
-            if !cents.isNaN, cents <= Decimal(ShowBudgetMoney.maximumCents) {
-                askingPriceText = Self.inputText(NSDecimalNumber(decimal: cents).int64Value)
-            }
-        }
+        marketValue = item.card.marketPrice
+        profitInputs = preferences.profitInputs(for: item)
+        let suggestion = TagPricing.evaluate(market: marketValue, inputs: profitInputs).tag
+        // Existing approved prices are retained until an explicit review. New
+        // sub-$0.75 quotes always propose the bulk category, never a cents tag.
+        isBulk = suggestion == .twoForOne || (marketValue == nil && approval?.approvedTag == .twoForOne)
+        isManualOverride = approval?.isManualOverride ?? false
+        let cents = isBulk ? nil : (approval?.approvedTag.integerPriceCents ?? suggestion?.integerPriceCents)
+        askingPriceText = cents.map(Self.inputText) ?? ""
     }
 
-    var priceCents: Int64? { ShowBudgetMoney.parse(askingPriceText) }
-    var priceText: String? { priceCents.map { ShowBudgetMoney.decimal($0).money } }
+    var priceCents: Int64? { isBulk ? nil : ShowBudgetMoney.parse(askingPriceText) }
+    var tag: StickerPrice? {
+        if isBulk { return .twoForOne }
+        guard let cents = priceCents, cents % 100 == 0 else { return nil }
+        return .individual(cents)
+    }
+    var priceText: String? { tag?.displayText }
+    var pricing: TagPriceEvaluation { TagPricing.evaluate(market: marketValue, inputs: profitInputs) }
+    var pricingWarnings: [String] {
+        if isBulk { return pricing.reasons.map(\.message) }
+        guard let cents = priceCents else { return [InventoryLabelFailure.invalidPrice.localizedDescription] }
+        var reasons = TagPricing.validateActualPriceCents(cents, inputs: profitInputs)
+        for reason in pricing.reasons where reason == .missingMarket || reason == .invalidMarket {
+            if !reasons.contains(reason) { reasons.append(reason) }
+        }
+        if cents % 100 != 0 { return [InventoryLabelFailure.wholeDollarRequired.localizedDescription] + reasons.map(\.message) }
+        return reasons.map(\.message)
+    }
+    var suggestedOfferCents: Int64? {
+        guard !isBulk, pricingWarnings.isEmpty, let priceCents, let floor = pricing.preferredFloorCents else { return nil }
+        return TagPricing.suggestedOfferCents(stickerCents: priceCents, preferredFloorCents: floor)
+    }
+
+    mutating func useSuggestedPrice() {
+        let suggestion = pricing.tag
+        isBulk = suggestion == .twoForOne
+        askingPriceText = suggestion?.integerPriceCents.map(Self.inputText) ?? ""
+        isManualOverride = false
+    }
 
     func validate() throws {
         guard !cardName.isEmpty, cardName.count <= 500, cardNumber.count <= 100,
               condition.count <= 100, askingPriceText.count <= 40 else { throw InventoryLabelFailure.invalidText }
+        guard !isBulk else { throw InventoryLabelFailure.bulkCategory }
         guard priceCents != nil else { throw InventoryLabelFailure.invalidPrice }
+        guard let priceCents, priceCents % 100 == 0 else { throw InventoryLabelFailure.wholeDollarRequired }
         guard (1...Self.maximumCopies).contains(copies) else { throw InventoryLabelFailure.invalidCopies }
     }
 
@@ -96,13 +129,15 @@ struct LabelRaster: Codable, Equatable, Sendable {
 }
 
 enum InventoryLabelFailure: Error, LocalizedError, Equatable {
-    case invalidPrice, invalidCopies, invalidRaster, invalidText
+    case invalidPrice, invalidCopies, invalidRaster, invalidText, wholeDollarRequired, bulkCategory
     var errorDescription: String? {
         switch self {
         case .invalidPrice: return "Enter a valid asking price before preparing this label."
         case .invalidCopies: return "Choose between 1 and \(InventoryLabelDraft.maximumCopies) labels per card."
         case .invalidRaster: return "This label could not be prepared for the selected paper."
         case .invalidText: return "Review the card information before preparing its label."
+        case .wholeDollarRequired: return "Individual price tags use whole dollars. Review this price before printing."
+        case .bulkCategory: return "Cards below $0.75 belong in the 2 for $1 category and do not receive individual price tags."
         }
     }
 }
