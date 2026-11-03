@@ -11,12 +11,6 @@
         30E802590E9701FA25C00105 /* ShowCostBasisTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5B11344F2E70DB142E50992; };
         652F5D3544431F0B3304E984 /* ShowProfitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ED3CDEC25A18BE21BBD47D7; };
         51E1F2D8F1DEEBDDA174DDA9 /* ShowCostBasis.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6EBCF01DACF9149115887B1; };
-        8D750EE27D3FF03F55170917 /* PriceTagTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 501146FA7FBAA2D3E7998CE1; };
-        EB09CB0554F9605F58E44C1C /* LetraTagProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E9C3AEA955E796FF2F0329E; };
-        247E44EDBF276442C8F1C1C4 /* PriceTag.swift in Sources */ = {isa = PBXBuildFile; fileRef = A18624CC7C1C0179E49AA726; };
-        0176105FE68CE005C8DDFC5F /* LetraTagProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CD6B0804E6B42A3E52259DC; };
-        0DA68F6542046E44CFE8C1CB /* LetraTagPrinter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B7523211C1FD923F6A337C0; };
-        C86E54CC03E480E437C5510F /* LabelPrinterViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89FD58E175422DB84882C199; };
         4E123B9ED458A13766DE4274 /* ShowSaleMathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72A8B627A2A6961AA19DE950; };
         9596DE673738CE821C601700 /* ShowInventorySelectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 758F4BCDDEB78781602E5EAE; };
         A90717DCF440AD5FD6AE25E9 /* ShowTransactionsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0180A5CE6C4A3D46B9ED12F7; };
@@ -193,12 +187,6 @@
         E5B11344F2E70DB142E50992 /* ShowCostBasisTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowCostBasisTests.swift; sourceTree = "<group>"; };
         9ED3CDEC25A18BE21BBD47D7 /* ShowProfitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowProfitView.swift; sourceTree = "<group>"; };
         E6EBCF01DACF9149115887B1 /* ShowCostBasis.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowCostBasis.swift; sourceTree = "<group>"; };
-        501146FA7FBAA2D3E7998CE1 /* PriceTagTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PriceTagTests.swift; sourceTree = "<group>"; };
-        9E9C3AEA955E796FF2F0329E /* LetraTagProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LetraTagProtocolTests.swift; sourceTree = "<group>"; };
-        A18624CC7C1C0179E49AA726 /* PriceTag.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PriceTag.swift; sourceTree = "<group>"; };
-        9CD6B0804E6B42A3E52259DC /* LetraTagProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LetraTagProtocol.swift; sourceTree = "<group>"; };
-        1B7523211C1FD923F6A337C0 /* LetraTagPrinter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LetraTagPrinter.swift; sourceTree = "<group>"; };
-        89FD58E175422DB84882C199 /* LabelPrinterViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabelPrinterViews.swift; sourceTree = "<group>"; };
         72A8B627A2A6961AA19DE950 /* ShowSaleMathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowSaleMathTests.swift; sourceTree = "<group>"; };
         758F4BCDDEB78781602E5EAE /* ShowInventorySelectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowInventorySelectionView.swift; sourceTree = "<group>"; };
         0180A5CE6C4A3D46B9ED12F7 /* ShowTransactionsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowTransactionsUITests.swift; sourceTree = "<group>"; };
@@ -411,8 +399,6 @@
 			children = (
                 2EA711B3EA33421026DBF608 /* ShowCostLedgerTests.swift */,
                 E5B11344F2E70DB142E50992 /* ShowCostBasisTests.swift */,
-                501146FA7FBAA2D3E7998CE1 /* PriceTagTests.swift */,
-                9E9C3AEA955E796FF2F0329E /* LetraTagProtocolTests.swift */,
                 72A8B627A2A6961AA19DE950 /* ShowSaleMathTests.swift */,
                 C1B319E579B6A9D538F28151 /* ShowTransactionsTests.swift */,
                 BC7CE12E338618499E0D2A95 /* ShowTransactionListServiceTests.swift */,
@@ -473,10 +459,6 @@
 			children = (
                 9ED3CDEC25A18BE21BBD47D7 /* ShowProfitView.swift */,
                 E6EBCF01DACF9149115887B1 /* ShowCostBasis.swift */,
-                A18624CC7C1C0179E49AA726 /* PriceTag.swift */,
-                9CD6B0804E6B42A3E52259DC /* LetraTagProtocol.swift */,
-                1B7523211C1FD923F6A337C0 /* LetraTagPrinter.swift */,
-                89FD58E175422DB84882C199 /* LabelPrinterViews.swift */,
                 758F4BCDDEB78781602E5EAE /* ShowInventorySelectionView.swift */,
                 360EF494FAC319736F8B081F /* ShowTransactions.swift */,
                 958524B6EDC4D2C1187E78D9 /* ShowTransactionViews.swift */,
@@ -730,8 +712,6 @@
 			files = (
                 8CBE0342160496BADCF753CD /* ShowCostLedgerTests.swift in Sources */,
                 30E802590E9701FA25C00105 /* ShowCostBasisTests.swift in Sources */,
-                8D750EE27D3FF03F55170917 /* PriceTagTests.swift in Sources */,
-                EB09CB0554F9605F58E44C1C /* LetraTagProtocolTests.swift in Sources */,
                 4E123B9ED458A13766DE4274 /* ShowSaleMathTests.swift in Sources */,
                 2EAD0ADE92CA2346EEF2327D /* ShowTransactionsTests.swift in Sources */,
                 EC28EBB95E75520305533F00 /* ShowTransactionListServiceTests.swift in Sources */,
@@ -791,10 +771,6 @@
 			files = (
                 652F5D3544431F0B3304E984 /* ShowProfitView.swift in Sources */,
                 51E1F2D8F1DEEBDDA174DDA9 /* ShowCostBasis.swift in Sources */,
-                247E44EDBF276442C8F1C1C4 /* PriceTag.swift in Sources */,
-                0176105FE68CE005C8DDFC5F /* LetraTagProtocol.swift in Sources */,
-                0DA68F6542046E44CFE8C1CB /* LetraTagPrinter.swift in Sources */,
-                C86E54CC03E480E437C5510F /* LabelPrinterViews.swift in Sources */,
                 9596DE673738CE821C601700 /* ShowInventorySelectionView.swift in Sources */,
                 FCAADE71DB3E63AA8B8352C9 /* ShowTransactions.swift in Sources */,
                 9EC2DA0831A11221594B46F6 /* ShowTransactionViews.swift in Sources */,
@@ -941,7 +917,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 40;
+				CURRENT_PROJECT_VERSION = 41;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -978,7 +954,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 40;
+				CURRENT_PROJECT_VERSION = 41;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
