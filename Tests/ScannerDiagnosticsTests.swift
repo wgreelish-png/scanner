@@ -2,6 +2,37 @@ import XCTest
 @testable import CardShowScanner
 
 @MainActor final class ScannerDiagnosticsTests: XCTestCase {
+    func testBetaIndexLimitDiagnosticsPersistOnlyBoundedCounts() throws {
+        let failure = BetaAPIIndexValidationFailure(stage: .categories, reason: .tooManyEntries,
+            observedCount: 257, entryLimit: 256)
+        let fields = ServiceDiagnosticFields.failure(failure)
+        XCTAssertEqual(fields["observed_count"], "257")
+        XCTAssertEqual(fields["entry_limit"], "256")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = "BetaIndexLimitDiagnostics." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let log = DiagnosticLog(directory: directory, defaults: defaults)
+        log.record("beta.index_rejected", fields.merging(["body": "PRIVATE_BODY", "api_key": "PRIVATE_KEY"]) { _, value in value })
+        log.record("beta.index_rejected", ["observed_count": "PRIVATE_COUNT", "entry_limit": "1.5"])
+        let exported = try log.export()
+        defer { try? FileManager.default.removeItem(at: exported.deletingLastPathComponent()) }
+        let text = try String(contentsOf: exported, encoding: .utf8)
+        XCTAssertFalse(text.contains("PRIVATE_"))
+        let events = try text.split(separator: "\n").compactMap { line -> [String: String]? in
+            let row = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+            return row["event"] as? String == "beta.index_rejected" ? row["fields"] as? [String: String] : nil
+        }
+        XCTAssertEqual(events.first?["observed_count"], "257")
+        XCTAssertEqual(events.first?["entry_limit"], "256")
+        XCTAssertEqual(events.last?.count, 0)
+        for value in ["-1", "nan", "1.5", "1000001"] {
+            XCTAssertFalse(DiagnosticScanFields.accepts("observed_count", value))
+            XCTAssertFalse(DiagnosticScanFields.accepts("entry_limit", value))
+        }
+    }
+
     func testBetaIndexDiagnosticsKeepOnlyFixedFieldAndShapeClassifications() throws {
         let failure = BetaAPIIndexValidationFailure(stage: .sets, reason: .unexpectedType, shape: .array)
         let fields = ServiceDiagnosticFields.failure(failure)

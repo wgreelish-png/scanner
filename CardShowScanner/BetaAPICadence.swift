@@ -21,9 +21,13 @@ struct BetaAPIIndexValidationFailure: Error, Equatable, Sendable {
     let stage: Stage
     let reason: Reason
     let shape: Shape?
+    let observedCount: Int?
+    let entryLimit: Int?
 
-    init(stage: Stage, reason: Reason, shape: Shape? = nil) {
+    init(stage: Stage, reason: Reason, shape: Shape? = nil,
+         observedCount: Int? = nil, entryLimit: Int? = nil) {
         self.stage = stage; self.reason = reason; self.shape = shape
+        self.observedCount = observedCount; self.entryLimit = entryLimit
     }
 
     var supportsFallback: Bool { stage != .envelope && reason != .tooManyEntries }
@@ -34,6 +38,8 @@ struct BetaAPIIndexValidationFailure: Error, Equatable, Sendable {
     var diagnosticFields: [String: String] {
         var fields = ["domain": "beta_index", "stage": stage.rawValue, "reason": reason.rawValue]
         if let shape { fields["shape"] = shape.rawValue }
+        if let observedCount { fields["observed_count"] = String(observedCount) }
+        if let entryLimit { fields["entry_limit"] = String(entryLimit) }
         return fields
     }
 }
@@ -50,6 +56,8 @@ actor BetaAPICadence {
     static let shared = BetaAPICadence(disk: .shared)
     static let indexLifetime: TimeInterval = 24 * 60 * 60
     static let unsupportedIndexLifetime: TimeInterval = 15 * 60
+    static let maximumIndexCategories = 256
+    static let maximumIndexSetsPerCategory = 50_000
     private let now: @Sendable () -> Date
     private let wait: @Sendable (TimeInterval) async throws -> Void
     private let disk: BetaAPIDiskCache?
@@ -362,7 +370,10 @@ actor BetaAPICadence {
             throw Rejection(stage: .categories, reason: body["categories"] == nil ? .missingField : .unexpectedType,
                             shape: indexShape(body["categories"]))
         }
-        guard categories.count <= 32 else { throw Rejection(stage: .categories, reason: .tooManyEntries) }
+        guard categories.count <= maximumIndexCategories else {
+            throw Rejection(stage: .categories, reason: .tooManyEntries,
+                observedCount: categories.count, entryLimit: maximumIndexCategories)
+        }
         var sets: [String: SetIndex] = [:]
         for (category, value) in categories {
             guard let number = Int(category), number > 0, String(number) == category else {
@@ -375,7 +386,10 @@ actor BetaAPICadence {
                 throw Rejection(stage: .sets, reason: value["sets"] == nil ? .missingField : .unexpectedType,
                                 shape: indexShape(value["sets"]))
             }
-            guard groups.count <= 50_000 else { throw Rejection(stage: .sets, reason: .tooManyEntries) }
+            guard groups.count <= maximumIndexSetsPerCategory else {
+                throw Rejection(stage: .sets, reason: .tooManyEntries,
+                    observedCount: groups.count, entryLimit: maximumIndexSetsPerCategory)
+            }
             for (group, value) in groups {
                 guard let number = Int(group), number > 0, String(number) == group else {
                     throw Rejection(stage: .set, reason: .invalidIdentifier)

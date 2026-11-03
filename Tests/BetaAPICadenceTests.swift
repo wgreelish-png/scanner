@@ -16,6 +16,13 @@ import XCTest
         if let hash { set["etag"] = hash }
         return try JSONSerialization.data(withJSONObject: ["categories": [category: ["sets": [group: set]]]])
     }
+    private func index(categoryCount: Int) throws -> Data {
+        var categories = Dictionary(uniqueKeysWithValues: (1...categoryCount).map {
+            (String($0), ["sets": [:]] as [String: Any])
+        })
+        categories["3"] = ["sets": ["1430": ["etag": "selected-data-hash"]]]
+        return try JSONSerialization.data(withJSONObject: ["categories": categories])
+    }
     private func coordinator(_ clock: BetaCadenceClock) -> BetaAPICadence {
         BetaAPICadence(now: { clock.now() }, wait: { seconds in try Task.checkCancellation(); clock.waitAndAdvance(seconds) })
     }
@@ -173,6 +180,25 @@ import XCTest
         let requests = await loader.requests; XCTAssertEqual(requests.count, 1)
     }
 
+    func testIndexWithMoreThanThirtyTwoCategoriesSupportsExactSetAndDailyCache() async throws {
+        for count in [33, BetaAPICadence.maximumIndexCategories] {
+            let clock = BetaCadenceClock(), cadence = coordinator(clock)
+            let loader = BetaCadenceLoader([.init(status: 200, data: try index(categoryCount: count))])
+            let selected = try await cadence.setInfo(family: .opportunities, category: 3, group: 1430,
+                credentials: credentials, loader: loader)
+            XCTAssertEqual(selected.dataETag, "selected-data-hash")
+            let cached = try await cadence.setInfo(family: .opportunities, category: 3, group: 1430,
+                credentials: credentials, loader: loader)
+            XCTAssertEqual(cached, selected)
+            let requests = await loader.requests
+            XCTAssertEqual(requests.count, 1, "The larger valid index still uses the existing daily cache")
+            XCTAssertEqual(requests.first?.url?.absoluteString, "https://beta.tcgtracking.com/v1/meta")
+            XCTAssertEqual(requests.first?.httpMethod, "GET")
+            XCTAssertEqual(requests.first?.value(forHTTPHeaderField: "X-Shipper-Id"), credentials.shipperID)
+            XCTAssertEqual(requests.first?.value(forHTTPHeaderField: "X-Api-Key"), credentials.apiKey)
+        }
+    }
+
     func testMalformedMissingAndUnvalidatedIndexResponsesNeverBecomeFresh() async throws {
         let replies: [(BetaCadenceLoader.Reply, BetaAPICadenceFailure)] = [
             (.init(data: Data("{}".utf8)), .unsupportedIndex),
@@ -250,12 +276,22 @@ import XCTest
                 XCTAssertFalse(error.diagnosticFields.description.contains("private-"))
             }
         }
-        let categories = Dictionary(uniqueKeysWithValues: (1...33).map { (String($0), ["sets": [:]] as [String: Any]) })
+        XCTAssertEqual(BetaAPICadence.maximumIndexCategories, 256)
+        XCTAssertNoThrow(try BetaAPICadence.validateIndex(index(categoryCount: 256)))
+        let categories = Dictionary(uniqueKeysWithValues: (1...257).map { (String($0), ["sets": [:]] as [String: Any]) })
         let groups = Dictionary(uniqueKeysWithValues: (1...50_001).map { (String($0), [:] as [String: String]) })
-        for body in [["categories": categories] as [String: Any], ["categories": ["3": ["sets": groups]]]] {
+        let oversizedBodies: [([String: Any], Rejection.Stage, Int, Int)] = [
+            (["categories": categories], .categories, 257, 256),
+            (["categories": ["3": ["sets": groups]]], .sets, 50_001, 50_000)
+        ]
+        for (body, stage, count, limit) in oversizedBodies {
             XCTAssertThrowsError(try BetaAPICadence.validateIndex(JSONSerialization.data(withJSONObject: body))) { error in
                 guard let error = error as? Rejection else { return XCTFail("Typed bound rejection") }
                 XCTAssertEqual(error.reason, .tooManyEntries); XCTAssertEqual(error.failure, .invalidResponse)
+                XCTAssertEqual(error.stage, stage)
+                XCTAssertEqual(error.observedCount, count); XCTAssertEqual(error.entryLimit, limit)
+                XCTAssertEqual(error.diagnosticFields, ["domain": "beta_index", "stage": stage.rawValue,
+                    "reason": "too_many_entries", "observed_count": String(count), "entry_limit": String(limit)])
                 XCTAssertFalse(error.supportsFallback)
             }
         }
