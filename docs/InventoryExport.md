@@ -2,7 +2,7 @@
 
 # Export a scanned inventory list
 
-From the scanner, choose **View List**. You can also use **Open Existing List** on the home screen and select the saved list. The **Export inventory** section is at the top of list review, above the offer calculations.
+From the scanner, choose **View List**. You can also use **Open Existing List** on the home screen and select the saved list. Open the top-right **•••** menu from either Cards or Offer to export the whole list.
 
 - **Export CSV to Files** opens the iPhone file picker. Choose a folder and save the file; you can change its filename there.
 - **Share CSV** opens the iOS share sheet for AirDrop or another destination.

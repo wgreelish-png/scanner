@@ -32,6 +32,22 @@ If the received amount differs from the rounded suggestion, all cards share one 
 
 Sale allocations derive from the immutable receipt card references and its actual cash total, so they remain available across relaunches without changing financial format v3 or rewriting any historical cash/stock entries.
 
+## Sale cash editing in build 37
+
+Tap **Actual cash received** to open a dedicated **Sale Amount** editor. Its text and keyboard focus are local to the editor; typing does not update the checkout's stock validation, price allocations or layout. Clear removes the current entry; Done applies a valid USD amount once and returns to checkout. Empty or invalid input disables Done. Cancel or dismiss keeps the previous amount. Accepting an unchanged amount keeps automatic whole-dollar pricing active. An explicitly changed amount remains fixed when the selection changes until Use Rounded Market Total restores automatic pricing. Only Record Transaction commits inventory and budget changes.
+
+The pinned checkout summary stays present for incomplete drafts. Checkout calculates its preview once per render, validates selected quantities using an inventory index instead of scanning every inventory row for every selected card, and computes detailed allocation rows only when their disclosure is expanded. The sale-percentage display and existing exact-cent allocation math remain unchanged. No financial schema, existing data, signing configuration or scanner-engine change is included.
+
+The uploaded build-36 log contains two invalid-frame warnings, eleven UIKit keyboard constraint conflicts and nine RTI keyboard session warnings, but no app crash, main-thread stack trace, sale interaction breadcrumb or measured hang duration. These warnings do not prove a specific root cause. The changes remove identified keyboard/layout coupling and avoidable computation; resolution of the reported hang still requires an iPhone check. New `show_transaction.cash_edit` breadcrumbs record only fixed phases (requested, presented, focused/unfocused, applied/cancelled, closed, dismissed) and bounded elapsed time. They never record the entered amount, card/account identifiers or credentials.
+
+After implementation, UI regressions cover repeated open/edit/close, invalid input, cancellation, unchanged acceptance retaining automatic pricing, discounted totals, manual amounts surviving selection changes, reset restoring automatic pricing, and preserved stock/budget. Existing sale/relaunch/Undo tests use the new editor. These cases run in the existing transaction UI job; no new simulator job is added. On the phone, repeatedly open cash entry, clear and replace the amount, cancel once, apply a discounted total, change selections, reset, record and undo. Check that typing, Done and reopening remain responsive and upload a new log if a pause remains.
+
+Build-37 local checks passed Swift grammar parsing of all 143 files, Xcode app/native/UI source and resource membership, all 47 pinned scanner assets/dependencies, and whitespace validation. Two UI regressions were added and existing sale cases were adapted. No native/UI tests or Xcode build ran here because this Linux workspace has no Swift/Xcode installation. The unchanged JavaScript/Python suites were not rerun. Physical-iPhone resolution of the reported hang remains unverified.
+
+## Compact actions in build 38
+
+[Simple list navigation](SimpleListNavigation.md) restores visible transaction-type buttons, collapses incoming/receipt card rows and keeps Record/Undo controls fixed. Saved lists separate Cards from Offer, with fixed primary actions; working inventory places Source in the toolbar and Record at the bottom. No transaction math or saved data changes are included.
+
 ## Import and source snapshots
 
 The existing TCGTracking location importer remains a read-only snapshot in SwiftData. The first complete saved snapshot seeds working inventory once. Refreshing or removing that source snapshot cannot restock locally sold cards, change local quantities or delete newly acquired cards. The source page labels this distinction, and remains available under Show → Inventory → TCGTracking Source Snapshot. Subsequent website reconciliation and outbound synchronization are deferred; new/changed website rows are not automatically applied to an already established working inventory.

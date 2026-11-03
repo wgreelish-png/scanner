@@ -411,16 +411,17 @@ private enum BudgetDashboardSheet: Identifiable {
                 }
             }
             if let error { Section { Text(error).foregroundStyle(.orange).accessibilityIdentifier("budget.error") } }
-            Section {
-                Button(editing == nil ? "Create Show Budget" : "Save Show") { save() }
-                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || ShowBudgetMoney.parse(starting) == nil || saving || saved || !store.isLoaded)
-                    .accessibilityIdentifier("budget.create")
-            }
         }
         .navigationTitle(editing == nil ? "New Show Budget" : "Edit Show")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
+            ToolbarItem(placement: .confirmationAction) {
+                Button(editing == nil ? "Create" : "Save") { save() }
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || ShowBudgetMoney.parse(starting) == nil || saving || saved || !store.isLoaded)
+                    .accessibilityLabel(editing == nil ? "Create Show Budget" : "Save Show")
+                    .accessibilityIdentifier("budget.create")
+            }
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
                 Button("Done") { focused = nil }
@@ -501,7 +502,16 @@ private enum BudgetTradeDirection: String, CaseIterable, Identifiable {
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 60, paused: !isVisible || scenePhase != .active)) { _ in form }
+        TimelineView(.animation(minimumInterval: 60, paused: !isVisible || scenePhase != .active)) { _ in
+            form.toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Record") { record() }
+                        .disabled(entry == nil || saving || saved || !store.isLoaded || !store.canRecord(showID: showID))
+                        .accessibilityLabel("Record Transaction")
+                        .accessibilityIdentifier("budget.record")
+                }
+            }
+        }
         .onAppear { isVisible = true }.onDisappear { isVisible = false }
         .navigationTitle("Record Cash").navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -532,7 +542,7 @@ private enum BudgetTradeDirection: String, CaseIterable, Identifiable {
                         .accessibilityIdentifier("budget.recordScheduleStatus")
                 }
             }
-            Section("Cash movement") {
+            Section {
                 if kind == .trade {
                     Picker("Cash in this trade", selection: $direction) {
                         ForEach(BudgetTradeDirection.allCases) { Text($0.rawValue).tag($0) }
@@ -561,6 +571,10 @@ private enum BudgetTradeDirection: String, CaseIterable, Identifiable {
                 TextField("Note, optional", text: $note, axis: .vertical).lineLimit(2...4)
                     .focused($focused, equals: .note)
                     .onChange(of: note) { _, value in if value.count > 1_000 { note = String(value.prefix(1_000)) } }
+            } header: {
+                Text("Cash movement")
+            } footer: {
+                Text("Confirm the actual cash paid or received to record this budget transaction.")
             }
             if let entry, let allocation = try? entry.allocation() {
                 Section("Budget change") {
@@ -583,13 +597,6 @@ private enum BudgetTradeDirection: String, CaseIterable, Identifiable {
                 Section { Text("Enter valid cash amounts with at most two decimal places. Fees cannot exceed gross cash received.").font(.caption).foregroundStyle(.secondary) }
             }
             if let error { Section { Text(error).foregroundStyle(.orange).accessibilityIdentifier("budget.error") } }
-            Section {
-                Button("Record Transaction") { record() }
-                    .disabled(entry == nil || saving || saved || !store.isLoaded || !store.canRecord(showID: showID))
-                    .accessibilityIdentifier("budget.record")
-            } footer: {
-                Text("Confirm the actual cash paid or received to record this budget transaction.")
-            }
         }
     }
 

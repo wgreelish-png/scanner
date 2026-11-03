@@ -283,6 +283,13 @@ struct ListDeletionConfirmationView: View {
     var onContinueScanning: (() -> Void)? = nil
     var transactionEditing = false
     @Query private var sessions: [ScanSession]
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    private enum ReviewSection: String, CaseIterable { case cards = "Cards", offer = "Offer" }
+    @State private var reviewSection = ReviewSection.cards
+    @State private var openingScanner = false
+    @State private var offerCardPrice = ""
+    @State private var offerTransactionMode = TradeTransactionMode.cashOnly
+    @State private var restoredOfferInputs = false
     @State private var continueGame = "Pokémon"
     @State private var confirmContinue = false
     @State private var reviewDestination: ReviewDestination?
@@ -322,87 +329,25 @@ struct ListDeletionConfirmationView: View {
     }
     var body: some View {
         List {
-            if list.isCardShowInventory {
-                Section("TCGTracking inventory") {
-                    if let link = list.cardShowInventory {
-                        Text("Saved on this iPhone · Updated " + link.refreshedAt.formatted(date: .abbreviated, time: .shortened))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Text("This list mirrors your Card Show location. Use an editable copy to scan or change cards locally.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Button("Refresh or Make Editable Copy", systemImage: "arrow.triangle.2.circlepath") { showingInventoryImport = true }
-                        .buttonStyle(.borderless).accessibilityIdentifier("list.manageCardShowInventory")
-                }
-            }
-            Section {
-                if let session = reviewSession {
-                    // This row contains several independent controls. Automatic
-                    // List button styling can otherwise make the whole offer
-                    // panel trigger its Continue Scanning action.
-                    SessionReviewHeader(session: session, list: list,
-                        onContinue: { continueScanning(session) },
-                        onSavedOffers: { open(.savedOffers(session.id), session: session) },
-                        outcomeActions: transactionEditing ? nil : { totals, transaction in AnyView(listOutcomeActions(totals: totals, transaction: transaction)) })
-                        .buttonStyle(.borderless)
-                }
-                else {
-                    LabeledContent("Total quantity", value: String(list.quantity))
-                    LabeledContent("Known market subtotal", value: list.knownValue.money)
-                    if list.unpricedQuantity > 0 { Text("Partial valuation: \(list.unpricedQuantity) copies have no price.").foregroundStyle(.orange) }
-                    Text("Cash on purchase: " + currentOfferTotals.cash.money).font(.caption).foregroundStyle(.secondary)
-                    if !transactionEditing { listOutcomeActions(totals: currentOfferTotals, transaction: nil) }
-                    if !list.isCardShowInventory {
-                        Picker("Game for continued scanning", selection: $continueGame) {
-                            ForEach(CatalogOptions.games, id: \.self) { Text($0) }
-                        }
-                        Button("Continue Scanning", systemImage: "viewfinder") {
-                            guard !confirmContinue, reviewDestination == nil else { return }
-                            DiagnosticLog.shared.record("navigation.scan_requested", ["phase": "standalone_list"])
-                            confirmContinue = true
-                        }.buttonStyle(.borderless)
-                    }
-                }
-            }
-            if !list.isCardShowInventory {
-                Section {
-                    Button("Search & Add Card", systemImage: "magnifyingglass") { showingCatalogSearch = true }
-                        .buttonStyle(.borderless).frame(minHeight: 44).accessibilityIdentifier("list.searchAndAdd")
-                }
-            }
-            Picker("Sort", selection: $sort) { ForEach(["Scan Order", "Name", "Value"], id: \.self) { Text($0 == "Scan Order" && list.isCardShowInventory ? "Import Order" : $0).tag($0) } }
-            if list.cards.isEmpty { ContentUnavailableView("No cards yet", systemImage: "rectangle.stack", description: Text(list.isCardShowInventory ? "Your last imported location is empty. Refresh inventory to check for changes." : "Open the scanner to add cards.")) }
-            ForEach(filtered) { item in
-                Button {
-                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                    editing = item
-                } label: {
-                    HStack(alignment: .top, spacing: 12) {
-                        AsyncImage(url: item.snapshot.imageURL) { phase in
-                            if let image = phase.image { image.resizable().scaledToFit() }
-                            else {
-                                RoundedRectangle(cornerRadius: 5).fill(.quaternary)
-                                    .overlay { Image(systemName: "rectangle.portrait").foregroundStyle(.secondary) }
-                            }
-                        }.frame(width: 52, height: 74).clipShape(RoundedRectangle(cornerRadius: 5))
-                            .accessibilityIdentifier("list.cardThumbnail").accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 5) {
-                        Text(item.snapshot.name).font(.headline)
-                        Text("\(item.snapshot.set) • \(item.snapshot.number)").font(.caption)
-                        Text("\(item.snapshot.identity.printing) • \(item.snapshot.identity.condition) • \(item.snapshot.identity.language)").font(.caption)
-                        Text("Qty \(item.quantity) • \(item.snapshot.marketPrice.map { ($0 * Decimal(item.quantity)).money } ?? "Price unavailable")")
-                        if item.cashOverrideText != nil || item.tradeOverrideText != nil || item.maximumOverrideText != nil {
-                            Text("Per-copy offer overrides applied").font(.caption).foregroundStyle(.secondary)
-                        }
-                        }.foregroundStyle(.primary).frame(maxWidth: .infinity, alignment: .leading)
-                    }.frame(maxWidth: .infinity, minHeight: 74, alignment: .leading)
-                }.swipeActions {
-                    if !list.isCardShowInventory { Button("Remove", role: .destructive) { context.delete(item); save() } }
-                }
-            }
+            if reviewSection == .cards { cardRows }
+            else { offerSection }
         }.navigationTitle(reviewSession == nil ? list.name : "Review & Offer").searchable(text: $search)
+            .scrollDismissesKeyboard(.interactively)
+            .safeAreaInset(edge: .top) { reviewSummary }
+            .safeAreaInset(edge: .bottom) { reviewActions }
+            .onChange(of: reviewSection) { _, _ in
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            }
+            .confirmationDialog("Record Transaction", isPresented: $choosingOutcome, titleVisibility: .visible) {
+                Button("Purchase") { newTransactionKind = .purchase }.accessibilityIdentifier("list.outcome.purchase")
+                Button("Trade") { newTransactionKind = .trade }.accessibilityIdentifier("list.outcome.trade")
+                Button("Trade + Cash to Customer") { newTransactionKind = .tradePayCustomer }.accessibilityIdentifier("list.outcome.tradeAndPurchase")
+                Button("Trade + Cash to Me") { newTransactionKind = .tradeReceiveCash }
+                Button("Cancel", role: .cancel) {}
+            }
             .onAppear {
-                isVisible = true
-                continueGame = list.orderedCards.first?.snapshot.identity.game ?? "Pokémon"
+                isVisible = true; openingScanner = false
+                continueGame = reviewSession?.game ?? list.orderedCards.first?.snapshot.identity.game ?? "Pokémon"
                 synchronizeBudgetOutcomes()
             }
             .onDisappear { isVisible = false }
@@ -411,8 +356,13 @@ struct ListDeletionConfirmationView: View {
                 Button("Continue Scanning") {
                     guard reviewDestination == nil else { return }
                     do {
-                        let continued = try SessionService.continueList(list, game: continueGame, context: context, finishingOtherSession: true)
-                        continueScanning(continued)
+                        if let session = reviewSession {
+                            try SessionService.resume(session, context: context, finishingOtherSession: true)
+                            openingScanner = true; continueScanning(session)
+                        } else {
+                            let continued = try SessionService.continueList(list, game: continueGame, context: context, finishingOtherSession: true)
+                            openingScanner = true; continueScanning(continued)
+                        }
                         DiagnosticLog.shared.record("navigation.scan_opened", ["phase": "standalone_list"])
                     }
                     catch { self.error = error.localizedDescription }
@@ -431,6 +381,12 @@ struct ListDeletionConfirmationView: View {
                 }
             }
             .toolbar {
+                if !list.isCardShowInventory {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Search & Add Card", systemImage: "magnifyingglass") { showingCatalogSearch = true }
+                            .accessibilityIdentifier("list.searchAndAdd")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         if !list.isCardShowInventory { Button("Rename") { name = list.name; rename = true } }
@@ -499,6 +455,167 @@ struct ListDeletionConfirmationView: View {
                 else { DiagnosticLog.shared.record("csv.exported") }
             }.failureAlert($error)
     }
+    @ViewBuilder private var cardRows: some View {
+        if list.isCardShowInventory {
+            Section("TCGTracking inventory") {
+                if let link = list.cardShowInventory {
+                    Text("Saved on this iPhone · Updated " + link.refreshedAt.formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Text("This list mirrors your Card Show location. Use an editable copy to scan or change cards locally.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        Picker("Sort", selection: $sort) { ForEach(["Scan Order", "Name", "Value"], id: \.self) { Text($0 == "Scan Order" && list.isCardShowInventory ? "Import Order" : $0).tag($0) } }
+        if list.cards.isEmpty { ContentUnavailableView("No cards yet", systemImage: "rectangle.stack", description: Text(list.isCardShowInventory ? "Your last imported location is empty. Refresh inventory to check for changes." : "Open the scanner to add cards.")) }
+        ForEach(filtered) { item in
+            Button {
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                editing = item
+            } label: {
+                HStack(alignment: .top, spacing: 12) {
+                    AsyncImage(url: item.snapshot.imageURL) { phase in
+                        if let image = phase.image { image.resizable().scaledToFit() }
+                        else {
+                            RoundedRectangle(cornerRadius: 5).fill(.quaternary)
+                                .overlay { Image(systemName: "rectangle.portrait").foregroundStyle(.secondary) }
+                        }
+                    }.frame(width: 52, height: 74).clipShape(RoundedRectangle(cornerRadius: 5))
+                        .accessibilityIdentifier("list.cardThumbnail").accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 5) {
+                    Text(item.snapshot.name).font(.headline)
+                    Text("\(item.snapshot.set) • \(item.snapshot.number)").font(.caption)
+                    Text("\(item.snapshot.identity.printing) • \(item.snapshot.identity.condition) • \(item.snapshot.identity.language)").font(.caption)
+                    Text("Qty \(item.quantity) • \(item.snapshot.marketPrice.map { ($0 * Decimal(item.quantity)).money } ?? "Price unavailable")")
+                    if item.cashOverrideText != nil || item.tradeOverrideText != nil || item.maximumOverrideText != nil {
+                        Text("Per-copy offer overrides applied").font(.caption).foregroundStyle(.secondary)
+                    }
+                    }.foregroundStyle(.primary).frame(maxWidth: .infinity, alignment: .leading)
+                }.frame(maxWidth: .infinity, minHeight: 74, alignment: .leading)
+            }.swipeActions {
+                if !list.isCardShowInventory { Button("Remove", role: .destructive) { context.delete(item); save() } }
+            }
+        }
+    }
+
+    private var offerSection: some View {
+        Section {
+            if let session = reviewSession {
+                SessionReviewHeader(session: session, list: list,
+                    onContinue: { continueScanning(session) },
+                    onSavedOffers: { open(.savedOffers(session.id), session: session) },
+                    myCardPriceText: $offerCardPrice, transactionMode: $offerTransactionMode,
+                    restoredInputs: $restoredOfferInputs,
+                    outcomeActions: transactionEditing ? nil : { totals, transaction in AnyView(listOutcomeActions(totals: totals, transaction: transaction)) },
+                    showsContinueAction: false)
+                    .buttonStyle(.borderless)
+            } else {
+                LabeledContent("Known market subtotal", value: list.knownValue.money)
+                if list.unpricedQuantity > 0 {
+                    Text("Partial valuation: \(list.unpricedQuantity) copies have no price.").foregroundStyle(.orange)
+                }
+                LabeledContent("Calculated cash offer", value: currentOfferTotals.cash.money)
+                if !transactionEditing { listOutcomeActions(totals: currentOfferTotals, transaction: nil) }
+                if !list.isCardShowInventory {
+                    Picker("Game for continued scanning", selection: $continueGame) {
+                        ForEach(CatalogOptions.games, id: \.self) { Text($0) }
+                    }
+                }
+            }
+        }
+    }
+
+    private var reviewSummary: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Text("\(list.quantity.formatted()) cards").font(.subheadline.weight(.semibold))
+                    .accessibilityIdentifier("list.quantity")
+                Spacer()
+                Text(list.quantity > 0 && list.unpricedQuantity == list.quantity
+                     ? "Market unavailable"
+                     : list.knownValue.money + (list.unpricedQuantity > 0 ? " known" : " market"))
+                    .font(.subheadline).monospacedDigit()
+            }
+            if !transactionEditing && !list.isCardShowInventory {
+                HStack {
+                    Text(ShowTransactionListService.outcomeTitle(for: list, store: transactionStore))
+                        .accessibilityIdentifier("list.outcomeValue")
+                    Spacer()
+                    if let recordedAt = inventoryTransaction?.recordedAt ?? list.outcomeRecord?.recordedAt {
+                        Text(recordedAt.formatted(date: .abbreviated, time: .shortened))
+                            .accessibilityIdentifier("list.outcomeRecordedAt")
+                    }
+                }.font(.caption).foregroundStyle(.secondary)
+            }
+            if !transactionEditing && !list.isCardShowInventory && (pendingOutcomeBudget || outcomeError != nil) {
+                Button {
+                    reviewSection = .offer
+                } label: {
+                    Label(pendingOutcomeBudget ? "Outcome sync needs attention" : "Review outcome error", systemImage: "exclamationmark.circle")
+                        .font(.caption)
+                }.buttonStyle(.borderless).foregroundStyle(.orange)
+                    .accessibilityIdentifier("list.outcomeAttention")
+            }
+            Picker("List section", selection: $reviewSection) {
+                ForEach(ReviewSection.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }.pickerStyle(.segmented).accessibilityIdentifier("list.section")
+        }.padding(.horizontal, 16).padding(.vertical, 10).background(.regularMaterial)
+    }
+
+    @ViewBuilder private var reviewActions: some View {
+        if list.isCardShowInventory {
+            Button { showingInventoryImport = true } label: {
+                Label("Refresh or Make Editable Copy", systemImage: "arrow.triangle.2.circlepath")
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }.buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("list.manageCardShowInventory")
+                .padding(.horizontal, 16).padding(.vertical, 10).background(.regularMaterial)
+        } else {
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    VStack(spacing: 8) { primaryReviewActions }
+                } else {
+                    HStack(spacing: 12) { primaryReviewActions }
+                }
+            }.padding(.horizontal, 16).padding(.vertical, 10).background(.regularMaterial)
+        }
+    }
+
+    @ViewBuilder private var primaryReviewActions: some View {
+        if !transactionEditing { recordTransactionButton }
+        Button(action: requestContinueScanning) {
+            Label("Scan", systemImage: "viewfinder")
+                .frame(maxWidth: .infinity, minHeight: 44)
+        }.buttonStyle(.bordered).disabled(openingScanner)
+            .accessibilityLabel("Continue Scanning")
+            .accessibilityIdentifier("list.continueScanning")
+    }
+
+    private var recordTransactionButton: some View {
+        Button {
+            if let receipt = inventoryTransaction { receiptRoute = ReceiptRoute(id: receipt.id) }
+            else { choosingOutcome = true }
+        } label: {
+            Label(inventoryTransaction == nil ? (recordedTransaction?.title ?? "Record Transaction") : "View Transaction",
+                  systemImage: inventoryTransaction == nil && recordedTransaction == nil ? "checkmark.circle" : "checkmark.circle.fill")
+                .frame(maxWidth: .infinity, minHeight: 44)
+        }.buttonStyle(.borderedProminent)
+            .disabled(savingOutcome || pendingOutcomeBudget)
+            .accessibilityIdentifier("list.recordTransaction")
+            .accessibilityHint("Review a purchase or trade using this scanned list.")
+    }
+
+    private func requestContinueScanning() {
+        guard !openingScanner, !confirmContinue, reviewDestination == nil else { return }
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        DiagnosticLog.shared.record("navigation.scan_requested", ["phase": "list_action_bar"])
+        if let session = reviewSession, session.isActive {
+            openingScanner = true
+            continueScanning(session)
+            DiagnosticLog.shared.record("navigation.scan_opened", ["phase": "list_action_bar"])
+        } else { confirmContinue = true }
+    }
+
     private var recordedTransaction: ListOutcomeKind? {
         guard let kind = list.outcomeRecord?.kind, kind != .nothingHappened else { return nil }
         return kind
@@ -511,16 +628,6 @@ struct ListDeletionConfirmationView: View {
             Text("Record the deal to update your show inventory and budget together.")
                 .font(.caption).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text("Outcome")
-                    Spacer(minLength: 12)
-                    Text(ShowTransactionListService.outcomeTitle(for: list, store: transactionStore)).accessibilityIdentifier("list.outcomeValue")
-                }.accessibilityElement(children: .contain)
-                if let recordedAt = inventoryTransaction?.recordedAt ?? list.outcomeRecord?.recordedAt {
-                    Text("Recorded \(recordedAt.formatted(date: .abbreviated, time: .shortened))")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .accessibilityIdentifier("list.outcomeRecordedAt")
-                }
                 if let outcomeError {
                     Text(outcomeError).font(.caption).foregroundStyle(.red)
                         .accessibilityIdentifier("list.outcomeError")
@@ -534,24 +641,6 @@ struct ListDeletionConfirmationView: View {
                         .accessibilityIdentifier("list.retryOutcomeSync")
                 }
             }
-            Button {
-                if let receipt = inventoryTransaction { receiptRoute = ReceiptRoute(id: receipt.id) }
-                else { choosingOutcome = true }
-            } label: {
-                Label(inventoryTransaction == nil ? (recordedTransaction?.title ?? "Record Transaction") : "View Transaction",
-                      systemImage: inventoryTransaction == nil && recordedTransaction == nil ? "checkmark.circle" : "checkmark.circle.fill")
-                    .frame(maxWidth: .infinity, minHeight: 44)
-            }.buttonStyle(.borderedProminent)
-                .disabled(savingOutcome || pendingOutcomeBudget)
-                .accessibilityIdentifier("list.recordTransaction")
-                .accessibilityHint("Review a purchase or trade using this scanned list.")
-                .confirmationDialog("Record Transaction", isPresented: $choosingOutcome, titleVisibility: .visible) {
-                    Button("Purchase") { newTransactionKind = .purchase }.accessibilityIdentifier("list.outcome.purchase")
-                    Button("Trade") { newTransactionKind = .trade }.accessibilityIdentifier("list.outcome.trade")
-                    Button("Trade + Cash to Customer") { newTransactionKind = .tradePayCustomer }.accessibilityIdentifier("list.outcome.tradeAndPurchase")
-                    Button("Trade + Cash to Me") { newTransactionKind = .tradeReceiveCash }
-                    Button("Cancel", role: .cancel) {}
-                }
             Button {
                 recordOutcome(.nothingHappened, totals: totals, transaction: transaction)
             } label: {

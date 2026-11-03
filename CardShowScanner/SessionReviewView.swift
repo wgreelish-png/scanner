@@ -172,15 +172,17 @@ struct SessionReviewHeader: View {
     let list: CardList
     let onContinue: () -> Void
     let onSavedOffers: () -> Void
+    @Binding var myCardPriceText: String
+    @Binding var transactionMode: TradeTransactionMode
+    @Binding var restoredInputs: Bool
     var outcomeActions: ((OfferTotals, TradeTransactionResult?) -> AnyView)? = nil
+    var showsContinueAction = true
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.modelContext) private var context
     @State private var openingScanner = false
     @State private var confirmResume = false
     private enum MoneyField: Hashable { case myCard }
     @FocusState private var editingMoney: MoneyField?
-    @State private var myCardPriceText = ""
-    @State private var transactionMode = TradeTransactionMode.cashOnly
-    @State private var restoredInputs = false
     @State private var error: String?
     private var hasMyCardInput: Bool { !myCardPriceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var myCardPrice: Decimal? { CustomOfferAmount.parse(myCardPriceText) }
@@ -250,9 +252,10 @@ struct SessionReviewHeader: View {
     }
     private var transactionControls: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Picker("Transaction", selection: $transactionMode) {
-                ForEach(TradeTransactionMode.allCases) { mode in Text(mode.title).tag(mode) }
-            }.pickerStyle(.menu)
+            Group {
+                if dynamicTypeSize >= .xxLarge { VStack(spacing: 8) { offerModeButtons } }
+                else { HStack(spacing: 8) { offerModeButtons } }
+            }
             VStack(alignment: .leading, spacing: 8) {
                 Text("My Card Price").font(.headline)
                 HStack {
@@ -272,8 +275,21 @@ struct SessionReviewHeader: View {
             }
         }.padding(16).background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 18))
     }
+    @ViewBuilder private var offerModeButtons: some View {
+        ForEach(TradeTransactionMode.allCases) { mode in
+            Button {
+                editingMoney = nil; transactionMode = mode
+            } label: {
+                Text(mode.title).font(.subheadline.weight(transactionMode == mode ? .semibold : .regular))
+                    .multilineTextAlignment(.center).frame(maxWidth: .infinity, minHeight: 44)
+            }.buttonStyle(.bordered)
+                .tint(transactionMode == mode ? Color.indigo : Color.secondary)
+                .accessibilityAddTraits(transactionMode == mode ? .isSelected : [])
+        }
+    }
     private var offerActions: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if showsContinueAction {
             Button {
                 guard !openingScanner, !confirmResume else { return }
                 editingMoney = nil
@@ -285,6 +301,7 @@ struct SessionReviewHeader: View {
                 } else { confirmResume = true }
             } label: { Label("Continue Scanning", systemImage: "viewfinder").frame(minHeight: 44) }
                 .buttonStyle(.bordered).disabled(openingScanner)
+            }
             if session.isActive { FinishSessionButton(session: session) }
             Text("These are offer estimates. Record Transaction selects the actual inventory cards and agreed values, then updates stock and cash together.")
                 .font(.caption).foregroundStyle(.secondary)
