@@ -240,7 +240,7 @@ import SwiftData
         XCTAssertEqual(ShowTransactionListService.outcomeTitle(for: fixture.list, store: fixture.store), "Purchase")
     }
 
-    func testBridgeSeedsOnlyOnceSoRefreshAndSourceDeletionPreserveSalesAndLocalPurchases() throws {
+    func testBridgeFreshImportReplacesWorkingQuantitiesAndSourceDeletionKeepsCommittedHistory() throws {
         let fixture = try fixture()
         let first = CardShowInventorySnapshot(location: .init(id: 9, name: "Card Show"),
             rows: [.init(inventoryID: 10, card: card("source"), quantity: 2)], fetchedAt: fixture.disk.now)
@@ -255,7 +255,8 @@ import SwiftData
         let purchase = try ShowTransactionListService.record(purchase(fixture.list), showID: fixture.showID,
             context: fixture.context, store: fixture.store)
         let purchasedID = try XCTUnwrap(purchase.incoming.first?.inventoryID)
-        let committed = fixture.store.book, writes = fixture.disk.writes
+        let receipts = fixture.store.transactions
+        let cash = try XCTUnwrap(fixture.store.activeShow).totals()
 
         let refreshed = CardShowInventorySnapshot(location: first.location, rows: [
             .init(inventoryID: 10, card: card("source", price: 200), quantity: 8),
@@ -265,10 +266,15 @@ import SwiftData
         try fixture.context.save()
         XCTAssertEqual(imported.quantity, 12)
         try ShowInventoryBridge.seedFromImportedList(context: fixture.context, store: fixture.store)
-        XCTAssertEqual(fixture.store.book, committed)
+        XCTAssertEqual(fixture.store.inventory.reduce(0) { $0 + $1.quantity }, 12)
         XCTAssertEqual(fixture.store.inventory.first { $0.id == sourceID }?.quantity, 0)
-        XCTAssertEqual(fixture.store.inventory.first { $0.id == purchasedID }?.quantity, 2)
-        XCTAssertFalse(fixture.store.inventory.contains { $0.sourceInventoryID == 20 })
+        XCTAssertEqual(fixture.store.inventory.first { $0.id == purchasedID }?.quantity, 0)
+        XCTAssertEqual(fixture.store.inventory.filter { $0.card.identity.productID == "source" }.reduce(0) { $0 + $1.quantity }, 8)
+        XCTAssertEqual(fixture.store.inventory.filter { $0.card.identity.productID == "new-remote" }.reduce(0) { $0 + $1.quantity }, 4)
+        XCTAssertEqual(fixture.store.transactions, receipts)
+        XCTAssertEqual(try XCTUnwrap(fixture.store.activeShow).totals(), cash)
+        XCTAssertEqual(imported.cardShowInventory?.pendingWorkingSync, false)
+        let committed = fixture.store.book, writes = fixture.disk.writes
 
         fixture.context.delete(imported)
         try fixture.context.save()

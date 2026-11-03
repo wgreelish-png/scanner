@@ -11,6 +11,10 @@ import SwiftData
         try ModelContainer(for: CardList.self, InventoryCard.self, ScanSession.self,
                            configurations: ModelConfiguration(isStoredInMemoryOnly: true))
     }
+    private func workingStore() -> ShowBudgetStore {
+        var bytes: Data?
+        return ShowBudgetStore(read: { _ in bytes }, write: { data, _ in bytes = data })
+    }
     private func card(_ number: Int = 42, price: Decimal? = 7) -> CardCandidate {
         CardCandidate(identity: CardIdentity(game: "Pokémon", productID: "p:\(number)", skuID: "\(number * 100)", printing: "Holofoil"),
                       name: "Synthetic \(number)", set: "Synthetic set", number: "\(number)", marketPrice: price,
@@ -38,8 +42,218 @@ import SwiftData
         XCTAssertEqual(list.orderedCards.map(\.quantity), rows.map(\.quantity))
         XCTAssertEqual(list.cardShowInventory?.locationID, 259401)
         XCTAssertEqual(list.cardShowInventory?.refreshedAt, first)
+        let source = try XCTUnwrap(list.cardShowInventory)
+        XCTAssertEqual(source.version, 2)
+        XCTAssertNotNil(source.syncID)
+        XCTAssertEqual(source.pendingWorkingSync, true)
+        XCTAssertFalse(try XCTUnwrap(source.inventorySnapshotID).isEmpty)
+        XCTAssertNil(source.workingRevision)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<CardList>()), 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<ScanSession>()), 0)
+    }
+
+    func testPendingWorkingSnapshotIdentitySurvivesReopenAndRepeatedReads() async throws {
+        let directory = try folder(); defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("pending-inventory.store")
+        let working = workingStore()
+        try working.seedInventory([.init(sourceInventoryID: 1, card: card(), quantity: 3)], sourceLocationID: 259401)
+        let revision = ShowInventorySyncRevision(store: working)
+        func write() throws -> (UUID, Data, CardShowInventoryLink) {
+            let container = try AppPersistence.open(url: url), context = container.mainContext
+            let list = try CardShowInventoryService.apply(snapshot([row(1, quantity: 3), row(2)]),
+                context: context, workingRevision: revision)
+            let source = try XCTUnwrap(list.cardShowInventory)
+            XCTAssertEqual(source.pendingWorkingSync, true)
+            XCTAssertNotNil(source.syncID)
+            XCTAssertFalse(try XCTUnwrap(source.inventorySnapshotID).isEmpty)
+            XCTAssertEqual(source.workingRevision, revision)
+            return (list.id, try XCTUnwrap(list.inventorySourceData), source)
+        }
+        let expected = try write(), container = try AppPersistence.open(url: url), context = container.mainContext
+        for _ in 0..<3 {
+            let list = try XCTUnwrap(CardShowInventoryService.importedList(context: context))
+            XCTAssertEqual(list.id, expected.0)
+            XCTAssertEqual(list.inventorySourceData, expected.1)
+            XCTAssertEqual(list.cardShowInventory, expected.2)
+            XCTAssertEqual(list.cardShowInventory?.workingRevision, revision)
+            XCTAssertEqual(list.orderedCards.map(\.quantity), [3, 1])
+        }
+        XCTAssertFalse(context.hasChanges)
+    }
+
+    func testFreshWebsiteImportUpgradesLegacyLinkAndCommitsPendingWorkingMetadataWithRows() async throws {
+        let container = try store(), context = container.mainContext
+        let list = try CardShowInventoryService.apply(snapshot([row(1, quantity: 3), row(2)]), context: context)
+        let firstID = list.id, rowID = list.orderedCards[0].id
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(list.inventorySourceData)) as? [String: Any])
+        legacy["version"] = 1
+        for key in ["syncID", "pendingWorkingSync", "inventorySnapshotID", "workingRevision"] { legacy.removeValue(forKey: key) }
+        list.inventorySourceData = try JSONSerialization.data(withJSONObject: legacy)
+        try context.save()
+        XCTAssertEqual(list.cardShowInventory?.version, 1)
+        XCTAssertNil(list.cardShowInventory?.syncID)
+        XCTAssertNil(list.cardShowInventory?.pendingWorkingSync)
+        XCTAssertNil(list.cardShowInventory?.inventorySnapshotID)
+
+        var captured: CardShowInventoryLink?
+        let refreshed = try CardShowInventoryService.apply(snapshot([row(1, quantity: 2), row(3, quantity: 4)], at: second),
+            context: context, save: { context in
+                captured = list.cardShowInventory
+                XCTAssertEqual(list.orderedCards.map(\.quantity), [2, 4])
+                XCTAssertEqual(captured?.version, 2)
+                XCTAssertEqual(captured?.pendingWorkingSync, true)
+                XCTAssertNotNil(captured?.syncID)
+                XCTAssertFalse(try XCTUnwrap(captured?.inventorySnapshotID).isEmpty)
+                try context.save()
+            })
+        XCTAssertEqual(refreshed.id, firstID)
+        XCTAssertEqual(refreshed.orderedCards[0].id, rowID)
+        XCTAssertEqual(refreshed.orderedCards.compactMap(\.sourceInventoryID), [1, 3])
+        XCTAssertEqual(refreshed.cardShowInventory, captured)
+        XCTAssertEqual(refreshed.cardShowInventory?.refreshedAt, second)
+        XCTAssertFalse(context.hasChanges)
+    }
+
+    func testEverySuccessfulImportCreatesANewPendingTokenEvenForAnIdenticalResponse() async throws {
+        let container = try store(), context = container.mainContext
+        let response = snapshot([row(1, quantity: 3), row(2)])
+        let list = try CardShowInventoryService.apply(response, context: context)
+        let original = try XCTUnwrap(list.cardShowInventory)
+        let rowIDs = list.orderedCards.map(\.id)
+        try CardShowInventoryService.acknowledgeWorkingSync(list: list,
+            expectedSnapshotID: XCTUnwrap(original.inventorySnapshotID), context: context)
+        XCTAssertEqual(list.cardShowInventory?.pendingWorkingSync, false)
+
+        let refreshed = try CardShowInventoryService.apply(response, context: context)
+        let fresh = try XCTUnwrap(refreshed.cardShowInventory)
+        XCTAssertEqual(refreshed.id, list.id)
+        XCTAssertEqual(refreshed.orderedCards.map(\.id), rowIDs)
+        XCTAssertEqual(refreshed.orderedCards.map(\.quantity), [3, 1])
+        XCTAssertEqual(fresh.pendingWorkingSync, true)
+        XCTAssertNotEqual(fresh.syncID, original.syncID)
+        XCTAssertNotEqual(fresh.inventorySnapshotID, original.inventorySnapshotID)
+        XCTAssertEqual(fresh.refreshedAt, original.refreshedAt)
+    }
+
+    func testAcknowledgementPersistsStableSnapshotTokenAndLeavesImportedRowsUntouched() async throws {
+        let directory = try folder(); defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("acknowledged-inventory.store")
+        let container = try AppPersistence.open(url: url), context = container.mainContext
+        let working = workingStore()
+        try working.seedInventory([.init(sourceInventoryID: 1, card: card(), quantity: 3)], sourceLocationID: 259401)
+        let revision = ShowInventorySyncRevision(store: working)
+        let list = try CardShowInventoryService.apply(snapshot([row(1, quantity: 3), row(2)]),
+            context: context, workingRevision: revision)
+        let pending = try XCTUnwrap(list.cardShowInventory)
+        let token = try XCTUnwrap(pending.inventorySnapshotID)
+        let rowIDs = list.orderedCards.map(\.id), rowData = list.orderedCards.map(\.data)
+        try CardShowInventoryService.acknowledgeWorkingSync(list: list, expectedSnapshotID: token, context: context)
+        XCTAssertEqual(list.cardShowInventory?.pendingWorkingSync, false)
+        XCTAssertEqual(list.cardShowInventory?.syncID, pending.syncID)
+        XCTAssertEqual(list.cardShowInventory?.inventorySnapshotID, token)
+        XCTAssertEqual(list.cardShowInventory?.workingRevision, revision)
+        XCTAssertEqual(list.cardShowInventory?.refreshedAt, first)
+        XCTAssertEqual(list.orderedCards.map(\.id), rowIDs)
+        XCTAssertEqual(list.orderedCards.map(\.data), rowData)
+        XCTAssertEqual(list.orderedCards.map(\.quantity), [3, 1])
+        XCTAssertFalse(context.hasChanges)
+
+        let reopened = try AppPersistence.open(url: url)
+        let cached = try XCTUnwrap(CardShowInventoryService.importedList(context: reopened.mainContext))
+        XCTAssertEqual(cached.cardShowInventory, list.cardShowInventory)
+        XCTAssertEqual(cached.cardShowInventory?.workingRevision, revision)
+        XCTAssertEqual(cached.orderedCards.map(\.id), rowIDs)
+        XCTAssertEqual(cached.orderedCards.map(\.data), rowData)
+        XCTAssertEqual(cached.orderedCards.map(\.quantity), [3, 1])
+    }
+
+    func testFailedAcknowledgementKeepsPendingSnapshotDurableAndCanRetryWithoutImportingAgain() async throws {
+        let directory = try folder(); defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("failed-inventory-acknowledgement.store")
+        let container = try AppPersistence.open(url: url), context = container.mainContext
+        let working = workingStore()
+        try working.seedInventory([.init(sourceInventoryID: 1, card: card(), quantity: 3)], sourceLocationID: 259401)
+        let revision = ShowInventorySyncRevision(store: working)
+        let list = try CardShowInventoryService.apply(snapshot([row(1, quantity: 3), row(2)]),
+            context: context, workingRevision: revision)
+        let pending = try XCTUnwrap(list.cardShowInventory)
+        let token = try XCTUnwrap(pending.inventorySnapshotID), sourceData = list.inventorySourceData
+        let rowIDs = list.orderedCards.map(\.id), rowData = list.orderedCards.map(\.data)
+        XCTAssertThrowsError(try CardShowInventoryService.acknowledgeWorkingSync(list: list,
+            expectedSnapshotID: token, context: context, save: { context in
+                context.processPendingChanges(); throw SaveFailure.refused
+            })) { XCTAssertEqual($0 as? CardShowInventoryFailure, .persistenceFailed) }
+        XCTAssertEqual(list.inventorySourceData, sourceData)
+        XCTAssertEqual(list.cardShowInventory, pending)
+        XCTAssertEqual(list.cardShowInventory?.workingRevision, revision)
+        XCTAssertEqual(list.orderedCards.map(\.id), rowIDs)
+        XCTAssertEqual(list.orderedCards.map(\.data), rowData)
+        XCTAssertEqual(list.orderedCards.map(\.quantity), [3, 1])
+        XCTAssertFalse(context.hasChanges)
+
+        let reopened = try AppPersistence.open(url: url)
+        let cached = try XCTUnwrap(CardShowInventoryService.importedList(context: reopened.mainContext))
+        XCTAssertEqual(cached.inventorySourceData, sourceData)
+        XCTAssertEqual(cached.cardShowInventory, pending)
+        XCTAssertEqual(cached.cardShowInventory?.workingRevision, revision)
+        try CardShowInventoryService.acknowledgeWorkingSync(list: list, expectedSnapshotID: token, context: context)
+        XCTAssertEqual(list.cardShowInventory?.pendingWorkingSync, false)
+        XCTAssertEqual(list.cardShowInventory?.inventorySnapshotID, token)
+        XCTAssertEqual(list.cardShowInventory?.workingRevision, revision)
+        XCTAssertEqual(list.orderedCards.map(\.quantity), [3, 1])
+        XCTAssertFalse(context.hasChanges)
+    }
+
+    func testStaleForeignAndRepeatedAcknowledgementsCannotClearTheLatestPendingSnapshot() async throws {
+        let container = try store(), context = container.mainContext
+        let list = try CardShowInventoryService.apply(snapshot([row(1, quantity: 3)]), context: context)
+        let stale = try XCTUnwrap(list.cardShowInventory?.inventorySnapshotID)
+        try CardShowInventoryService.apply(snapshot([row(1, quantity: 2)], at: second), context: context)
+        let latest = try XCTUnwrap(list.cardShowInventory?.inventorySnapshotID), source = list.inventorySourceData
+        let foreign = CardList(name: "Unrelated inventory"); context.insert(foreign); try context.save()
+        for (candidate, token) in [(list, stale), (foreign, latest)] {
+            XCTAssertThrowsError(try CardShowInventoryService.acknowledgeWorkingSync(list: candidate,
+                expectedSnapshotID: token, context: context)) { XCTAssertEqual($0 as? CardShowInventoryFailure, .invalidResponse) }
+            XCTAssertEqual(list.inventorySourceData, source)
+            XCTAssertEqual(list.cardShowInventory?.pendingWorkingSync, true)
+            XCTAssertEqual(list.quantity, 2)
+            XCTAssertFalse(context.hasChanges)
+        }
+        try CardShowInventoryService.acknowledgeWorkingSync(list: list, expectedSnapshotID: latest, context: context)
+        let acknowledged = list.inventorySourceData
+        XCTAssertThrowsError(try CardShowInventoryService.acknowledgeWorkingSync(list: list,
+            expectedSnapshotID: latest, context: context)) { XCTAssertEqual($0 as? CardShowInventoryFailure, .invalidResponse) }
+        XCTAssertEqual(list.inventorySourceData, acknowledged)
+        XCTAssertFalse(context.hasChanges)
+    }
+
+    func testDirtyUnrelatedDraftIsNotSavedOrRolledBackByAcknowledgement() async throws {
+        let container = try store(), context = container.mainContext
+        let list = try CardShowInventoryService.apply(snapshot([row(1)]), context: context)
+        let source = list.inventorySourceData, token = try XCTUnwrap(list.cardShowInventory?.inventorySnapshotID)
+        let ordinary = CardList(name: "Uncommitted draft"); context.insert(ordinary)
+        XCTAssertThrowsError(try CardShowInventoryService.acknowledgeWorkingSync(list: list,
+            expectedSnapshotID: token, context: context)) { XCTAssertEqual($0 as? CardShowInventoryFailure, .persistenceFailed) }
+        XCTAssertEqual(ordinary.name, "Uncommitted draft")
+        XCTAssertTrue(context.hasChanges)
+        XCTAssertEqual(list.inventorySourceData, source)
+        XCTAssertEqual(list.cardShowInventory?.pendingWorkingSync, true)
+    }
+
+    func testSourceLinkRejectsIncompletePendingMetadataAndLegacyLinksWithSyncFields() async throws {
+        let container = try store(), context = container.mainContext
+        let list = try CardShowInventoryService.apply(snapshot([row(1)]), context: context)
+        let original = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(list.inventorySourceData)) as? [String: Any])
+        for key in ["syncID", "pendingWorkingSync"] {
+            var incomplete = original; incomplete.removeValue(forKey: key)
+            XCTAssertThrowsError(try JSONDecoder().decode(CardShowInventoryLink.self,
+                from: JSONSerialization.data(withJSONObject: incomplete)))
+        }
+        for version in [1, 3] {
+            var invalid = original; invalid["version"] = version
+            XCTAssertThrowsError(try JSONDecoder().decode(CardShowInventoryLink.self,
+                from: JSONSerialization.data(withJSONObject: invalid)))
+        }
     }
 
     func testRepeatedRefreshUpdatesSourceRowsWithoutMergingExactDuplicatesOrChangingLocalIdentity() async throws {
@@ -95,15 +309,24 @@ import SwiftData
         let directory = try folder(); defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("inventory-rollback.store")
         let container = try AppPersistence.open(url: url), context = container.mainContext
-        let list = try CardShowInventoryService.apply(snapshot([row(1, quantity: 3), row(2)]), context: context)
+        let working = workingStore()
+        try working.seedInventory([.init(sourceInventoryID: 1, card: card(), quantity: 3)], sourceLocationID: 259401)
+        let originalRevision = ShowInventorySyncRevision(store: working)
+        let list = try CardShowInventoryService.apply(snapshot([row(1, quantity: 3), row(2)]),
+            context: context, workingRevision: originalRevision)
         let before = list.orderedCards.map(\.data), ids = list.orderedCards.map(\.id), dates = list.orderedCards.map(\.addedAt)
         let source = list.inventorySourceData
         list.orderedCards[0].cashOverrideText = "4"; try context.save()
+        try working.setInventoryCost(itemID: XCTUnwrap(working.inventory.first?.id), totalCostCents: 600)
+        let nextRevision = ShowInventorySyncRevision(store: working)
+        XCTAssertNotEqual(nextRevision, originalRevision)
         let changed = snapshot([row(1, quantity: 2, price: 99), row(3, quantity: 4)], at: second)
-        XCTAssertThrowsError(try CardShowInventoryService.apply(changed, context: context, save: { context in
+        XCTAssertThrowsError(try CardShowInventoryService.apply(changed, context: context,
+            workingRevision: nextRevision, save: { context in
             context.processPendingChanges(); throw SaveFailure.refused
         }))
         XCTAssertEqual(list.inventorySourceData, source); XCTAssertEqual(list.orderedCards.map(\.id), ids)
+        XCTAssertEqual(list.cardShowInventory?.workingRevision, originalRevision)
         XCTAssertEqual(list.orderedCards.map(\.data), before); XCTAssertEqual(list.orderedCards.map(\.quantity), [3, 1])
         XCTAssertEqual(list.orderedCards.map(\.addedAt), dates); XCTAssertEqual(list.orderedCards[0].cashOverrideText, "4")
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<InventoryCard>()), 2)
@@ -111,10 +334,12 @@ import SwiftData
         let disk = try AppPersistence.open(url: url)
         let cached = try XCTUnwrap(CardShowInventoryService.importedList(context: disk.mainContext))
         XCTAssertEqual(cached.id, list.id); XCTAssertEqual(cached.inventorySourceData, source)
+        XCTAssertEqual(cached.cardShowInventory?.workingRevision, originalRevision)
         XCTAssertEqual(cached.orderedCards.map(\.data), before)
-        try CardShowInventoryService.apply(changed, context: context)
+        try CardShowInventoryService.apply(changed, context: context, workingRevision: nextRevision)
         XCTAssertEqual(list.orderedCards.compactMap(\.sourceInventoryID), [1, 3])
         XCTAssertEqual(list.orderedCards.map(\.quantity), [2, 4]); XCTAssertEqual(list.orderedCards[0].id, ids[0])
+        XCTAssertEqual(list.cardShowInventory?.workingRevision, nextRevision)
     }
 
     func testLocationChangeDuplicateIDsAndInvalidQuantityNeverMutateTheCachedList() async throws {

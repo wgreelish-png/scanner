@@ -1,7 +1,7 @@
 import SwiftUI
 import SwiftData
 
-/// Explicitly refreshed source snapshot, separate from Show's local working stock.
+/// Explicit website refresh reconciles available local stock and retains its history.
 @MainActor struct CardShowInventoryView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.scenePhase) private var scenePhase
@@ -13,8 +13,8 @@ import SwiftData
     @State private var removingSnapshot = false
     @State private var removalError: String?
 
-    init(provider: (any CardShowInventoryProviding)? = nil) {
-        _model = State(initialValue: CardShowInventoryModel(provider: provider))
+    init(provider: (any CardShowInventoryProviding)? = nil, workingStore: ShowBudgetStore = .shared) {
+        _model = State(initialValue: CardShowInventoryModel(provider: provider, workingStore: workingStore))
     }
 
     private var savedList: CardList? { lists.first { $0.isCardShowInventory } }
@@ -22,13 +22,15 @@ import SwiftData
     var body: some View {
         List {
             Section {
-                Label("Imported source snapshot", systemImage: "arrow.down.doc.fill")
+                Label("Website inventory", systemImage: "arrow.down.doc.fill")
                     .font(.title3.bold()).foregroundStyle(.indigo)
                 Text("TCGTracking · Card Show location")
                     .font(.caption).foregroundStyle(.secondary)
                 if let list = savedList {
-                    LabeledContent("Cards", value: list.quantity.formatted()).accessibilityIdentifier("cardShowInventory.quantity")
+                    LabeledContent("Physical cards", value: list.quantity.formatted()).accessibilityIdentifier("cardShowInventory.quantity")
                     LabeledContent("Inventory rows", value: list.cards.count.formatted()).accessibilityIdentifier("cardShowInventory.rows")
+                    LabeledContent("Available in local stock", value: model.workingStore.inventory.reduce(0) { $0 + $1.quantity }.formatted())
+                        .accessibilityIdentifier("cardShowInventory.workingQuantity")
                     LabeledContent("Imported market subtotal", value: list.knownValue.money)
                     if list.unpricedQuantity > 0 {
                         Text("\(list.unpricedQuantity) copies have no market price.").font(.caption).foregroundStyle(.secondary)
@@ -52,7 +54,7 @@ import SwiftData
                 Button {
                     copyMessage = nil; model.refresh(context: context)
                 } label: {
-                    Label(savedList == nil ? "Import Source Snapshot" : "Refresh Source Snapshot", systemImage: "arrow.clockwise")
+                    Label(savedList == nil ? "Import Inventory" : "Refresh Inventory", systemImage: "arrow.clockwise")
                         .frame(maxWidth: .infinity, minHeight: 44)
                 }.buttonStyle(.borderedProminent).disabled(model.isRefreshing)
                     .accessibilityIdentifier("cardShowInventory.refresh")
@@ -62,13 +64,18 @@ import SwiftData
                 if let message = model.message {
                     Text(message).font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("cardShowInventory.status")
                 }
+                if savedList?.cardShowInventory?.pendingWorkingSync == true && !model.requiresFreshInventoryRefresh {
+                    Button("Retry Inventory Update", systemImage: "arrow.triangle.2.circlepath") {
+                        model.retryWorkingInventory(context: context)
+                    }.disabled(model.isRefreshing).accessibilityIdentifier("cardShowInventory.retryWorkingSync")
+                }
                 Button {
                     model.setActive(false); showingConnection = true
                 } label: {
                     Label(model.needsSignIn ? "Sign In to TCGTracking" : "TCGTracking Account", systemImage: "person.crop.circle")
                 }.buttonStyle(.borderless).disabled(model.isRefreshing).accessibilityIdentifier("cardShowInventory.connect")
             } footer: {
-                Text("Refresh updates this source snapshot only. Local show stock starts from the first import once; later refreshes do not restock sold cards or remove cards you bought locally. Record sales, trades, and purchases from Show home. The saved snapshot works offline; artwork and new research may need internet.")
+                Text("Refresh replaces available local quantities with the website’s Card Show inventory. Transaction history and acquisition costs are retained. Local sales and purchases are not sent to the website; update the website before your next import. Saved inventory works offline; artwork and new research may need internet.")
             }
         }
         .navigationTitle("Card Show Inventory").navigationBarTitleDisplayMode(.inline)
@@ -117,15 +124,20 @@ import SwiftData
 /// Explicit synthetic inventory UI destination, never a live-network fallback.
 @MainActor struct CardShowInventoryFixtureScreen: View {
     @State private var container: ModelContainer
+    @State private var workingStore: ShowBudgetStore
     private let provider = CardShowInventoryFixtureProvider()
     init() {
         _container = State(initialValue: try! ModelContainer(for: CardList.self, InventoryCard.self, ScanSession.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)))
+        let file = CardShowInventoryFixtureFile()
+        _workingStore = State(initialValue: ShowBudgetStore(read: { _ in file.data }, write: { data, _ in file.data = data }))
     }
     var body: some View {
-        NavigationStack { CardShowInventoryView(provider: provider) }.modelContainer(container)
+        NavigationStack { CardShowInventoryView(provider: provider, workingStore: workingStore) }.modelContainer(container)
     }
 }
+
+@MainActor private final class CardShowInventoryFixtureFile { var data: Data? }
 
 @MainActor private final class CardShowInventoryFixtureProvider: CardShowInventoryProviding {
     private var count = 0

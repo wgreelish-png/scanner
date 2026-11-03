@@ -40,6 +40,8 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
     var visibleShows: [ShowBudgetEvent] { book.shows.filter { $0.deletedAt == nil } }
     var inventorySourceLocationID: Int? { book.inventorySourceLocationID }
     var costAdjustments: [ShowInventoryCostAdjustment] { book.costAdjustments }
+    var inventoryReconciliations: [ShowInventoryReconciliation] { book.inventoryReconciliations }
+    var lastInventorySnapshotID: Data? { book.inventoryReconciliations.last?.snapshotID }
 
     var activeShow: ShowBudgetEvent? {
         guard isLoaded, let id = book.activeShowID else { return nil }
@@ -306,6 +308,53 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
         DiagnosticLog.shared.record("show_inventory.seeded", ["records": String(seeds.count)])
     }
 
+    /// Apply a fresh, complete website snapshot as the authoritative quantity
+    /// across every working lot, including local purchases. This stock import
+    /// posts no cash or profit and preserves all receipt/card/cost history.
+    @discardableResult
+    func reconcileInventory(_ seeds: [ShowInventorySeed], sourceLocationID: Int,
+                            snapshotID: Data) throws -> ShowInventoryReconciliationSummary {
+        try requireWritable()
+        guard sourceLocationID > 0,
+              book.inventorySourceLocationID.map({ $0 == sourceLocationID }) ?? true else {
+            throw ShowTransactionFailure.inventoryLocationConflict
+        }
+        let rows = seeds.sorted { $0.sourceInventoryID < $1.sourceInventoryID }
+        // Check every committed marker, not just the last refresh. Reopening
+        // an old source must never restore copies sold or corrected locally.
+        if let prior = book.inventoryReconciliations.first(where: { $0.snapshotID == snapshotID }) {
+            guard prior.sourceLocationID == sourceLocationID, prior.sourceRows == rows else {
+                throw ShowBudgetStoreFailure.conflictingEntry
+            }
+            return .init(addedQuantity: 0, removedQuantity: 0, unchangedSnapshot: true,
+                totalQuantity: try ShowInventoryReconciliationMath.totalQuantity(book.inventory))
+        }
+        // Validate the complete source before making a plan or changing state.
+        try ShowInventoryReconciliationMath.validate(rows)
+        guard !snapshotID.isEmpty, snapshotID.count <= 4_096 else { throw ShowTransactionFailure.invalidInventory }
+        guard book.inventoryReconciliations.count < ShowBudgetBook.maximumInventoryReconciliations else {
+            throw ShowBudgetFailure.capacityExceeded
+        }
+        let count = try ShowInventoryReconciliationMath.newLotCount(seeds: rows, inventory: book.inventory)
+        guard count <= ShowBudgetBook.maximumInventoryItems - book.inventory.count else { throw ShowBudgetFailure.capacityExceeded }
+        let timestamp = max(now(), book.costMutations.map(\.recordedAt).max() ?? .distantPast)
+        let event = ShowInventoryReconciliation(id: UUID(), sourceLocationID: sourceLocationID,
+            snapshotID: snapshotID, recordedAt: timestamp, sourceRows: rows,
+            createdInventoryIDs: (0..<count).map { _ in UUID() })
+        let plan = try ShowInventoryReconciliationMath.plan(event, inventory: book.inventory)
+        var next = book
+        next.inventorySourceLocationID = sourceLocationID
+        next.inventory = plan.inventory
+        next.inventoryReconciliations.append(event)
+        next.costMutations.append(try .capturing(kind: .reconciliation, operationID: event.id,
+            recordedAt: timestamp, itemIDs: plan.changedIDs, before: book.inventory, after: next.inventory))
+        // Marker, provenance, quantity/cost deltas and event share one atomic
+        // write. A failed write leaves the same snapshot available for retry.
+        try commit(next)
+        DiagnosticLog.shared.record("show_inventory.reconciled", ["records": String(rows.count)])
+        return plan.summary
+    }
+
     func transaction(forListID listID: UUID) -> ShowTransactionReceipt? {
         book.transactions.first { $0.incomingListID == listID && $0.reversedAt == nil }
     }
@@ -459,6 +508,7 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
         }
         let receipt = book.transactions[index]
         guard receipt.reversedAt == nil else { return }
+        guard !book.reconciliationPreventsUndo(of: receipt) else { throw ShowTransactionFailure.inventoryReconciled }
         let acquired = Set(receipt.incoming.map(\.inventoryID))
         guard !book.transactions.contains(where: { $0.id != id && $0.reversedAt == nil &&
             $0.outgoing.contains(where: { acquired.contains($0.inventoryID) }) }) else {
