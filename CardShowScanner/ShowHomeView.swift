@@ -94,6 +94,7 @@ private struct ShowHomeRouteCard: View {
     @State private var search = ""
     @State private var seedError: String?
     @State private var showingTransaction = false
+    @State private var showingPriceTags = false
 
     init(store: ShowBudgetStore = .shared) { _store = State(initialValue: store) }
 
@@ -162,6 +163,14 @@ private struct ShowHomeRouteCard: View {
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button("Print Price Tags", systemImage: "printer") { showingPriceTags = true }
+                        .disabled(!store.isLoaded || available.isEmpty)
+                        .accessibilityIdentifier("showInventory.priceTags")
+                } label: { Image(systemName: "ellipsis.circle").frame(width: 44, height: 44) }
+                    .accessibilityLabel("Inventory options").accessibilityIdentifier("showInventory.options")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink { CardShowInventoryView() } label: { Text("Source") }
                     .accessibilityLabel("TCGTracking Source Snapshot")
                     .accessibilityIdentifier("showInventory.importSnapshot")
@@ -173,6 +182,15 @@ private struct ShowHomeRouteCard: View {
             }
         }
         .sheet(isPresented: $showingTransaction) { ShowTransactionForm(store: store) }
+        .sheet(isPresented: $showingPriceTags, onDismiss: { LetraTagPrinter.shared.stop() }) {
+            NavigationStack {
+                PriceTagQueueView(inventory: store.inventory)
+                    .toolbar { ToolbarItem(placement: .cancellationAction) {
+                        Button("Close") { showingPriceTags = false }.disabled(LetraTagPrinter.shared.isPrinting)
+                            .accessibilityIdentifier("priceTags.close")
+                    } }
+            }.interactiveDismissDisabled(LetraTagPrinter.shared.isPrinting)
+        }
         .onAppear { visible = true; seedInventory() }
         .onDisappear { visible = false }
     }

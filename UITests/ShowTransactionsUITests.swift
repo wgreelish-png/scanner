@@ -203,6 +203,54 @@ import XCTest
         assertStock("3", app: app)
     }
 
+    func testPriceTagPreviewEditsStayLocalAndOpeningDoesNotRequestBluetooth() {
+        continueAfterFailure = false
+        let app = launch()
+        defer { app.terminate() }
+        tap(app.buttons["show.inventory"], app: app)
+        assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
+        let options = app.navigationBars.buttons["showInventory.options"]
+        XCTAssertTrue(options.waitForExistence(timeout: 5))
+        XCTAssertTrue(options.isEnabled)
+        XCTAssertTrue(app.windows.firstMatch.frame.contains(options.frame))
+        options.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        tap(app.buttons["showInventory.priceTags"], app: app)
+        XCTAssertTrue(app.navigationBars["Price Tags"].waitForExistence(timeout: 5))
+        let system = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        XCTAssertFalse(system.alerts.firstMatch.waitForExistence(timeout: 1),
+            "Opening price tags must not request Bluetooth access before Search is tapped")
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        let review = app.buttons["priceTags.review"]
+        XCTAssertFalse(review.isEnabled)
+        let stockA = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@",
+            "priceTags.select.", "Stock A")).firstMatch
+        XCTAssertTrue(stockA.waitForExistence(timeout: 5))
+        let inventoryID = String(stockA.identifier.dropFirst("priceTags.select.".count))
+        XCTAssertNotNil(UUID(uuidString: inventoryID))
+        tap(stockA, app: app)
+        XCTAssertEqual(review.label, "Review 1 Label", "Stock quantity must not become the default label count")
+        tap(review, app: app)
+        let edit = app.buttons["priceTags.edit." + inventoryID]
+        tap(edit, app: app)
+        XCTAssertTrue(app.descendants(matching: .any)["priceTags.preview"].waitForExistence(timeout: 5))
+        let price = app.textFields["priceTags.askingPrice"]
+        XCTAssertEqual(price.value as? String, "35")
+        enter("32.50", field: price, app: app)
+        XCTAssertEqual(price.value as? String, "32.50")
+        let printOne = app.buttons["priceTags.printOne"]
+        XCTAssertTrue(printOne.exists)
+        XCTAssertFalse(printOne.isEnabled, "A preview must not print before a printer is explicitly connected")
+        XCTAssertFalse(system.alerts.firstMatch.exists)
+        tap(app.navigationBars["Edit Price Tag"].buttons.element(boundBy: 0), app: app)
+        assertContains("$32.50", element: edit)
+        tap(app.buttons["priceTags.done"], app: app)
+        tap(app.buttons["priceTags.close"], app: app)
+        assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        assertBalances(available: "$300.00", saved: "$0.00", app: app)
+        assertStock("3", app: app)
+    }
+
     func testLargeIncomingListKeepsInventoryCheckoutAndReceiptActionsReachable() {
         continueAfterFailure = false
         let app = launch(arguments: ["--show-transactions-large-incoming"])

@@ -35,6 +35,9 @@ struct SettingsView: View {
                 Text("Market prices use Open API without website sign-in. Your website connection is used for account features.")
             }
             Section("Manage") {
+                NavigationLink { LabelPrinterSettingsView() } label: {
+                    SettingsDestinationLabel("Label printer", subtitle: "Connect and test your DYMO LetraTag 200B", symbol: "printer", tint: .indigo)
+                }.accessibilityIdentifier("settings.labelPrinter")
                 NavigationLink { OfferDefaultsSettingsView() } label: {
                     SettingsDestinationLabel("Offer defaults", subtitle: "Cash, trade and maximum buy rates", symbol: "percent", tint: .green)
                 }.accessibilityIdentifier("settings.offerDefaults")
@@ -255,6 +258,7 @@ private struct AboutPrivacySettingsView: View {
             }
             Section("On this iPhone") {
                 Text("Lists, sessions and diagnostic logs stay on this iPhone unless you export them. Camera frames and barcode images are processed on this phone.")
+                Text("Label printing sends the previewed label to a printer you select over Bluetooth. Discovery and transmission are explicit and stop when the app becomes inactive; a label already received by the printer may still finish. Printer diagnostics contain event codes and timing, not device identifiers or label contents.")
                 Text("Website sign-in details and Direct Beta API credentials use device-only Keychain storage. Remove saved website credentials with Forget Saved Sign-In; manage API credentials in API Connection.")
             }
             Section("Internet requests & sharing") {
