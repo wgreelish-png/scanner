@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Prepare only a new UI-test simulator; never reset an existing device."""
 
+from __future__ import annotations
+
 import argparse
 import json
 import re
