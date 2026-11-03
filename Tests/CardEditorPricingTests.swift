@@ -281,6 +281,80 @@ import SwiftData
         XCTAssertEqual(model.price, "7")
     }
 
+    func testNavigationSuspendsAndResumesExactConditionQuoteWithoutSavingInventory() async throws {
+        let container = try ModelContainer(for: CardList.self, InventoryCard.self, ScanSession.self,
+                                           configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let context = container.mainContext, list = CardList(name: "Retained navigation draft")
+        context.insert(list)
+        try CardListService.add(card(), to: list, context: context); try context.save()
+        let item = try XCTUnwrap(list.orderedCards.first), saved = item.snapshot
+        let service = ControlledEditorPricing()
+        let model = CardEditorPricingModel(card: saved, pricing: service)
+        model.changeIdentity { $0.condition = "Lightly Played" }
+        try await waitForRequests(1, pricing: service)
+
+        model.suspendForNavigation()
+        model.suspendForNavigation()
+        XCTAssertFalse(model.priceLoading)
+        XCTAssertEqual(model.card.identity.condition, "Lightly Played")
+        await service.resolve(0, with: MarketQuote(marketPrice: 99, skuID: "stale"))
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertNil(model.card.marketPrice); XCTAssertNil(model.card.identity.skuID)
+        let suspendedRequests = await service.requests
+        XCTAssertEqual(suspendedRequests.count, 1, "Suspension must not request prices off screen")
+
+        model.resumeAfterNavigation()
+        try await waitForRequests(2, pricing: service)
+        let requests = await service.requests, refreshes = await service.forceRefreshes
+        XCTAssertEqual(requests[1].identity.condition, "Lightly Played")
+        XCTAssertEqual(refreshes, [false, false])
+        await service.resolve(1, with: MarketQuote(marketPrice: 7, skuID: "700"))
+        await waitForIdle(model)
+        XCTAssertEqual(model.card.marketPrice, 7); XCTAssertEqual(model.price, "7")
+        XCTAssertEqual(model.card.identity.skuID, "700")
+        XCTAssertEqual(item.snapshot, saved, "Returning to a retained draft must never save it")
+        XCTAssertEqual(item.quantity, 1)
+        XCTAssertFalse(context.hasChanges)
+    }
+
+    func testNavigationRetainsManualPriceAndSKUWhileRefreshingPrintingChoices() async throws {
+        let service = ControlledEditorPricing()
+        let model = CardEditorPricingModel(card: card(), pricing: service)
+        model.setPrice("7.50"); model.setSKU("manual-sku")
+        model.suspendForNavigation()
+        model.resumeAfterNavigation()
+        try await waitForRequests(1, pricing: service)
+        XCTAssertFalse(model.priceLoading)
+        await service.resolve(0, with: MarketQuote(marketPrice: 99, skuID: "999"),
+                              printings: ["Normal", "Reverse Holofoil"])
+        await waitForPrintings(["Normal", "Reverse Holofoil"], model: model)
+        XCTAssertEqual(model.price, "7.50")
+        XCTAssertEqual(model.card.marketPrice, Decimal(string: "7.50"))
+        XCTAssertEqual(model.card.identity.skuID, "manual-sku")
+        let refreshes = await service.forceRefreshes
+        XCTAssertEqual(refreshes, [false])
+    }
+
+    func testManualCorrectionAfterSuspensionCancelsRememberedQuoteRetry() async throws {
+        let service = ControlledEditorPricing()
+        let model = CardEditorPricingModel(card: card(), pricing: service)
+        model.changeIdentity { $0.condition = "Damaged" }
+        try await waitForRequests(1, pricing: service)
+        model.suspendForNavigation()
+        model.setPrice("3.25"); model.setSKU("corrected-sku")
+        model.resumeAfterNavigation()
+        try await waitForRequests(2, pricing: service)
+        XCTAssertFalse(model.priceLoading, "A deliberate manual correction cancels the remembered exact-quote retry")
+        await service.resolve(1, with: MarketQuote(marketPrice: 99, skuID: "999"), printings: ["Holofoil"])
+        await waitForPrintings(["Holofoil"], model: model)
+        await service.resolve(0, with: MarketQuote(marketPrice: 88, skuID: "888"))
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(model.card.identity.condition, "Damaged")
+        XCTAssertEqual(model.price, "3.25")
+        XCTAssertEqual(model.card.marketPrice, Decimal(string: "3.25"))
+        XCTAssertEqual(model.card.identity.skuID, "corrected-sku")
+    }
+
     private func waitForRequests(_ count: Int, pricing: ControlledEditorPricing) async throws {
         for _ in 0..<100 {
             let received = await pricing.requests.count

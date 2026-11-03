@@ -163,6 +163,7 @@ struct ResearchConnectionView: View {
     @State private var probe: Task<Void, Never>?
     @State private var probeID = UUID()
     @State private var tokenOrigin: String?
+    @State private var loaded = false
     private let store = ResearchConnectionStore()
 
     var body: some View {
@@ -233,7 +234,11 @@ struct ResearchConnectionView: View {
                     Button("Done") { focusedField = nil }.accessibilityIdentifier("researchConnection.keyboardDone")
                 }
             }
-            .onAppear { load() }
+            .onAppear {
+                guard !loaded else { return }
+                loaded = true
+                load()
+            }
             .onDisappear { cancelProbe() }
             .onChange(of: method) { _, _ in cancelProbe(); message = nil }
             .onChange(of: address) { _, value in

@@ -421,7 +421,7 @@ struct ListDeletionConfirmationView: View {
                 Button("Save") { if !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { list.name = name; save() } }
                 Button("Cancel", role: .cancel) {}
             }
-            .sheet(item: $editing) { item in
+            .navigationDestination(item: $editing) { item in
                 if list.isCardShowInventory { CardShowInventoryCardView(item: item) }
                 else { CardEditorView(item: item) }
             }
@@ -760,79 +760,78 @@ struct CardEditorView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    if textSize.isAccessibilitySize {
-                        VStack(alignment: .leading, spacing: 14) { artworkButton; cardIdentity }
-                    } else {
-                        HStack(alignment: .top, spacing: 16) { artworkButton; cardIdentity }
-                    }
-                }.listRowBackground(Color.indigo.opacity(0.07))
+        Form {
+            Section {
+                if textSize.isAccessibilitySize {
+                    VStack(alignment: .leading, spacing: 14) { artworkButton; cardIdentity }
+                } else {
+                    HStack(alignment: .top, spacing: 16) { artworkButton; cardIdentity }
+                }
+            }.listRowBackground(Color.indigo.opacity(0.07))
 
-                marketSection
-                Section("Printing & language") {
-                    Picker("Printing", selection: identityBinding(\.printing)) {
-                        ForEach(Array(Set(pricing.card.printings + [pricing.card.identity.printing])).sorted(), id: \.self) { Text($0) }
-                    }.pickerStyle(.menu).accessibilityIdentifier("cardEditor.printing")
-                    Picker("Language", selection: identityBinding(\.language)) {
-                        ForEach(languages, id: \.self) { Text($0) }
-                    }.pickerStyle(.menu).accessibilityIdentifier("cardEditor.language")
-                }
-                Section("Your inventory") {
-                    Stepper(value: $quantity, in: 1...100_000) {
-                        LabeledContent("Quantity", value: quantity.formatted())
-                    }.accessibilityIdentifier("cardEditor.quantity")
-                    if quantity > 1, let price = pricing.card.marketPrice {
-                        LabeledContent("Total market value", value: (price * Decimal(quantity)).money)
-                            .foregroundStyle(.secondary).accessibilityIdentifier("cardEditor.totalValue")
-                    }
-                }
-                Section {
-                    Button("Find Correct Card", systemImage: "magnifyingglass") {
-                        focusedField = nil; sheet = .correction
-                    }.accessibilityIdentifier("cardEditor.correctMatch")
-                }
-                Section("Research") {
-                    NavigationLink { CardResearchView(card: pricing.card) } label: {
-                        Label("Market & Graded Research", systemImage: "magnifyingglass")
-                    }.accessibilityIdentifier("cardEditor.research")
-                }
-                offerSection
+            marketSection
+            Section("Printing & language") {
+                Picker("Printing", selection: identityBinding(\.printing)) {
+                    ForEach(Array(Set(pricing.card.printings + [pricing.card.identity.printing])).sorted(), id: \.self) { Text($0) }
+                }.pickerStyle(.menu).accessibilityIdentifier("cardEditor.printing")
+                Picker("Language", selection: identityBinding(\.language)) {
+                    ForEach(languages, id: \.self) { Text($0) }
+                }.pickerStyle(.menu).accessibilityIdentifier("cardEditor.language")
             }
-            .navigationTitle("Card Details").navigationBarTitleDisplayMode(.inline)
-            .scrollDismissesKeyboard(.interactively)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }.disabled(saving).accessibilityIdentifier("cardEditor.cancel")
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }.disabled(pricing.priceLoading || saving)
-                        .accessibilityIdentifier("cardEditor.save")
-                }
-                if focusedField != nil {
-                    ToolbarItemGroup(placement: .keyboard) {
-                        Spacer()
-                        Button { focusedField = nil } label: { Text("Done").fixedSize() }
-                            .frame(minWidth: 64, minHeight: 44).layoutPriority(1)
-                            .accessibilityIdentifier("cardEditor.keyboardDone")
-                    }
+            Section("Your inventory") {
+                Stepper(value: $quantity, in: 1...100_000) {
+                    LabeledContent("Quantity", value: quantity.formatted())
+                }.accessibilityIdentifier("cardEditor.quantity")
+                if quantity > 1, let price = pricing.card.marketPrice {
+                    LabeledContent("Total market value", value: (price * Decimal(quantity)).money)
+                        .foregroundStyle(.secondary).accessibilityIdentifier("cardEditor.totalValue")
                 }
             }
-            .task { pricing.loadPrintingOptions() }
-            .onDisappear { pricing.cancelLookup() }
-            .sheet(item: $sheet) { selected in
-                switch selected {
-                case .artwork:
-                    CardArtworkSheet(card: pricing.card)
-                case .correction:
-                    CardMatchCorrectionSheet(game: pricing.card.identity.game) { candidate in
-                        pricing.replaceCard(with: candidate); sheet = nil
-                    }
-                }
+            Section {
+                Button("Find Correct Card", systemImage: "magnifyingglass") {
+                    focusedField = nil; sheet = .correction
+                }.accessibilityIdentifier("cardEditor.correctMatch")
             }
-            .failureAlert($error)
+            Section("Research") {
+                NavigationLink { CardResearchView(card: pricing.card) } label: {
+                    Label("Market & Graded Research", systemImage: "magnifyingglass")
+                }.accessibilityIdentifier("cardEditor.research")
+            }
+            offerSection
         }
+        .navigationTitle("Card Details").navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .tabBar)
+        .scrollDismissesKeyboard(.interactively)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }.disabled(saving).accessibilityIdentifier("cardEditor.cancel")
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Save") { save() }.disabled(pricing.priceLoading || saving)
+                    .accessibilityIdentifier("cardEditor.save")
+            }
+            if focusedField != nil {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button { focusedField = nil } label: { Text("Done").fixedSize() }
+                        .frame(minWidth: 64, minHeight: 44).layoutPriority(1)
+                        .accessibilityIdentifier("cardEditor.keyboardDone")
+                }
+            }
+        }
+        .onAppear { pricing.resumeAfterNavigation() }
+        .onDisappear { focusedField = nil; pricing.suspendForNavigation() }
+        .sheet(item: $sheet) { selected in
+            switch selected {
+            case .artwork:
+                CardArtworkSheet(card: pricing.card)
+            case .correction:
+                CardMatchCorrectionSheet(game: pricing.card.identity.game) { candidate in
+                    pricing.replaceCard(with: candidate); sheet = nil
+                }
+            }
+        }
+        .failureAlert($error)
     }
 
     private var artworkButton: some View {

@@ -43,4 +43,44 @@ import SwiftData
         try! context.save()
     }
 }
+
+/// Runs the real five-tab shell against synthetic, in-memory lists. Its source
+/// marker is acknowledged so merely visiting Show cannot seed financial stock.
+@MainActor struct PersistentNavigationFixtureScreen: View {
+    @State private var fixture = PersistentNavigationFixtureStore()
+
+    var body: some View {
+        HomeView().modelContainer(fixture.container)
+    }
+}
+
+@MainActor private final class PersistentNavigationFixtureStore {
+    let container: ModelContainer
+
+    init() {
+        container = try! ModelContainer(for: CardList.self, InventoryCard.self, ScanSession.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let context = container.mainContext
+        context.autosaveEnabled = false
+        let editable = CardList(name: "Navigation Test List")
+        context.insert(editable)
+        let editableCard = CardCandidate(identity: CardIdentity(game: "Pokémon", productID: "mock:navigation:editable", printing: "Normal"),
+            name: "Navigation Draft Card", set: "Synthetic navigation set", number: "1", marketPrice: 25,
+            confidence: 100, printings: ["Normal"])
+        try! CardListService.add(editableCard, to: editable, context: context)
+
+        let imported = CardList(name: "Card Show")
+        context.insert(imported)
+        let importedCard = CardCandidate(identity: CardIdentity(game: "Pokémon", productID: "mock:navigation:imported", printing: "Holofoil"),
+            name: "Navigation Imported Card", set: "Synthetic navigation set", number: "2", marketPrice: 10,
+            confidence: 100, printings: ["Holofoil"])
+        let importedRow = try! InventoryCard(card: importedCard, quantity: 2)
+        importedRow.sourceInventoryID = 9_001
+        context.insert(importedRow); imported.cards.append(importedRow)
+        imported.inventorySourceData = try! JSONEncoder().encode(CardShowInventoryLink(locationID: 9_001,
+            locationName: "Card Show", refreshedAt: Date(timeIntervalSince1970: 1_800_000_000),
+            version: 2, syncID: UUID(), pendingWorkingSync: false))
+        try! context.save()
+    }
+}
 #endif

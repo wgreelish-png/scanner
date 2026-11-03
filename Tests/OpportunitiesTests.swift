@@ -43,6 +43,13 @@ import XCTest
         if let dataETag { set["etag"] = dataETag }
         return try JSONSerialization.data(withJSONObject: ["categories": ["3": ["sets": [group: set]]]])
     }
+    private func index(categoryCount: Int) throws -> Data {
+        var categories = Dictionary(uniqueKeysWithValues: (1...categoryCount).map {
+            (String($0), ["sets": [:]] as [String: Any])
+        })
+        categories["3"] = ["sets": ["1430": [:]]]
+        return try JSONSerialization.data(withJSONObject: ["categories": categories])
+    }
     private func cadence(_ clock: OpportunitiesClock) -> BetaAPICadence {
         BetaAPICadence(now: { clock.now() }, wait: { _ in throw URLError(.timedOut) })
     }
@@ -298,6 +305,43 @@ import XCTest
             let nestedRequests = await nestedLoader.requests
             XCTAssertEqual(nestedRequests.map { $0.url?.path }, ["/v1/meta", "/v1/meta", "/v1/3/sets/1430"], "Connection tests cannot seed a weaker metadata cache")
         }
+    }
+
+    func testDirectMetaConnectionAndExactSetLookupAcceptLargerValidCategoryIndex() async throws {
+        for count in [33, BetaAPICadence.maximumIndexCategories] {
+            let clock = OpportunitiesClock(instant), body = try index(categoryCount: count)
+            let loader = OpportunitiesLoader([.init(status: 200, data: body),
+                .init(status: 200, data: body), .init(status: 200, data: try fixture())])
+            let client = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430),
+                loader: loader, cache: OpportunitiesSetCache(), cadence: cadence(clock), now: { clock.now() })
+
+            try await client.testConnection()
+            let result = try await client.opportunities(for: card(), forceRefresh: false)
+            XCTAssertEqual(result.selectedSKUID, "101")
+            let requests = await loader.requests
+            XCTAssertEqual(requests.map { $0.url?.absoluteString }, [
+                "https://beta.tcgtracking.com/v1/meta", "https://beta.tcgtracking.com/v1/meta",
+                "https://beta.tcgtracking.com/v1/3/sets/1430"
+            ], "Connection validation and card lookup must use the same complete index rules")
+            XCTAssertTrue(requests.allSatisfy { $0.httpMethod == "GET" && $0.url?.query == nil })
+            XCTAssertTrue(requests.allSatisfy { $0.value(forHTTPHeaderField: "X-Shipper-Id") == credentials.shipperID })
+            XCTAssertTrue(requests.allSatisfy { $0.value(forHTTPHeaderField: "X-Api-Key") == credentials.apiKey })
+            XCTAssertTrue(requests.allSatisfy { $0.value(forHTTPHeaderField: "Cookie") == nil &&
+                $0.value(forHTTPHeaderField: "Authorization") == nil })
+        }
+    }
+
+    func testDirectMetaExceedingCategoryLimitStillFailsWithoutExactSetFallback() async throws {
+        let clock = OpportunitiesClock(instant), oversized = try index(categoryCount: 257)
+        let loader = OpportunitiesLoader([.init(status: 200, data: oversized), .init(status: 200, data: oversized)])
+        let client = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430),
+            loader: loader, cache: OpportunitiesSetCache(), cadence: cadence(clock), now: { clock.now() })
+        do { try await client.testConnection(); XCTFail("HTTP 200 does not bypass metadata capacity limits") }
+        catch { XCTAssertEqual(error as? OpportunitiesFailure, .invalidResponse) }
+        do { _ = try await client.opportunities(for: card(), forceRefresh: false); XCTFail("Oversized metadata must not use exact-set fallback") }
+        catch { XCTAssertEqual(error as? OpportunitiesFailure, .invalidResponse) }
+        let requests = await loader.requests
+        XCTAssertEqual(requests.map { $0.url?.path }, ["/v1/meta", "/v1/meta"])
     }
 
     func testHTTPFailuresHaveSafeDistinctClassificationsAndNeverFollowRedirects() async throws {
