@@ -2,12 +2,13 @@ import Foundation
 import SwiftData
 
 enum ShowTransactionListFailure: LocalizedError, Equatable {
-    case unsavedChanges, listUnavailable, sourceChanged, invalidCards, invalidOffer, alreadyRecorded
+    case unsavedChanges, listUnavailable, sourceChanged, inventoryRefreshRequired, invalidCards, invalidOffer, alreadyRecorded
     var errorDescription: String? {
         switch self {
         case .unsavedChanges: return "Finish or cancel your card edits before recording a transaction."
         case .listUnavailable: return "This scanned list is no longer available. Select it again before recording."
         case .sourceChanged: return "The scanned list changed while you were reviewing this deal. Select it again to review the current cards."
+        case .inventoryRefreshRequired: return "Working inventory changed after the downloaded snapshot. Open Inventory → Source and tap Refresh Inventory to get a new website copy. Your local changes are kept."
         case .invalidCards: return "Choose a nonempty scanned list with valid cards and quantities."
         case .invalidOffer: return "The list’s offer settings are invalid. Review its percentages and per-card values."
         case .alreadyRecorded: return "This list already has a recorded transaction. Review or undo that transaction before recording it again."
@@ -144,21 +145,85 @@ enum ShowTransactionListFailure: LocalizedError, Equatable {
     }
 }
 
-/// Only the initial source copy seeds working stock. Later source refreshes and
-/// removal of that snapshot cannot undo a local sale or discard a local purchase.
+/// A fresh source snapshot first commits its pending marker with the source
+/// rows. The working ledger applies that marker once, then acknowledges it.
+/// Acknowledgment failures can retry without replaying stock after local sales.
 @MainActor enum ShowInventoryBridge {
     static func seedFromImportedList(context: ModelContext, store: ShowBudgetStore = .shared) throws {
-        guard store.isLoaded else { throw ShowBudgetStoreFailure.notLoaded }
-        guard store.inventorySourceLocationID == nil else { return }
         guard !context.hasChanges else { throw ShowTransactionListFailure.unsavedChanges }
         guard let list = try CardShowInventoryService.importedList(context: context),
               let link = list.cardShowInventory else { return }
+        if link.version == 2, link.pendingWorkingSync == true {
+            _ = try synchronizeImportedList(list, context: context, store: store)
+            return
+        }
+        // An established v1 source has no durable fresh-refresh marker. Keep
+        // its working stock until the user imports a complete fresh snapshot.
+        guard link.version == 1 else { return }
+        store.reload()
+        guard store.isLoaded else { throw ShowBudgetStoreFailure.notLoaded }
+        guard store.inventorySourceLocationID == nil, store.inventory.isEmpty,
+              store.transactions.isEmpty else { return }
+        try store.seedInventory(try seeds(from: list), sourceLocationID: link.locationID)
+    }
+
+    @discardableResult
+    static func synchronizeImportedList(_ list: CardList, context: ModelContext,
+        store: ShowBudgetStore = .shared) throws -> ShowInventoryReconciliationSummary {
+        guard !context.hasChanges else { throw ShowTransactionListFailure.unsavedChanges }
+        guard let source = try CardShowInventoryService.importedList(context: context),
+              source.id == list.id, source.inventorySourceData == list.inventorySourceData,
+              let link = source.cardShowInventory else { throw ShowTransactionListFailure.sourceChanged }
+        // A write may have completed before its caller reported a failure.
+        // Reopen the durable book before deciding whether a marker is new.
+        store.reload()
+        guard store.isLoaded else { throw ShowBudgetStoreFailure.notLoaded }
+        let rows = try seeds(from: source)
+        guard link.version == 2, let marker = link.inventorySnapshotID else {
+            return try unchangedSummary(store)
+        }
+        guard store.inventorySourceLocationID.map({ $0 == link.locationID }) ?? true else {
+            throw ShowTransactionFailure.inventoryLocationConflict
+        }
+        let markerWasApplied = store.inventoryReconciliations.contains { $0.snapshotID == marker }
+        if link.pendingWorkingSync != true {
+            // Acknowledged source rows are historical. A known marker may be
+            // checked through core deduplication, but never applied as fresh.
+            guard markerWasApplied else {
+                return try unchangedSummary(store)
+            }
+            return try store.reconcileInventory(rows, sourceLocationID: link.locationID, snapshotID: marker)
+        }
+        // A source saved before its first ledger write must not overwrite a
+        // local sale/cost edit made before retry. Already committed markers
+        // ignore this revision so a later sale cannot block acknowledgment.
+        if !markerWasApplied, let expected = link.workingRevision,
+           expected != ShowInventorySyncRevision(store: store) {
+            throw ShowTransactionListFailure.inventoryRefreshRequired
+        }
+        let summary = try store.reconcileInventory(rows, sourceLocationID: link.locationID, snapshotID: marker)
+        try CardShowInventoryService.acknowledgeWorkingSync(list: source,
+            expectedSnapshotID: marker, context: context)
+        return summary
+    }
+
+    private static func seeds(from list: CardList) throws -> [ShowInventorySeed] {
+        guard list.cards.count <= ShowBudgetBook.maximumInventorySeeds else { throw ShowBudgetFailure.capacityExceeded }
+        var rowIDs = Set<UUID>()
         let seeds = try list.orderedCards.map { row -> ShowInventorySeed in
-            guard let id = row.sourceInventoryID, id > 0,
+            guard rowIDs.insert(row.id).inserted, row.list?.id == list.id,
+                  let id = row.sourceInventoryID, id > 0,
                   let card = try? JSONDecoder().decode(CardCandidate.self, from: row.data),
-                  (0...1_000_000).contains(row.quantity) else { throw ShowTransactionListFailure.invalidCards }
+                  (0...ShowBudgetBook.maximumQuantity).contains(row.quantity),
+                  ShowTransactionMath.validCard(card) else { throw ShowTransactionListFailure.invalidCards }
             return ShowInventorySeed(sourceInventoryID: id, card: card, quantity: row.quantity)
         }
-        try store.seedInventory(seeds, sourceLocationID: link.locationID)
+        try ShowInventoryReconciliationMath.validate(seeds)
+        return seeds
+    }
+
+    private static func unchangedSummary(_ store: ShowBudgetStore) throws -> ShowInventoryReconciliationSummary {
+        .init(addedQuantity: 0, removedQuantity: 0, unchangedSnapshot: true,
+            totalQuantity: try ShowInventoryReconciliationMath.totalQuantity(store.inventory))
     }
 }

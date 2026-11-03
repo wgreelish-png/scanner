@@ -15,15 +15,17 @@ import XCTest
         reveal(refresh, in: app); refresh.tap()
         let quantity = app.staticTexts["cardShowInventory.quantity"]
         reveal(quantity, in: app)
-        assertValue("2", title: "Cards", element: quantity)
+        assertValue("2", title: "Physical cards", element: quantity)
         assertValue("1", title: "Inventory rows", element: app.staticTexts["cardShowInventory.rows"])
+        assertValue("2", title: "Available in local stock", element: app.staticTexts["cardShowInventory.workingQuantity"])
         XCTAssertTrue(app.staticTexts["cardShowInventory.updated"].exists)
         reveal(refresh, in: app); refresh.tap()
         reveal(quantity, in: app)
-        let updated = NSPredicate(format: "label == %@ OR label == %@", "3", "Cards, 3")
+        let updated = NSPredicate(format: "label == %@ OR label == %@", "3", "Physical cards, 3")
         let changed = expectation(for: updated, evaluatedWith: quantity)
         await fulfillment(of: [changed], timeout: 5)
         assertValue("1", title: "Inventory rows", element: app.staticTexts["cardShowInventory.rows"])
+        assertValue("3", title: "Available in local stock", element: app.staticTexts["cardShowInventory.workingQuantity"])
         let open = app.buttons["cardShowInventory.open"]
         reveal(open, in: app); open.tap()
         let options = app.buttons["list.options"]
@@ -35,7 +37,7 @@ import XCTest
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(app.navigationBars["Card Show Inventory"].waitForExistence(timeout: 5))
         reveal(quantity, in: app)
-        assertValue("3", title: "Cards", element: app.staticTexts["cardShowInventory.quantity"])
+        assertValue("3", title: "Physical cards", element: app.staticTexts["cardShowInventory.quantity"])
         assertValue("1", title: "Inventory rows", element: app.staticTexts["cardShowInventory.rows"])
     }
 

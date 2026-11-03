@@ -253,6 +253,7 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
     static let maximumInventoryItems = 50_000
     static let maximumTransactions = 20_000
     static let maximumCostAdjustments = 50_000
+    static let maximumInventoryReconciliations = 20_000
     static let maximumQuantity = 1_000_000
     var version: Int
     var shows: [ShowBudgetEvent]
@@ -266,23 +267,25 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
     var costMutations: [ShowCostLedgerMutation]
     var legacyTransactionIDs: [UUID]
     var legacyReversedTransactionIDs: [UUID]
+    var inventoryReconciliations: [ShowInventoryReconciliation]
 
-    init(version: Int = 4, shows: [ShowBudgetEvent] = [], activeShowID: UUID? = nil,
+    init(version: Int = 5, shows: [ShowBudgetEvent] = [], activeShowID: UUID? = nil,
          listOutcomeUpdates: [BudgetListOutcomeUpdate]? = nil, inventory: [ShowInventoryItem] = [],
          transactions: [ShowTransactionReceipt] = [], inventorySourceLocationID: Int? = nil,
          costAdjustments: [ShowInventoryCostAdjustment] = [], costLedgerBaseline: [ShowCostStockState] = [],
          costMutations: [ShowCostLedgerMutation] = [], legacyTransactionIDs: [UUID] = [],
-         legacyReversedTransactionIDs: [UUID] = []) {
+         legacyReversedTransactionIDs: [UUID] = [], inventoryReconciliations: [ShowInventoryReconciliation] = []) {
         self.version = version; self.shows = shows; self.activeShowID = activeShowID
         self.listOutcomeUpdates = listOutcomeUpdates
         self.inventory = inventory; self.transactions = transactions; self.inventorySourceLocationID = inventorySourceLocationID
         self.costAdjustments = costAdjustments
         self.costLedgerBaseline = costLedgerBaseline; self.costMutations = costMutations
         self.legacyTransactionIDs = legacyTransactionIDs; self.legacyReversedTransactionIDs = legacyReversedTransactionIDs
+        self.inventoryReconciliations = inventoryReconciliations
     }
 
     func validate() throws {
-        guard version == 4 else { throw ShowBudgetFailure.invalidVersion }
+        guard version == 5 else { throw ShowBudgetFailure.invalidVersion }
         guard shows.count <= Self.maximumStoredShows,
               shows.filter({ $0.deletedAt == nil }).count <= Self.maximumShows,
               shows.reduce(0, { $0 + $1.entries.count }) <= Self.maximumEntriesTotal else { throw ShowBudgetFailure.capacityExceeded }
@@ -320,12 +323,12 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case version, shows, activeShowID, listOutcomeUpdates, inventory, transactions, inventorySourceLocationID, costAdjustments,
-             costLedgerBaseline, costMutations, legacyTransactionIDs, legacyReversedTransactionIDs
+             costLedgerBaseline, costMutations, legacyTransactionIDs, legacyReversedTransactionIDs, inventoryReconciliations
     }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         let storedVersion = try values.decode(Int.self, forKey: .version)
-        guard (1...4).contains(storedVersion) else { throw ShowBudgetFailure.invalidVersion }
+        guard (1...5).contains(storedVersion) else { throw ShowBudgetFailure.invalidVersion }
         shows = try values.decode([ShowBudgetEvent].self, forKey: .shows)
         activeShowID = try values.decodeIfPresent(UUID.self, forKey: .activeShowID)
         listOutcomeUpdates = try values.decodeIfPresent([BudgetListOutcomeUpdate].self, forKey: .listOutcomeUpdates)
@@ -333,7 +336,7 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
         transactions = try values.decodeIfPresent([ShowTransactionReceipt].self, forKey: .transactions) ?? []
         inventorySourceLocationID = try values.decodeIfPresent(Int.self, forKey: .inventorySourceLocationID)
         costAdjustments = try values.decodeIfPresent([ShowInventoryCostAdjustment].self, forKey: .costAdjustments) ?? []
-        if storedVersion == 4 {
+        if storedVersion >= 4 {
             // Required metadata distinguishes a migrated unknown checkpoint from
             // a damaged v4 ledger with its accounting or journal removed.
             costLedgerBaseline = try values.decode([ShowCostStockState].self, forKey: .costLedgerBaseline)
@@ -341,10 +344,26 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
             legacyTransactionIDs = try values.decode([UUID].self, forKey: .legacyTransactionIDs)
             legacyReversedTransactionIDs = try values.decode([UUID].self, forKey: .legacyReversedTransactionIDs)
         } else {
+            let unsupportedJournal = try values.decodeIfPresent([ShowCostLedgerMutation].self, forKey: .costMutations) ?? []
+            guard !unsupportedJournal.contains(where: { $0.kind == .reconciliation }) else {
+                throw ShowBudgetFailure.invalidVersion
+            }
             costLedgerBaseline = inventory.map(ShowCostStockState.init)
             costMutations = []
             legacyTransactionIDs = transactions.map(\.id)
             legacyReversedTransactionIDs = transactions.filter { $0.reversedAt != nil }.map(\.id)
+        }
+        if storedVersion == 5 {
+            // Required even when empty: removing v5 audit metadata is damage,
+            // not a request to migrate a fresh baseline.
+            inventoryReconciliations = try values.decode([ShowInventoryReconciliation].self, forKey: .inventoryReconciliations)
+        } else {
+            let unexpected = try values.decodeIfPresent([ShowInventoryReconciliation].self, forKey: .inventoryReconciliations) ?? []
+            guard unexpected.isEmpty, inventory.allSatisfy({ $0.acquiredByReconciliationID == nil }),
+                  !costMutations.contains(where: { $0.kind == .reconciliation }) else {
+                throw ShowBudgetFailure.invalidVersion
+            }
+            inventoryReconciliations = []
         }
         if storedVersion == 1 {
             guard (listOutcomeUpdates ?? []).isEmpty,
@@ -363,7 +382,7 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
                 throw ShowBudgetFailure.invalidVersion
             }
         }
-        version = 4
+        version = 5
         try validate()
     }
     func encode(to encoder: Encoder) throws {
@@ -381,6 +400,7 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
         try values.encode(costMutations, forKey: .costMutations)
         try values.encode(legacyTransactionIDs, forKey: .legacyTransactionIDs)
         try values.encode(legacyReversedTransactionIDs, forKey: .legacyReversedTransactionIDs)
+        try values.encode(inventoryReconciliations, forKey: .inventoryReconciliations)
     }
 
     private func validateTransactions() throws {
@@ -389,6 +409,15 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
             throw ShowBudgetFailure.capacityExceeded
         }
         guard costAdjustments.count <= Self.maximumCostAdjustments else { throw ShowBudgetFailure.capacityExceeded }
+        guard inventoryReconciliations.count <= Self.maximumInventoryReconciliations else { throw ShowBudgetFailure.capacityExceeded }
+        guard Set(inventoryReconciliations.map(\.id)).count == inventoryReconciliations.count,
+              Set(inventoryReconciliations.map(\.snapshotID)).count == inventoryReconciliations.count else {
+            throw ShowBudgetFailure.duplicateIdentity
+        }
+        for event in inventoryReconciliations {
+            try event.validate()
+            guard event.sourceLocationID == inventorySourceLocationID else { throw ShowTransactionFailure.inventoryLocationConflict }
+        }
         guard Set(costAdjustments.map(\.id)).count == costAdjustments.count else { throw ShowBudgetFailure.duplicateIdentity }
         guard Set(inventory.map(\.id)).count == inventory.count,
               Set(transactions.map(\.id)).count == transactions.count else { throw ShowBudgetFailure.invalidBook }
@@ -400,6 +429,8 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
             }
         }
         let receipts = Dictionary(uniqueKeysWithValues: transactions.map { ($0.id, $0) })
+        let reconciliations = Dictionary(uniqueKeysWithValues: inventoryReconciliations.map { ($0.id, $0) })
+        let reconciliationItems = Dictionary(uniqueKeysWithValues: inventoryReconciliations.map { ($0.id, Set($0.createdInventoryIDs)) })
         let positions = Dictionary(uniqueKeysWithValues: transactions.enumerated().map { ($0.element.id, $0.offset) })
         let entries = shows.flatMap { show in show.entries.map { (show.id, $0) } }
         let cash = Dictionary(uniqueKeysWithValues: entries.filter { $0.1.transactionID != nil }.map { ($0.1.id, $0) })
@@ -411,9 +442,15 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
                   item.quantity != 0 || item.remainingCostCents == nil || item.remainingCostCents == 0,
                   item.acquiredAt.timeIntervalSince1970.isFinite else { throw ShowTransactionFailure.invalidInventory }
             if let transaction = item.acquiredByTransactionID {
-                guard item.sourceInventoryID == nil, item.sourceLocationID == nil,
+                guard item.sourceInventoryID == nil, item.sourceLocationID == nil, item.acquiredByReconciliationID == nil,
                       let receipt = receipts[transaction], item.acquiredAt == receipt.recordedAt,
                       receipt.incoming.contains(where: { $0.inventoryID == item.id && $0.card == item.card }) else {
+                    throw ShowTransactionFailure.invalidInventory
+                }
+            } else if let operation = item.acquiredByReconciliationID {
+                guard let event = reconciliations[operation], reconciliationItems[operation]?.contains(item.id) == true,
+                      item.sourceInventoryID.map({ $0 > 0 }) == true,
+                      item.sourceLocationID == inventorySourceLocationID, item.acquiredAt == event.recordedAt else {
                     throw ShowTransactionFailure.invalidInventory
                 }
             } else {
@@ -454,12 +491,28 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
                 }
             }
         }
+        var reconciledQuantities: [UUID: Int] = [:]
+        for mutation in costMutations where mutation.kind == .reconciliation {
+            for change in mutation.changes {
+                // Decoded journal quantities are untrusted until replay. Check
+                // them before calculating deltas so damage cannot trap Int.
+                try change.after.validate()
+                try change.before?.validate()
+                let delta = change.after.quantity.subtractingReportingOverflow(change.before?.quantity ?? 0)
+                guard !delta.overflow else { throw ShowBudgetFailure.arithmeticOverflow }
+                let total = (reconciledQuantities[change.after.id] ?? 0).addingReportingOverflow(delta.partialValue)
+                guard !total.overflow else { throw ShowBudgetFailure.arithmeticOverflow }
+                reconciledQuantities[change.after.id] = total.partialValue
+            }
+        }
         for item in inventory {
             let used = consumed[item.id] ?? 0
             if let transaction = item.acquiredByTransactionID, let receipt = receipts[transaction],
                let line = receipt.incoming.first(where: { $0.inventoryID == item.id }) {
                 let original = receipt.reversedAt == nil ? line.quantity : 0
-                guard used <= original, item.quantity == original - used else { throw ShowTransactionFailure.invalidInventory }
+                let authoritative = original.addingReportingOverflow(reconciledQuantities[item.id] ?? 0)
+                guard !authoritative.overflow, authoritative.partialValue >= used,
+                      item.quantity == authoritative.partialValue - used else { throw ShowTransactionFailure.invalidInventory }
             } else {
                 guard item.quantity <= Self.maximumQuantity - used else { throw ShowTransactionFailure.invalidInventory }
             }

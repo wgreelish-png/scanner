@@ -100,7 +100,7 @@ enum ShowTransactionKind: String, Codable, CaseIterable, Identifiable, Sendable 
 enum ShowTransactionFailure: LocalizedError, Equatable, Sendable {
     case invalidDraft, invalidInventory, insufficientStock, inventoryLocationConflict, transactionNotFound
     case incomingListAlreadyUsed, legacyListOutcomeExists, inventoryLinkedEntry, dependentStockUsed
-    case invalidCost, costAllocationRequired
+    case invalidCost, costAllocationRequired, inventoryReconciled
 
     var errorDescription: String? {
         switch self {
@@ -115,6 +115,7 @@ enum ShowTransactionFailure: LocalizedError, Equatable, Sendable {
         case .dependentStockUsed: return "Cards acquired by this transaction were used in a later transaction. Undo those transactions first."
         case .invalidCost: return "Enter a valid total cost for the remaining copies. Sold receipts keep their recorded cost."
         case .costAllocationRequired: return "Review the incoming card costs. Entered costs must fit the actual total, and remaining cards need usable allocation weights."
+        case .inventoryReconciled: return "A later website import changed this card’s stock. No inventory or cash was reversed. Review the current inventory and this transaction’s receipt."
         }
     }
 }
@@ -126,21 +127,24 @@ struct ShowInventoryItem: Codable, Equatable, Identifiable, Sendable {
     var sourceInventoryID: Int?
     var sourceLocationID: Int?
     var acquiredByTransactionID: UUID?
+    /// Import-created copies have unknown acquisition cost and their own audit origin.
+    var acquiredByReconciliationID: UUID?
     var acquiredAt: Date
     /// Total actual cost of the copies still in this lot. Nil means unknown.
     var remainingCostCents: Int64?
 
     init(id: UUID = UUID(), card: CardCandidate, quantity: Int, sourceInventoryID: Int? = nil,
          sourceLocationID: Int? = nil, acquiredByTransactionID: UUID? = nil, acquiredAt: Date = Date(),
-         remainingCostCents: Int64? = nil) {
+         remainingCostCents: Int64? = nil, acquiredByReconciliationID: UUID? = nil) {
         self.id = id; self.card = card; self.quantity = quantity; self.sourceInventoryID = sourceInventoryID
         self.sourceLocationID = sourceLocationID; self.acquiredByTransactionID = acquiredByTransactionID
         self.acquiredAt = acquiredAt
         self.remainingCostCents = remainingCostCents
+        self.acquiredByReconciliationID = acquiredByReconciliationID
     }
 }
 
-struct ShowInventorySeed: Sendable {
+struct ShowInventorySeed: Codable, Equatable, Sendable {
     var sourceInventoryID: Int
     var card: CardCandidate
     var quantity: Int
@@ -539,7 +543,7 @@ struct ShowCostStockChange: Codable, Equatable, Sendable {
 /// validation of consumed costs against the lot at recording, including edits
 /// and out-of-order Undo, without reconstructing historical unknown costs.
 struct ShowCostLedgerMutation: Codable, Equatable, Sendable {
-    enum Kind: String, Codable, Sendable { case record, undo, adjustment }
+    enum Kind: String, Codable, Sendable { case record, undo, adjustment, reconciliation }
     let kind: Kind
     let operationID: UUID
     let recordedAt: Date
@@ -559,7 +563,7 @@ struct ShowCostLedgerMutation: Codable, Equatable, Sendable {
 
 extension ShowBudgetBook {
     func validateCostLedger() throws {
-        let maximumMutations = Self.maximumTransactions * 2 + Self.maximumCostAdjustments
+        let maximumMutations = Self.maximumTransactions * 2 + Self.maximumCostAdjustments + Self.maximumInventoryReconciliations
         guard costLedgerBaseline.count <= Self.maximumInventoryItems, costMutations.count <= maximumMutations else {
             throw ShowBudgetFailure.capacityExceeded
         }
@@ -572,6 +576,7 @@ extension ShowBudgetBook {
         let stock = Dictionary(uniqueKeysWithValues: inventory.map { ($0.id, $0) })
         let receipts = Dictionary(uniqueKeysWithValues: transactions.map { ($0.id, $0) })
         let adjustments = Dictionary(uniqueKeysWithValues: costAdjustments.map { ($0.id, $0) })
+        let reconciliations = Dictionary(uniqueKeysWithValues: inventoryReconciliations.map { ($0.id, $0) })
         let reinvestmentPercents = Dictionary(uniqueKeysWithValues: shows.flatMap(\.entries).compactMap { entry in
             entry.transactionID.map { ($0, entry.reinvestmentPercent) }
         })
@@ -584,19 +589,25 @@ extension ShowBudgetBook {
         for state in costLedgerBaseline {
             try state.validate()
             guard let item = stock[state.id], state.remainingCostCents == nil,
+                  item.acquiredByReconciliationID == nil,
                   item.acquiredByTransactionID.map({ legacy.contains($0) }) ?? true else { throw ShowBudgetFailure.invalidBook }
             states[state.id] = state
         }
         let baselineIDs = Set(costLedgerBaseline.map(\.id))
         guard inventory.allSatisfy({ item in
-            let needsBaseline = item.acquiredByTransactionID.map({ legacy.contains($0) }) ?? true
+            let needsBaseline = item.acquiredByReconciliationID == nil &&
+                (item.acquiredByTransactionID.map({ legacy.contains($0) }) ?? true)
             return baselineIDs.contains(item.id) == needsBaseline
         }) else { throw ShowBudgetFailure.invalidBook }
         var recorded = Set<UUID>(), undone = Set<UUID>(), adjusted = Set<UUID>()
+        var reconciled = Set<UUID>(), reconciliationOrder: [UUID] = []
+        var recordPositions = Dictionary(uniqueKeysWithValues: legacy.map { ($0, -1) })
+        var lastReconciliationPositions: [CardIdentity: Int] = [:]
         var activeReceipts = legacy.subtracting(legacyReversed)
-        for mutation in costMutations {
+        for (mutationIndex, mutation) in costMutations.enumerated() {
+            let maximumChanges = mutation.kind == .reconciliation ? Self.maximumInventoryItems : Self.maximumTransactionCards * 2
             guard mutation.recordedAt.timeIntervalSince1970.isFinite,
-                  mutation.changes.count <= Self.maximumTransactionCards * 2,
+                  mutation.changes.count <= maximumChanges,
                   Set(mutation.changes.map { $0.after.id }).count == mutation.changes.count else {
                 throw ShowBudgetFailure.invalidBook
             }
@@ -645,9 +656,15 @@ extension ShowBudgetBook {
                 }
                 expected = changes
                 activeReceipts.insert(receipt.id)
+                recordPositions[receipt.id] = mutationIndex
             case .undo:
                 guard undone.insert(mutation.operationID).inserted, activeReceipts.contains(mutation.operationID),
                       let receipt = receipts[mutation.operationID], receipt.reversedAt == mutation.recordedAt else {
+                    throw ShowBudgetFailure.invalidBook
+                }
+                let affected = receipt.incoming.map { $0.card.identity } + receipt.outgoing.map { $0.card.identity }
+                guard let recordedPosition = recordPositions[receipt.id],
+                      affected.allSatisfy({ (lastReconciliationPositions[$0] ?? -1) <= recordedPosition }) else {
                     throw ShowBudgetFailure.invalidBook
                 }
                 var changes: [ShowCostStockChange] = []
@@ -680,6 +697,32 @@ extension ShowBudgetBook {
                       before.remainingCostCents == adjustment.previousCostCents else { throw ShowBudgetFailure.invalidBook }
                 expected = [.init(before: before, after: .init(id: adjustment.inventoryID,
                     quantity: before.quantity, remainingCostCents: adjustment.totalCostCents))]
+            case .reconciliation:
+                guard reconciled.insert(mutation.operationID).inserted,
+                      let event = reconciliations[mutation.operationID], event.recordedAt == mutation.recordedAt,
+                      event.sourceLocationID == inventorySourceLocationID else { throw ShowBudgetFailure.invalidBook }
+                // Only lots that exist at this journal position participate;
+                // future purchases/import additions cannot influence the plan.
+                let beforeInventory = try states.keys.sorted(by: { $0.uuidString < $1.uuidString }).map { id -> ShowInventoryItem in
+                    guard var item = stock[id], let state = states[id] else { throw ShowBudgetFailure.invalidBook }
+                    item.quantity = state.quantity; item.remainingCostCents = state.remainingCostCents
+                    return item
+                }
+                let plan = try ShowInventoryReconciliationMath.plan(event, inventory: beforeInventory)
+                let planned = Dictionary(uniqueKeysWithValues: plan.inventory.map { ($0.id, $0) })
+                for id in event.createdInventoryIDs {
+                    guard var durable = stock[id], let initial = planned[id] else { throw ShowBudgetFailure.invalidBook }
+                    durable.quantity = initial.quantity; durable.remainingCostCents = initial.remainingCostCents
+                    guard durable == initial else { throw ShowBudgetFailure.invalidBook }
+                }
+                expected = try ShowCostLedgerMutation.capturing(kind: .reconciliation, operationID: event.id,
+                    recordedAt: event.recordedAt, itemIDs: plan.changedIDs, before: beforeInventory,
+                    after: plan.inventory).changes
+                for id in plan.changedIDs {
+                    guard let item = planned[id] else { throw ShowBudgetFailure.invalidBook }
+                    lastReconciliationPositions[item.card.identity] = mutationIndex
+                }
+                reconciliationOrder.append(event.id)
             }
             guard mutation.changes == expected else { throw ShowBudgetFailure.invalidBook }
             for change in mutation.changes { states[change.after.id] = change.after }
@@ -687,6 +730,7 @@ extension ShowBudgetBook {
         let expectedRecorded = Set(transactions.map(\.id)).subtracting(legacy)
         let expectedUndone = Set(transactions.filter { $0.reversedAt != nil }.map(\.id)).subtracting(legacyReversed)
         guard recorded == expectedRecorded, undone == expectedUndone, adjusted == Set(adjustments.keys),
+              reconciled == Set(reconciliations.keys), reconciliationOrder == inventoryReconciliations.map(\.id),
               states.count == inventory.count,
               inventory.allSatisfy({ states[$0.id] == ShowCostStockState($0) }) else { throw ShowBudgetFailure.invalidBook }
     }
