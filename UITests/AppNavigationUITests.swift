@@ -110,12 +110,194 @@ import XCTest
         XCTAssertFalse(app.buttons["savedLists.cardShowInventory"].exists)
     }
 
-    private func launch() -> XCUIApplication {
+    func testEditableCardRetainsMainTabsAndUnsavedDraftThroughResearchAndConnection() async throws {
+        continueAfterFailure = false
+        let app = launch(persistentNavigation: true)
+        defer { app.terminate() }
+        openFixtureEditor(in: app)
+        setFixtureDraft(price: "18", in: app)
+        tapVisible(app.buttons["cardEditor.research"], in: app)
+        XCTAssertTrue(app.navigationBars["Card Research"].waitForExistence(timeout: 5))
+        assertMainTabs(in: app)
+        app.buttons["cardResearch.connection"].tap()
+        XCTAssertTrue(app.navigationBars["TCGTracking API Connection"].waitForExistence(timeout: 5))
+        assertMainTabs(in: app)
+        let shipper = app.textFields["researchConnection.shipperID"]
+        reveal(shipper, in: app); shipper.tap()
+        let previousShipper = shipper.value as? String ?? ""
+        shipper.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: max(1, previousShipper.count)) + "navigation-draft")
+        app.buttons["researchConnection.keyboardDone"].tap()
+
+        for tab in ["Scan", "Show", "Research", "Settings"] {
+            selectTab(tab, in: app)
+            assertMainTabs(in: app)
+            if tab == "Settings" {
+                tapVisible(app.buttons["settings.about"], in: app)
+                XCTAssertTrue(app.navigationBars["About & Privacy"].waitForExistence(timeout: 5))
+                assertMainTabs(in: app)
+            }
+            XCTAssertFalse(app.buttons["scanner.options"].exists)
+            selectTab("Lists", in: app)
+            XCTAssertTrue(app.navigationBars["TCGTracking API Connection"].waitForExistence(timeout: 5),
+                          "Switching sections must preserve the deep Lists route")
+            XCTAssertEqual(shipper.value as? String, "navigation-draft", "Tab changes must retain unsaved connection fields")
+        }
+        selectTab("Settings", in: app)
+        XCTAssertTrue(app.navigationBars["About & Privacy"].waitForExistence(timeout: 5),
+                      "Settings keeps its own navigation position")
+        selectTab("Lists", in: app)
+        goBack(from: "TCGTracking API Connection", in: app)
+        goBack(from: "Card Research", in: app)
+        XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5))
+        assertDraft(price: "18", quantity: 2, in: app)
+        app.buttons["cardEditor.cancel"].tap()
+        XCTAssertTrue(app.navigationBars["Navigation Test List"].waitForExistence(timeout: 5))
+
+        tapVisible(app.staticTexts["Navigation Draft Card"], in: app)
+        assertDraft(price: "25", quantity: 1, in: app)
+        app.buttons["cardEditor.cancel"].tap()
+        goBack(from: "Navigation Test List", in: app)
+        XCTAssertEqual(app.staticTexts["savedLists.count"].label, "1", "Tab navigation must not create lists")
+        XCTAssertFalse(app.buttons["scanner.options"].exists)
+    }
+
+    func testEditableCardSavesOnlyWhenExplicitlySavedAfterSwitchingTabs() async throws {
+        continueAfterFailure = false
+        let app = launch(persistentNavigation: true)
+        defer { app.terminate() }
+        openFixtureEditor(in: app)
+        setFixtureDraft(price: "18", in: app)
+        selectTab("Settings", in: app)
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+        selectTab("Lists", in: app)
+        XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5))
+        assertMainTabs(in: app)
+        assertDraft(price: "18", quantity: 2, in: app)
+        app.buttons["cardEditor.save"].tap()
+        XCTAssertTrue(app.navigationBars["Navigation Test List"].waitForExistence(timeout: 5))
+        tapVisible(app.staticTexts["Navigation Draft Card"], in: app)
+        assertDraft(price: "18", quantity: 2, in: app)
+        app.buttons["cardEditor.cancel"].tap()
+        XCTAssertTrue(app.navigationBars["Navigation Test List"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["scanner.options"].exists)
+    }
+
+    func testImportedCardAndResearchKeepMainTabsAndReadonlyInventory() async throws {
+        continueAfterFailure = false
+        let app = launch(persistentNavigation: true)
+        defer { app.terminate() }
+        selectTab("Show", in: app)
+        tapVisible(app.buttons["show.inventory"], in: app)
+        tapVisible(app.buttons["showInventory.importSnapshot"], in: app)
+        XCTAssertTrue(app.navigationBars["Card Show Inventory"].waitForExistence(timeout: 5))
+        tapVisible(app.buttons["cardShowInventory.open"], in: app)
+        tapVisible(app.staticTexts["Navigation Imported Card"], in: app)
+        XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5))
+        assertMainTabs(in: app)
+        XCTAssertFalse(app.buttons["cardEditor.save"].exists)
+        tapVisible(app.buttons["cardShowInventory.cardResearch"], in: app)
+        XCTAssertTrue(app.navigationBars["Card Research"].waitForExistence(timeout: 5))
+        app.buttons["cardResearch.connection"].tap()
+        XCTAssertTrue(app.navigationBars["TCGTracking API Connection"].waitForExistence(timeout: 5))
+        assertMainTabs(in: app)
+
+        selectTab("Settings", in: app)
+        tapVisible(app.buttons["settings.about"], in: app)
+        XCTAssertTrue(app.navigationBars["About & Privacy"].waitForExistence(timeout: 5))
+        selectTab("Lists", in: app)
+        XCTAssertTrue(app.navigationBars["My Lists"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["savedLists.count"].label, "1")
+        selectTab("Scan", in: app)
+        XCTAssertTrue(app.buttons["home.startNewScan"].waitForExistence(timeout: 5))
+        selectTab("Research", in: app)
+        selectTab("Show", in: app)
+        XCTAssertTrue(app.navigationBars["TCGTracking API Connection"].waitForExistence(timeout: 5))
+        goBack(from: "TCGTracking API Connection", in: app)
+        goBack(from: "Card Research", in: app)
+        let quantity = app.staticTexts["cardShowInventory.cardQuantity"]
+        reveal(quantity, in: app)
+        XCTAssertTrue(["2", "Quantity, 2"].contains(quantity.label))
+        app.navigationBars["Card Details"].buttons["Done"].tap()
+        XCTAssertTrue(app.navigationBars["Card Show"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["scanner.options"].exists)
+        XCTAssertFalse(app.buttons["list.searchAndAdd"].exists)
+    }
+
+    private func openFixtureEditor(in app: XCUIApplication) {
+        selectTab("Lists", in: app)
+        XCTAssertEqual(app.staticTexts["savedLists.count"].label, "1")
+        tapVisible(app.staticTexts["Navigation Test List"], in: app)
+        tapVisible(app.staticTexts["Navigation Draft Card"], in: app)
+        XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5))
+        assertMainTabs(in: app)
+    }
+
+    private func setFixtureDraft(price: String, in app: XCUIApplication) {
+        let quantity = app.steppers["cardEditor.quantity"]
+        reveal(quantity, in: app)
+        quantity.buttons["Increment"].tap()
+        tapVisible(app.buttons["cardEditor.adjustPrice"], in: app)
+        let field = app.textFields["cardEditor.manualPrice"]
+        reveal(field, in: app); field.tap()
+        let existing = field.value as? String ?? ""
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: max(1, existing.count)) + price)
+        let done = app.buttons["cardEditor.keyboardDone"]
+        XCTAssertTrue(done.waitForExistence(timeout: 5)); done.tap()
+    }
+
+    private func assertDraft(price: String, quantity: Int, in app: XCUIApplication,
+                             file: StaticString = #filePath, line: UInt = #line) {
+        let amount = app.textFields["cardEditor.manualPrice"]
+        let disclosure = app.buttons["cardEditor.adjustPrice"]
+        reveal(disclosure, in: app)
+        if !amount.exists { disclosure.tap() }
+        reveal(amount, in: app)
+        XCTAssertEqual(amount.value as? String, price, file: file, line: line)
+        let stepper = app.steppers["cardEditor.quantity"]
+        reveal(stepper, in: app)
+        let value = String(quantity)
+        XCTAssertTrue(stepper.value as? String == value || stepper.label.contains(value) ||
+                      stepper.staticTexts[value].exists, "Expected draft quantity \(quantity)", file: file, line: line)
+    }
+
+    private func assertMainTabs(in app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        for title in ["Lists", "Scan", "Show", "Research", "Settings"] {
+            let tab = app.tabBars.buttons[title]
+            XCTAssertTrue(tab.waitForExistence(timeout: 5), "Missing \(title) tab", file: file, line: line)
+            XCTAssertTrue(tab.isHittable, "\(title) must be usable without dismissing screens", file: file, line: line)
+        }
+    }
+
+    private func goBack(from title: String, in app: XCUIApplication) {
+        let bar = app.navigationBars[title]
+        XCTAssertTrue(bar.waitForExistence(timeout: 5))
+        bar.buttons.element(boundBy: 0).tap()
+    }
+
+    private func tapVisible(_ element: XCUIElement, in app: XCUIApplication) {
+        reveal(element, in: app); element.tap()
+    }
+
+    private func reveal(_ element: XCUIElement, in app: XCUIApplication) {
+        if element.exists && element.isHittable { return }
+        let list = app.collectionViews.firstMatch
+        for _ in 0..<3 { list.swipeDown() }
+        for _ in 0..<8 {
+            if element.exists && element.isHittable { return }
+            list.swipeUp()
+        }
+        XCTAssertTrue(element.waitForExistence(timeout: 5)); XCTAssertTrue(element.isHittable)
+    }
+
+    private func launch(persistentNavigation: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         if let path = ProcessInfo.processInfo.environment["DYLD_FALLBACK_LIBRARY_PATH"] {
             app.launchEnvironment["DYLD_FALLBACK_LIBRARY_PATH"] = path
         }
         app.launchArguments = ["-autoDatabaseUpdates", "NO"]
+        if persistentNavigation {
+            app.launchArguments += ["--uitest-persistent-navigation", "-betaAutomaticIPAllowlist", "NO"]
+        }
         app.launch()
         XCTAssertTrue(app.tabBars.buttons["Scan"].waitForExistence(timeout: 10))
         return app

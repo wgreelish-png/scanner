@@ -1,3 +1,19 @@
+# Persistent main navigation — build 45
+
+Card Details now opens inside its tab’s existing navigation stack instead of a sheet above the entire app. Lists → card → Market & Graded Research → API Connection keeps Lists, Scan, Show, Research and Settings available at the bottom. Imported, read-only cards follow the same route. Each tab retains its own navigation position; returning to Lists restores the same card or research screen.
+
+Card quantity, manual price and offer drafts stay in memory while switching tabs. Only Save writes card changes; Cancel or backing out of Card Details discards the draft. API Connection fields also survive a temporary tab change without saving credentials. Interrupted condition/printing price lookups stop while the editor is hidden and resume for the exact selected draft on return, using the existing cache policy and stale-response guard. Completed and manual prices are retained.
+
+Live camera capture retains its full-screen controls. Short tasks such as artwork preview, correction search, sign-in, transaction confirmation and the iOS share sheet keep their focused presentations. Browsing card details no longer requires dismissing them to reach the main sections.
+
+Three isolated UI cases exercise editable/imported card research and API settings, usable tabs at depth, retained navigation positions, unsaved card/connection drafts, explicit Save/Cancel and no accidental scans or lists. Three native pricing cases cover pause/resume and stale replies. They run in the existing native/navigation jobs without adding a CI job. Implementation finishes before checks; Xcode/iPhone results must be reported separately from structural checks.
+
+Build-45 local checks passed grammar parsing of all 171 Swift files, Xcode target/resource membership, all 47 pinned scanner assets, portrait/foreground-only metadata and whitespace checks. This Linux environment has no Xcode; native/UI execution and physical-iPhone navigation remain unverified. JavaScript, Python and scanner assets are unchanged and their unrelated suites were not rerun locally.
+
+On the phone: open a saved card, change quantity or price, open Market and its settings, then tap Settings or Show directly. Return to Lists and check that your previous page and draft are preserved. Cancel the card and reopen it to verify it was not saved. Repeat and Save to confirm persistence. Repeat research navigation with an imported card. Confirm explicit Start/Continue still opens full-screen capture and closing it stops the camera.
+
+---
+
 > Build 32 adds **Show** as a fifth tab for show dates and budgets, removes budget links from the Lists/Scan roots, and makes explicit **Open Existing List** reset the Lists navigation stack. Ordinary tab taps retain their stacks. The four-tab build-23 description below is historical.
 
 # Bottom navigation and simpler screens

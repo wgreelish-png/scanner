@@ -12,6 +12,7 @@ import Observation
     private let manualPriceAllowed: Bool
     private var lookup: Task<Void, Never>?
     private var requestID = UUID()
+    private var resumeQuoteAfterNavigation = false
 
     init(card: CardCandidate, pricing: any MarketPricing = StandardMarketPricing(), manualPriceAllowed: Bool = true) {
         self.card = card
@@ -43,6 +44,25 @@ import Observation
 
     func refreshPrice() { fetchPrice(forceRefresh: true) }
     func pricingSourceChanged() { fetchPrice(forceRefresh: true) }
+
+    /// A retained tab or pushed research page keeps this edit draft, but its
+    /// price request must stop while the editor is not visible.
+    func suspendForNavigation() {
+        let interruptedQuote = priceLoading || resumeQuoteAfterNavigation
+        cancelLookup()
+        resumeQuoteAfterNavigation = interruptedQuote
+    }
+
+    /// Resume only an interrupted exact-selection lookup. A completed or manual
+    /// quote stays intact while ordinary catalog choices refresh from cache.
+    func resumeAfterNavigation() {
+        if resumeQuoteAfterNavigation {
+            resumeQuoteAfterNavigation = false
+            fetchPrice(forceRefresh: false)
+        } else {
+            loadPrintingOptions()
+        }
+    }
 
     private func fetchPrice(forceRefresh: Bool) {
         cancelLookup()
@@ -131,6 +151,7 @@ import Observation
 
     func cancelLookup() {
         lookup?.cancel(); lookup = nil; requestID = UUID(); priceLoading = false
+        resumeQuoteAfterNavigation = false
     }
 
     private static func priceIdentity(_ identity: CardIdentity) -> CardIdentity {

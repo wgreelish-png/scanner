@@ -56,6 +56,7 @@ struct CardResearchView: View {
             }
         }
         .navigationTitle("Card Research").navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .tabBar)
         .safeAreaInset(edge: .top) {
             VStack(spacing: 7) {
                 Picker("Research view", selection: Binding(get: { model.section }, set: { model.selectSection($0) })) {

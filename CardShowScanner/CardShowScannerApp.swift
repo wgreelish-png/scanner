@@ -34,6 +34,8 @@ import SwiftData
             CardShowInventoryFixtureScreen()
         } else if ProcessInfo.processInfo.arguments.contains("--uitest-streamlined-review") {
             ReviewPresentationFixtureScreen()
+        } else if ProcessInfo.processInfo.arguments.contains("--uitest-persistent-navigation") {
+            PersistentNavigationFixtureScreen()
         } else if ProcessInfo.processInfo.arguments.contains("--uitest-bulk-list-delete") {
             ListBulkDeletionFixtureScreen()
         } else if let budgetTestID = Self.budgetUITestID {
