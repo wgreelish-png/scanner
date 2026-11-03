@@ -9,7 +9,7 @@ import SwiftData
         var failWrites = Set<Int>()
         var now = Date(timeIntervalSince1970: 1_800_000_000)
     }
-    private struct Fixture {
+    @MainActor private struct Fixture {
         let container: ModelContainer
         let list: CardList
         let disk: Disk

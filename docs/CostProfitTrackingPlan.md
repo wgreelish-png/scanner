@@ -67,6 +67,8 @@ Implementation finishes before checks run. New native cases cover known/zero/mis
 
 After implementation, local checks passed Swift grammar parsing of all 153 files, Xcode source membership (87 app / 54 native-test / 12 UI-test files) and bundled-resource membership, all 47 pinned recognition assets/dependencies, and permission/privacy metadata (portrait-only, foreground-only, existing Bluetooth purpose). The unchanged JavaScript and Python suites were not rerun for this Swift-only feature. Xcode compilation and native/UI execution have not run in this Linux workspace; test definitions and grammar checks are not evidence of a native test pass. Physical-iPhone behavior remains unverified.
 
+The [first build-40 macOS CI run](https://github.com/wgreelish-png/scanner/actions/runs/41669542191) passed the unsigned Release iPhone build. Test compilation stopped on an existing nested fixture's nonisolated SwiftData access in `ListBudgetOutcomeTests`, so no native/UI test pass is claimed. The fixture now explicitly uses `@MainActor`; its CI rerun is pending. No workflow or extra simulator job was added.
+
 On the iPhone, preserve the installed data and check:
 
 1. Buy a one-card list for $7. Verify the $7 cost and Purchase receipt in inventory, and $7 deducted from buying funds.
