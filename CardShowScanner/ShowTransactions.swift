@@ -100,6 +100,7 @@ enum ShowTransactionKind: String, Codable, CaseIterable, Identifiable, Sendable 
 enum ShowTransactionFailure: LocalizedError, Equatable, Sendable {
     case invalidDraft, invalidInventory, insufficientStock, inventoryLocationConflict, transactionNotFound
     case incomingListAlreadyUsed, legacyListOutcomeExists, inventoryLinkedEntry, dependentStockUsed
+    case invalidCost, costAllocationRequired
 
     var errorDescription: String? {
         switch self {
@@ -112,6 +113,8 @@ enum ShowTransactionFailure: LocalizedError, Equatable, Sendable {
         case .legacyListOutcomeExists: return "This list already has a purchase, trade, or cash receipt. Review its existing outcome before recording another transaction."
         case .inventoryLinkedEntry: return "This cash entry also moved cards. Undo the complete transaction in Transaction History."
         case .dependentStockUsed: return "Cards acquired by this transaction were used in a later transaction. Undo those transactions first."
+        case .invalidCost: return "Enter a valid total cost for the remaining copies. Sold receipts keep their recorded cost."
+        case .costAllocationRequired: return "Review the incoming card costs. Entered costs must fit the actual total, and remaining cards need usable allocation weights."
         }
     }
 }
@@ -124,12 +127,16 @@ struct ShowInventoryItem: Codable, Equatable, Identifiable, Sendable {
     var sourceLocationID: Int?
     var acquiredByTransactionID: UUID?
     var acquiredAt: Date
+    /// Total actual cost of the copies still in this lot. Nil means unknown.
+    var remainingCostCents: Int64?
 
     init(id: UUID = UUID(), card: CardCandidate, quantity: Int, sourceInventoryID: Int? = nil,
-         sourceLocationID: Int? = nil, acquiredByTransactionID: UUID? = nil, acquiredAt: Date = Date()) {
+         sourceLocationID: Int? = nil, acquiredByTransactionID: UUID? = nil, acquiredAt: Date = Date(),
+         remainingCostCents: Int64? = nil) {
         self.id = id; self.card = card; self.quantity = quantity; self.sourceInventoryID = sourceInventoryID
         self.sourceLocationID = sourceLocationID; self.acquiredByTransactionID = acquiredByTransactionID
         self.acquiredAt = acquiredAt
+        self.remainingCostCents = remainingCostCents
     }
 }
 
@@ -143,14 +150,21 @@ struct ShowIncomingCard: Codable, Equatable, Identifiable, Sendable {
     var id: UUID
     var card: CardCandidate
     var quantity: Int
-    init(id: UUID = UUID(), card: CardCandidate, quantity: Int = 1) {
+    /// Row total from the actual cash/trade offer, including per-card overrides.
+    var costWeightCents: Int64?
+    /// An explicitly reviewed total cost for this row, rather than a weight.
+    var allocatedCostCents: Int64?
+    init(id: UUID = UUID(), card: CardCandidate, quantity: Int = 1,
+         costWeightCents: Int64? = nil, allocatedCostCents: Int64? = nil) {
         self.id = id; self.card = card; self.quantity = quantity
+        self.costWeightCents = costWeightCents; self.allocatedCostCents = allocatedCostCents
     }
 }
 
 struct ShowTransactionSelection: Codable, Equatable, Sendable {
     var inventoryID: UUID
     var quantity: Int
+    var allocatedProceedsCents: Int64? = nil
 }
 
 struct ShowTransactionDraft: Codable, Equatable, Sendable {
@@ -165,27 +179,32 @@ struct ShowTransactionDraft: Codable, Equatable, Sendable {
     var saleReceivedCents: Int64
     var makeEven: Bool
     var note: String
+    var feeCents: Int64
 
     init(id: UUID = UUID(), kind: ShowTransactionKind, incomingListID: UUID? = nil,
          incomingListName: String? = nil, incoming: [ShowIncomingCard] = [],
          outgoing: [ShowTransactionSelection] = [], incomingValueCents: Int64 = 0,
          outgoingValueCents: Int64 = 0, saleReceivedCents: Int64 = 0,
-         makeEven: Bool = false, note: String = "") {
+         makeEven: Bool = false, note: String = "", feeCents: Int64 = 0) {
         self.id = id; self.kind = kind; self.incomingListID = incomingListID
         self.incomingListName = incomingListName; self.incoming = incoming; self.outgoing = outgoing
         self.incomingValueCents = incomingValueCents; self.outgoingValueCents = outgoingValueCents
         self.saleReceivedCents = saleReceivedCents; self.makeEven = makeEven; self.note = note
+        self.feeCents = feeCents
     }
 
     func validate() throws {
         guard incoming.count <= ShowBudgetBook.maximumTransactionCards,
               outgoing.count <= ShowBudgetBook.maximumTransactionCards else { throw ShowBudgetFailure.capacityExceeded }
-        guard [incomingValueCents, outgoingValueCents, saleReceivedCents].allSatisfy(ShowBudgetMoney.isValid),
+        guard [incomingValueCents, outgoingValueCents, saleReceivedCents, feeCents].allSatisfy(ShowBudgetMoney.isValid),
+              feeCents <= saleReceivedCents, kind == .sale || feeCents == 0,
               note.count <= 1_000,
               Set(incoming.map(\.id)).count == incoming.count,
               Set(outgoing.map(\.inventoryID)).count == outgoing.count,
-              incoming.allSatisfy({ (1...ShowBudgetBook.maximumQuantity).contains($0.quantity) && ShowTransactionMath.validCard($0.card) }),
-              outgoing.allSatisfy({ (1...ShowBudgetBook.maximumQuantity).contains($0.quantity) }),
+              incoming.allSatisfy({ (1...ShowBudgetBook.maximumQuantity).contains($0.quantity) && ShowTransactionMath.validCard($0.card) &&
+                  ($0.costWeightCents.map(ShowBudgetMoney.isValid) ?? true) && ($0.allocatedCostCents.map(ShowBudgetMoney.isValid) ?? true) }),
+              outgoing.allSatisfy({ (1...ShowBudgetBook.maximumQuantity).contains($0.quantity) &&
+                  ($0.allocatedProceedsCents.map(ShowBudgetMoney.isValid) ?? true) && (kind == .sale || $0.allocatedProceedsCents == nil) }),
               incomingListName.map({ incomingListID != nil && !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.count <= 250 }) ?? true else {
             throw ShowTransactionFailure.invalidDraft
         }
@@ -208,6 +227,27 @@ struct ShowTransactionDraft: Codable, Equatable, Sendable {
             default: break
             }
         }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, incomingListID, incomingListName, incoming, outgoing, incomingValueCents,
+             outgoingValueCents, saleReceivedCents, makeEven, note, feeCents
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        kind = try values.decode(ShowTransactionKind.self, forKey: .kind)
+        incomingListID = try values.decodeIfPresent(UUID.self, forKey: .incomingListID)
+        incomingListName = try values.decodeIfPresent(String.self, forKey: .incomingListName)
+        incoming = try values.decode([ShowIncomingCard].self, forKey: .incoming)
+        outgoing = try values.decode([ShowTransactionSelection].self, forKey: .outgoing)
+        incomingValueCents = try values.decode(Int64.self, forKey: .incomingValueCents)
+        outgoingValueCents = try values.decode(Int64.self, forKey: .outgoingValueCents)
+        saleReceivedCents = try values.decode(Int64.self, forKey: .saleReceivedCents)
+        makeEven = try values.decode(Bool.self, forKey: .makeEven)
+        note = try values.decode(String.self, forKey: .note)
+        feeCents = try values.decodeIfPresent(Int64.self, forKey: .feeCents) ?? 0
     }
 }
 
@@ -280,6 +320,12 @@ struct ShowTransactionReceipt: Codable, Equatable, Identifiable, Sendable {
     var concessionCents: Int64
     var reversedAt: Date?
     var draft: ShowTransactionDraft
+    /// Nil on historical receipts: current inventory costs never backfill history.
+    var accounting: ShowTransactionAccounting? = nil
+
+    var totalCostCents: Int64? { accounting?.totalCostCents }
+    var feeCents: Int64 { accounting?.feeCents ?? draft.feeCents }
+    var profitCents: Int64? { accounting?.profitCents }
 
     func validate(saleReinvestmentPercent: Int) throws {
         let amounts = try ShowTransactionMath.calculate(draft, saleReinvestmentPercent: saleReinvestmentPercent)
@@ -301,5 +347,348 @@ struct ShowTransactionReceipt: Codable, Equatable, Identifiable, Sendable {
             guard line.inventoryID == original.inventoryID, line.quantity == original.quantity,
                   ShowTransactionMath.validCard(line.card) else { throw ShowBudgetFailure.invalidBook }
         }
+        if let accounting { try accounting.validate(receipt: self, saleReinvestmentPercent: saleReinvestmentPercent) }
+        else if draft.feeCents != 0 { throw ShowBudgetFailure.invalidBook }
     }
+}
+
+struct ShowCostLineAccounting: Codable, Equatable, Identifiable, Sendable {
+    let inventoryID: UUID
+    let quantity: Int
+    let totalCostCents: Int64?
+    let proceedsCents: Int64?
+    let feeCents: Int64?
+    let profitCents: Int64?
+    var id: UUID { inventoryID }
+
+    func replacingInventoryID(_ id: UUID) -> Self {
+        .init(inventoryID: id, quantity: quantity, totalCostCents: totalCostCents,
+              proceedsCents: proceedsCents, feeCents: feeCents, profitCents: profitCents)
+    }
+}
+
+/// Recorded numbers are independent of future prices and remaining-stock edits.
+struct ShowTransactionAccounting: Codable, Equatable, Sendable {
+    enum Policy: String, Codable, Sendable { case carryForwardV1 }
+    let policy: Policy
+    let totalCostCents: Int64?
+    let feeCents: Int64
+    let profitCents: Int64?
+    let proceedsCents: Int64?
+    let buyingFundsDeltaCents: Int64
+    var incoming: [ShowCostLineAccounting]
+    let outgoing: [ShowCostLineAccounting]
+
+    func validate(receipt: ShowTransactionReceipt, saleReinvestmentPercent: Int) throws {
+        guard incoming.count == receipt.incoming.count, outgoing.count == receipt.outgoing.count else {
+            throw ShowBudgetFailure.invalidBook
+        }
+        // Recompute from the immutable consumed costs, never today's lot costs.
+        let stock = zip(receipt.outgoing, outgoing).map { line, cost in
+            ShowInventoryItem(id: line.inventoryID, card: line.card, quantity: line.quantity,
+                              remainingCostCents: cost.totalCostCents)
+        }
+        var expected = try ShowTransactionMath.preview(receipt.draft, inventory: stock,
+            saleReinvestmentPercent: saleReinvestmentPercent)
+        expected.incoming = zip(expected.incoming, receipt.incoming).map { cost, line in cost.replacingInventoryID(line.inventoryID) }
+        guard self == expected else { throw ShowBudgetFailure.invalidBook }
+    }
+}
+
+struct ShowInventoryCostAdjustment: Codable, Equatable, Identifiable, Sendable {
+    let id: UUID
+    let inventoryID: UUID
+    let quantity: Int
+    let previousCostCents: Int64?
+    let totalCostCents: Int64?
+    let recordedAt: Date
+
+    func validate() throws {
+        guard (1...ShowBudgetBook.maximumQuantity).contains(quantity),
+              previousCostCents.map(ShowBudgetMoney.isValid) ?? true,
+              totalCostCents.map(ShowBudgetMoney.isValid) ?? true,
+              previousCostCents != totalCostCents, recordedAt.timeIntervalSince1970.isFinite else {
+            throw ShowTransactionFailure.invalidCost
+        }
+    }
+}
+
+struct ShowProfitSummary: Equatable, Sendable {
+    let salesCents: Int64
+    let sellingFeesCents: Int64
+    let soldCostCents: Int64
+    /// Includes known sale profits and realized trade cash profits.
+    let knownProfitCents: Int64
+    let tradeCashProfitCents: Int64
+    let unknownCostQuantity: Int
+    let unknownCostLineCount: Int
+    let uncostedSaleCount: Int
+    let incompleteTransactionCount: Int
+    var uncostedTradeCount: Int = 0
+    var isComplete: Bool { incompleteTransactionCount == 0 && uncostedSaleCount == 0 && uncostedTradeCount == 0 }
+}
+
+extension ShowTransactionMath {
+    static func preview(_ draft: ShowTransactionDraft, inventory: [ShowInventoryItem],
+                        saleReinvestmentPercent: Int = 65) throws -> ShowTransactionAccounting {
+        let amounts = try calculate(draft, saleReinvestmentPercent: saleReinvestmentPercent)
+        guard Set(inventory.map(\.id)).count == inventory.count else { throw ShowTransactionFailure.invalidInventory }
+        let byID = Dictionary(uniqueKeysWithValues: inventory.map { ($0.id, $0) })
+        var outgoingCards: [ShowTransactionCardLine] = []
+        var costs: [Int64?] = []
+        for row in draft.outgoing {
+            guard let item = byID[row.inventoryID], item.quantity >= row.quantity else {
+                throw ShowTransactionFailure.insufficientStock
+            }
+            costs.append(try ShowCostBasisMath.consumedCost(totalCostCents: item.remainingCostCents,
+                quantity: item.quantity, consumedQuantity: row.quantity))
+            outgoingCards.append(.init(inventoryID: item.id, card: item.card, quantity: row.quantity))
+        }
+        let outgoingCost = try sumKnown(costs)
+        let incomingCost: Int64?
+        let profit: Int64?
+        if draft.kind == .purchase {
+            incomingCost = amounts.paidCents; profit = nil
+        } else if draft.kind == .sale {
+            incomingCost = nil
+            profit = outgoingCost.map { amounts.receivedCents - draft.feeCents - $0 }
+        } else {
+            let trade = try ShowCostBasisMath.carriedTradeCost(outgoingCostCents: outgoingCost,
+                paidCents: amounts.paidCents, receivedCents: amounts.receivedCents)
+            incomingCost = trade.incomingCostCents; profit = trade.profitCents
+        }
+        let incomingCosts = draft.incoming.isEmpty ? [] : try ShowCostBasisMath.incomingCosts(draft.incoming, totalCostCents: incomingCost)
+        let incoming = zip(draft.incoming, incomingCosts).map { row, cost in
+            ShowCostLineAccounting(inventoryID: row.id, quantity: row.quantity, totalCostCents: cost,
+                                  proceedsCents: nil, feeCents: nil, profitCents: nil)
+        }
+        var proceeds: [Int64]? = nil, fees: [Int64]? = nil
+        if draft.kind == .sale {
+            if draft.outgoing.contains(where: { $0.allocatedProceedsCents != nil }) {
+                guard draft.outgoing.allSatisfy({ $0.allocatedProceedsCents != nil }),
+                      try sumKnown(draft.outgoing.map(\.allocatedProceedsCents)) == amounts.receivedCents else {
+                    throw ShowTransactionFailure.invalidDraft
+                }
+                proceeds = draft.outgoing.compactMap(\.allocatedProceedsCents)
+            } else if outgoingCards.count == 1 { proceeds = [amounts.receivedCents] }
+            else if amounts.receivedCents == 0 { proceeds = outgoingCards.map { _ in 0 } }
+            else { proceeds = ShowSaleMath.allocations(outgoingCards, receivedCents: amounts.receivedCents)?.map(\.receivedCents) }
+            if let proceeds {
+                fees = try ShowCostBasisMath.allocate(totalCents: draft.feeCents,
+                    ids: outgoingCards.map(\.inventoryID), weights: proceeds.map { Decimal($0) })
+            } else if draft.feeCents == 0 {
+                fees = outgoingCards.map { _ in 0 }
+            }
+        }
+        let outgoing = draft.outgoing.indices.map { index in
+            let received = proceeds?[index], fee = fees?[index], cost = costs[index]
+            let lineProfit: Int64?
+            if let received, let fee, let cost { lineProfit = received - fee - cost }
+            else { lineProfit = nil }
+            return ShowCostLineAccounting(inventoryID: draft.outgoing[index].inventoryID,
+                quantity: draft.outgoing[index].quantity, totalCostCents: cost,
+                proceedsCents: received, feeCents: fee, profitCents: lineProfit)
+        }
+        return ShowTransactionAccounting(policy: .carryForwardV1,
+            totalCostCents: draft.kind == .purchase ? incomingCost : outgoingCost,
+            feeCents: draft.feeCents, profitCents: profit,
+            proceedsCents: draft.kind == .purchase ? nil : amounts.receivedCents,
+            buyingFundsDeltaCents: amounts.reinvestedCents - amounts.paidCents - draft.feeCents,
+            incoming: incoming, outgoing: outgoing)
+    }
+
+    private static func sumKnown(_ values: [Int64?]) throws -> Int64? {
+        guard values.allSatisfy({ $0 != nil }) else { return nil }
+        var total: Int64 = 0
+        for case let value? in values {
+            guard ShowBudgetMoney.isValid(value) else { throw ShowTransactionFailure.invalidCost }
+            let result = total.addingReportingOverflow(value)
+            guard !result.overflow, ShowBudgetMoney.isValid(result.partialValue) else { throw ShowBudgetFailure.arithmeticOverflow }
+            total = result.partialValue
+        }
+        return total
+    }
+}
+
+struct ShowCostStockState: Codable, Equatable, Identifiable, Sendable {
+    let id: UUID
+    let quantity: Int
+    let remainingCostCents: Int64?
+
+    init(_ item: ShowInventoryItem) {
+        id = item.id; quantity = item.quantity; remainingCostCents = item.remainingCostCents
+    }
+    init(id: UUID, quantity: Int, remainingCostCents: Int64?) {
+        self.id = id; self.quantity = quantity; self.remainingCostCents = remainingCostCents
+    }
+    func validate() throws {
+        guard (0...ShowBudgetBook.maximumQuantity).contains(quantity),
+              remainingCostCents.map(ShowBudgetMoney.isValid) ?? true,
+              quantity != 0 || remainingCostCents == nil || remainingCostCents == 0 else {
+            throw ShowTransactionFailure.invalidInventory
+        }
+    }
+}
+
+struct ShowCostStockChange: Codable, Equatable, Sendable {
+    let before: ShowCostStockState?
+    let after: ShowCostStockState
+}
+
+/// Each stock/cost command has one checked before/after mutation. This allows
+/// validation of consumed costs against the lot at recording, including edits
+/// and out-of-order Undo, without reconstructing historical unknown costs.
+struct ShowCostLedgerMutation: Codable, Equatable, Sendable {
+    enum Kind: String, Codable, Sendable { case record, undo, adjustment }
+    let kind: Kind
+    let operationID: UUID
+    let recordedAt: Date
+    let changes: [ShowCostStockChange]
+
+    static func capturing(kind: Kind, operationID: UUID, recordedAt: Date, itemIDs: [UUID],
+                          before: [ShowInventoryItem], after: [ShowInventoryItem]) throws -> Self {
+        let old = Dictionary(uniqueKeysWithValues: before.map { ($0.id, $0) })
+        let new = Dictionary(uniqueKeysWithValues: after.map { ($0.id, $0) })
+        let changes = try itemIDs.map { id -> ShowCostStockChange in
+            guard let item = new[id] else { throw ShowBudgetFailure.invalidBook }
+            return .init(before: old[id].map(ShowCostStockState.init), after: .init(item))
+        }
+        return .init(kind: kind, operationID: operationID, recordedAt: recordedAt, changes: changes)
+    }
+}
+
+extension ShowBudgetBook {
+    func validateCostLedger() throws {
+        let maximumMutations = Self.maximumTransactions * 2 + Self.maximumCostAdjustments
+        guard costLedgerBaseline.count <= Self.maximumInventoryItems, costMutations.count <= maximumMutations else {
+            throw ShowBudgetFailure.capacityExceeded
+        }
+        guard Set(costLedgerBaseline.map(\.id)).count == costLedgerBaseline.count,
+              Set(legacyTransactionIDs).count == legacyTransactionIDs.count,
+              Set(legacyReversedTransactionIDs).count == legacyReversedTransactionIDs.count else {
+            throw ShowBudgetFailure.duplicateIdentity
+        }
+        let legacy = Set(legacyTransactionIDs), legacyReversed = Set(legacyReversedTransactionIDs)
+        let stock = Dictionary(uniqueKeysWithValues: inventory.map { ($0.id, $0) })
+        let receipts = Dictionary(uniqueKeysWithValues: transactions.map { ($0.id, $0) })
+        let adjustments = Dictionary(uniqueKeysWithValues: costAdjustments.map { ($0.id, $0) })
+        let reinvestmentPercents = Dictionary(uniqueKeysWithValues: shows.flatMap(\.entries).compactMap { entry in
+            entry.transactionID.map { ($0, entry.reinvestmentPercent) }
+        })
+        guard legacy.isSubset(of: Set(receipts.keys)), legacyReversed.isSubset(of: legacy),
+              legacyReversed.allSatisfy({ receipts[$0]?.reversedAt != nil }) else { throw ShowBudgetFailure.invalidBook }
+        for receipt in transactions {
+            guard (receipt.accounting == nil) == legacy.contains(receipt.id) else { throw ShowBudgetFailure.invalidBook }
+        }
+        var states: [UUID: ShowCostStockState] = [:]
+        for state in costLedgerBaseline {
+            try state.validate()
+            guard let item = stock[state.id], state.remainingCostCents == nil,
+                  item.acquiredByTransactionID.map({ legacy.contains($0) }) ?? true else { throw ShowBudgetFailure.invalidBook }
+            states[state.id] = state
+        }
+        let baselineIDs = Set(costLedgerBaseline.map(\.id))
+        guard inventory.allSatisfy({ item in
+            let needsBaseline = item.acquiredByTransactionID.map({ legacy.contains($0) }) ?? true
+            return baselineIDs.contains(item.id) == needsBaseline
+        }) else { throw ShowBudgetFailure.invalidBook }
+        var recorded = Set<UUID>(), undone = Set<UUID>(), adjusted = Set<UUID>()
+        var activeReceipts = legacy.subtracting(legacyReversed)
+        for mutation in costMutations {
+            guard mutation.recordedAt.timeIntervalSince1970.isFinite,
+                  mutation.changes.count <= Self.maximumTransactionCards * 2,
+                  Set(mutation.changes.map { $0.after.id }).count == mutation.changes.count else {
+                throw ShowBudgetFailure.invalidBook
+            }
+            for change in mutation.changes {
+                try change.after.validate()
+                if let before = change.before { try before.validate() }
+                guard change.before?.id == nil || change.before?.id == change.after.id,
+                      states[change.after.id] == change.before else { throw ShowBudgetFailure.invalidBook }
+            }
+            let expected: [ShowCostStockChange]
+            switch mutation.kind {
+            case .record:
+                guard !legacy.contains(mutation.operationID), recorded.insert(mutation.operationID).inserted,
+                      let receipt = receipts[mutation.operationID], receipt.recordedAt == mutation.recordedAt,
+                      let accounting = receipt.accounting, let reinvestmentPercent = reinvestmentPercents[receipt.id] else {
+                    throw ShowBudgetFailure.invalidBook
+                }
+                // Only inventory that existed at this point can supply a cost.
+                let beforeStock = try receipt.outgoing.map { line -> ShowInventoryItem in
+                    guard let state = states[line.inventoryID], let item = stock[line.inventoryID] else {
+                        throw ShowBudgetFailure.invalidBook
+                    }
+                    if let acquisition = item.acquiredByTransactionID {
+                        guard activeReceipts.contains(acquisition) else { throw ShowBudgetFailure.invalidBook }
+                    }
+                    return .init(id: item.id, card: item.card, quantity: state.quantity,
+                                 remainingCostCents: state.remainingCostCents)
+                }
+                var calculated = try ShowTransactionMath.preview(receipt.draft, inventory: beforeStock,
+                    saleReinvestmentPercent: reinvestmentPercent)
+                calculated.incoming = zip(calculated.incoming, receipt.incoming).map { cost, line in
+                    cost.replacingInventoryID(line.inventoryID)
+                }
+                guard accounting == calculated else { throw ShowBudgetFailure.invalidBook }
+                var changes: [ShowCostStockChange] = []
+                for (line, cost) in zip(receipt.outgoing, accounting.outgoing) {
+                    guard let before = states[line.inventoryID] else { throw ShowBudgetFailure.invalidBook }
+                    let afterCost = before.remainingCostCents.flatMap { original in cost.totalCostCents.map { original - $0 } }
+                    changes.append(.init(before: before, after: .init(id: line.inventoryID,
+                        quantity: before.quantity - line.quantity, remainingCostCents: afterCost)))
+                }
+                for (line, cost) in zip(receipt.incoming, accounting.incoming) {
+                    guard states[line.inventoryID] == nil else { throw ShowBudgetFailure.invalidBook }
+                    changes.append(.init(before: nil, after: .init(id: line.inventoryID,
+                        quantity: line.quantity, remainingCostCents: cost.totalCostCents)))
+                }
+                expected = changes
+                activeReceipts.insert(receipt.id)
+            case .undo:
+                guard undone.insert(mutation.operationID).inserted, activeReceipts.contains(mutation.operationID),
+                      let receipt = receipts[mutation.operationID], receipt.reversedAt == mutation.recordedAt else {
+                    throw ShowBudgetFailure.invalidBook
+                }
+                var changes: [ShowCostStockChange] = []
+                for line in receipt.incoming {
+                    guard let before = states[line.inventoryID], before.quantity == line.quantity else {
+                        throw ShowBudgetFailure.invalidBook
+                    }
+                    changes.append(.init(before: before, after: .init(id: line.inventoryID,
+                        quantity: 0, remainingCostCents: before.remainingCostCents == nil ? nil : 0)))
+                }
+                for (index, line) in receipt.outgoing.enumerated() {
+                    guard let before = states[line.inventoryID] else { throw ShowBudgetFailure.invalidBook }
+                    let quantity = before.quantity.addingReportingOverflow(line.quantity)
+                    guard !quantity.overflow, quantity.partialValue <= Self.maximumQuantity else { throw ShowBudgetFailure.invalidBook }
+                    var cost: Int64?
+                    if let original = before.remainingCostCents, let consumed = receipt.accounting?.outgoing[index].totalCostCents {
+                        let sum = original.addingReportingOverflow(consumed)
+                        guard !sum.overflow, ShowBudgetMoney.isValid(sum.partialValue) else { throw ShowBudgetFailure.invalidBook }
+                        cost = sum.partialValue
+                    }
+                    changes.append(.init(before: before, after: .init(id: line.inventoryID,
+                        quantity: quantity.partialValue, remainingCostCents: cost)))
+                }
+                expected = changes
+                activeReceipts.remove(receipt.id)
+            case .adjustment:
+                guard adjusted.insert(mutation.operationID).inserted,
+                      let adjustment = adjustments[mutation.operationID], adjustment.recordedAt == mutation.recordedAt,
+                      let before = states[adjustment.inventoryID], before.quantity == adjustment.quantity,
+                      before.remainingCostCents == adjustment.previousCostCents else { throw ShowBudgetFailure.invalidBook }
+                expected = [.init(before: before, after: .init(id: adjustment.inventoryID,
+                    quantity: before.quantity, remainingCostCents: adjustment.totalCostCents))]
+            }
+            guard mutation.changes == expected else { throw ShowBudgetFailure.invalidBook }
+            for change in mutation.changes { states[change.after.id] = change.after }
+        }
+        let expectedRecorded = Set(transactions.map(\.id)).subtracting(legacy)
+        let expectedUndone = Set(transactions.filter { $0.reversedAt != nil }.map(\.id)).subtracting(legacyReversed)
+        guard recorded == expectedRecorded, undone == expectedUndone, adjusted == Set(adjustments.keys),
+              states.count == inventory.count,
+              inventory.allSatisfy({ states[$0.id] == ShowCostStockState($0) }) else { throw ShowBudgetFailure.invalidBook }
+    }
+
 }

@@ -34,6 +34,10 @@ import UIKit
                             ShowHomeRouteCard(title: "Transaction History", subtitle: "Receipts, card movements, and Undo",
                                               symbol: "clock.arrow.circlepath", color: .orange)
                         }.buttonStyle(.plain).accessibilityIdentifier("show.history")
+                        NavigationLink { ShowProfitView(store: store) } label: {
+                            ShowHomeRouteCard(title: "Sales & Profit", subtitle: "Sales, costs, and profit by show",
+                                              symbol: "chart.bar.fill", color: .green)
+                        }.buttonStyle(.plain).accessibilityIdentifier("show.profit")
                     }
                     if store.isLoaded && store.eligibleActiveShow == nil {
                         Label(store.activeShow == nil
@@ -94,6 +98,7 @@ private struct ShowHomeRouteCard: View {
     @State private var search = ""
     @State private var seedError: String?
     @State private var showingTransaction = false
+    @State private var showingLabels = false
 
     init(store: ShowBudgetStore = .shared) { _store = State(initialValue: store) }
 
@@ -162,6 +167,14 @@ private struct ShowHomeRouteCard: View {
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button("Print Price Tags", systemImage: "printer") { showingLabels = true }
+                        .disabled(!store.isLoaded || available.isEmpty)
+                        .accessibilityIdentifier("showInventory.printLabels")
+                } label: { Image(systemName: "ellipsis.circle").frame(width: 44, height: 44) }
+                    .accessibilityLabel("Inventory options").accessibilityIdentifier("showInventory.options")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink { CardShowInventoryView() } label: { Text("Source") }
                     .accessibilityLabel("TCGTracking Source Snapshot")
                     .accessibilityIdentifier("showInventory.importSnapshot")
@@ -173,6 +186,10 @@ private struct ShowHomeRouteCard: View {
             }
         }
         .sheet(isPresented: $showingTransaction) { ShowTransactionForm(store: store) }
+        .sheet(isPresented: $showingLabels) {
+            InventoryLabelFlowView(inventory: store.inventory,
+                marketQuotes: TagPricingContext.currentQuotes(inventory: store.inventory, context: context))
+        }
         .onAppear { visible = true; seedInventory() }
         .onDisappear { visible = false }
     }
@@ -251,9 +268,15 @@ private struct ShowWorkingInventoryRow: View {
     }
 }
 
-@MainActor private struct ShowWorkingInventoryDetailView: View {
+@MainActor struct ShowWorkingInventoryDetailView: View {
+    @Environment(\.modelContext) private var context
+    @Environment(\.scenePhase) private var scenePhase
     let itemID: UUID
     let store: ShowBudgetStore
+    @State private var visible = false
+    @State private var showingTransaction = false
+    @State private var showingCostEditor = false
+    @State private var showingLabel = false
     private var item: ShowInventoryItem? { store.inventory.first { $0.id == itemID } }
 
     var body: some View {
@@ -269,27 +292,193 @@ private struct ShowWorkingInventoryRow: View {
                             Text("Last saved market value · USD per card").font(.caption).foregroundStyle(.secondary)
                         }
                     }.padding(.vertical, 5)
-                }
-                Section("Local stock") {
                     LabeledContent("Available quantity", value: item.quantity.formatted())
-                    LabeledContent("Game", value: item.card.identity.game)
-                    LabeledContent("Printing", value: item.card.identity.printing)
-                    LabeledContent("Condition", value: item.card.identity.condition)
-                    LabeledContent("Language", value: item.card.identity.language)
-                    Text("This quantity changes when you record or undo a transaction.").font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Cost & acquisition") {
+                    LabeledContent("Cost of remaining lot", value: item.remainingCostCents.map { ShowBudgetMoney.decimal($0).money } ?? "Cost unknown")
+                        .monospacedDigit().accessibilityIdentifier("inventory.cost")
+                    Text("Total cost for \(item.quantity.formatted()) remaining \(item.quantity == 1 ? "copy" : "copies") · USD")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button(item.remainingCostCents == nil ? "Set Cost" : "Edit Cost") { showingCostEditor = true }
+                        .disabled(!store.isLoaded || store.isSaving || item.quantity <= 0)
+                        .accessibilityIdentifier("inventory.editCost")
+                    if let transactionID = item.acquiredByTransactionID {
+                        NavigationLink { ShowTransactionDetailView(transactionID: transactionID, store: store) } label: {
+                            if let receipt = store.transactions.first(where: { $0.id == transactionID }) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Label(receipt.kind == .purchase ? "Purchase Receipt" : "Trade Receipt", systemImage: "receipt")
+                                    Text("\(receipt.showName) · \(receipt.recordedAt.formatted(date: .abbreviated, time: .omitted))")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            } else {
+                                Label("Acquisition Receipt", systemImage: "receipt")
+                            }
+                        }.accessibilityIdentifier("inventory.acquisitionReceipt")
+                    } else if item.sourceInventoryID != nil {
+                        Label("Imported source snapshot", systemImage: "shippingbox")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Section {
+                    DisclosureGroup("Card Details") {
+                        LabeledContent("Game", value: item.card.identity.game)
+                        LabeledContent("Printing", value: item.card.identity.printing)
+                        LabeledContent("Condition", value: item.card.identity.condition)
+                        LabeledContent("Language", value: item.card.identity.language)
+                        Text("Local stock changes when you record or undo a transaction.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }.accessibilityIdentifier("inventory.cardDetails")
                 }
                 Section {
                     NavigationLink { CardResearchView(card: item.card) } label: {
                         Label("Market & Graded Research", systemImage: "magnifyingglass")
                     }.accessibilityIdentifier("showInventory.cardResearch")
-                    if let transactionID = item.acquiredByTransactionID {
-                        NavigationLink { ShowTransactionDetailView(transactionID: transactionID, store: store) } label: {
-                            Label("Acquisition Receipt", systemImage: "receipt")
-                        }
-                    }
                 }
             } else { ContentUnavailableView("Card unavailable", systemImage: "shippingbox") }
         }.navigationTitle("Card Details").navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button("Print Price Tag", systemImage: "printer") { showingLabel = true }
+                        .disabled(!store.isLoaded || (item?.quantity ?? 0) <= 0)
+                        .accessibilityIdentifier("inventory.printLabel")
+                } label: { Image(systemName: "ellipsis.circle").frame(width: 44, height: 44) }
+                    .accessibilityLabel("Card options").accessibilityIdentifier("inventory.options")
+            }
+        }
+        .sheet(isPresented: $showingLabel) {
+            InventoryLabelFlowView(inventory: store.inventory, initialInventoryID: itemID,
+                marketQuotes: TagPricingContext.currentQuotes(inventory: store.inventory, context: context))
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            TimelineView(.animation(minimumInterval: 60, paused: !visible || scenePhase != .active)) { _ in
+                quickSellAction
+            }
+        }
+        .sheet(isPresented: $showingTransaction) {
+            ShowTransactionForm(store: store, initialKind: .sale, initialInventoryID: itemID)
+        }
+        .sheet(isPresented: $showingCostEditor) {
+            if let item { ShowInventoryCostEditor(item: item, store: store) }
+        }
+        .onAppear { visible = true }
+        .onDisappear { visible = false }
+    }
+
+    private var quickSellAction: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                guard store.isLoaded, store.eligibleActiveShow != nil,
+                      let item, item.quantity > 0 else { return }
+                showingTransaction = true
+            } label: {
+                Label("Sell This Card", systemImage: "cart.fill")
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!store.isLoaded || store.eligibleActiveShow == nil || (item?.quantity ?? 0) <= 0)
+            .accessibilityIdentifier("quickSell.sell")
+            if !store.isLoaded {
+                Text("Load your show data to record a sale.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if (item?.quantity ?? 0) <= 0 {
+                Text("This card is no longer available in local stock.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if store.eligibleActiveShow == nil {
+                Text(store.activeShow == nil
+                     ? "Choose an active show in Show Budget to record."
+                     : "Recording opens on your show's dates.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
+    }
+}
+
+@MainActor private struct ShowInventoryCostEditor: View {
+    @Environment(\.dismiss) private var dismiss
+    let item: ShowInventoryItem
+    let store: ShowBudgetStore
+    @State private var totalCost: String
+    @State private var originalQuantity: Int
+    @State private var error: String?
+    @FocusState private var editingCost: Bool
+
+    init(item: ShowInventoryItem, store: ShowBudgetStore) {
+        self.item = item
+        self.store = store
+        _originalQuantity = State(initialValue: item.quantity)
+        _totalCost = State(initialValue: item.remainingCostCents.map {
+            String($0 / 100) + "." + String(format: "%02lld", $0 % 100)
+        } ?? "")
+    }
+
+    private var currentItem: ShowInventoryItem? { store.inventory.first { $0.id == item.id } }
+    private var quantityMatches: Bool { currentItem?.quantity == originalQuantity && originalQuantity > 0 }
+    private var canSave: Bool { store.isLoaded && !store.isSaving && quantityMatches && ShowBudgetMoney.parse(totalCost) != nil }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text(item.card.name).font(.headline)
+                    LabeledContent("Remaining copies", value: originalQuantity.formatted())
+                    TextField("Total cost in USD", text: $totalCost)
+                        .keyboardType(.decimalPad).focused($editingCost)
+                        .accessibilityLabel("Total cost of remaining lot in USD")
+                        .accessibilityIdentifier("inventory.costAmount")
+                } header: {
+                    Text("Actual cost of remaining lot")
+                } footer: {
+                    Text("Enter what you paid for all remaining copies in this lot. This updates their cost without changing your cash budget or saved sale profits.")
+                }
+                if item.remainingCostCents != nil {
+                    Section {
+                        Button("Mark Cost Unknown") { save(nil) }
+                            .disabled(!store.isLoaded || store.isSaving || !quantityMatches)
+                            .accessibilityIdentifier("inventory.clearCost")
+                    }
+                }
+                if !quantityMatches {
+                    Section {
+                        Text("The quantity changed. Close and reopen Set Cost to review the remaining lot.")
+                            .font(.footnote).foregroundStyle(.orange)
+                    }
+                }
+                if let error {
+                    Section { Text(error).font(.footnote).foregroundStyle(.orange) }
+                        .accessibilityIdentifier("inventory.costError")
+                }
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .navigationTitle(item.remainingCostCents == nil ? "Set Cost" : "Edit Cost")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }.accessibilityIdentifier("inventory.cancelCost")
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        guard let cents = ShowBudgetMoney.parse(totalCost), canSave else { return }
+                        save(cents)
+                    }.disabled(!canSave).accessibilityIdentifier("inventory.saveCost")
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { editingCost = false }.frame(minWidth: 64, minHeight: 44)
+                }
+            }
+        }
+    }
+
+    private func save(_ cents: Int64?) {
+        guard store.isLoaded, !store.isSaving, quantityMatches else { return }
+        do {
+            try store.setInventoryCost(itemID: item.id, totalCostCents: cents)
+            dismiss()
+        } catch { self.error = showViewError(error) }
     }
 }
 

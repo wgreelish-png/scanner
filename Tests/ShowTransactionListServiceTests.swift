@@ -278,4 +278,69 @@ import SwiftData
         XCTAssertEqual(fixture.store.inventorySourceLocationID, 9)
         XCTAssertEqual(budgetStore(fixture.disk).book, committed)
     }
+    func testIncomingCostWeightsRespectOfferOverridesAndNegotiatedPaymentWithoutEditingSource() throws {
+        let fixture = try fixture()
+        let first = try XCTUnwrap(fixture.list.cards.first)
+        first.cashOverrideText = "55"; first.tradeOverrideText = "85"
+        let other = try InventoryCard(card: card("weighted", price: 20), quantity: 3)
+        fixture.context.insert(other); fixture.list.cards.append(other)
+        let session = ScanSession(listName: fixture.list.name)
+        session.listID = fixture.list.id; session.setRates(.init(cash: 50, trade: 90, maximum: 75))
+        fixture.context.insert(session); try fixture.context.save()
+        let source = fixture.list.orderedCards.map(\.snapshot)
+        let snapshot = try ShowTransactionListService.incomingSnapshot(for: fixture.list, kind: .purchase, context: fixture.context)
+        let weights = Dictionary(uniqueKeysWithValues: snapshot.cards.map { ($0.id, $0.costWeightCents) })
+        XCTAssertEqual(weights[first.id]!, 11_000)
+        XCTAssertEqual(weights[other.id]!, 3_000)
+        let draft = ShowTransactionDraft(kind: .purchase, incomingListID: fixture.list.id,
+            incomingListName: fixture.list.name, incoming: snapshot.cards, incomingValueCents: 7_000)
+        let receipt = try ShowTransactionListService.record(draft, showID: fixture.showID,
+            context: fixture.context, store: fixture.store)
+        XCTAssertEqual(receipt.accounting?.incoming.map(\.totalCostCents).compactMap { $0 }.sorted(), [1_500, 5_500])
+        XCTAssertEqual(fixture.list.orderedCards.map(\.snapshot), source)
+        XCTAssertEqual(try XCTUnwrap(fixture.store.activeShow).totals().availableCents, 23_000)
+        XCTAssertEqual(fixture.store.inventory.compactMap(\.remainingCostCents).reduce(0, +), 7_000)
+    }
+
+    func testReviewedIncomingCostsMayDifferFromOfferWeightsButCannotReplaceSourceCards() throws {
+        let fixture = try fixture()
+        let other = try InventoryCard(card: card("second", price: 25), quantity: 1)
+        fixture.context.insert(other); fixture.list.cards.append(other); try fixture.context.save()
+        var rows = try ShowTransactionListService.incomingSnapshot(for: fixture.list,
+            kind: .purchase, context: fixture.context).cards
+        rows[0].allocatedCostCents = 1_000
+        rows[1].allocatedCostCents = 6_000
+        var draft = ShowTransactionDraft(kind: .purchase, incomingListID: fixture.list.id,
+            incomingListName: fixture.list.name, incoming: rows, incomingValueCents: 7_000)
+        draft.incoming[0].card.identity.condition = "Damaged"
+        assertRejected(draft, as: .sourceChanged, in: fixture)
+        draft.incoming = rows
+        let receipt = try ShowTransactionListService.record(draft, showID: fixture.showID,
+            context: fixture.context, store: fixture.store)
+        XCTAssertEqual(receipt.accounting?.incoming.map(\.totalCostCents), [1_000, 6_000])
+        XCTAssertEqual(fixture.list.orderedCards.count, 2)
+        XCTAssertFalse(fixture.context.hasChanges)
+    }
+
+    func testOneUnpricedIncomingLotKeepsActualCostAndSupportsLaterOfflineSaleProfit() throws {
+        let fixture = try fixture()
+        let row = try XCTUnwrap(fixture.list.cards.first)
+        try row.update(card(price: nil)); try fixture.context.save()
+        let snapshot = try ShowTransactionListService.incomingSnapshot(for: fixture.list,
+            kind: .purchase, context: fixture.context)
+        XCTAssertNil(snapshot.defaultValueCents); XCTAssertNil(snapshot.cards.first?.costWeightCents)
+        let purchase = try ShowTransactionListService.record(.init(kind: .purchase,
+            incomingListID: fixture.list.id, incomingListName: fixture.list.name,
+            incoming: snapshot.cards, incomingValueCents: 1_400), showID: fixture.showID,
+            context: fixture.context, store: fixture.store)
+        let acquired = try XCTUnwrap(purchase.incoming.first)
+        XCTAssertEqual(fixture.store.inventory.first?.remainingCostCents, 1_400)
+        let sale = try ShowTransactionListService.record(.init(kind: .sale,
+            outgoing: [.init(inventoryID: acquired.inventoryID, quantity: 1)], saleReceivedCents: 1_000),
+            showID: fixture.showID, context: fixture.context, store: fixture.store)
+        XCTAssertEqual(sale.totalCostCents, 700); XCTAssertEqual(sale.profitCents, 300)
+        XCTAssertNil(sale.outgoing.first?.card.marketPrice)
+        XCTAssertEqual(fixture.store.inventory.first?.remainingCostCents, 700)
+    }
+
 }

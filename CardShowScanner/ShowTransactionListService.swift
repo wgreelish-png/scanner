@@ -28,7 +28,7 @@ enum ShowTransactionListFailure: LocalizedError, Equatable {
 
     static func incomingSnapshot(for list: CardList, kind: ShowTransactionKind,
                                  context: ModelContext) throws -> IncomingSnapshot {
-        IncomingSnapshot(listID: list.id, name: list.name, cards: try incomingCards(for: list),
+        IncomingSnapshot(listID: list.id, name: list.name, cards: try costedIncomingCards(for: list, kind: kind, context: context),
             defaultValueCents: try defaultIncomingValue(for: list, kind: kind, context: context))
     }
     static func incomingCards(for list: CardList) throws -> [ShowIncomingCard] {
@@ -46,11 +46,29 @@ enum ShowTransactionListFailure: LocalizedError, Equatable {
         }
     }
 
-    /// A partial price total is not silently used as the whole agreed amount.
-    /// The form may accept an explicitly entered amount for an unpriced lot.
-    static func defaultIncomingValue(for list: CardList, kind: ShowTransactionKind,
-                                     context: ModelContext) throws -> Int64? {
-        _ = try incomingCards(for: list)
+    /// Allocation weights are calculated offers, not acquisition costs. The
+    /// actual confirmed payment (or carried trade cost) is allocated later.
+    static func costedIncomingCards(for list: CardList, kind: ShowTransactionKind,
+                                    context: ModelContext) throws -> [ShowIncomingCard] {
+        var rows = try incomingCards(for: list)
+        let rates = try offerRates(for: list, context: context)
+        let items = Dictionary(uniqueKeysWithValues: list.cards.map { ($0.id, $0) })
+        for index in rows.indices {
+            guard let item = items[rows[index].id] else { throw ShowTransactionListFailure.invalidCards }
+            let override = kind == .purchase ? item.cashOverrideText : item.tradeOverrideText
+            let rate = kind == .purchase ? rates.cash : rates.trade
+            let perCopy: Decimal?
+            if let override { perCopy = CustomOfferAmount.parse(override) }
+            else if let market = rows[index].card.marketPrice { perCopy = market * rate / 100 }
+            else { perCopy = nil }
+            if let perCopy {
+                rows[index].costWeightCents = try exactCents(OfferCalculator.cents(perCopy * Decimal(rows[index].quantity)))
+            }
+        }
+        return rows
+    }
+
+    private static func offerRates(for list: CardList, context: ModelContext) throws -> OfferRates {
         let sessions = try context.fetch(FetchDescriptor<ScanSession>(sortBy: [SortDescriptor(\.startedAt, order: .reverse)]))
         let rates = sessions.first { $0.listID == list.id }?.rates ?? SessionService.defaults()
         guard rates.isValid else { throw ShowTransactionListFailure.invalidOffer }
@@ -59,15 +77,36 @@ enum ShowTransactionListFailure: LocalizedError, Equatable {
                 if let raw, CustomOfferAmount.parse(raw) == nil { throw ShowTransactionListFailure.invalidOffer }
             }
         }
+        return rates
+    }
+
+    private static func exactCents(_ value: Decimal) throws -> Int64 {
+        guard !value.isNaN, value >= 0, value <= ShowBudgetMoney.decimal(ShowBudgetMoney.maximumCents) else {
+            throw ShowTransactionListFailure.invalidOffer
+        }
+        let scaled = value * 100
+        let cents = NSDecimalNumber(decimal: scaled).int64Value
+        guard ShowBudgetMoney.isValid(cents), Decimal(cents) == scaled else { throw ShowTransactionListFailure.invalidOffer }
+        return cents
+    }
+
+    private static func sameCards(_ source: [ShowIncomingCard], _ draft: [ShowIncomingCard]) -> Bool {
+        guard source.count == draft.count else { return false }
+        return zip(source, draft).allSatisfy { pair in
+            pair.0.id == pair.1.id && pair.0.card == pair.1.card && pair.0.quantity == pair.1.quantity
+        }
+    }
+
+    /// A partial price total is not silently used as the whole agreed amount.
+    /// The form may accept an explicitly entered amount for an unpriced lot.
+    static func defaultIncomingValue(for list: CardList, kind: ShowTransactionKind,
+                                     context: ModelContext) throws -> Int64? {
+        _ = try incomingCards(for: list)
+        let rates = try offerRates(for: list, context: context)
         let totals = OfferCalculator.calculate(list.cards.map(\.offerLine), rates: rates)
         guard totals.unpricedQuantity == 0 else { return nil }
         let value = kind == .purchase ? totals.cash : totals.trade
-        let scaled = value * 100
-        let cents = NSDecimalNumber(decimal: scaled).int64Value
-        guard !value.isNaN, ShowBudgetMoney.isValid(cents), Decimal(cents) == scaled else {
-            throw ShowTransactionListFailure.invalidOffer
-        }
-        return cents
+        return try exactCents(value)
     }
 
     static func record(_ draft: ShowTransactionDraft, showID: UUID, context: ModelContext,
@@ -81,7 +120,7 @@ enum ShowTransactionListFailure: LocalizedError, Equatable {
         if let listID = draft.incomingListID {
             guard let list = try context.fetch(FetchDescriptor<CardList>(predicate: #Predicate { $0.id == listID })).first,
                   !list.isCardShowInventory else { throw ShowTransactionListFailure.listUnavailable }
-            guard try incomingCards(for: list) == draft.incoming, list.name == draft.incomingListName else {
+            guard sameCards(try incomingCards(for: list), draft.incoming), list.name == draft.incomingListName else {
                 throw ShowTransactionListFailure.sourceChanged
             }
             guard store.transaction(forListID: listID) == nil,

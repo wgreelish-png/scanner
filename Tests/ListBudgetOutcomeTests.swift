@@ -9,7 +9,7 @@ import SwiftData
         var failWrites = Set<Int>()
         var now = Date(timeIntervalSince1970: 1_800_000_000)
     }
-    private struct Fixture {
+    @MainActor private struct Fixture {
         let container: ModelContainer
         let list: CardList
         let disk: Disk
@@ -272,18 +272,18 @@ import SwiftData
         XCTAssertEqual(store.activeShow?.entries.count, 1)
     }
 
-    func testVersionOneBudgetMigratesInMemoryAndNextWriteUsesVersionThree() throws {
+    func testVersionOneBudgetMigratesInMemoryAndNextWriteUsesVersionFour() throws {
         let old = ShowBudgetBook(shows: [.init(name: "Old show", startingCents: 30_000)])
         var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(old)) as? [String: Any])
         json["version"] = 1
         let disk = Disk(); disk.data = try JSONSerialization.data(withJSONObject: json)
         let bytes = disk.data
         let store = ShowBudgetStore(read: { _ in disk.data }, write: { data, _ in disk.writes += 1; disk.data = data })
-        XCTAssertTrue(store.isLoaded); XCTAssertEqual(store.book.version, 3); XCTAssertEqual(disk.data, bytes)
+        XCTAssertTrue(store.isLoaded); XCTAssertEqual(store.book.version, 4); XCTAssertEqual(disk.data, bytes)
         let id = try XCTUnwrap(store.book.shows.first).id
         try store.update(showID: id, name: "Updated old show", startingCents: 30_000)
         let written = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(disk.data)) as? [String: Any])
-        XCTAssertEqual(written["version"] as? Int, 3)
+        XCTAssertEqual(written["version"] as? Int, 4)
         XCTAssertEqual(store.book.shows.first?.startingCents, 30_000)
     }
 }

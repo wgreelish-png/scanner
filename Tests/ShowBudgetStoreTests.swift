@@ -122,6 +122,42 @@ import XCTest
         XCTAssertEqual(restarted.activeShow?.entries.first?.listName, "Original list")
     }
 
+    func testLegacyCashFilesOpenWithoutWritingAndPersistVersionFourOnTheNextChange() async throws {
+        var netSale = sale(); netSale.splitBasis = .netProceeds; netSale.reinvestmentPercent = 40
+        var voidedSale = sale(); voidedSale.voidedAt = now.addingTimeInterval(1)
+        let trade = ShowBudgetEntry(kind: .trade, grossReceivedCents: 10_000, feeCents: 200, recordedAt: now)
+        let original = ShowBudgetEvent(name: "Legacy show", startingCents: 30_000, createdAt: now,
+                                       entries: [sale(), netSale, trade, voidedSale])
+        let encodedShows = try JSONSerialization.jsonObject(with: JSONEncoder().encode([original]))
+        let originalTotals = try original.totals()
+        for version in 1...3 {
+            let legacy: [String: Any] = ["version": version, "shows": encodedShows, "activeShowID": original.id.uuidString]
+            let originalBytes = try JSONSerialization.data(withJSONObject: legacy)
+            var bytes = originalBytes, writes = 0
+            let url = location()
+            let store = ShowBudgetStore(url: url, read: { _ in bytes }, write: { data, _ in bytes = data; writes += 1 })
+            XCTAssertTrue(store.isLoaded, "Version \(version) remains readable")
+            XCTAssertNil(store.error)
+            XCTAssertEqual(store.book.version, 4)
+            XCTAssertEqual(store.book.shows, [original])
+            XCTAssertEqual(try store.activeShow?.totals(), originalTotals)
+            XCTAssertEqual(writes, 0, "Opening a legacy file must not rewrite durable bytes")
+            XCTAssertEqual(bytes, originalBytes)
+
+            try store.select(showID: nil)
+            XCTAssertEqual(writes, 1)
+            let restarted = ShowBudgetStore(url: url, read: { _ in bytes }, write: { data, _ in bytes = data; writes += 1 })
+            XCTAssertTrue(restarted.isLoaded)
+            XCTAssertEqual(restarted.book.version, 4)
+            XCTAssertNil(restarted.activeShow)
+            XCTAssertEqual(restarted.book.shows, [original])
+            let totals = try XCTUnwrap(restarted.book.shows.first).totals()
+            XCTAssertEqual(totals, originalTotals)
+            XCTAssertEqual(totals.availableCents + totals.savedCents, totals.cashOnHandCents)
+            XCTAssertEqual(writes, 1)
+        }
+    }
+
     func testFailedWriteKeepsBookAndDurableBytesThenExactReceiptCanRetryOnce() async throws {
         let url = location(); defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let seed = ShowBudgetStore(url: url)

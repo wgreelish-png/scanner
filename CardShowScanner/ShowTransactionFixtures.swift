@@ -46,6 +46,14 @@ import SwiftData
                     }
                 }
             }
+            if ProcessInfo.processInfo.arguments.contains("--show-cost-profit-ui-fixture") {
+                let list = CardList(name: "Profit Example"), session = ScanSession(listName: "Profit Example")
+                session.listID = list.id; session.game = "Pokémon"
+                session.setRates(OfferRates(cash: 70, trade: 80, maximum: 75))
+                context.insert(list); context.insert(session)
+                let row = try! InventoryCard(card: Self.card("Profit Example", price: 10))
+                context.insert(row); list.cards.append(row)
+            }
             try! context.save()
         }
     }
