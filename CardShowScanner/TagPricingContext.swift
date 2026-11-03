@@ -36,7 +36,12 @@ struct TagSaleSuggestion: Equatable {
     static func draft(for item: ShowInventoryItem, marketQuotes: [UUID: TagMarketQuote] = [:],
                       store: TagApprovalStore = .shared) -> InventoryLabelDraft {
         var snapshot = item
-        if let quote = marketQuotes[item.id] { snapshot.card.marketPrice = quote.market }
+        if let quote = marketQuotes[item.id] {
+            let hasNewerSavedQuote = quote.observedAt.map { importedAt in
+                item.card.marketPriceMetadata.map { $0.fetchedAt > importedAt } ?? false
+            } ?? false
+            if !hasNewerSavedQuote { snapshot.card.marketPrice = quote.market }
+        }
         return InventoryLabelDraft(item: snapshot, preferences: store.preferences, approval: store.record(for: item.id))
     }
 

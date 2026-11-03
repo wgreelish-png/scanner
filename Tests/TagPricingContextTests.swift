@@ -49,6 +49,20 @@ import SwiftData
         XCTAssertThrowsError(try InventoryLabelRenderer.render(zero))
     }
 
+    func testOlderImportCannotReplaceANewerSavedQuoteButNewerUnavailableQuoteIsRespected() {
+        var stock = item()
+        let store = approvals()
+        let fetched = Date(timeIntervalSince1970: 1_800_000_000)
+        stock.card.marketPriceMetadata = MarketPriceMetadata(source: .openAPI, fetchedAt: fetched)
+        let older = [stock.id: TagMarketQuote(market: 8, observedAt: fetched.addingTimeInterval(-1))]
+        XCTAssertEqual(TagPricingContext.draft(for: stock, marketQuotes: older, store: store).marketValue, 10.49)
+        let newer = [stock.id: TagMarketQuote(market: 12, observedAt: fetched.addingTimeInterval(1))]
+        XCTAssertEqual(TagPricingContext.draft(for: stock, marketQuotes: newer, store: store).marketValue, 12)
+        let unavailable = [stock.id: TagMarketQuote(market: nil, observedAt: fetched.addingTimeInterval(1))]
+        XCTAssertNil(TagPricingContext.draft(for: stock, marketQuotes: unavailable, store: store).marketValue)
+        XCTAssertEqual(stock.card.marketPrice, 10.49)
+    }
+
     func testSavedImportQuotesMatchExactCardDimensionsAndConflictsStayUnavailable() throws {
         let container = try ModelContainer(for: CardList.self, InventoryCard.self, ScanSession.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true))

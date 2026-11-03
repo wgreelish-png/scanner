@@ -25,7 +25,7 @@ Approved stickers are separate from current market quotes and immutable purchase
 
 Threshold equality triggers review. Fractional-cent thresholds round upward. Separately, a positive approved sticker premium of at least 10% below $5, 8% from $5 to $19.99, or 5% at $20+ is flagged as overpriced. These flags request review and never force a price reduction. Selected review rows prioritize overpriced cards and decreases ahead of increases.
 
-Pricing uses matching quotes from the existing saved source import when available, keyed by product/game/printing/language/condition and exact SKU where possible. A newer missing or conflicting quote stays unavailable rather than silently inheriting an old quote. Working stock and receipt card snapshots are not rewritten.
+Pricing uses matching quotes from the existing saved source import when available, keyed by product/game/printing/language/condition and exact SKU where possible. A newer saved card quote takes precedence over an older import. A newer missing or conflicting quote stays unavailable rather than silently inheriting an old quote. Working stock and receipt card snapshots are not rewritten.
 
 ## Costs and reasonable offers
 
