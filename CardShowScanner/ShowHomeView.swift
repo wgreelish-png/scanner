@@ -198,6 +198,8 @@ private struct ShowHomeRouteCard: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("\(available.reduce(0) { $0 + $1.quantity }.formatted()) cards available")
                 .font(.headline).monospacedDigit().accessibilityIdentifier("showInventory.quantity")
+            Text("\(available.count.formatted()) acquisition lots · Quantities count physical cards")
+                .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("showInventory.lots")
             Label("Local stock · Works offline", systemImage: "iphone")
                 .font(.caption).foregroundStyle(.indigo).accessibilityIdentifier("showInventory.localStock")
                 .accessibilityHint("Sales remove cards from this stock. Purchases and trades add the cards you receive. Artwork and research may need internet.")
@@ -325,7 +327,7 @@ private struct ShowWorkingInventoryRow: View {
                         LabeledContent("Printing", value: item.card.identity.printing)
                         LabeledContent("Condition", value: item.card.identity.condition)
                         LabeledContent("Language", value: item.card.identity.language)
-                        Text("Local stock changes when you record or undo a transaction.")
+                        Text("Local stock changes with transactions and explicit website inventory refreshes.")
                             .font(.caption).foregroundStyle(.secondary)
                     }.accessibilityIdentifier("inventory.cardDetails")
                 }

@@ -122,7 +122,7 @@ import XCTest
         XCTAssertEqual(restarted.activeShow?.entries.first?.listName, "Original list")
     }
 
-    func testLegacyCashFilesOpenWithoutWritingAndPersistVersionFourOnTheNextChange() async throws {
+    func testLegacyCashFilesOpenWithoutWritingAndPersistVersionFiveOnTheNextChange() async throws {
         var netSale = sale(); netSale.splitBasis = .netProceeds; netSale.reinvestmentPercent = 40
         var voidedSale = sale(); voidedSale.voidedAt = now.addingTimeInterval(1)
         let trade = ShowBudgetEntry(kind: .trade, grossReceivedCents: 10_000, feeCents: 200, recordedAt: now)
@@ -138,7 +138,7 @@ import XCTest
             let store = ShowBudgetStore(url: url, read: { _ in bytes }, write: { data, _ in bytes = data; writes += 1 })
             XCTAssertTrue(store.isLoaded, "Version \(version) remains readable")
             XCTAssertNil(store.error)
-            XCTAssertEqual(store.book.version, 4)
+            XCTAssertEqual(store.book.version, 5)
             XCTAssertEqual(store.book.shows, [original])
             XCTAssertEqual(try store.activeShow?.totals(), originalTotals)
             XCTAssertEqual(writes, 0, "Opening a legacy file must not rewrite durable bytes")
@@ -148,7 +148,7 @@ import XCTest
             XCTAssertEqual(writes, 1)
             let restarted = ShowBudgetStore(url: url, read: { _ in bytes }, write: { data, _ in bytes = data; writes += 1 })
             XCTAssertTrue(restarted.isLoaded)
-            XCTAssertEqual(restarted.book.version, 4)
+            XCTAssertEqual(restarted.book.version, 5)
             XCTAssertNil(restarted.activeShow)
             XCTAssertEqual(restarted.book.shows, [original])
             let totals = try XCTUnwrap(restarted.book.shows.first).totals()

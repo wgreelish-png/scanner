@@ -1,6 +1,32 @@
 import Foundation
 import SwiftData
 
+/// The working stock state when a source download was authorized. A pending
+/// handoff cannot overwrite local movements recorded after that download.
+struct ShowInventorySyncRevision: Codable, Equatable, Sendable {
+    let mutations: Int
+    let lots: Int
+    let locationID: Int?
+
+    init(mutations: Int, lots: Int, locationID: Int? = nil) {
+        self.mutations = mutations; self.lots = lots; self.locationID = locationID
+    }
+
+    @MainActor init(store: ShowBudgetStore) {
+        mutations = store.book.costMutations.count
+        lots = store.inventory.count
+        locationID = store.inventorySourceLocationID
+    }
+
+    var isValid: Bool {
+        let maximumMutations = ShowBudgetBook.maximumTransactions * 2 +
+            ShowBudgetBook.maximumCostAdjustments + ShowBudgetBook.maximumInventoryReconciliations
+        return (0...maximumMutations).contains(mutations) &&
+            (0...ShowBudgetBook.maximumInventoryItems).contains(lots) &&
+            (locationID.map { $0 > 0 } ?? true)
+    }
+}
+
 /// Source identity and freshness commit in the same store as the imported rows.
 /// No sidecar UUID can outlive a failed save or recreate a deleted local list.
 struct CardShowInventoryLink: Codable, Equatable, Sendable {
@@ -8,15 +34,37 @@ struct CardShowInventoryLink: Codable, Equatable, Sendable {
     let locationID: Int
     let locationName: String
     let refreshedAt: Date
+    let syncID: UUID?
+    let pendingWorkingSync: Bool?
+    let workingRevision: ShowInventorySyncRevision?
 
-    init(locationID: Int, locationName: String, refreshedAt: Date, version: Int = 1) {
+    init(locationID: Int, locationName: String, refreshedAt: Date, version: Int = 1,
+         syncID: UUID? = nil, pendingWorkingSync: Bool? = nil,
+         workingRevision: ShowInventorySyncRevision? = nil) {
         self.version = version; self.locationID = locationID
         self.locationName = locationName; self.refreshedAt = refreshedAt
+        self.syncID = syncID; self.pendingWorkingSync = pendingWorkingSync
+        self.workingRevision = workingRevision
     }
 
-    private enum CodingKeys: String, CodingKey { case version, locationID, locationName, refreshedAt }
+    /// This token survives acknowledgement unchanged, so a retry can identify
+    /// a source snapshot already applied to the independent financial store.
+    var inventorySnapshotID: Data? {
+        guard version == 2, let syncID else { return nil }
+        return Data(syncID.uuidString.utf8)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case version, locationID, locationName, refreshedAt, syncID, pendingWorkingSync, workingRevision
+    }
     private var valid: Bool {
-        version == 1 && locationID > 0 && !locationName.isEmpty && locationName.count <= 200 && refreshedAt.timeIntervalSince1970.isFinite
+        guard locationID > 0, !locationName.isEmpty, locationName.count <= 200,
+              refreshedAt.timeIntervalSince1970.isFinite else { return false }
+        switch version {
+        case 1: return syncID == nil && pendingWorkingSync == nil && workingRevision == nil
+        case 2: return syncID != nil && pendingWorkingSync != nil && (workingRevision?.isValid ?? true)
+        default: return false
+        }
     }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -24,6 +72,9 @@ struct CardShowInventoryLink: Codable, Equatable, Sendable {
         locationID = try values.decode(Int.self, forKey: .locationID)
         locationName = try values.decode(String.self, forKey: .locationName)
         refreshedAt = try values.decode(Date.self, forKey: .refreshedAt)
+        syncID = try values.decodeIfPresent(UUID.self, forKey: .syncID)
+        pendingWorkingSync = try values.decodeIfPresent(Bool.self, forKey: .pendingWorkingSync)
+        workingRevision = try values.decodeIfPresent(ShowInventorySyncRevision.self, forKey: .workingRevision)
         guard valid else {
             throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Invalid inventory link."))
         }
@@ -35,6 +86,9 @@ struct CardShowInventoryLink: Codable, Equatable, Sendable {
         var values = encoder.container(keyedBy: CodingKeys.self)
         try values.encode(version, forKey: .version); try values.encode(locationID, forKey: .locationID)
         try values.encode(locationName, forKey: .locationName); try values.encode(refreshedAt, forKey: .refreshedAt)
+        try values.encodeIfPresent(syncID, forKey: .syncID)
+        try values.encodeIfPresent(pendingWorkingSync, forKey: .pendingWorkingSync)
+        try values.encodeIfPresent(workingRevision, forKey: .workingRevision)
     }
 }
 
@@ -65,6 +119,7 @@ extension CardList {
     /// Apply one fully fetched snapshot, preserving source quantities as given.
     /// Source order is retained on first import; new rows append thereafter.
     @discardableResult static func apply(_ snapshot: CardShowInventorySnapshot, context: ModelContext,
+        workingRevision: ShowInventorySyncRevision? = nil,
         save: (@MainActor (ModelContext) throws -> Void)? = nil) throws -> CardList {
         guard snapshot.location.id > 0, snapshot.location.name.count <= 200,
               normalized(snapshot.location.name) == "card show", snapshot.fetchedAt.timeIntervalSince1970.isFinite,
@@ -97,7 +152,8 @@ extension CardList {
             bySource[sourceID] = item
         }
         let metadata = try encoder.encode(CardShowInventoryLink(locationID: snapshot.location.id,
-            locationName: snapshot.location.name, refreshedAt: snapshot.fetchedAt))
+            locationName: snapshot.location.name, refreshedAt: snapshot.fetchedAt,
+            version: 2, syncID: UUID(), pendingWorkingSync: true, workingRevision: workingRevision))
         do {
             if existing == nil { context.insert(list) }
             var nextDate = list.orderedCards.last?.addedAt ?? snapshot.fetchedAt.addingTimeInterval(-0.001)
@@ -134,6 +190,42 @@ extension CardList {
             DiagnosticLog.shared.failure("inventory_import.persistence_error", error)
             DiagnosticLog.shared.record("inventory_import.save_failed", ServiceDiagnosticFields.failure(error)
                 .merging(["phase": "persistence", "reason": "persistence_failed"]) { _, value in value })
+            throw CardShowInventoryFailure.persistenceFailed
+        }
+    }
+
+    /// Clear only the exact source operation already committed to working
+    /// inventory. The token and imported rows stay intact for durable retries.
+    static func acknowledgeWorkingSync(list: CardList, expectedSnapshotID: Data, context: ModelContext,
+        save: (@MainActor (ModelContext) throws -> Void)? = nil) throws {
+        guard !context.hasChanges else {
+            DiagnosticLog.shared.record("inventory_import.save_blocked", ["phase": "acknowledgement", "reason": "unsaved_changes"])
+            throw CardShowInventoryFailure.persistenceFailed
+        }
+        guard let current = try importedList(context: context), current === list,
+              let link = list.cardShowInventory, link.version == 2,
+              link.pendingWorkingSync == true, link.inventorySnapshotID == expectedSnapshotID else {
+            throw CardShowInventoryFailure.invalidResponse
+        }
+        let previous = list.inventorySourceData
+        let acknowledged = CardShowInventoryLink(locationID: link.locationID,
+            locationName: link.locationName, refreshedAt: link.refreshedAt,
+            version: 2, syncID: link.syncID, pendingWorkingSync: false, workingRevision: link.workingRevision)
+        let metadata = try JSONEncoder().encode(acknowledged)
+        do {
+            list.inventorySourceData = metadata
+            if let save { try save(context) } else { try context.save() }
+            DiagnosticLog.shared.record("inventory_import.working_sync_acknowledged")
+        } catch {
+            context.rollback()
+            if list.inventorySourceData != previous {
+                list.inventorySourceData = previous
+                if context.hasChanges { context.rollback() }
+            }
+            context.processPendingChanges()
+            DiagnosticLog.shared.failure("inventory_import.acknowledgement_error", error)
+            DiagnosticLog.shared.record("inventory_import.save_failed", ServiceDiagnosticFields.failure(error)
+                .merging(["phase": "acknowledgement", "reason": "persistence_failed"]) { _, value in value })
             throw CardShowInventoryFailure.persistenceFailed
         }
     }

@@ -55,7 +55,7 @@ import XCTest
     private func legacyVersionThreeBytes(_ value: Fixture) throws -> Data {
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(value.disk.data)) as? [String: Any])
         object["version"] = 3
-        for key in ["costAdjustments", "costLedgerBaseline", "costMutations", "legacyTransactionIDs", "legacyReversedTransactionIDs"] {
+        for key in ["costAdjustments", "costLedgerBaseline", "costMutations", "legacyTransactionIDs", "legacyReversedTransactionIDs", "inventoryReconciliations"] {
             object.removeValue(forKey: key)
         }
         var inventory = try XCTUnwrap(object["inventory"] as? [[String: Any]])
@@ -503,14 +503,14 @@ import XCTest
             var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
             object["version"] = version
             object.removeValue(forKey: "inventory"); object.removeValue(forKey: "transactions")
-            for key in ["costAdjustments", "costLedgerBaseline", "costMutations", "legacyTransactionIDs", "legacyReversedTransactionIDs"] {
+            for key in ["costAdjustments", "costLedgerBaseline", "costMutations", "legacyTransactionIDs", "legacyReversedTransactionIDs", "inventoryReconciliations"] {
                 object.removeValue(forKey: key)
             }
             let bytes = try JSONSerialization.data(withJSONObject: object)
             let historical = Disk(); historical.data = bytes
             let migrated = store(historical)
             XCTAssertTrue(migrated.isLoaded)
-            XCTAssertEqual(migrated.book.version, 4)
+            XCTAssertEqual(migrated.book.version, 5)
             XCTAssertEqual(migrated.book.shows, [original])
             XCTAssertEqual(try totals(migrated), try original.totals())
             XCTAssertTrue(migrated.book.inventory.isEmpty)
@@ -531,7 +531,7 @@ import XCTest
         let disk = Disk(); disk.data = try legacyVersionThreeBytes(value)
         let migrated = store(disk)
         XCTAssertTrue(migrated.isLoaded)
-        XCTAssertEqual(migrated.book.version, 4)
+        XCTAssertEqual(migrated.book.version, 5)
         XCTAssertEqual(try totals(migrated), oldCash)
         XCTAssertEqual(migrated.transaction(forListID: listID)?.incomingListName, "Original incoming list")
         XCTAssertEqual(migrated.transactions.map(\.id), [bought.id, sold.id])
@@ -566,21 +566,71 @@ import XCTest
         XCTAssertEqual(store(disk).book, persisted.book)
     }
 
-    func testVersionFourRequiresJournalMetadataAndCannotLoseReceiptAccounting() throws {
+    func testVersionFourMigrationPreservesCostJournalReceiptsAndProfitExactly() throws {
+        let value = try fixture(quantity: 3, cost: 1_000)
+        let sold = try value.store.recordTransaction(sale(value.stockID, fee: 100), showID: value.showID)
+        let reversed = try value.store.recordTransaction(sale(value.stockID, fee: 200), showID: value.showID)
+        try value.store.undoTransaction(reversed.id)
+        let bought = try value.store.recordTransaction(purchase(701, quantity: 2, listID: UUID()), showID: value.showID)
+        let acquiredID = try XCTUnwrap(bought.incoming.first?.inventoryID)
+        let original = value.store.book
+        let originalCash = try totals(value.store)
+        let originalProfit = try value.store.profitSummary()
+        XCTAssertEqual(sold.totalCostCents, 334)
+        XCTAssertEqual(sold.profitCents, 566)
+        XCTAssertEqual(originalProfit.knownProfitCents, 566)
+        XCTAssertTrue(originalProfit.isComplete)
+
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(value.disk.data)) as? [String: Any])
+        object["version"] = 4
+        object.removeValue(forKey: "inventoryReconciliations")
+        let bytes = try JSONSerialization.data(withJSONObject: object)
+        let disk = Disk(); disk.data = bytes
+        let migrated = store(disk)
+        XCTAssertTrue(migrated.isLoaded)
+        XCTAssertEqual(migrated.book.version, 5)
+        XCTAssertEqual(migrated.book, original)
+        XCTAssertEqual(try item(value.stockID, in: migrated).quantity, 2)
+        XCTAssertEqual(try item(value.stockID, in: migrated).remainingCostCents, 666)
+        XCTAssertEqual(try item(acquiredID, in: migrated).remainingCostCents, 701)
+        XCTAssertEqual(migrated.transactions, original.transactions)
+        XCTAssertEqual(migrated.book.costLedgerBaseline, original.costLedgerBaseline)
+        XCTAssertEqual(migrated.book.costAdjustments, original.costAdjustments)
+        XCTAssertEqual(migrated.book.costMutations, original.costMutations)
+        XCTAssertTrue(migrated.book.inventoryReconciliations.isEmpty)
+        XCTAssertEqual(try totals(migrated), originalCash)
+        XCTAssertEqual(try migrated.profitSummary(), originalProfit)
+        XCTAssertEqual(disk.data, bytes); XCTAssertEqual(disk.writes, 0)
+
+        try migrated.select(showID: nil)
+        let written = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(disk.data)) as? [String: Any])
+        XCTAssertEqual(written["version"] as? Int, 5)
+        XCTAssertEqual(disk.writes, 1)
+        let restarted = store(disk)
+        XCTAssertTrue(restarted.isLoaded)
+        XCTAssertEqual(restarted.book, migrated.book)
+        XCTAssertEqual(try restarted.profitSummary(), originalProfit)
+    }
+
+    func testVersionsFourAndFiveRequireJournalMetadataAndCannotLoseReceiptAccounting() throws {
         let value = try fixture(quantity: 3, cost: 1_000)
         try value.store.recordTransaction(sale(value.stockID), showID: value.showID)
         let original = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(value.disk.data)) as? [String: Any])
-        for key in ["costLedgerBaseline", "costMutations", "legacyTransactionIDs", "legacyReversedTransactionIDs"] {
-            var stripped = original; stripped.removeValue(forKey: key)
-            try assertRejected(stripped)
+        for version in [4, 5] {
+            var versioned = original; versioned["version"] = version
+            if version == 4 { versioned.removeValue(forKey: "inventoryReconciliations") }
+            for key in ["costLedgerBaseline", "costMutations", "legacyTransactionIDs", "legacyReversedTransactionIDs"] {
+                var stripped = versioned; stripped.removeValue(forKey: key)
+                try assertRejected(stripped)
+            }
+            var strippedAccounting = versioned
+            var receipts = try XCTUnwrap(strippedAccounting["transactions"] as? [[String: Any]])
+            receipts[0].removeValue(forKey: "accounting")
+            strippedAccounting["transactions"] = receipts
+            try assertRejected(strippedAccounting)
+            var strippedMutations = versioned; strippedMutations["costMutations"] = [] as [Any]
+            try assertRejected(strippedMutations)
         }
-        var strippedAccounting = original
-        var receipts = try XCTUnwrap(strippedAccounting["transactions"] as? [[String: Any]])
-        receipts[0].removeValue(forKey: "accounting")
-        strippedAccounting["transactions"] = receipts
-        try assertRejected(strippedAccounting)
-        var strippedMutations = original; strippedMutations["costMutations"] = [] as [Any]
-        try assertRejected(strippedMutations)
     }
 
     func testVersionThreeMigrationKeepsPreviouslyReversedReceiptsIdempotent() throws {
