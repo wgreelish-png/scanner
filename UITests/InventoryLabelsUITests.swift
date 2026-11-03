@@ -15,7 +15,8 @@ import XCTest
         tap(row, app: app)
         assertContains("$35.00", element: app.staticTexts["$35.00"])
         assertContains("Cost unknown", element: app.descendants(matching: .any)["inventory.cost"])
-        tap(app.buttons["inventory.options"], app: app)
+        UITestInteraction.tapToolbar(app.descendants(matching: .any).matching(identifier: "inventory.options").firstMatch,
+                                     in: app, identifier: "inventory.options")
         tap(app.buttons["inventory.printLabel"], app: app)
         XCTAssertTrue(app.navigationBars["Label Details"].waitForExistence(timeout: 5))
         assertContains("1 labels", element: app.staticTexts["labels.totalCount"])
@@ -53,9 +54,9 @@ import XCTest
         reveal(app.staticTexts["$35.00"], app: app)
         XCTAssertTrue(app.staticTexts["$35.00"].exists, "Label price edits must not change the saved market price")
         assertContains("Cost unknown", element: app.descendants(matching: .any)["inventory.cost"])
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
         assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
         assertBalances(app: app)
         assertNoBluetoothPrompt(app: app)
     }
@@ -118,7 +119,7 @@ import XCTest
         assertUnstartedQueue(app: app)
         tap(app.buttons["labels.close"], app: app)
         assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
         assertBalances(app: app)
 
         app.terminate()
@@ -189,7 +190,8 @@ import XCTest
     }
 
     private func openBatch(app: XCUIApplication) {
-        tap(app.buttons["showInventory.options"], app: app)
+        UITestInteraction.tapToolbar(app.descendants(matching: .any).matching(identifier: "showInventory.options").firstMatch,
+                                     in: app, identifier: "showInventory.options")
         tap(app.buttons["showInventory.printLabels"], app: app)
     }
 
@@ -211,7 +213,7 @@ import XCTest
         tap(app.buttons["budget.summary"], app: app)
         assertContains("$300.00", element: app.staticTexts["budget.available"])
         assertContains("$0.00", element: app.staticTexts["budget.saved"])
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
     }
 
     private func assertNoBluetoothPrompt(app: XCUIApplication) {
@@ -248,19 +250,11 @@ import XCTest
 
     private func reveal(_ element: XCUIElement, app: XCUIApplication,
                         file: StaticString = #filePath, line: UInt = #line) {
-        if element.exists && element.isHittable { return }
-        let list = app.collectionViews.firstMatch
-        for _ in 0..<4 { list.swipeDown() }
-        for _ in 0..<10 {
-            if element.exists && element.isHittable { return }
-            list.swipeUp()
-        }
-        XCTFail("Expected label control was not visible: \(element.identifier)", file: file, line: line)
+        UITestInteraction.reveal(element, in: app, file: file, line: line)
     }
 
     private func tap(_ element: XCUIElement, app: XCUIApplication,
                      file: StaticString = #filePath, line: UInt = #line) {
-        reveal(element, app: app, file: file, line: line)
-        element.tap()
+        UITestInteraction.tap(element, in: app, file: file, line: line)
     }
 }

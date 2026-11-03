@@ -38,11 +38,11 @@ import XCTest
         let name = "UITest Navigation " + String(UUID().uuidString.prefix(8))
 
         selectTab("Lists", in: app)
-        app.buttons["savedLists.newList"].tap()
+        _ = UITestInteraction.tapToolbar(app.buttons["savedLists.newList"], in: app)
         let nameField = app.textFields["savedLists.newName"]
         XCTAssertTrue(nameField.waitForExistence(timeout: 5))
         nameField.tap(); nameField.typeText(name + "\n")
-        app.buttons["savedLists.create"].tap()
+        _ = UITestInteraction.tapToolbar(app.buttons["savedLists.create"], in: app)
         let row = app.cells.containing(.staticText, identifier: name).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
         XCTAssertTrue(app.navigationBars[name].waitForExistence(timeout: 5))
@@ -62,7 +62,7 @@ import XCTest
         XCTAssertTrue(app.navigationBars[name].waitForExistence(timeout: 5))
 
         // Remove only this test's new list through the ordinary confirmation.
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        _ = UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app)
         XCTAssertTrue(row.waitForExistence(timeout: 5)); row.swipeLeft()
         let confirm = app.buttons["listDeletion.confirm"]
         if !confirm.waitForExistence(timeout: 1) {
@@ -80,10 +80,10 @@ import XCTest
         defer { app.terminate() }
         selectTab("Lists", in: app)
         let name = "UITest Return " + String(UUID().uuidString.prefix(8))
-        app.buttons["savedLists.newList"].tap()
+        _ = UITestInteraction.tapToolbar(app.buttons["savedLists.newList"], in: app)
         let field = app.textFields["savedLists.newName"]
         XCTAssertTrue(field.waitForExistence(timeout: 5)); field.tap(); field.typeText(name + "\n")
-        app.buttons["savedLists.create"].tap()
+        _ = UITestInteraction.tapToolbar(app.buttons["savedLists.create"], in: app)
         let row = app.cells.containing(.staticText, identifier: name).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
         XCTAssertTrue(app.navigationBars[name].waitForExistence(timeout: 5))
@@ -119,14 +119,14 @@ import XCTest
         tapVisible(app.buttons["cardEditor.research"], in: app)
         XCTAssertTrue(app.navigationBars["Card Research"].waitForExistence(timeout: 5))
         assertMainTabs(in: app)
-        app.buttons["cardResearch.connection"].tap()
+        _ = UITestInteraction.tapToolbar(app.buttons["cardResearch.connection"], in: app)
         XCTAssertTrue(app.navigationBars["TCGTracking API Connection"].waitForExistence(timeout: 5))
         assertMainTabs(in: app)
         let shipper = app.textFields["researchConnection.shipperID"]
-        reveal(shipper, in: app); shipper.tap()
+        _ = UITestInteraction.tap(shipper, in: app)
         let previousShipper = shipper.value as? String ?? ""
         shipper.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: max(1, previousShipper.count)) + "navigation-draft")
-        app.buttons["researchConnection.keyboardDone"].tap()
+        _ = UITestInteraction.tap(app.buttons["researchConnection.keyboardDone"], in: app)
 
         for tab in ["Scan", "Show", "Research", "Settings"] {
             selectTab(tab, in: app)
@@ -150,12 +150,12 @@ import XCTest
         goBack(from: "Card Research", in: app)
         XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5))
         assertDraft(price: "18", quantity: 2, in: app)
-        app.buttons["cardEditor.cancel"].tap()
+        _ = UITestInteraction.tapToolbar(app.buttons["cardEditor.cancel"], in: app)
         XCTAssertTrue(app.navigationBars["Navigation Test List"].waitForExistence(timeout: 5))
 
-        tapVisible(app.staticTexts["Navigation Draft Card"], in: app)
+        tapVisible(app.buttons["list.card.10000000-0000-0000-0000-000000000001"], in: app)
         assertDraft(price: "25", quantity: 1, in: app)
-        app.buttons["cardEditor.cancel"].tap()
+        _ = UITestInteraction.tapToolbar(app.buttons["cardEditor.cancel"], in: app)
         goBack(from: "Navigation Test List", in: app)
         XCTAssertEqual(app.staticTexts["savedLists.count"].label, "1", "Tab navigation must not create lists")
         XCTAssertFalse(app.buttons["scanner.options"].exists)
@@ -173,11 +173,11 @@ import XCTest
         XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5))
         assertMainTabs(in: app)
         assertDraft(price: "18", quantity: 2, in: app)
-        app.buttons["cardEditor.save"].tap()
+        _ = UITestInteraction.tapToolbar(app.buttons["cardEditor.save"], in: app)
         XCTAssertTrue(app.navigationBars["Navigation Test List"].waitForExistence(timeout: 5))
-        tapVisible(app.staticTexts["Navigation Draft Card"], in: app)
+        tapVisible(app.buttons["list.card.10000000-0000-0000-0000-000000000001"], in: app)
         assertDraft(price: "18", quantity: 2, in: app)
-        app.buttons["cardEditor.cancel"].tap()
+        _ = UITestInteraction.tapToolbar(app.buttons["cardEditor.cancel"], in: app)
         XCTAssertTrue(app.navigationBars["Navigation Test List"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["scanner.options"].exists)
     }
@@ -191,13 +191,13 @@ import XCTest
         tapVisible(app.buttons["showInventory.importSnapshot"], in: app)
         XCTAssertTrue(app.navigationBars["Card Show Inventory"].waitForExistence(timeout: 5))
         tapVisible(app.buttons["cardShowInventory.open"], in: app)
-        tapVisible(app.staticTexts["Navigation Imported Card"], in: app)
+        tapVisible(app.buttons["list.card.10000000-0000-0000-0000-000000000002"], in: app)
         XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5))
         assertMainTabs(in: app)
         XCTAssertFalse(app.buttons["cardEditor.save"].exists)
         tapVisible(app.buttons["cardShowInventory.cardResearch"], in: app)
         XCTAssertTrue(app.navigationBars["Card Research"].waitForExistence(timeout: 5))
-        app.buttons["cardResearch.connection"].tap()
+        _ = UITestInteraction.tapToolbar(app.buttons["cardResearch.connection"], in: app)
         XCTAssertTrue(app.navigationBars["TCGTracking API Connection"].waitForExistence(timeout: 5))
         assertMainTabs(in: app)
 
@@ -217,7 +217,7 @@ import XCTest
         let quantity = app.staticTexts["cardShowInventory.cardQuantity"]
         reveal(quantity, in: app)
         XCTAssertTrue(["2", "Quantity, 2"].contains(quantity.label))
-        app.navigationBars["Card Details"].buttons["Done"].tap()
+        _ = UITestInteraction.tapToolbar(app.navigationBars["Card Details"].buttons["Done"], in: app)
         XCTAssertTrue(app.navigationBars["Card Show"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["scanner.options"].exists)
         XCTAssertFalse(app.buttons["list.searchAndAdd"].exists)
@@ -227,7 +227,7 @@ import XCTest
         selectTab("Lists", in: app)
         XCTAssertEqual(app.staticTexts["savedLists.count"].label, "1")
         tapVisible(app.staticTexts["Navigation Test List"], in: app)
-        tapVisible(app.staticTexts["Navigation Draft Card"], in: app)
+        tapVisible(app.buttons["list.card.10000000-0000-0000-0000-000000000001"], in: app)
         XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5))
         assertMainTabs(in: app)
     }
@@ -235,26 +235,26 @@ import XCTest
     private func setFixtureDraft(price: String, in app: XCUIApplication) {
         let quantity = app.steppers["cardEditor.quantity"]
         reveal(quantity, in: app)
-        quantity.buttons["Increment"].tap()
+        _ = UITestInteraction.tap(quantity.buttons["Increment"], in: app)
         tapVisible(app.buttons["cardEditor.adjustPrice"], in: app)
         let field = app.textFields["cardEditor.manualPrice"]
-        reveal(field, in: app); field.tap()
+        _ = UITestInteraction.tap(field, in: app)
         let existing = field.value as? String ?? ""
         field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: max(1, existing.count)) + price)
         let done = app.buttons["cardEditor.keyboardDone"]
-        XCTAssertTrue(done.waitForExistence(timeout: 5)); done.tap()
+        _ = UITestInteraction.tap(done, in: app)
     }
 
     private func assertDraft(price: String, quantity: Int, in app: XCUIApplication,
                              file: StaticString = #filePath, line: UInt = #line) {
         let amount = app.textFields["cardEditor.manualPrice"]
         let disclosure = app.buttons["cardEditor.adjustPrice"]
-        reveal(disclosure, in: app)
-        if !amount.exists { disclosure.tap() }
-        reveal(amount, in: app)
+        reveal(disclosure, in: app, identifier: "cardEditor.adjustPrice", file: file, line: line)
+        if !amount.exists { _ = UITestInteraction.tap(disclosure, in: app) }
+        reveal(amount, in: app, identifier: "cardEditor.manualPrice", file: file, line: line)
         XCTAssertEqual(amount.value as? String, price, file: file, line: line)
         let stepper = app.steppers["cardEditor.quantity"]
-        reveal(stepper, in: app)
+        reveal(stepper, in: app, identifier: "cardEditor.quantity", file: file, line: line)
         let value = String(quantity)
         XCTAssertTrue(stepper.value as? String == value || stepper.label.contains(value) ||
                       stepper.staticTexts[value].exists, "Expected draft quantity \(quantity)", file: file, line: line)
@@ -271,22 +271,17 @@ import XCTest
     private func goBack(from title: String, in app: XCUIApplication) {
         let bar = app.navigationBars[title]
         XCTAssertTrue(bar.waitForExistence(timeout: 5))
-        bar.buttons.element(boundBy: 0).tap()
+        _ = UITestInteraction.tapToolbar(bar.buttons.element(boundBy: 0), in: app)
     }
 
-    private func tapVisible(_ element: XCUIElement, in app: XCUIApplication) {
-        reveal(element, in: app); element.tap()
+    private func tapVisible(_ element: XCUIElement, in app: XCUIApplication,
+                            identifier: String? = nil, file: StaticString = #filePath, line: UInt = #line) {
+        _ = UITestInteraction.tap(element, in: app, identifier: identifier, file: file, line: line)
     }
 
-    private func reveal(_ element: XCUIElement, in app: XCUIApplication) {
-        if element.exists && element.isHittable { return }
-        let list = app.collectionViews.firstMatch
-        for _ in 0..<3 { list.swipeDown() }
-        for _ in 0..<8 {
-            if element.exists && element.isHittable { return }
-            list.swipeUp()
-        }
-        XCTAssertTrue(element.waitForExistence(timeout: 5)); XCTAssertTrue(element.isHittable)
+    private func reveal(_ element: XCUIElement, in app: XCUIApplication,
+                        identifier: String? = nil, file: StaticString = #filePath, line: UInt = #line) {
+        _ = UITestInteraction.reveal(element, in: app, identifier: identifier, file: file, line: line)
     }
 
     private func launch(persistentNavigation: Bool = false) -> XCUIApplication {
@@ -294,9 +289,9 @@ import XCTest
         if let path = ProcessInfo.processInfo.environment["DYLD_FALLBACK_LIBRARY_PATH"] {
             app.launchEnvironment["DYLD_FALLBACK_LIBRARY_PATH"] = path
         }
-        app.launchArguments = ["-autoDatabaseUpdates", "NO"]
+        app.launchArguments = ["-autoDatabaseUpdates", "NO", "-betaAutomaticIPAllowlist", "NO"]
         if persistentNavigation {
-            app.launchArguments += ["--uitest-persistent-navigation", "-betaAutomaticIPAllowlist", "NO"]
+            app.launchArguments += ["--uitest-persistent-navigation"]
         }
         app.launch()
         XCTAssertTrue(app.tabBars.buttons["Scan"].waitForExistence(timeout: 10))
@@ -305,6 +300,6 @@ import XCTest
 
     private func selectTab(_ title: String, in app: XCUIApplication) {
         let tab = app.tabBars.buttons[title]
-        XCTAssertTrue(tab.waitForExistence(timeout: 5)); tab.tap()
+        _ = UITestInteraction.tapToolbar(tab, in: app, identifier: "tab." + title)
     }
 }

@@ -16,7 +16,7 @@ import UIKit
     private var availableQuantity: Int { store.inventory.reduce(0) { $0 + max(0, $1.quantity) } }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 60, paused: !isVisible || scenePhase != .active)) { _ in
+        TimelineView(ForegroundMinuteSchedule(enabled: isVisible && scenePhase == .active)) { _ in
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     ShowBudgetSummaryCard(store: store)
@@ -161,7 +161,7 @@ private struct ShowHomeRouteCard: View {
         .onSubmit(of: .search) { endSearchEditing() }
         .safeAreaInset(edge: .top, spacing: 0) { inventorySummary }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            TimelineView(.animation(minimumInterval: 60, paused: !visible || scenePhase != .active)) { _ in
+            TimelineView(ForegroundMinuteSchedule(enabled: visible && scenePhase == .active)) { _ in
                 transactionAction
             }
         }
@@ -353,7 +353,7 @@ private struct ShowWorkingInventoryRow: View {
                 marketQuotes: TagPricingContext.currentQuotes(inventory: store.inventory, context: context))
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            TimelineView(.animation(minimumInterval: 60, paused: !visible || scenePhase != .active)) { _ in
+            TimelineView(ForegroundMinuteSchedule(enabled: visible && scenePhase == .active)) { _ in
                 quickSellAction
             }
         }

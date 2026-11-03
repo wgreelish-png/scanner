@@ -22,7 +22,7 @@ import XCTest
         XCTAssertTrue(done.waitForExistence(timeout: 5))
         XCTAssertEqual(done.label, "Done")
         XCTAssertGreaterThanOrEqual(done.frame.width, 60, "Done needs room for its full title")
-        done.tap()
+        _ = UITestInteraction.tap(done, in: app)
         let keyboardDismissed = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.keyboards.firstMatch)
         await fulfillment(of: [keyboardDismissed], timeout: 5)
         app.segmentedControls["list.section"].buttons["Cards"].tap()
@@ -32,14 +32,14 @@ import XCTest
         XCTAssertEqual(price.value as? String, "20", "Switching sections must keep the offer draft")
 
         let options = app.buttons["list.options"]
-        XCTAssertTrue(options.isHittable); options.tap()
+        _ = UITestInteraction.tapToolbar(options, in: app)
         XCTAssertTrue(app.buttons["list.exportCSV"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["list.shareCSV"].exists)
         let percentages = app.buttons["list.offerPercentages"]
         XCTAssertTrue(percentages.exists); percentages.tap()
         let rateEditor = app.navigationBars["Session Pricing"]
         XCTAssertTrue(rateEditor.waitForExistence(timeout: 5))
-        rateEditor.buttons["Cancel"].tap()
+        _ = UITestInteraction.tapToolbar(rateEditor.buttons["Cancel"], in: app)
         XCTAssertTrue(app.navigationBars["Review & Offer"].waitForExistence(timeout: 5))
 
         let record = app.buttons["list.recordTransaction"]
@@ -109,13 +109,6 @@ import XCTest
 
     private func reveal(_ element: XCUIElement, in app: XCUIApplication,
                         file: StaticString = #filePath, line: UInt = #line) {
-        for _ in 0..<10 {
-            if element.exists && element.isHittable { return }
-            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.80))
-            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.28))
-            start.press(forDuration: 0.05, thenDragTo: end)
-        }
-        XCTAssertTrue(element.waitForExistence(timeout: 5), file: file, line: line)
-        XCTAssertTrue(element.isHittable, file: file, line: line)
+        _ = UITestInteraction.reveal(element, in: app, file: file, line: line)
     }
 }

@@ -77,7 +77,7 @@ import XCTest
         saved.tap()
         XCTAssertTrue(app.navigationBars["Review & Offer"].waitForExistence(timeout: 5))
         let exportOptions = app.buttons["list.options"]
-        XCTAssertTrue(exportOptions.waitForExistence(timeout: 5)); exportOptions.tap()
+        _ = UITestInteraction.tapToolbar(exportOptions, in: app)
         let export = app.buttons["list.exportCSV"], share = app.buttons["list.shareCSV"]
         XCTAssertTrue(export.waitForExistence(timeout: 5)); XCTAssertTrue(export.isHittable); XCTAssertTrue(export.isEnabled)
         XCTAssertTrue(share.waitForExistence(timeout: 5)); XCTAssertTrue(share.isHittable); XCTAssertTrue(share.isEnabled)

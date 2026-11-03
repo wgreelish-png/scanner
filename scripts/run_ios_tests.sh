@@ -3,11 +3,13 @@
 set -euo pipefail
 SCANNER_TEST_TARGET="${1:?Expected an allowlisted native or UI suite}"
 SCANNER_TEST_SELECTION=(-only-testing:"$SCANNER_TEST_TARGET")
+SCANNER_UI_RUN=false
 for SCANNER_ALLOWED_TARGET in "$@"; do
   case "$SCANNER_ALLOWED_TARGET" in
     CardShowScannerTests|CardShowScannerUITests|CardShowScannerUITests/ResearchUITests|CardShowScannerUITests/MarketEvidenceUITests|CardShowScannerUITests/AppNavigationUITests|CardShowScannerUITests/ShowBudgetUITests|CardShowScannerUITests/ShowTransactionsUITests|CardShowScannerUITests/CardShowInventoryUITests|CardShowScannerUITests/ReviewPresentationUITests|CardShowScannerUITests/ListBulkDeletionUITests) ;;
     *) echo "Unknown test target" >&2; exit 2 ;;
   esac
+  if [[ "$SCANNER_ALLOWED_TARGET" == CardShowScannerUITests* ]]; then SCANNER_UI_RUN=true; fi
 done
 if [ "$#" -gt 1 ]; then
   shift
@@ -26,7 +28,22 @@ if [ "$SCANNER_TEST_TARGET" = CardShowScannerUITests ]; then
   SCANNER_TEST_SELECTION+=(-skip-testing:CardShowScannerUITests/ReviewPresentationUITests)
   SCANNER_TEST_SELECTION+=(-skip-testing:CardShowScannerUITests/ListBulkDeletionUITests)
 fi
-DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for k,v in d["devices"].items() if "iOS" in k for x in v if x["name"].startswith("iPhone")))')
+if [ "$SCANNER_UI_RUN" = true ]; then
+  # UI geometry and startup must not depend on simctl's listing order or data
+  # from a previously used device. Only this newly created simulator is stopped.
+  DEVICE_ID=$(python3 scripts/prepare_ui_simulator.py create)
+  scanner_finish_ui_simulator() {
+    SCANNER_UI_EXIT_CODE=$?
+    trap - EXIT
+    python3 scripts/prepare_ui_simulator.py shutdown "$DEVICE_ID" || true
+    exit "$SCANNER_UI_EXIT_CODE"
+  }
+  trap scanner_finish_ui_simulator EXIT
+  python3 scripts/prepare_ui_simulator.py boot "$DEVICE_ID"
+  SCANNER_TEST_SELECTION+=(-testLanguage en -testRegion US)
+else
+  DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for k,v in d["devices"].items() if "iOS" in k for x in v if x["name"].startswith("iPhone")))')
+fi
 # Xcode 16.3/16.4's iOS 18.4/18.5 simulator omits a Swift WebKit symlink.
 # Forward Apple's runtime-only workaround to XCTest; keep the app's iOS minimum.
 SCANNER_SWIFT_OVERLAY_DIR=$(python3 -c '

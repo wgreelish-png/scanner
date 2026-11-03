@@ -181,3 +181,5 @@ Build 44 fixes [website-authoritative inventory refresh](docs/AuthoritativeInven
 Build 45 keeps [main navigation visible through card details, Market and API settings](docs/AppNavigation.md). Cards open within their tab’s navigation stack, tab changes retain unsaved drafts and interrupted pricing resumes for the selected condition. Save/Cancel behavior is preserved; no financial or scanner-engine changes are included.
 
 Build 46 fixes the diagnostic’s Market Activity metadata rejection by raising the bounded category capacity from 32 to 256 while retaining schema, identity and size checks. Safe observed/allowed counts are logged for future limit failures. See [Market Activity index capacity](docs/MarketData.md#market-activity-index-capacity--build-46).
+
+Build 47 improves [UI reliability](docs/UIReliability.md): show date checks use foreground-only minute schedules, toolbar tests avoid invalid accessibility scrolling, card rows have stable interaction IDs, and UI jobs prepare a fresh compatible iPhone simulator. Existing save/Undo assertions and CI timeout limits are retained.

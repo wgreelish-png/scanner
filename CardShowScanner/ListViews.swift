@@ -492,7 +492,8 @@ struct ListDeletionConfirmationView: View {
                     }
                     }.foregroundStyle(.primary).frame(maxWidth: .infinity, alignment: .leading)
                 }.frame(maxWidth: .infinity, minHeight: 74, alignment: .leading)
-            }.swipeActions {
+            }.accessibilityIdentifier("list.card." + item.id.uuidString)
+            .swipeActions {
                 if !list.isCardShowInventory { Button("Remove", role: .destructive) { context.delete(item); save() } }
             }
         }

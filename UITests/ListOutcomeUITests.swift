@@ -11,6 +11,7 @@ import XCTest
         let suffix = String(UUID().uuidString.prefix(8))
         let recordedName = "UITest Outcome \(suffix)"
         let untouchedName = "UITest Unmarked \(suffix)"
+        app.launchArguments = ["-autoDatabaseUpdates", "NO", "-betaAutomaticIPAllowlist", "NO"]
         app.launch()
         defer { app.terminate() }
         openLists(in: app)
@@ -22,10 +23,10 @@ import XCTest
 
         // Merely opening the chooser, cancelling, or leaving the list does not
         // describe a purchase. Both lists must remain unmarked after restart.
-        app.buttons["list.recordTransaction"].tap()
+        _ = UITestInteraction.tap(app.buttons["list.recordTransaction"], in: app)
         XCTAssertTrue(choice("purchase", title: "Purchase", in: app).waitForExistence(timeout: 5))
         let cancel = app.buttons["Cancel"].firstMatch
-        XCTAssertTrue(cancel.waitForExistence(timeout: 5)); cancel.tap()
+        _ = UITestInteraction.tap(cancel, in: app)
         assertOutcome("No status", in: app)
         relaunchToLists(in: app)
         assertRow(untouchedName, outcome: "No status", in: app)
@@ -40,11 +41,11 @@ import XCTest
             (id: "trade", title: "Trade", screen: "Record Trade")
         ]
         for selected in choices {
-            app.buttons["list.recordTransaction"].tap()
+            _ = UITestInteraction.tap(app.buttons["list.recordTransaction"], in: app)
             let action = choice(selected.id, title: selected.title, in: app)
-            XCTAssertTrue(action.waitForExistence(timeout: 5)); action.tap()
+            _ = UITestInteraction.tap(action, in: app)
             XCTAssertTrue(app.navigationBars[selected.screen].waitForExistence(timeout: 5))
-            app.buttons["Cancel"].firstMatch.tap()
+            _ = UITestInteraction.tapToolbar(app.buttons["Cancel"].firstMatch, in: app)
             assertOutcome("No status", in: app)
         }
         relaunchToLists(in: app)
@@ -54,9 +55,9 @@ import XCTest
 
         let sections = app.segmentedControls["list.section"]
         XCTAssertTrue(sections.waitForExistence(timeout: 5))
-        sections.buttons["Offer"].tap()
+        _ = UITestInteraction.tap(sections.buttons["Offer"], in: app)
         let nothing = app.buttons["list.nothingHappened"]
-        XCTAssertTrue(nothing.waitForExistence(timeout: 5)); nothing.tap()
+        _ = UITestInteraction.tap(nothing, in: app)
         assertOutcome("Nothing Happened", in: app)
         XCTAssertEqual(app.buttons["list.recordTransaction"].label, "Record Transaction")
         relaunchToLists(in: app)
@@ -71,7 +72,8 @@ import XCTest
         let identifiedClear = app.buttons["list.clearOutcome"]
         let clear = identifiedClear.waitForExistence(timeout: 1)
             ? identifiedClear : app.buttons["Clear List Outcome"].firstMatch
-        XCTAssertTrue(clear.waitForExistence(timeout: 5), "The physical Options tap must open Clear List Outcome. " + String(app.debugDescription.prefix(3000))); clear.tap()
+        XCTAssertTrue(clear.waitForExistence(timeout: 5), "List options must open Clear List Outcome.")
+        _ = UITestInteraction.tap(clear, in: app)
         assertOutcome("No status", in: app)
         relaunchToLists(in: app)
         assertRow(recordedName, outcome: "No status", in: app)
@@ -83,16 +85,17 @@ import XCTest
 
     private func openLists(in app: XCUIApplication) {
         let open = app.tabBars.buttons["Lists"]
-        XCTAssertTrue(open.waitForExistence(timeout: 10)); open.tap()
+        XCTAssertTrue(open.waitForExistence(timeout: 10))
+        _ = UITestInteraction.tapToolbar(open, in: app)
         XCTAssertTrue(app.navigationBars["My Lists"].waitForExistence(timeout: 5))
     }
 
     private func createList(_ name: String, in app: XCUIApplication) {
-        app.buttons["savedLists.newList"].tap()
+        _ = UITestInteraction.tapToolbar(app.buttons["savedLists.newList"], in: app)
         let input = app.textFields["savedLists.newName"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
-        input.tap(); input.typeText(name + "\n")
-        app.buttons["savedLists.create"].tap()
+        _ = UITestInteraction.tap(input, in: app); input.typeText(name + "\n")
+        _ = UITestInteraction.tapToolbar(app.buttons["savedLists.create"], in: app)
         XCTAssertTrue(row(name, in: app).waitForExistence(timeout: 5))
     }
 
@@ -102,7 +105,8 @@ import XCTest
 
     private func openList(_ name: String, in app: XCUIApplication) {
         let saved = row(name, in: app)
-        XCTAssertTrue(saved.waitForExistence(timeout: 5)); saved.tap()
+        XCTAssertTrue(saved.waitForExistence(timeout: 5))
+        _ = UITestInteraction.tap(saved, in: app, identifier: "savedList.row")
         XCTAssertTrue(app.staticTexts["list.outcomeValue"].waitForExistence(timeout: 5))
     }
 
@@ -134,36 +138,20 @@ import XCTest
         return app.buttons[title].firstMatch
     }
 
-    private func tapListOptions(in app: XCUIApplication) {
+    private func tapListOptions(in app: XCUIApplication,
+                                file: StaticString = #filePath, line: UInt = #line) {
         let options = app.navigationBars.buttons["list.options"]
-        XCTAssertTrue(options.waitForExistence(timeout: 5))
-        let ready = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "exists == true AND enabled == true"), object: options)
-        let enabled = XCTWaiter.wait(for: [ready], timeout: 5) == .completed
-        XCTAssertTrue(enabled, "List options must be enabled after navigation completes. " + optionsFailureContext(in: app))
-        guard enabled else { return }
-        XCTAssertEqual(app.state, .runningForeground)
-        XCTAssertFalse(app.alerts.firstMatch.exists)
-        XCTAssertFalse(XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch.exists)
+        XCTAssertTrue(options.waitForExistence(timeout: 5), file: file, line: line)
+        guard options.exists else { return }
+        XCTAssertEqual(app.state, .runningForeground, file: file, line: line)
+        XCTAssertFalse(app.alerts.firstMatch.exists, file: file, line: line)
+        XCTAssertFalse(XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch.exists,
+                       file: file, line: line)
         let bounds = options.frame, window = app.windows.firstMatch.frame
-        let onScreen = bounds.width >= 44 && bounds.height >= 44 && window.contains(bounds)
-        XCTAssertTrue(onScreen, "List options must be entirely on screen with a 44-point target: \(bounds), window: \(window). " + optionsFailureContext(in: app))
-        guard onScreen else { return }
-        // This simulator reports the enabled, fully visible Menu as non-hittable
-        // and element.tap() fails AXScrollToVisible. Tap the identified control's
-        // validated center, as for the existing camera Options test. The caller
-        // requires the actual menu action, clear result and disk relaunch below.
-        options.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-    }
-
-    private func optionsFailureContext(in app: XCUIApplication) -> String {
-        let matches = app.buttons.matching(identifier: "list.options").allElementsBoundByIndex
-        let controls = matches.map {
-            "label=\($0.label), frame=\($0.frame), enabled=\($0.isEnabled), hittable=\($0.isHittable)"
-        }.joined(separator: "; ")
-        return "App state: \(app.state.rawValue); window: \(app.windows.firstMatch.frame); "
-            + "matching options: [\(controls)]; navigation bars: "
-            + String(app.navigationBars.debugDescription.prefix(3500))
+        XCTAssertTrue(bounds.width >= 44 && bounds.height >= 44 && window.contains(bounds),
+                      "List options must remain a fully visible 44-point target; frame: \(bounds), window: \(window)",
+                      file: file, line: line)
+        _ = UITestInteraction.tapToolbar(options, in: app, file: file, line: line)
     }
 
     private func relaunchToLists(in app: XCUIApplication) {
