@@ -14,34 +14,54 @@ struct MarketInsightsView: View {
     }
 }
 
+/// The shared card header owns the only visible market quote.
+struct MarketPriceSummary: View {
+    let model: MarketInsightsModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Card price").font(.caption).foregroundStyle(.secondary)
+            if model.publicLoading {
+                ProgressView("Checking price…").accessibilityIdentifier("marketDetails.publicLoading")
+            } else {
+                Text(model.publicDetails?.quote?.marketPrice?.money ?? "Price unavailable")
+                    .font(model.publicDetails?.quote?.marketPrice == nil ? .headline : .largeTitle.bold())
+                    .monospacedDigit().fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("marketDetails.marketPrice")
+            }
+            Text("USD per card").font(.caption).foregroundStyle(.secondary)
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 /// Sections only: the shared parent owns the List, card header and lifecycle.
 struct MarketInsightsContent: View {
     @Bindable var model: MarketInsightsModel
     @Binding var window: Int
+    @State private var showingListingDetails = false
 
     var body: some View {
-        Section("Market price") {
-            if model.publicLoading { ProgressView("Checking price…").accessibilityIdentifier("marketDetails.publicLoading") }
-            else {
-                Text(model.publicDetails?.quote?.marketPrice?.money ?? "Price unavailable")
-                    .font(model.publicDetails?.quote?.marketPrice == nil ? .headline : .largeTitle.bold())
-                    .monospacedDigit().accessibilityIdentifier("marketDetails.marketPrice")
-                Text("USD per card").font(.caption).foregroundStyle(.secondary)
-            }
-            if let message = model.publicMessage {
-                Text(message).font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("marketDetails.publicStatus")
-                Button("Retry Market Price") { model.refreshPublic() }.disabled(model.publicLoading)
-            }
-            if let context = model.publicDetails?.context {
-                DisclosureGroup("Listing details") {
-                    LabeledContent("Lowest listing", value: money(context.lowPrice))
+        Section {
+            DisclosureGroup(isExpanded: $showingListingDetails) {
+                if let message = model.publicMessage {
+                    Text(message).font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("marketDetails.publicStatus")
+                    Button("Retry Market Price") { model.refreshPublic() }.disabled(model.publicLoading)
+                }
+                if let context = model.publicDetails?.context {
+                    LabeledContent("Lowest listing", value: money(context.lowPrice)).accessibilityIdentifier("marketDetails.lowestListing")
                     LabeledContent("Highest listing", value: money(context.highPrice))
                     LabeledContent("Listing count", value: count(context.listingCount))
-                    Text("Asking prices are separate from completed sales.").font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("Listing details unavailable").font(.footnote).foregroundStyle(.secondary)
                 }
+                if let metadata = model.publicDetails?.metadata {
+                    LabeledContent("Price data", value: metadata.summary)
+                }
+                Text("Asking prices are separate from completed sales.").font(.caption).foregroundStyle(.secondary)
+            } label: {
+                Text("Listing details").accessibilityIdentifier("marketDetails.listingDetails")
             }
         }
-        Section("Sales activity") {
+        Section {
             if model.activityLoading { ProgressView("Loading activity…").accessibilityIdentifier("marketDetails.activityLoading") }
             if let message = model.activityMessage {
                 Text(message).font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("marketDetails.activityStatus")
@@ -65,6 +85,8 @@ struct MarketInsightsContent: View {
                     }
                 }
             }
+        } header: {
+            Text("Market Activity").accessibilityIdentifier("marketDetails.activityHeader")
         }
     }
 

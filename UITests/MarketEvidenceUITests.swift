@@ -8,6 +8,7 @@ import XCTest
         XCTAssertTrue(app.navigationBars["Card Research"].waitForExistence(timeout: 10))
         let modes = app.segmentedControls["cardResearch.section"]
         XCTAssertTrue(modes.waitForExistence(timeout: 5))
+        assertCompactResearchLayout(in: app)
         let condition = app.buttons["cardResearch.condition.LP"]
         UITestInteraction.tap(condition, in: app, identifier: "cardResearch.condition.LP")
         let period = app.segmentedControls["marketDetails.period"]
@@ -75,6 +76,45 @@ import XCTest
         revealChart(app.descendants(matching: .any)["research.historyChart"], in: app)
         revealChart(app.descendants(matching: .any)["research.salesHistoryChart"], in: app)
         XCTAssertFalse(app.alerts.firstMatch.exists)
+    }
+
+    private func assertCompactResearchLayout(in app: XCUIApplication,
+                                              file: StaticString = #filePath, line: UInt = #line) {
+        let price = app.staticTexts["marketDetails.marketPrice"]
+        XCTAssertTrue(price.waitForExistence(timeout: 5), file: file, line: line)
+        XCTAssertEqual(app.staticTexts.matching(identifier: "marketDetails.marketPrice").count, 1,
+                       "Show the quote once beside the thumbnail", file: file, line: line)
+        let name = app.staticTexts["cardResearch.name"]
+        let printing = app.buttons["cardResearch.printing.Holofoil"]
+        let language = app.buttons["cardResearch.language.English"]
+        let condition = app.buttons["cardResearch.condition.NM"]
+        let tcgplayer = app.descendants(matching: .any).matching(identifier: "cardResearch.tcgplayer").firstMatch
+        let listings = app.descendants(matching: .any).matching(identifier: "marketDetails.listingDetails").firstMatch
+        let activity = app.staticTexts["marketDetails.activityHeader"]
+        let ordered = [price, name, printing, language, condition, tcgplayer, listings, activity]
+        for element in ordered {
+            XCTAssertTrue(element.waitForExistence(timeout: 5), "Missing \(element.identifier)", file: file, line: line)
+        }
+        for index in 1..<ordered.count {
+            XCTAssertGreaterThanOrEqual(ordered[index].frame.minY, ordered[index - 1].frame.maxY - 1,
+                "Research controls must follow the displayed card order", file: file, line: line)
+        }
+        XCTAssertTrue(tcgplayer.isHittable, "The primary controls should fit without scrolling", file: file, line: line)
+        let bottom = app.tabBars.firstMatch.exists ? app.tabBars.firstMatch.frame.minY : app.windows.firstMatch.frame.maxY
+        XCTAssertLessThanOrEqual(activity.frame.maxY, bottom,
+            "Market Activity should follow the collapsed details in the initial viewport", file: file, line: line)
+        for unavailable in ["Japanese", "French", "German", "Italian", "Spanish", "Portuguese", "Russian", "Korean", "Simplified Chinese", "Traditional Chinese"] {
+            XCTAssertFalse(app.buttons["cardResearch.language." + unavailable].exists,
+                           "Do not offer an unpriced language", file: file, line: line)
+        }
+        let lowest = app.descendants(matching: .any).matching(identifier: "marketDetails.lowestListing").firstMatch
+        XCTAssertFalse(lowest.exists, "Listing details start collapsed", file: file, line: line)
+        UITestInteraction.tap(listings, in: app, identifier: "marketDetails.listingDetails", file: file, line: line)
+        XCTAssertTrue(lowest.waitForExistence(timeout: 5), file: file, line: line)
+        UITestInteraction.tap(listings, in: app, identifier: "marketDetails.listingDetails", file: file, line: line)
+        let collapsed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: lowest)
+        XCTAssertEqual(XCTWaiter.wait(for: [collapsed], timeout: 5), .completed, file: file, line: line)
+        scrollToTop(in: app)
     }
 
     // LabeledContent can expose its value as an independent text element or

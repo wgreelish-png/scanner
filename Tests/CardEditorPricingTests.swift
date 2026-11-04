@@ -157,6 +157,79 @@ import SwiftData
         XCTAssertEqual(model.card.identity.skuID, "100")
     }
 
+    func testLanguageOptionsRequireReturnedPriceEvidenceWithoutChangingSavedLanguageOrQuote() async throws {
+        let service = ControlledEditorPricing()
+        var saved = card(); saved.identity.language = "German"
+        let model = CardEditorPricingModel(card: saved, pricing: service)
+        XCTAssertTrue(model.languages.isEmpty)
+        model.loadPrintingOptions(); try await waitForRequests(1, pricing: service)
+        await service.resolve(0, with: nil, languages: ["JP"])
+        await waitForLanguages(["Japanese"], model: model)
+        XCTAssertEqual(model.card.identity.language, "German")
+        XCTAssertEqual(model.card.marketPrice, 10); XCTAssertEqual(model.price, "10")
+        XCTAssertEqual(model.card.identity.skuID, "100")
+        let requests = await service.requests
+        XCTAssertEqual(requests.count, 1, "One existing details response supplies all priced language choices")
+    }
+
+    func testChangingPrintingAndConditionClearsLanguagesAndRejectsLateAvailability() async throws {
+        let service = ControlledEditorPricing()
+        let model = CardEditorPricingModel(card: card(), pricing: service)
+        model.loadPrintingOptions(); try await waitForRequests(1, pricing: service)
+        await service.resolve(0, with: MarketQuote(marketPrice: 0, skuID: "100"), languages: ["Japanese"])
+        await waitForLanguages(["English", "Japanese"], model: model)
+        model.changeIdentity { $0.printing = "Holofoil" }
+        XCTAssertTrue(model.languages.isEmpty)
+        try await waitForRequests(2, pricing: service)
+        model.changeIdentity { $0.condition = "Damaged" }
+        XCTAssertTrue(model.languages.isEmpty)
+        try await waitForRequests(3, pricing: service)
+        await service.resolve(2, with: MarketQuote(marketPrice: nil, skuID: "300"), languages: ["French"])
+        await waitForIdle(model)
+        await service.resolve(1, with: MarketQuote(marketPrice: 99, skuID: "200"), languages: ["German"])
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(model.languages, ["French"])
+        XCTAssertEqual(model.card.identity.language, "English")
+        XCTAssertEqual(model.card.identity.printing, "Holofoil")
+        XCTAssertEqual(model.card.identity.condition, "Damaged")
+        XCTAssertNil(model.card.marketPrice)
+    }
+
+    func testManualPriceDoesNotInventLanguageAvailabilityAndCancelledReplyCannotAddChoices() async throws {
+        let service = ControlledEditorPricing()
+        let model = CardEditorPricingModel(card: card(), pricing: service)
+        model.refreshPrice(); try await waitForRequests(1, pricing: service)
+        await service.resolve(0, with: MarketQuote(marketPrice: nil, skuID: "100"), languages: ["Japanese"])
+        await waitForIdle(model)
+        XCTAssertEqual(model.languages, ["Japanese"])
+        model.setPrice("50")
+        XCTAssertEqual(model.languages, ["Japanese"], "A user-entered value does not prove an online language price")
+        model.loadPrintingOptions(); try await waitForRequests(2, pricing: service)
+        XCTAssertTrue(model.languages.isEmpty)
+        model.cancelLookup()
+        await service.resolve(1, with: MarketQuote(marketPrice: 99, skuID: "999"), languages: ["German"])
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertTrue(model.languages.isEmpty)
+        XCTAssertEqual(model.card.identity.language, "English")
+        XCTAssertEqual(model.card.marketPrice, 50)
+    }
+
+    func testCorrectedCardCannotKeepPreviousProductsLanguageChoicesAfterFailure() async throws {
+        let service = ControlledEditorPricing()
+        let model = CardEditorPricingModel(card: card(), pricing: service)
+        model.loadPrintingOptions(); try await waitForRequests(1, pricing: service)
+        await service.resolve(0, with: MarketQuote(marketPrice: 0, skuID: "100"))
+        await waitForLanguages(["English"], model: model)
+        var replacement = card(); replacement.identity.productID = "p:999"
+        model.replaceCard(with: replacement)
+        XCTAssertTrue(model.languages.isEmpty)
+        try await waitForRequests(2, pricing: service)
+        await service.reject(1, with: URLError(.notConnectedToInternet)); await waitForIdle(model)
+        XCTAssertTrue(model.languages.isEmpty)
+        XCTAssertEqual(model.card.identity.productID, "p:999")
+        XCTAssertEqual(model.card.identity.language, "English")
+    }
+
     func testLateOpeningCatalogCannotReplaceNewConditionPrintingOptions() async throws {
         let pricing = ControlledEditorPricing()
         let model = CardEditorPricingModel(card: card(), pricing: pricing)
@@ -379,6 +452,14 @@ import SwiftData
         }
         XCTFail("Editor printing options did not finish loading")
     }
+
+    private func waitForLanguages(_ expected: [String], model: CardEditorPricingModel) async {
+        for _ in 0..<100 {
+            if model.languages == expected { return }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Editor language options did not finish loading")
+    }
 }
 
 private actor ControlledEditorPricing: MarketPricing {
@@ -393,9 +474,9 @@ private actor ControlledEditorPricing: MarketPricing {
         forceRefreshes.append(forceRefresh)
         return try await withCheckedThrowingContinuation { pending.append($0) }
     }
-    func resolve(_ index: Int, with quote: MarketQuote?, printings: [String] = []) {
+    func resolve(_ index: Int, with quote: MarketQuote?, printings: [String] = [], languages: [String] = []) {
         let continuation = pending[index]; pending[index] = nil
-        continuation?.resume(returning: MarketDetails(quote: quote, printings: printings))
+        continuation?.resume(returning: MarketDetails(quote: quote, printings: printings, pricedLanguages: languages))
     }
     func reject(_ index: Int, with error: Error) {
         let continuation = pending[index]; pending[index] = nil; continuation?.resume(throwing: error)

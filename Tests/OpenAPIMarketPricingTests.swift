@@ -15,6 +15,80 @@ import XCTest
     "4641":{"cnd":"NM","var":"Foil","lng":"EN","mkt":4.54},
     "4642":{"cnd":"NM","var":"Normal","lng":"JP","mkt":2.15}
     """#
+
+    func testPricedLanguagesUseOnlyTheExactProductPrintingAndCondition() throws {
+        let rows = #"""
+        "1":{"cnd":"NM","var":"Normal","lng":"EN","mkt":0},
+        "2":{"cnd":"NM","var":"Normal","lng":"JP","mkt":"2.15"},
+        "3":{"cnd":"LP","var":"Normal","lng":"FR","mkt":3},
+        "4":{"cnd":"NM","var":"Foil","lng":"DE","mkt":4},
+        "5":{"cnd":"NM","var":"Normal","lng":"ES","mkt":null,"low":9,"hi":10,"cnt":20}
+        """#
+        let extra = #", "2":{"6":{"cnd":"NM","var":"Normal","lng":"IT","mkt":6}}"#
+        let data = body(rows, extra: extra)
+        let nearMint = try OpenAPIMarketPricing.parseDetails(data, for: card())
+        XCTAssertEqual(nearMint.pricedLanguages, ["English", "Japanese"])
+        XCTAssertEqual(nearMint.quote?.marketPrice, 0, "A known zero remains an available price")
+        XCTAssertEqual(try OpenAPIMarketPricing.parseDetails(data, for: card(condition: "Lightly Played")).pricedLanguages, ["French"])
+        XCTAssertEqual(try OpenAPIMarketPricing.parseDetails(data, for: card(printing: " foil ")).pricedLanguages, ["German"])
+        XCTAssertEqual(try OpenAPIMarketPricing.parseDetails(data, for: card("p:2")).pricedLanguages, ["Italian"])
+        XCTAssertTrue(try OpenAPIMarketPricing.parseDetails(data, for: card("p:999")).pricedLanguages.isEmpty)
+    }
+
+    func testMissingInvalidAndUnsupportedLanguagePricesAreNotAdvertised() throws {
+        let invalid = ["null", "true", "false", "-1", "\"-1\"", "\"NaN\"", "\"Infinity\"", "\"1e1000\"", "{}", "[]"]
+        for value in invalid {
+            let rows = "\"1\":{\"cnd\":\"NM\",\"var\":\"Normal\",\"lng\":\"EN\",\"mkt\":\(value),\"low\":99,\"cnt\":20},\"2\":{\"cnd\":\"NM\",\"var\":\"Normal\",\"lng\":\"JP\",\"mkt\":0}"
+            let details = try OpenAPIMarketPricing.parseDetails(body(rows), for: card())
+            XCTAssertEqual(details.pricedLanguages, ["Japanese"], value)
+            XCTAssertEqual(details.availableLanguages(for: "English"), ["Japanese"], value)
+        }
+        let missing = #"""
+        "1":{"cnd":"NM","var":"Normal","lng":"EN","low":99,"cnt":20},
+        "2":{"cnd":"NM","var":"Normal","lng":"XX","mkt":8},
+        "3":{"cnd":"NM","var":"Normal","lng":"Japanese","mkt":9}
+        """#
+        XCTAssertTrue(try OpenAPIMarketPricing.parseDetails(body(missing), for: card()).pricedLanguages.isEmpty)
+    }
+
+    func testDuplicateSKUIdentityExcludesLanguageEvenWhenOnlyOneRowHasAPrice() throws {
+        let rows = #"""
+        "1":{"cnd":"NM","var":"Normal","lng":"EN","mkt":4},
+        "2":{"cnd":"NM","var":"Normal","lng":"EN","mkt":null},
+        "3":{"cnd":"NM","var":"Normal","lng":"JP","mkt":0},
+        "invalid-sku":{"cnd":"NM","var":"Normal","lng":"JP","mkt":20}
+        """#
+        let details = try OpenAPIMarketPricing.parseDetails(body(rows), for: card())
+        XCTAssertNil(details.quote)
+        XCTAssertEqual(details.pricedLanguages, ["Japanese"])
+        XCTAssertEqual(details.availableLanguages(for: "English"), ["Japanese"])
+    }
+
+    func testUnknownSelectedLanguageStillReceivesOtherExactPricedLanguages() throws {
+        let details = try OpenAPIMarketPricing.parseDetails(body(exactRows), for: card(language: "Unlisted"))
+        XCTAssertNil(details.quote)
+        XCTAssertEqual(details.pricedLanguages, ["English", "Japanese"])
+        XCTAssertEqual(details.availableLanguages(for: "Unlisted"), ["English", "Japanese"])
+        XCTAssertTrue(try OpenAPIMarketPricing.parseDetails(body(exactRows), for: card(condition: "Unlisted")).pricedLanguages.isEmpty)
+    }
+
+    func testEveryDocumentedLanguageCodeProducesItsCanonicalPricedName() throws {
+        let languages = [("English", "EN"), ("Japanese", "JP"), ("French", "FR"), ("German", "DE"), ("Italian", "IT"), ("Spanish", "ES"),
+                         ("Portuguese", "PT"), ("Russian", "RU"), ("Korean", "KO"), ("Simplified Chinese", "CS"), ("Traditional Chinese", "CT")]
+        var rows: [String: [String: String]] = [:]
+        for (index, language) in languages.enumerated() {
+            rows[String(index + 1)] = ["cnd": "NM", "var": "Normal", "lng": language.1, "mkt": "0"]
+        }
+        let data = try JSONSerialization.data(withJSONObject: ["set_id": 1, "products": ["15038": rows]])
+        let expected = languages.map(\.0).sorted()
+        for language in languages {
+            let details = try OpenAPIMarketPricing.parseDetails(data, for: card(language: language.1))
+            XCTAssertEqual(details.quote?.marketPrice, 0)
+            XCTAssertEqual(details.pricedLanguages, expected)
+            XCTAssertEqual(details.availableLanguages(for: language.0), expected)
+        }
+    }
+
     func testExactSKUConditionLanguageAndFullPrinting() async throws {
         let data = body(exactRows)
         let normal = try OpenAPIMarketPricing.parseDetails(data, for: card())

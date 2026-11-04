@@ -8,6 +8,7 @@ import Observation
     private(set) var priceLoading = false
     private(set) var priceMessage: String?
     private(set) var priceConnectionRequired = false
+    private(set) var languages: [String] = []
     private let pricing: any MarketPricing
     private let manualPriceAllowed: Bool
     private var lookup: Task<Void, Never>?
@@ -66,6 +67,7 @@ import Observation
 
     private func fetchPrice(forceRefresh: Bool) {
         cancelLookup()
+        languages = []
         card.marketPrice = nil; card.identity.skuID = nil; card.marketPriceMetadata = nil; price = ""
         priceMessage = nil; priceConnectionRequired = false; priceLoading = true
         let request = requestID
@@ -77,6 +79,7 @@ import Observation
                 guard let self, !Task.isCancelled, self.requestID == request,
                       Self.priceIdentity(self.card.identity) == Self.priceIdentity(requestedCard.identity) else { return }
                 let quote = details.quote
+                self.languages = details.availableLanguages(for: requestedCard.identity.language)
                 if !details.printings.isEmpty { self.card.printings = details.printings }
                 self.card.marketPrice = quote?.marketPrice
                 self.card.identity.skuID = quote?.skuID
@@ -107,6 +110,7 @@ import Observation
     func loadPrintingOptions() {
         guard !priceLoading else { return }
         cancelLookup()
+        languages = []
         let request = requestID
         let requestedCard = card
         lookup = Task { [weak self, pricing] in
@@ -114,6 +118,7 @@ import Observation
                 let details = try await pricing.details(for: requestedCard, candidates: [requestedCard], forceRefresh: false)
                 guard let self, !Task.isCancelled, self.requestID == request,
                       Self.priceIdentity(self.card.identity) == Self.priceIdentity(requestedCard.identity) else { return }
+                self.languages = details.availableLanguages(for: requestedCard.identity.language)
                 if !details.printings.isEmpty { self.card.printings = details.printings }
                 if self.priceConnectionRequired {
                     self.priceConnectionRequired = false; self.priceMessage = nil

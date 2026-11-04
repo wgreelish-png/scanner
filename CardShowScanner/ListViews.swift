@@ -766,12 +766,6 @@ struct CardEditorView: View {
     }
 
     private var hasOfferOverrides: Bool { !cashOverride.isEmpty || !tradeOverride.isEmpty || !maximumOverride.isEmpty }
-    private var languages: [String] {
-        Array(Set([pricing.card.identity.language, "English", "Japanese", "French", "German", "Italian",
-                   "Spanish", "Portuguese", "Russian", "Korean", "Simplified Chinese", "Traditional Chinese"]))
-            .filter { !$0.isEmpty }.sorted()
-    }
-
     var body: some View {
         Form {
             Section {
@@ -787,9 +781,13 @@ struct CardEditorView: View {
                 Picker("Printing", selection: identityBinding(\.printing)) {
                     ForEach(Array(Set(pricing.card.printings + [pricing.card.identity.printing])).sorted(), id: \.self) { Text($0) }
                 }.pickerStyle(.menu).accessibilityIdentifier("cardEditor.printing")
-                Picker("Language", selection: identityBinding(\.language)) {
-                    ForEach(languages, id: \.self) { Text($0) }
-                }.pickerStyle(.menu).accessibilityIdentifier("cardEditor.language")
+                Menu {
+                    ForEach(pricing.languages, id: \.self) { language in
+                        Button(language) { pricing.changeIdentity { $0.language = language } }
+                    }
+                } label: {
+                    LabeledContent("Language", value: pricing.card.identity.language)
+                }.disabled(pricing.languages.isEmpty).accessibilityIdentifier("cardEditor.language")
             }
             Section("Your inventory") {
                 Stepper(value: $quantity, in: 1...100_000) {

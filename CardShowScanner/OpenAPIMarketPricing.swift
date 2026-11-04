@@ -123,7 +123,20 @@ struct OpenAPIMarketPricing: MarketPricing {
         let languageInput = normalized(card.identity.language), conditionInput = normalized(card.identity.condition)
         let language = languages[languageInput] ?? (Set(languages.values).contains(languageInput.uppercased()) ? languageInput.uppercased() : nil)
         let condition = conditions[conditionInput] ?? (Set(conditions.values).contains(conditionInput.uppercased()) ? conditionInput.uppercased() : nil)
-        guard let language, let condition else { return result }
+        guard let condition else { return result }
+        let languageCodes = Set(languages.values)
+        let matchingSelection = rows.filter { sku, row in
+            numericID(sku, maximumLength: 20) && languageCodes.contains(row.language) &&
+            row.condition == condition && normalized(row.variant) == normalized(card.identity.printing)
+        }
+        // Count every SKU identity before checking its price. An unpriced
+        // duplicate still makes an otherwise priced language ambiguous.
+        let languageRows = Dictionary(grouping: matchingSelection.values, by: \.language)
+        result.pricedLanguages = languageRows.compactMap { code, rows in
+            guard rows.count == 1, let row = rows.first, MarketDetails.hasPrice(row.market.value) else { return nil }
+            return MarketDetails.languageName(code)
+        }.sorted()
+        guard let language else { return result }
         let matches = rows.filter { sku, row in
             numericID(sku, maximumLength: 20) &&
             row.language == language && row.condition == condition && normalized(row.variant) == normalized(card.identity.printing)
