@@ -125,13 +125,26 @@ struct ListBulkDeletionConfirmationView: View {
                         LabeledContent(list.name, value: "\(list.quantity) cards")
                     }
                 }
-                if let error = model.error { Section { Text(error).foregroundStyle(.red).accessibilityIdentifier("bulkDeletion.error") } }
-                Section {
-                    Button(model.error == nil ? "Delete Selected Lists" : "Retry Delete", role: .destructive) {
+            }
+            .accessibilityIdentifier("bulkDeletion.selectedLists")
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 12) {
+                    if let error = model.error {
+                        Text(error).font(.footnote).foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("bulkDeletion.error")
+                    }
+                    Button(role: .destructive) {
                         if model.confirm(context: context) { onDeleted(); dismiss() }
-                    }.disabled(model.isDeleting).accessibilityIdentifier("bulkDeletion.confirm")
+                    } label: {
+                        Text(model.error == nil ? "Delete Selected Lists" : "Retry Delete")
+                            .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                    }.buttonStyle(.borderedProminent).tint(.red).controlSize(.large)
+                        .disabled(model.isDeleting || model.didDelete).accessibilityIdentifier("bulkDeletion.confirm")
                 }
-            }.navigationTitle("Delete Selected Lists").navigationBarTitleDisplayMode(.inline)
+                .padding(16).frame(maxWidth: .infinity).background(.regularMaterial)
+            }
+            .navigationTitle("Delete Selected Lists").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") { model.cancel(); dismiss() }.disabled(model.isDeleting)
@@ -149,7 +162,9 @@ struct ListBulkDeletionConfirmationView: View {
     init() {
         let value = try! ModelContainer(for: CardList.self, InventoryCard.self, ScanSession.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true))
-        for name in ["Bulk Fixture Alpha", "Bulk Fixture Beta", "Bulk Fixture Keep"] {
+        let extraNames = ProcessInfo.processInfo.arguments.contains("--uitest-long-bulk-list-delete")
+            ? (0..<60).map { String(format: "Bulk Fixture Extra %03d", $0) } : []
+        for name in ["Bulk Fixture Alpha", "Bulk Fixture Beta", "Bulk Fixture Keep"] + extraNames {
             value.mainContext.insert(CardList(name: name))
         }
         try! value.mainContext.save()
