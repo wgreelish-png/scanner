@@ -72,7 +72,13 @@ struct CardResearchView: View {
                 if let url = MarketplaceLinks.tcgplayerProduct(model.card.identity.productID) {
                     Link(destination: url) {
                         Label("View Card on TCGplayer", systemImage: "arrow.up.right.square")
-                    }.accessibilityIdentifier("cardResearch.tcgplayer")
+                            .font(.subheadline.weight(.semibold)).multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, 8).padding(.vertical, 6)
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .foregroundStyle(Color.white)
+                            .background(Color.indigo, in: RoundedRectangle(cornerRadius: 10))
+                    }.buttonStyle(.plain).accessibilityIdentifier("cardResearch.tcgplayer")
                         .accessibilityHint("Opens raw-card listings and sales history. Choose the matching printing and condition on TCGplayer.")
                 }
             }.listRowBackground(Color.indigo.opacity(0.07))
