@@ -57,6 +57,36 @@ import XCTest
         XCTAssertEqual(disk.writes, 0, file: file, line: line)
     }
 
+    private func legacyReplaceRetainingKnownLocalPurchase(_ disk: Disk) throws
+        -> (ledger: ShowBudgetStore, showID: UUID, purchase: ShowTransactionReceipt, localID: UUID) {
+        let ledger = store(disk)
+        try ledger.seedInventory([seed(quantity: 2)], sourceLocationID: 9)
+        let sourceID = try XCTUnwrap(ledger.inventory.first?.id)
+        let showID = try ledger.create(name: "Legacy overlapping local stock", startingCents: 30_000)
+        let purchase = try ledger.recordTransaction(.init(kind: .purchase,
+            incoming: [.init(card: card(), quantity: 2)], incomingValueCents: 1_400), showID: showID)
+        let localID = try XCTUnwrap(purchase.incoming.first?.inventoryID)
+        var historical = ledger.book
+        let event = ShowInventoryReconciliation(id: UUID(), sourceLocationID: 9,
+            snapshotID: snapshot("historical website retains known matching purchase"), recordedAt: disk.now,
+            sourceRows: [seed(quantity: 2)], createdInventoryIDs: [])
+        let before = historical.inventory
+        let plan = try ShowInventoryReconciliationMath.plan(event, inventory: before)
+        historical.inventory = plan.inventory
+        historical.inventoryReconciliations.append(event)
+        historical.costMutations.append(try .capturing(kind: .reconciliation, operationID: event.id,
+            recordedAt: event.recordedAt, itemIDs: plan.changedIDs, before: before, after: plan.inventory))
+        try historical.validate()
+        disk.data = try JSONEncoder().encode(historical)
+        let reopened = store(disk)
+        XCTAssertTrue(reopened.isLoaded)
+        XCTAssertNil(reopened.inventoryReconciliations.last?.mode)
+        XCTAssertEqual(try item(sourceID, in: reopened).quantity, 0)
+        XCTAssertEqual(try item(localID, in: reopened).quantity, 2)
+        XCTAssertEqual(try item(localID, in: reopened).remainingCostCents, 1_400)
+        return (reopened, showID, purchase, localID)
+    }
+
     func testSeventyFourSourceRowsReplaceEightySixWorkingCopiesWithEightyAcrossDuplicateSKULots() throws {
         let disk = Disk(), ledger = store(disk)
         let shared = card("shared")
@@ -213,31 +243,406 @@ import XCTest
         XCTAssertEqual(store(disk).book, ledger.book)
     }
 
-    func testMissingLocalPurchaseIsRetiredWithItsCostAndCashHistoryPreserved() throws {
+    func testFreshImportKeepsMissingLocalPurchaseWithItsCostAndCashHistory() throws {
         let disk = Disk(), ledger = store(disk)
         try ledger.seedInventory([seed(quantity: 2)], sourceLocationID: 9)
         let showID = try ledger.create(name: "Local purchase show", startingCents: 30_000)
         let bought = try ledger.recordTransaction(.init(kind: .purchase,
             incoming: [.init(card: card("local"), quantity: 3)], incomingValueCents: 2_100), showID: showID)
         let acquiredID = try XCTUnwrap(bought.incoming.first?.inventoryID)
+        let acquired = try item(acquiredID, in: ledger)
         let cash = try XCTUnwrap(ledger.activeShow).totals()
 
         let result = try ledger.reconcileInventory([seed(quantity: 2)], sourceLocationID: 9,
             snapshotID: snapshot("website omits purchase"))
 
-        XCTAssertEqual(result.removedQuantity, 3)
-        XCTAssertEqual(total(ledger), 2)
-        XCTAssertEqual(try item(acquiredID, in: ledger).quantity, 0)
-        XCTAssertEqual(try item(acquiredID, in: ledger).remainingCostCents, 0)
+        XCTAssertEqual(result.removedQuantity, 0)
+        XCTAssertEqual(result.totalQuantity, 5)
+        XCTAssertEqual(total(ledger), 5)
+        XCTAssertEqual(try item(acquiredID, in: ledger), acquired)
         XCTAssertEqual(ledger.transactions, [bought])
         XCTAssertEqual(try XCTUnwrap(ledger.activeShow).totals(), cash)
-        let bytes = disk.data, book = ledger.book
+        XCTAssertEqual(ledger.inventoryReconciliations.last?.mode, .merge)
+        try ledger.undoTransaction(bought.id)
+        XCTAssertEqual(try item(acquiredID, in: ledger).quantity, 0)
+        XCTAssertEqual(total(ledger), 2)
+        XCTAssertEqual(store(disk).book, ledger.book)
+    }
+
+    func testMergeAdoptsNewWebsiteCopiesWithoutDuplicatingLocalStockOrLosingCost() throws {
+        let disk = Disk(), ledger = store(disk)
+        try ledger.seedInventory([seed(quantity: 2)], sourceLocationID: 9)
+        let showID = try ledger.create(name: "Local and source copies", startingCents: 30_000)
+        let bought = try ledger.recordTransaction(.init(kind: .purchase,
+            incoming: [.init(card: card("newly uploaded"), quantity: 3)], incomingValueCents: 1_000), showID: showID)
+        let localID = try XCTUnwrap(bought.incoming.first?.inventoryID)
+        let local = try item(localID, in: ledger)
+        let cash = try XCTUnwrap(ledger.activeShow).totals()
+        let rows = [seed(quantity: 2), seed(2, card: card("newly uploaded"), quantity: 2)]
+        let marker = snapshot("two local copies now on the website")
+
+        let result = try ledger.reconcileInventory(rows, sourceLocationID: 9, snapshotID: marker)
+        XCTAssertEqual(result.totalQuantity, 5, "The two matched website copies must not duplicate the locally bought cards")
+        let retained = try item(localID, in: ledger)
+        XCTAssertEqual(retained.quantity, 1); XCTAssertEqual(retained.remainingCostCents, 333)
+        XCTAssertEqual(retained.acquiredByTransactionID, bought.id)
+        let adopted = try XCTUnwrap(ledger.inventory.first { $0.adoptedFromInventoryID == localID })
+        XCTAssertEqual(adopted.quantity, 2); XCTAssertEqual(adopted.remainingCostCents, 667)
+        XCTAssertEqual(adopted.sourceInventoryID, 2); XCTAssertEqual(adopted.sourceLocationID, 9)
+        XCTAssertNil(adopted.acquiredByTransactionID)
+        XCTAssertEqual(adopted.acquiredByReconciliationID, ledger.inventoryReconciliations.last?.id)
+        let retainedCost = try XCTUnwrap(retained.remainingCostCents)
+        let adoptedCost = try XCTUnwrap(adopted.remainingCostCents)
+        XCTAssertEqual(retainedCost + adoptedCost, try XCTUnwrap(local.remainingCostCents))
+        XCTAssertEqual(ledger.transactions, [bought]); XCTAssertEqual(bought.incoming.first?.inventoryID, localID)
+        XCTAssertEqual(try XCTUnwrap(ledger.activeShow).totals(), cash)
+        XCTAssertEqual(store(disk).book, ledger.book)
+
+        let saved = ledger.book, writes = disk.writes
+        XCTAssertTrue(try ledger.reconcileInventory(rows, sourceLocationID: 9, snapshotID: marker).unchangedSnapshot)
+        XCTAssertEqual(ledger.book, saved); XCTAssertEqual(disk.writes, writes)
+        _ = try ledger.reconcileInventory(rows, sourceLocationID: 9, snapshotID: snapshot("same website quantities fetched again"))
+        XCTAssertEqual(try item(localID, in: ledger), retained)
+        XCTAssertEqual(try item(adopted.id, in: ledger), adopted)
+        XCTAssertEqual(total(ledger), 5)
+        XCTAssertThrowsError(try ledger.undoTransaction(bought.id)) {
+            XCTAssertEqual($0 as? ShowTransactionFailure, .inventoryReconciled,
+                           "Adopted copies retain their purchase provenance; Undo cannot strand them in source stock")
+        }
+        XCTAssertEqual(store(disk).book, ledger.book)
+
+        let reopened = store(disk)
+        let sold = try reopened.recordTransaction(.init(kind: .sale,
+            outgoing: [.init(inventoryID: adopted.id, quantity: 1)], saleReceivedCents: 1_000), showID: showID)
+        XCTAssertEqual(sold.totalCostCents, 334)
+        XCTAssertEqual(try item(adopted.id, in: reopened).quantity, 1)
+        XCTAssertEqual(try item(adopted.id, in: reopened).remainingCostCents, 333)
+        XCTAssertEqual(try item(adopted.id, in: reopened).adoptedFromInventoryID, localID)
+        XCTAssertEqual(try item(localID, in: reopened), retained)
+        XCTAssertEqual(reopened.transactions.first, bought)
+        XCTAssertEqual(total(reopened), 4)
+        XCTAssertEqual(store(disk).book, reopened.book)
+    }
+
+    func testReplaceRemovesUnmatchedLocalStockWhilePreservingReceiptAndCashHistory() throws {
+        let disk = Disk(), ledger = store(disk)
+        try ledger.seedInventory([seed(quantity: 2)], sourceLocationID: 9)
+        let showID = try ledger.create(name: "Replace website inventory", startingCents: 30_000)
+        let bought = try ledger.recordTransaction(.init(kind: .purchase,
+            incoming: [.init(card: card("not on website"), quantity: 3)], incomingValueCents: 2_100), showID: showID)
+        let localID = try XCTUnwrap(bought.incoming.first?.inventoryID)
+        let cash = try XCTUnwrap(ledger.activeShow).totals()
+        let result = try ledger.reconcileInventory([seed(quantity: 2)], sourceLocationID: 9,
+            snapshotID: snapshot("explicit replace"), mode: .replace)
+        XCTAssertEqual(result.totalQuantity, 2); XCTAssertEqual(result.removedQuantity, 3)
+        XCTAssertEqual(try item(localID, in: ledger).quantity, 0)
+        XCTAssertEqual(try item(localID, in: ledger).remainingCostCents, 0)
+        XCTAssertEqual(ledger.transactions, [bought]); XCTAssertEqual(try XCTUnwrap(ledger.activeShow).totals(), cash)
+        XCTAssertEqual(ledger.inventoryReconciliations.last?.mode, .replace)
+        XCTAssertEqual(store(disk).book, ledger.book)
+    }
+
+    func testMergeDecreaseConsumesOnlySourceCostForTheSameCardIdentity() throws {
+        let disk = Disk(), ledger = store(disk)
+        try ledger.seedInventory([seed(quantity: 4)], sourceLocationID: 9)
+        let sourceID = try XCTUnwrap(ledger.inventory.first?.id)
+        try ledger.setInventoryCost(itemID: sourceID, totalCostCents: 1_000)
+        let showID = try ledger.create(name: "Source decrease keeps local copies", startingCents: 30_000)
+        let bought = try ledger.recordTransaction(.init(kind: .purchase,
+            incoming: [.init(card: card(), quantity: 2)], incomingValueCents: 1_400), showID: showID)
+        let localID = try XCTUnwrap(bought.incoming.first?.inventoryID)
+        let local = try item(localID, in: ledger)
+        let cash = try XCTUnwrap(ledger.activeShow).totals()
+
+        let result = try ledger.reconcileInventory([seed(quantity: 1)], sourceLocationID: 9,
+            snapshotID: snapshot("website reduces the shared identity"))
+
+        XCTAssertEqual(result.removedQuantity, 3); XCTAssertEqual(result.addedQuantity, 0)
+        XCTAssertEqual(result.totalQuantity, 3)
+        XCTAssertEqual(try item(sourceID, in: ledger).quantity, 1)
+        XCTAssertEqual(try item(sourceID, in: ledger).remainingCostCents, 250)
+        XCTAssertEqual(try item(localID, in: ledger), local)
+        XCTAssertEqual(ledger.transactions, [bought]); XCTAssertEqual(try XCTUnwrap(ledger.activeShow).totals(), cash)
+        XCTAssertEqual(store(disk).book, ledger.book)
+    }
+
+    func testReplaceAdoptsSurvivingLocalCopiesBeforeAnUnchangedMerge() throws {
+        let disk = Disk(), ledger = store(disk)
+        try ledger.seedInventory([seed(quantity: 2)], sourceLocationID: 9)
+        let showID = try ledger.create(name: "Replace then merge", startingCents: 30_000)
+        let bought = try ledger.recordTransaction(.init(kind: .purchase,
+            incoming: [.init(card: card("surviving local"), quantity: 2)], incomingValueCents: 1_000), showID: showID)
+        let localID = try XCTUnwrap(bought.incoming.first?.inventoryID)
+        let source = [seed(2, card: card("surviving local"), quantity: 1)]
+        let cash = try XCTUnwrap(ledger.activeShow).totals()
+
+        let replaced = try ledger.reconcileInventory(source, sourceLocationID: 9,
+            snapshotID: snapshot("replace keeps one known local copy"), mode: .replace)
+
+        XCTAssertEqual(replaced.totalQuantity, 1)
+        XCTAssertEqual(try item(localID, in: ledger).quantity, 0)
+        XCTAssertEqual(try item(localID, in: ledger).remainingCostCents, 0)
+        let adopted = try XCTUnwrap(ledger.inventory.first { $0.adoptedFromInventoryID == localID })
+        XCTAssertEqual(adopted.quantity, 1); XCTAssertEqual(adopted.remainingCostCents, 500)
+        XCTAssertEqual(adopted.sourceInventoryID, 2)
+        XCTAssertNil(adopted.acquiredByTransactionID)
+        XCTAssertEqual(ledger.transactions, [bought]); XCTAssertEqual(try XCTUnwrap(ledger.activeShow).totals(), cash)
+        XCTAssertEqual(store(disk).book, ledger.book)
+
+        let merged = try ledger.reconcileInventory(source, sourceLocationID: 9,
+            snapshotID: snapshot("merge after explicit replace"))
+        XCTAssertEqual(merged.totalQuantity, 1); XCTAssertEqual(merged.addedQuantity, 0)
+        XCTAssertEqual(try item(adopted.id, in: ledger), adopted)
         XCTAssertThrowsError(try ledger.undoTransaction(bought.id)) {
             XCTAssertEqual($0 as? ShowTransactionFailure, .inventoryReconciled)
         }
-        XCTAssertEqual(ledger.book, book)
-        XCTAssertEqual(disk.data, bytes)
         XCTAssertEqual(store(disk).book, ledger.book)
+    }
+
+    func testMergeNeverAdoptsLocalCardsWithAnotherLanguageConditionOrSKU() throws {
+        let disk = Disk(), ledger = store(disk)
+        try ledger.seedInventory([seed()], sourceLocationID: 9)
+        let showID = try ledger.create(name: "Exact local identity", startingCents: 30_000)
+        let variants = [card("variant", condition: "Lightly Played"), card("variant", language: "Japanese"),
+                        card("variant", sku: "200")]
+        let bought = try ledger.recordTransaction(.init(kind: .purchase,
+            incoming: variants.map { .init(card: $0, quantity: 1) }, incomingValueCents: 900), showID: showID)
+        let locals = try bought.incoming.map { try item($0.inventoryID, in: ledger) }
+
+        let result = try ledger.reconcileInventory([seed(), seed(2, card: card("variant"))],
+            sourceLocationID: 9, snapshotID: snapshot("different exact local variants"))
+
+        XCTAssertEqual(result.addedQuantity, 1); XCTAssertEqual(result.totalQuantity, 5)
+        for local in locals { XCTAssertEqual(try item(local.id, in: ledger), local) }
+        XCTAssertFalse(ledger.inventory.contains { $0.adoptedFromInventoryID != nil })
+        XCTAssertEqual(ledger.transactions, [bought])
+        XCTAssertEqual(store(disk).book, ledger.book)
+    }
+
+    func testUnchangedWebsiteBaselineAfterLocalSalesDoesNotAdoptRemainingLocalCopies() throws {
+        let disk = Disk(), ledger = store(disk)
+        let source = [seed(quantity: 3)]
+        try ledger.seedInventory(source, sourceLocationID: 9)
+        _ = try ledger.reconcileInventory(source, sourceLocationID: 9, snapshotID: snapshot("prior website count"))
+        let sourceID = try XCTUnwrap(ledger.inventory.first?.id)
+        let showID = try ledger.create(name: "Local sales keep website baseline", startingCents: 30_000)
+        _ = try ledger.recordTransaction(.init(kind: .sale,
+            outgoing: [.init(inventoryID: sourceID, quantity: 2)], saleReceivedCents: 2_000), showID: showID)
+        let bought = try ledger.recordTransaction(.init(kind: .purchase,
+            incoming: [.init(card: card(), quantity: 2)], incomingValueCents: 1_000), showID: showID)
+        let localID = try XCTUnwrap(bought.incoming.first?.inventoryID)
+        let soldLocal = try ledger.recordTransaction(.init(kind: .sale,
+            outgoing: [.init(inventoryID: localID, quantity: 1)], saleReceivedCents: 1_000), showID: showID)
+        let local = try item(localID, in: ledger)
+        XCTAssertEqual(local.quantity, 1); XCTAssertEqual(local.remainingCostCents, 500)
+
+        let result = try ledger.reconcileInventory(source, sourceLocationID: 9,
+            snapshotID: snapshot("unchanged website after local sales"))
+
+        XCTAssertEqual(result.addedQuantity, 2); XCTAssertEqual(result.removedQuantity, 0)
+        XCTAssertEqual(result.totalQuantity, 4)
+        XCTAssertEqual(try item(localID, in: ledger), local)
+        XCTAssertFalse(ledger.inventory.contains { $0.adoptedFromInventoryID != nil })
+        XCTAssertEqual(store(disk).book, ledger.book)
+        try ledger.undoTransaction(soldLocal.id)
+        XCTAssertEqual(try item(localID, in: ledger).quantity, 2)
+        XCTAssertEqual(try item(localID, in: ledger).remainingCostCents, 1_000)
+        XCTAssertEqual(total(ledger), 5)
+        XCTAssertEqual(store(disk).book, ledger.book)
+    }
+
+    func testFailedMergeAdoptionLeavesEveryLocalCostCentAvailableForRetryAfterReopen() throws {
+        let disk = Disk(), ledger = store(disk)
+        try ledger.seedInventory([seed()], sourceLocationID: 9)
+        let showID = try ledger.create(name: "Atomic adoption", startingCents: 30_000)
+        let bought = try ledger.recordTransaction(.init(kind: .purchase,
+            incoming: [.init(card: card("uploaded"), quantity: 3)], incomingValueCents: 1_000), showID: showID)
+        let localID = try XCTUnwrap(bought.incoming.first?.inventoryID)
+        let before = ledger.book, bytes = disk.data
+        let source = [seed(), seed(2, card: card("uploaded"), quantity: 2)]
+        let marker = snapshot("retry atomic adoption")
+        disk.fail = true
+
+        XCTAssertThrowsError(try ledger.reconcileInventory(source, sourceLocationID: 9, snapshotID: marker))
+        XCTAssertEqual(ledger.book, before); XCTAssertEqual(disk.data, bytes)
+        XCTAssertNil(ledger.lastInventorySnapshotID)
+        XCTAssertEqual(try item(localID, in: ledger).quantity, 3)
+        XCTAssertEqual(try item(localID, in: ledger).remainingCostCents, 1_000)
+        let reopened = store(disk)
+        XCTAssertEqual(reopened.book, before)
+        disk.fail = false
+
+        let result = try reopened.reconcileInventory(source, sourceLocationID: 9, snapshotID: marker)
+        XCTAssertEqual(result.totalQuantity, 4); XCTAssertEqual(result.addedQuantity, 0)
+        XCTAssertEqual(try item(localID, in: reopened).quantity, 1)
+        XCTAssertEqual(try item(localID, in: reopened).remainingCostCents, 333)
+        let adopted = try XCTUnwrap(reopened.inventory.first { $0.adoptedFromInventoryID == localID })
+        XCTAssertEqual(adopted.quantity, 2); XCTAssertEqual(adopted.remainingCostCents, 667)
+        XCTAssertEqual(reopened.transactions, [bought]); XCTAssertEqual(reopened.lastInventorySnapshotID, marker)
+        XCTAssertEqual(store(disk).book, reopened.book)
+    }
+
+    func testTradeAcquisitionRemainsAvailableForSaleAfterAnEmptyWebsiteRefresh() throws {
+        let disk = Disk(), ledger = store(disk)
+        try ledger.seedInventory([seed(quantity: 2)], sourceLocationID: 9)
+        let sourceID = try XCTUnwrap(ledger.inventory.first?.id)
+        try ledger.setInventoryCost(itemID: sourceID, totalCostCents: 1_400)
+        let showID = try ledger.create(name: "Trade and sell locally", startingCents: 30_000)
+        let traded = try ledger.recordTransaction(.init(kind: .trade,
+            incoming: [.init(card: card("trade acquisition"), quantity: 3)],
+            outgoing: [.init(inventoryID: sourceID, quantity: 1)],
+            incomingValueCents: 2_000, outgoingValueCents: 2_000), showID: showID)
+        let localID = try XCTUnwrap(traded.incoming.first?.inventoryID)
+        let local = try item(localID, in: ledger)
+        let cash = try XCTUnwrap(ledger.activeShow).totals()
+
+        let refreshed = try ledger.reconcileInventory([], sourceLocationID: 9,
+            snapshotID: snapshot("empty website keeps the received trade cards"))
+        XCTAssertEqual(refreshed.removedQuantity, 1)
+        XCTAssertEqual(refreshed.totalQuantity, 3)
+        XCTAssertEqual(try item(localID, in: ledger), local)
+        XCTAssertEqual(try XCTUnwrap(ledger.activeShow).totals(), cash)
+        let reopened = store(disk)
+        XCTAssertTrue(reopened.isLoaded)
+        XCTAssertEqual(try item(localID, in: reopened), local)
+
+        let sold = try reopened.recordTransaction(.init(kind: .sale,
+            outgoing: [.init(inventoryID: localID, quantity: 1)], saleReceivedCents: 1_000), showID: showID)
+        XCTAssertEqual(try item(localID, in: reopened).quantity, 2)
+        let consumed = try XCTUnwrap(sold.accounting?.outgoing.first?.totalCostCents)
+        XCTAssertEqual(try item(localID, in: reopened).remainingCostCents, try XCTUnwrap(local.remainingCostCents) - consumed)
+        XCTAssertEqual(store(disk).book, reopened.book)
+        XCTAssertThrowsError(try reopened.undoTransaction(traded.id)) {
+            XCTAssertEqual($0 as? ShowTransactionFailure, .inventoryReconciled,
+                           "The imported outgoing lot changed, so Undo must not restore source copies")
+        }
+    }
+
+    func testLegacyReconciliationWithoutPolicyReplaysWithoutRevivingRetiredLocalCards() throws {
+        let disk = Disk(), ledger = store(disk)
+        try ledger.seedInventory([seed(quantity: 2)], sourceLocationID: 9)
+        let showID = try ledger.create(name: "Historical authoritative import", startingCents: 30_000)
+        let bought = try ledger.recordTransaction(.init(kind: .purchase,
+            incoming: [.init(card: card("historically removed"), quantity: 3)], incomingValueCents: 2_100), showID: showID)
+        let localID = try XCTUnwrap(bought.incoming.first?.inventoryID)
+        var historical = ledger.book
+        let event = ShowInventoryReconciliation(id: UUID(), sourceLocationID: 9,
+            snapshotID: snapshot("old all-stock refresh"), recordedAt: disk.now,
+            sourceRows: [seed(quantity: 2)], createdInventoryIDs: [])
+        let before = historical.inventory
+        let plan = try ShowInventoryReconciliationMath.plan(event, inventory: before)
+        XCTAssertEqual(plan.summary.removedQuantity, 3, "An event without the new policy uses its original all-stock rules")
+        historical.inventory = plan.inventory
+        historical.inventoryReconciliations.append(event)
+        historical.costMutations.append(try .capturing(kind: .reconciliation, operationID: event.id,
+            recordedAt: event.recordedAt, itemIDs: plan.changedIDs, before: before, after: plan.inventory))
+        try historical.validate()
+        var document = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(historical)) as? [String: Any])
+        var events = try XCTUnwrap(document["inventoryReconciliations"] as? [[String: Any]])
+        for index in events.indices { events[index].removeValue(forKey: "mode") }
+        document["inventoryReconciliations"] = events
+        disk.data = try JSONSerialization.data(withJSONObject: document)
+        let bytes = disk.data, writes = disk.writes
+
+        let reopened = store(disk)
+        XCTAssertTrue(reopened.isLoaded)
+        XCTAssertEqual(try item(localID, in: reopened).quantity, 0)
+        XCTAssertEqual(try item(localID, in: reopened).remainingCostCents, 0)
+        XCTAssertEqual(reopened.transactions, [bought])
+        XCTAssertEqual(disk.data, bytes); XCTAssertEqual(disk.writes, writes)
+        XCTAssertNil(reopened.inventoryReconciliations.first?.mode)
+        XCTAssertEqual(reopened.inventoryReconciliations.first?.effectiveMode, .replace)
+        XCTAssertThrowsError(try reopened.undoTransaction(bought.id)) {
+            XCTAssertEqual($0 as? ShowTransactionFailure, .inventoryReconciled)
+        }
+        _ = try reopened.reconcileInventory([seed(quantity: 2)], sourceLocationID: 9,
+            snapshotID: snapshot("new source-only refresh"))
+        XCTAssertEqual(try item(localID, in: reopened).quantity, 0, "The new policy must not guess that an old retired lot can be restored")
+        XCTAssertEqual(reopened.inventoryReconciliations.last?.mode, .merge)
+        XCTAssertEqual(store(disk).book, reopened.book)
+    }
+
+    func testFirstMergeAdoptsLegacyMatchingLocalSurvivorWithoutAdoptingLaterPurchase() throws {
+        let disk = Disk()
+        let legacy = try legacyReplaceRetainingKnownLocalPurchase(disk)
+        let ledger = legacy.ledger
+        let later = try ledger.recordTransaction(.init(kind: .purchase,
+            incoming: [.init(card: card(), quantity: 1)], incomingValueCents: 600), showID: legacy.showID)
+        let laterID = try XCTUnwrap(later.incoming.first?.inventoryID)
+        let laterLot = try item(laterID, in: ledger)
+        let cash = try XCTUnwrap(ledger.activeShow).totals()
+
+        let result = try ledger.reconcileInventory([seed(quantity: 2)], sourceLocationID: 9,
+            snapshotID: snapshot("first merge after historical matching-local replace"))
+
+        XCTAssertEqual(result.totalQuantity, 3)
+        XCTAssertEqual(result.addedQuantity, 0); XCTAssertEqual(result.removedQuantity, 0)
+        XCTAssertEqual(try item(legacy.localID, in: ledger).quantity, 0)
+        XCTAssertEqual(try item(legacy.localID, in: ledger).remainingCostCents, 0)
+        let adopted = try XCTUnwrap(ledger.inventory.first { $0.adoptedFromInventoryID == legacy.localID })
+        XCTAssertEqual(adopted.quantity, 2); XCTAssertEqual(adopted.remainingCostCents, 1_400)
+        XCTAssertEqual(adopted.sourceInventoryID, 1); XCTAssertNil(adopted.acquiredByTransactionID)
+        XCTAssertEqual(try item(laterID, in: ledger), laterLot)
+        XCTAssertEqual(ledger.transactions, [legacy.purchase, later])
+        XCTAssertEqual(try XCTUnwrap(ledger.activeShow).totals(), cash)
+        XCTAssertEqual(store(disk).book, ledger.book)
+
+        _ = try ledger.reconcileInventory([seed(quantity: 2)], sourceLocationID: 9,
+            snapshotID: snapshot("later unchanged merge after historical overlap consumed"))
+        XCTAssertEqual(total(ledger), 3)
+        XCTAssertEqual(try item(laterID, in: ledger), laterLot)
+        XCTAssertEqual(try item(adopted.id, in: ledger), adopted)
+        try ledger.undoTransaction(later.id)
+        XCTAssertEqual(total(ledger), 2)
+        XCTAssertEqual(try item(adopted.id, in: ledger), adopted)
+        XCTAssertEqual(store(disk).book, ledger.book)
+    }
+
+    func testFirstMergeRetiresLegacyLocalOverlapButKeepsPurchasesMadeAfterLegacyReplace() throws {
+        for websiteQuantity in [1, 0] {
+            let disk = Disk()
+            let legacy = try legacyReplaceRetainingKnownLocalPurchase(disk)
+            let ledger = legacy.ledger
+            let later = try ledger.recordTransaction(.init(kind: .purchase,
+                incoming: [.init(card: card(), quantity: 2)], incomingValueCents: 1_000), showID: legacy.showID)
+            let laterID = try XCTUnwrap(later.incoming.first?.inventoryID)
+            let laterLot = try item(laterID, in: ledger)
+            let cash = try XCTUnwrap(ledger.activeShow).totals()
+            let source = websiteQuantity == 0 ? [] : [seed(quantity: websiteQuantity)]
+
+            let result = try ledger.reconcileInventory(source, sourceLocationID: 9,
+                snapshotID: snapshot("first merge reduces historical overlap to \(websiteQuantity)"))
+
+            XCTAssertEqual(result.totalQuantity, websiteQuantity + 2)
+            XCTAssertEqual(result.addedQuantity, 0); XCTAssertEqual(result.removedQuantity, 2 - websiteQuantity)
+            XCTAssertEqual(try item(legacy.localID, in: ledger).quantity, 0)
+            XCTAssertEqual(try item(legacy.localID, in: ledger).remainingCostCents, 0)
+            let adopted = ledger.inventory.filter { $0.adoptedFromInventoryID == legacy.localID }
+            XCTAssertEqual(adopted.reduce(0) { $0 + $1.quantity }, websiteQuantity)
+            XCTAssertEqual(adopted.compactMap(\.remainingCostCents).reduce(0, +), Int64(websiteQuantity * 700))
+            XCTAssertEqual(try item(laterID, in: ledger), laterLot)
+            XCTAssertEqual(ledger.transactions, [legacy.purchase, later])
+            XCTAssertEqual(try XCTUnwrap(ledger.activeShow).totals(), cash)
+            XCTAssertEqual(store(disk).book, ledger.book)
+        }
+    }
+
+    func testChangingOrRemovingMergeModeCannotReinterpretTheNewJournal() throws {
+        let disk = Disk(), ledger = store(disk)
+        try ledger.seedInventory([seed(quantity: 1)], sourceLocationID: 9)
+        let showID = try ledger.create(name: "Preserved import proof", startingCents: 30_000)
+        _ = try ledger.recordTransaction(.init(kind: .purchase,
+            incoming: [.init(card: card("protected local"), quantity: 2)], incomingValueCents: 1_000), showID: showID)
+        _ = try ledger.reconcileInventory([], sourceLocationID: 9, snapshotID: snapshot("source absent, local kept"))
+        let valid = try object(disk)
+        for mode in [ShowInventoryImportMode.replace.rawValue, nil] as [String?] {
+            var changed = valid
+            var events = try XCTUnwrap(changed["inventoryReconciliations"] as? [[String: Any]])
+            if let mode { events[0]["mode"] = mode }
+            else { events[0].removeValue(forKey: "mode") }
+            changed["inventoryReconciliations"] = events
+            try assertRejected(changed)
+        }
     }
 
     func testReductionPrefersUnknownCostBeforeKnownAndNewerBeforeOlderLots() throws {
@@ -320,6 +725,22 @@ import XCTest
         XCTAssertEqual(total(ledger), 2)
     }
 
+    func testCommittedSnapshotCannotBeReusedWithADifferentImportMode() throws {
+        for mode in ShowInventoryImportMode.allCases {
+            let disk = Disk(), ledger = store(disk)
+            let source = [seed(quantity: 2)], marker = snapshot("one durable import mode")
+            _ = try ledger.reconcileInventory(source, sourceLocationID: 9, snapshotID: marker, mode: mode)
+            let book = ledger.book, bytes = disk.data, writes = disk.writes
+            let changedMode: ShowInventoryImportMode = mode == .merge ? .replace : .merge
+
+            XCTAssertThrowsError(try ledger.reconcileInventory(source, sourceLocationID: 9,
+                snapshotID: marker, mode: changedMode))
+
+            XCTAssertEqual(ledger.book, book); XCTAssertEqual(disk.data, bytes); XCTAssertEqual(disk.writes, writes)
+            XCTAssertEqual(store(disk).book, book)
+        }
+    }
+
     func testFreshSnapshotCanApplyTheSameQuantitiesAfterALocalSale() throws {
         let disk = Disk(), ledger = store(disk)
         let source = [seed(quantity: 3)]
@@ -388,6 +809,11 @@ import XCTest
         try ledger.seedInventory([seed(quantity: 3)], sourceLocationID: 9)
         let stockID = try XCTUnwrap(ledger.inventory.first?.id)
         try ledger.setInventoryCost(itemID: stockID, totalCostCents: 1_000)
+        let showID = try ledger.create(name: "Failure keeps local stock", startingCents: 30_000)
+        let bought = try ledger.recordTransaction(.init(kind: .purchase,
+            incoming: [.init(card: card("retry local acquisition"), quantity: 3)], incomingValueCents: 2_100), showID: showID)
+        let localID = try XCTUnwrap(bought.incoming.first?.inventoryID)
+        let local = try item(localID, in: ledger)
         let book = ledger.book, bytes = disk.data, marker = snapshot("retry failed fresh import")
         let source = [seed(10, quantity: 1), seed(11, card: card("new"), quantity: 2)]
         disk.fail = true
@@ -399,6 +825,7 @@ import XCTest
         XCTAssertEqual(disk.data, bytes)
         XCTAssertNil(ledger.lastInventorySnapshotID)
         XCTAssertTrue(ledger.inventoryReconciliations.isEmpty)
+        XCTAssertEqual(try item(localID, in: ledger), local)
         let restarted = store(disk)
         XCTAssertEqual(restarted.book, book)
 
@@ -409,6 +836,8 @@ import XCTest
         XCTAssertEqual(restarted.lastInventorySnapshotID, marker)
         XCTAssertEqual(restarted.inventoryReconciliations.count, 1)
         XCTAssertEqual(try item(stockID, in: restarted).remainingCostCents, 333)
+        XCTAssertEqual(try item(localID, in: restarted), local)
+        XCTAssertEqual(result.totalQuantity, 6)
         let committed = restarted.book, writes = disk.writes
         XCTAssertTrue(try restarted.reconcileInventory(source, sourceLocationID: 9,
             snapshotID: marker).unchangedSnapshot)
@@ -515,25 +944,41 @@ import XCTest
         }
     }
 
-    func testUnchangedFreshImportKeepsOrdinaryTransactionUndoAvailable() throws {
+    func testImportedCopiesWithSameIdentityAsPurchaseDoNotPreventLocalPurchaseUndo() throws {
         let disk = Disk(), ledger = store(disk)
-        try ledger.seedInventory([seed()], sourceLocationID: 9)
+        let source = [seed(), seed(2, card: card("purchase"), quantity: 2)]
+        try ledger.seedInventory(source, sourceLocationID: 9)
         let showID = try ledger.create(name: "Undo show", startingCents: 30_000)
+        let sourceID = try XCTUnwrap(ledger.inventory.first { $0.sourceInventoryID == 2 }?.id)
+        let sold = try ledger.recordTransaction(.init(kind: .sale,
+            outgoing: [.init(inventoryID: sourceID, quantity: 1)], saleReceivedCents: 1_000), showID: showID)
+        let cashBeforePurchase = try XCTUnwrap(ledger.activeShow).totals().availableCents
         let bought = try ledger.recordTransaction(.init(kind: .purchase,
             incoming: [.init(card: card("purchase"), quantity: 2)], incomingValueCents: 1_400), showID: showID)
         let purchasedID = try XCTUnwrap(bought.incoming.first?.inventoryID)
-        let source = [seed(), seed(2, card: card("purchase"), quantity: 2)]
+        let purchased = try item(purchasedID, in: ledger)
         let result = try ledger.reconcileInventory(source, sourceLocationID: 9,
-            snapshotID: snapshot("quantities already agree"))
-        XCTAssertEqual(result.addedQuantity, 0)
+            snapshotID: snapshot("website count unchanged after source sale and local purchase"))
+        XCTAssertEqual(result.addedQuantity, 1)
         XCTAssertEqual(result.removedQuantity, 0)
-        XCTAssertEqual(ledger.book.costMutations.last?.changes.count, 0)
+        XCTAssertEqual(result.totalQuantity, 5)
+        XCTAssertEqual(ledger.book.costMutations.last?.changes.count, 1)
+        XCTAssertEqual(try item(purchasedID, in: ledger), purchased,
+                       "Only growth from the previous website count may adopt a local purchase")
+        let imported = try XCTUnwrap(ledger.inventory.first { $0.acquiredByReconciliationID != nil })
+        XCTAssertEqual(imported.quantity, 1)
+        XCTAssertNil(imported.adoptedFromInventoryID)
+        XCTAssertNil(imported.remainingCostCents)
 
         try ledger.undoTransaction(bought.id)
 
         XCTAssertEqual(try item(purchasedID, in: ledger).quantity, 0)
         XCTAssertEqual(try item(purchasedID, in: ledger).remainingCostCents, 0)
-        XCTAssertEqual(try XCTUnwrap(ledger.activeShow).totals().availableCents, 30_000)
+        XCTAssertEqual(total(ledger), 3, "The independently imported copies remain after Undo removes the local purchase")
+        XCTAssertEqual(try XCTUnwrap(ledger.activeShow).totals().availableCents, cashBeforePurchase)
+        XCTAssertThrowsError(try ledger.undoTransaction(sold.id)) {
+            XCTAssertEqual($0 as? ShowTransactionFailure, .inventoryReconciled)
+        }
         XCTAssertEqual(store(disk).book, ledger.book)
     }
 

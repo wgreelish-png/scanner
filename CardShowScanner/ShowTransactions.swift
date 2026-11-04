@@ -132,15 +132,25 @@ struct ShowInventoryItem: Codable, Equatable, Identifiable, Sendable {
     var acquiredAt: Date
     /// Total actual cost of the copies still in this lot. Nil means unknown.
     var remainingCostCents: Int64?
+    /// A website-managed copy adopted from a local purchase/trade lot. The
+    /// original lot and receipt remain immutable acquisition provenance.
+    var adoptedFromInventoryID: UUID? = nil
+
+    var originTitle: String {
+        sourceInventoryID != nil || sourceLocationID != nil || acquiredByReconciliationID != nil
+            ? "TCGTracking" : "Acquired locally"
+    }
 
     init(id: UUID = UUID(), card: CardCandidate, quantity: Int, sourceInventoryID: Int? = nil,
          sourceLocationID: Int? = nil, acquiredByTransactionID: UUID? = nil, acquiredAt: Date = Date(),
-         remainingCostCents: Int64? = nil, acquiredByReconciliationID: UUID? = nil) {
+         remainingCostCents: Int64? = nil, acquiredByReconciliationID: UUID? = nil,
+         adoptedFromInventoryID: UUID? = nil) {
         self.id = id; self.card = card; self.quantity = quantity; self.sourceInventoryID = sourceInventoryID
         self.sourceLocationID = sourceLocationID; self.acquiredByTransactionID = acquiredByTransactionID
         self.acquiredAt = acquiredAt
         self.remainingCostCents = remainingCostCents
         self.acquiredByReconciliationID = acquiredByReconciliationID
+        self.adoptedFromInventoryID = adoptedFromInventoryID
     }
 }
 
@@ -603,6 +613,10 @@ extension ShowBudgetBook {
         var reconciled = Set<UUID>(), reconciliationOrder: [UUID] = []
         var recordPositions = Dictionary(uniqueKeysWithValues: legacy.map { ($0, -1) })
         var lastReconciliationPositions: [CardIdentity: Int] = [:]
+        var lastSourceReconciliationPositions: [CardIdentity: Int] = [:]
+        var lastDirectReconciliationPositions: [UUID: Int] = [:]
+        var previousSourceRows = try initialWebsiteSourceRows()
+        var legacyLocalOverlap: [UUID: Int] = [:]
         var activeReceipts = legacy.subtracting(legacyReversed)
         for (mutationIndex, mutation) in costMutations.enumerated() {
             let maximumChanges = mutation.kind == .reconciliation ? Self.maximumInventoryItems : Self.maximumTransactionCards * 2
@@ -663,8 +677,15 @@ extension ShowBudgetBook {
                     throw ShowBudgetFailure.invalidBook
                 }
                 let affected = receipt.incoming.map { $0.card.identity } + receipt.outgoing.map { $0.card.identity }
+                let sourceAffected = (receipt.incoming + receipt.outgoing).compactMap { line -> CardIdentity? in
+                    guard let item = stock[line.inventoryID], item.acquiredByTransactionID == nil else { return nil }
+                    return line.card.identity
+                }
+                let affectedIDs = (receipt.incoming + receipt.outgoing).map(\.inventoryID)
                 guard let recordedPosition = recordPositions[receipt.id],
-                      affected.allSatisfy({ (lastReconciliationPositions[$0] ?? -1) <= recordedPosition }) else {
+                      affected.allSatisfy({ (lastReconciliationPositions[$0] ?? -1) <= recordedPosition }),
+                      sourceAffected.allSatisfy({ (lastSourceReconciliationPositions[$0] ?? -1) <= recordedPosition }),
+                      affectedIDs.allSatisfy({ (lastDirectReconciliationPositions[$0] ?? -1) <= recordedPosition }) else {
                     throw ShowBudgetFailure.invalidBook
                 }
                 var changes: [ShowCostStockChange] = []
@@ -708,7 +729,8 @@ extension ShowBudgetBook {
                     item.quantity = state.quantity; item.remainingCostCents = state.remainingCostCents
                     return item
                 }
-                let plan = try ShowInventoryReconciliationMath.plan(event, inventory: beforeInventory)
+                let plan = try ShowInventoryReconciliationMath.plan(event, inventory: beforeInventory,
+                    previousSourceRows: previousSourceRows, legacyLocalOverlap: legacyLocalOverlap)
                 let planned = Dictionary(uniqueKeysWithValues: plan.inventory.map { ($0.id, $0) })
                 for id in event.createdInventoryIDs {
                     guard var durable = stock[id], let initial = planned[id] else { throw ShowBudgetFailure.invalidBook }
@@ -720,8 +742,16 @@ extension ShowBudgetBook {
                     after: plan.inventory).changes
                 for id in plan.changedIDs {
                     guard let item = planned[id] else { throw ShowBudgetFailure.invalidBook }
-                    lastReconciliationPositions[item.card.identity] = mutationIndex
+                    if event.effectiveMode == .merge {
+                        lastSourceReconciliationPositions[item.card.identity] = mutationIndex
+                    } else {
+                        lastReconciliationPositions[item.card.identity] = mutationIndex
+                    }
+                    lastDirectReconciliationPositions[id] = mutationIndex
                 }
+                previousSourceRows = event.sourceRows
+                legacyLocalOverlap = event.mode == nil ? Dictionary(uniqueKeysWithValues:
+                    plan.inventory.filter { $0.acquiredByTransactionID != nil && $0.quantity > 0 }.map { ($0.id, $0.quantity) }) : [:]
                 reconciliationOrder.append(event.id)
             }
             guard mutation.changes == expected else { throw ShowBudgetFailure.invalidBook }

@@ -112,6 +112,10 @@ struct TagSaleSuggestion: Equatable {
                     amounts[line.inventoryID] = value.partialValue
                 }
             } else {
+                // A source takeover must not silently replace an existing
+                // physical sticker with market rounding. The originating lot
+                // may still contain copies and can be repriced independently.
+                if let origin = item.adoptedFromInventoryID, store.record(for: origin) != nil { return nil }
                 guard let value = ShowSaleMath.suggestedTotal([line]) else { return nil }
                 amounts[line.inventoryID] = value
             }

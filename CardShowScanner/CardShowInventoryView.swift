@@ -12,6 +12,8 @@ import SwiftData
     @State private var copyMessage: String?
     @State private var removingSnapshot = false
     @State private var removalError: String?
+    @State private var importMode: ShowInventoryImportMode = .merge
+    @State private var confirmingReplace = false
 
     init(provider: (any CardShowInventoryProviding)? = nil, workingStore: ShowBudgetStore = .shared) {
         _model = State(initialValue: CardShowInventoryModel(provider: provider, workingStore: workingStore))
@@ -51,23 +53,8 @@ import SwiftData
                 }
             }
             Section {
-                Button {
-                    copyMessage = nil; model.refresh(context: context)
-                } label: {
-                    Label(savedList == nil ? "Import Inventory" : "Refresh Inventory", systemImage: "arrow.clockwise")
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                }.buttonStyle(.borderedProminent).disabled(model.isRefreshing)
-                    .accessibilityIdentifier("cardShowInventory.refresh")
-                if model.isRefreshing {
-                    ProgressView("Downloading complete inventory…").accessibilityIdentifier("cardShowInventory.loading")
-                }
                 if let message = model.message {
                     Text(message).font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("cardShowInventory.status")
-                }
-                if savedList?.cardShowInventory?.pendingWorkingSync == true && !model.requiresFreshInventoryRefresh {
-                    Button("Retry Inventory Update", systemImage: "arrow.triangle.2.circlepath") {
-                        model.retryWorkingInventory(context: context)
-                    }.disabled(model.isRefreshing).accessibilityIdentifier("cardShowInventory.retryWorkingSync")
                 }
                 Button {
                     model.setActive(false); showingConnection = true
@@ -75,10 +62,11 @@ import SwiftData
                     Label(model.needsSignIn ? "Sign In to TCGTracking" : "TCGTracking Account", systemImage: "person.crop.circle")
                 }.buttonStyle(.borderless).disabled(model.isRefreshing).accessibilityIdentifier("cardShowInventory.connect")
             } footer: {
-                Text("Refresh replaces available local quantities with the website’s Card Show inventory. Transaction history and acquisition costs are retained. Local sales and purchases are not sent to the website; update the website before your next import. Saved inventory works offline; artwork and new research may need internet.")
+                Text("Merge keeps local cards that are not yet on TCGTracking and reconciles matching website stock. Replace makes available stock match TCGTracking exactly. Transaction history and acquisition costs are retained. Imports do not upload local acquisitions. Saved inventory works offline; artwork and research may need internet.")
             }
         }
         .navigationTitle("Card Show Inventory").navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .bottom, spacing: 0) { importActions }
         .toolbar {
             if savedList != nil {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -98,16 +86,62 @@ import SwiftData
             }
             Button("Cancel", role: .cancel) {}
         } message: { Text("Your local working stock, transactions and budget are kept. Website inventory is unchanged.") }
+        .confirmationDialog("Replace all available inventory?", isPresented: $confirmingReplace, titleVisibility: .visible) {
+            Button("Replace All Inventory", role: .destructive) { beginRefresh(mode: .replace) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Available quantities will match TCGTracking. Local cards missing from the website will be removed from available stock. Acquisition costs and transaction history stay recorded.")
+        }
         .failureAlert($removalError)
         .fullScreenCover(isPresented: $showingConnection, onDismiss: {
             visible = true; model.setActive(scenePhase == .active)
-            if scenePhase == .active { model.refresh(context: context) }
+            if scenePhase == .active { requestRefresh() }
         }) {
             TCGTrackingConnectionView(continueTitle: "Return to Inventory") { showingConnection = false }
         }
         .onAppear { visible = true; model.setActive(scenePhase == .active && !showingConnection) }
         .onDisappear { visible = false; model.setActive(false) }
         .onChange(of: scenePhase) { _, phase in model.setActive(visible && !showingConnection && phase == .active) }
+    }
+
+    private var importActions: some View {
+        VStack(spacing: 8) {
+            Picker("Import mode", selection: $importMode) {
+                Text("Merge").tag(ShowInventoryImportMode.merge)
+                Text("Replace").tag(ShowInventoryImportMode.replace)
+            }.pickerStyle(.segmented).disabled(model.isRefreshing)
+                .accessibilityIdentifier("cardShowInventory.importMode")
+            Text(importMode == .merge ? "Keep unmatched local cards." : "Use TCGTracking quantities for all available stock.")
+                .font(.caption).foregroundStyle(.secondary)
+            Button(action: requestRefresh) {
+                Label(savedList == nil ? "Import Inventory" : (importMode == .merge ? "Merge Inventory" : "Replace Inventory"),
+                      systemImage: "arrow.clockwise")
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }.buttonStyle(.borderedProminent).tint(importMode == .merge ? Color.indigo : Color.red)
+                .disabled(model.isRefreshing).accessibilityIdentifier("cardShowInventory.refresh")
+            if model.isRefreshing {
+                ProgressView("Downloading complete inventory…").accessibilityIdentifier("cardShowInventory.loading")
+            }
+            if savedList?.cardShowInventory?.pendingWorkingSync == true && !model.requiresFreshInventoryRefresh {
+                let pendingMode = savedList?.cardShowInventory?.effectiveImportMode ?? .replace
+                Text("Pending download: " + (pendingMode == .merge ? "Merge" : "Replace"))
+                    .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("cardShowInventory.pendingMode")
+                Button("Retry Inventory Update", systemImage: "arrow.triangle.2.circlepath") {
+                    model.retryWorkingInventory(context: context)
+                }.disabled(model.isRefreshing).accessibilityIdentifier("cardShowInventory.retryWorkingSync")
+            }
+        }.padding(.horizontal, 16).padding(.vertical, 10).background(.regularMaterial)
+    }
+
+    private func requestRefresh() {
+        guard !model.isRefreshing else { return }
+        if importMode == .replace { confirmingReplace = true }
+        else { beginRefresh(mode: .merge) }
+    }
+
+    private func beginRefresh(mode: ShowInventoryImportMode) {
+        copyMessage = nil; model.refresh(context: context, mode: mode)
     }
 
     private func duplicate(_ list: CardList) {

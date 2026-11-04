@@ -192,7 +192,8 @@ enum ShowTransactionListFailure: LocalizedError, Equatable {
             guard markerWasApplied else {
                 return try unchangedSummary(store)
             }
-            return try store.reconcileInventory(rows, sourceLocationID: link.locationID, snapshotID: marker)
+            return try store.reconcileInventory(rows, sourceLocationID: link.locationID, snapshotID: marker,
+                mode: link.effectiveImportMode)
         }
         // A source saved before its first ledger write must not overwrite a
         // local sale/cost edit made before retry. Already committed markers
@@ -201,7 +202,8 @@ enum ShowTransactionListFailure: LocalizedError, Equatable {
            expected != ShowInventorySyncRevision(store: store) {
             throw ShowTransactionListFailure.inventoryRefreshRequired
         }
-        let summary = try store.reconcileInventory(rows, sourceLocationID: link.locationID, snapshotID: marker)
+        let summary = try store.reconcileInventory(rows, sourceLocationID: link.locationID, snapshotID: marker,
+            mode: link.effectiveImportMode)
         try CardShowInventoryService.acknowledgeWorkingSync(list: source,
             expectedSnapshotID: marker, context: context)
         return summary

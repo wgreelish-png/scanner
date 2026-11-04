@@ -39,7 +39,7 @@ import SwiftData
         try context.save()
     }
 
-    func testLegacySourceKeepsEstablishedSalesAndPurchasesUntilAFreshImport() throws {
+    func testFreshImportReconcilesSourceWhileKeepingEstablishedLocalPurchases() throws {
         let container = try container(), context = container.mainContext
         let list = try CardShowInventoryService.apply(snapshot(quantity: 99), context: context)
         try legacyLink(for: list, context: context)
@@ -62,10 +62,12 @@ import SwiftData
 
         try CardShowInventoryService.apply(snapshot(quantity: 4), context: context)
         try ShowInventoryBridge.seedFromImportedList(context: context, store: working)
-        XCTAssertEqual(working.inventory.reduce(0) { $0 + $1.quantity }, 4)
+        XCTAssertEqual(working.inventory.reduce(0) { $0 + $1.quantity }, 7)
         XCTAssertEqual(working.inventory.filter { $0.card.identity == card().identity }.reduce(0) { $0 + $1.quantity }, 4)
-        XCTAssertEqual(working.inventory.first { $0.id == acquiredID }?.quantity, 0)
-        XCTAssertEqual(working.inventory.first { $0.id == acquiredID }?.remainingCostCents, 0)
+        XCTAssertEqual(working.inventory.first { $0.id == acquiredID }?.quantity, 3)
+        XCTAssertEqual(working.inventory.first { $0.id == acquiredID }?.remainingCostCents, 2_100)
+        XCTAssertEqual(working.inventory.first { $0.id == acquiredID }?.acquiredByTransactionID, bought.id)
+        XCTAssertEqual(working.inventoryReconciliations.last?.mode, .merge)
         XCTAssertEqual(working.transactions, before.transactions)
         XCTAssertEqual(try XCTUnwrap(working.activeShow).totals(), cash)
         XCTAssertEqual(list.cardShowInventory?.version, 2)
@@ -86,6 +88,81 @@ import SwiftData
         let before = working.book, writes = disk.writes
         try ShowInventoryBridge.seedFromImportedList(context: context, store: working)
         XCTAssertEqual(working.book, before); XCTAssertEqual(disk.writes, writes)
+    }
+
+    func testPendingMergeAndReplaceModesSurviveReopenAndFailedWorkingWrite() throws {
+        for mode in ShowInventoryImportMode.allCases {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("ShowInventoryMode-" + UUID().uuidString)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let url = folder.appendingPathComponent("source.store"), disk = Disk()
+            let working = store(disk)
+            try working.seedInventory([.init(sourceInventoryID: 7, card: card(), quantity: 2)], sourceLocationID: 9)
+            let showID = try working.create(name: "Durable " + mode.title, startingCents: 30_000)
+            let bought = try working.recordTransaction(.init(kind: .purchase,
+                incoming: [.init(card: card("local"), quantity: 3)], incomingValueCents: 2_100), showID: showID)
+            let localID = try XCTUnwrap(bought.incoming.first?.inventoryID)
+            let before = working.book, cash = try XCTUnwrap(working.activeShow).totals()
+            func firstAttempt() throws -> Data {
+                let container = try AppPersistence.open(url: url), context = container.mainContext
+                let list = try CardShowInventoryService.apply(snapshot(quantity: 4), context: context,
+                    workingRevision: ShowInventorySyncRevision(store: working), workingImportMode: mode)
+                let marker = try XCTUnwrap(list.cardShowInventory?.inventorySnapshotID)
+                XCTAssertEqual(list.cardShowInventory?.workingImportMode, mode)
+                disk.fail = true
+                XCTAssertThrowsError(try ShowInventoryBridge.synchronizeImportedList(list, context: context, store: working))
+                XCTAssertEqual(working.book, before)
+                XCTAssertEqual(list.cardShowInventory?.pendingWorkingSync, true)
+                return marker
+            }
+            let marker = try firstAttempt()
+            disk.fail = false
+            let container = try AppPersistence.open(url: url), context = container.mainContext
+            let list = try XCTUnwrap(CardShowInventoryService.importedList(context: context))
+            let reopened = store(disk)
+            XCTAssertEqual(list.cardShowInventory?.workingImportMode, mode)
+            XCTAssertEqual(list.cardShowInventory?.effectiveImportMode, mode)
+            XCTAssertEqual(list.cardShowInventory?.inventorySnapshotID, marker)
+            let result = try ShowInventoryBridge.synchronizeImportedList(list, context: context, store: reopened)
+
+            XCTAssertEqual(result.totalQuantity, mode == .merge ? 7 : 4)
+            XCTAssertEqual(reopened.inventory.first { $0.id == localID }?.quantity, mode == .merge ? 3 : 0)
+            XCTAssertEqual(reopened.inventory.first { $0.id == localID }?.remainingCostCents, mode == .merge ? 2_100 : 0)
+            XCTAssertEqual(reopened.transactions, [bought]); XCTAssertEqual(try XCTUnwrap(reopened.activeShow).totals(), cash)
+            XCTAssertEqual(reopened.inventoryReconciliations.last?.mode, mode)
+            XCTAssertEqual(list.cardShowInventory?.pendingWorkingSync, false)
+            XCTAssertEqual(list.cardShowInventory?.workingImportMode, mode)
+            let committed = reopened.book, writes = disk.writes
+            XCTAssertTrue(try ShowInventoryBridge.synchronizeImportedList(list, context: context, store: reopened).unchangedSnapshot)
+            XCTAssertEqual(reopened.book, committed); XCTAssertEqual(disk.writes, writes)
+            XCTAssertEqual(store(disk).book, committed)
+        }
+    }
+
+    func testMergeBridgeAdoptsMatchingNewWebsiteStockAndKeepsItsPurchaseCost() throws {
+        let container = try container(), context = container.mainContext
+        let disk = Disk(), working = store(disk)
+        try working.seedInventory([.init(sourceInventoryID: 7, card: card(), quantity: 2)], sourceLocationID: 9)
+        let showID = try working.create(name: "Matched uploaded cards", startingCents: 30_000)
+        let bought = try working.recordTransaction(.init(kind: .purchase,
+            incoming: [.init(card: card(), quantity: 2)], incomingValueCents: 1_400), showID: showID)
+        let localID = try XCTUnwrap(bought.incoming.first?.inventoryID)
+        let cash = try XCTUnwrap(working.activeShow).totals()
+        let list = try CardShowInventoryService.apply(snapshot(quantity: 4), context: context,
+            workingRevision: ShowInventorySyncRevision(store: working), workingImportMode: .merge)
+
+        let result = try ShowInventoryBridge.synchronizeImportedList(list, context: context, store: working)
+
+        XCTAssertEqual(result.totalQuantity, 4); XCTAssertEqual(result.addedQuantity, 0)
+        XCTAssertEqual(working.inventory.first { $0.id == localID }?.quantity, 0)
+        XCTAssertEqual(working.inventory.first { $0.id == localID }?.remainingCostCents, 0)
+        let adopted = try XCTUnwrap(working.inventory.first { $0.adoptedFromInventoryID == localID })
+        XCTAssertEqual(adopted.quantity, 2); XCTAssertEqual(adopted.remainingCostCents, 1_400)
+        XCTAssertEqual(adopted.sourceInventoryID, 7); XCTAssertEqual(adopted.sourceLocationID, 9)
+        XCTAssertEqual(working.transactions, [bought]); XCTAssertEqual(try XCTUnwrap(working.activeShow).totals(), cash)
+        XCTAssertEqual(list.cardShowInventory?.pendingWorkingSync, false)
+        XCTAssertEqual(list.cardShowInventory?.workingImportMode, .merge)
+        XCTAssertEqual(store(disk).book, working.book)
     }
 
     func testFailedWorkingWriteRetainsPendingSnapshotAcrossReopenAndRetriesOnce() throws {

@@ -308,12 +308,11 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
         DiagnosticLog.shared.record("show_inventory.seeded", ["records": String(seeds.count)])
     }
 
-    /// Apply a fresh, complete website snapshot as the authoritative quantity
-    /// across every working lot, including local purchases. This stock import
-    /// posts no cash or profit and preserves all receipt/card/cost history.
+    /// Merge preserves unmatched acquisitions and adopts newly matching website
+    /// copies with their cost/provenance. Replace uses the entire website count.
     @discardableResult
     func reconcileInventory(_ seeds: [ShowInventorySeed], sourceLocationID: Int,
-                            snapshotID: Data) throws -> ShowInventoryReconciliationSummary {
+                            snapshotID: Data, mode: ShowInventoryImportMode = .merge) throws -> ShowInventoryReconciliationSummary {
         try requireWritable()
         guard sourceLocationID > 0,
               book.inventorySourceLocationID.map({ $0 == sourceLocationID }) ?? true else {
@@ -323,7 +322,8 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
         // Check every committed marker, not just the last refresh. Reopening
         // an old source must never restore copies sold or corrected locally.
         if let prior = book.inventoryReconciliations.first(where: { $0.snapshotID == snapshotID }) {
-            guard prior.sourceLocationID == sourceLocationID, prior.sourceRows == rows else {
+            guard prior.sourceLocationID == sourceLocationID, prior.sourceRows == rows,
+                  prior.effectiveMode == mode else {
                 throw ShowBudgetStoreFailure.conflictingEntry
             }
             return .init(addedQuantity: 0, removedQuantity: 0, unchangedSnapshot: true,
@@ -335,13 +335,17 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
         guard book.inventoryReconciliations.count < ShowBudgetBook.maximumInventoryReconciliations else {
             throw ShowBudgetFailure.capacityExceeded
         }
-        let count = try ShowInventoryReconciliationMath.newLotCount(seeds: rows, inventory: book.inventory)
+        let previousSourceRows = try book.inventoryReconciliations.last?.sourceRows ?? book.initialWebsiteSourceRows()
+        let legacyLocalOverlap = book.legacyLocalOverlapForNextImport()
+        let count = try ShowInventoryReconciliationMath.newLotCount(seeds: rows, inventory: book.inventory,
+            mode: mode, previousSourceRows: previousSourceRows, legacyLocalOverlap: legacyLocalOverlap)
         guard count <= ShowBudgetBook.maximumInventoryItems - book.inventory.count else { throw ShowBudgetFailure.capacityExceeded }
         let timestamp = max(now(), book.costMutations.map(\.recordedAt).max() ?? .distantPast)
         let event = ShowInventoryReconciliation(id: UUID(), sourceLocationID: sourceLocationID,
             snapshotID: snapshotID, recordedAt: timestamp, sourceRows: rows,
-            createdInventoryIDs: (0..<count).map { _ in UUID() })
-        let plan = try ShowInventoryReconciliationMath.plan(event, inventory: book.inventory)
+            createdInventoryIDs: (0..<count).map { _ in UUID() }, mode: mode)
+        let plan = try ShowInventoryReconciliationMath.plan(event, inventory: book.inventory,
+            previousSourceRows: previousSourceRows, legacyLocalOverlap: legacyLocalOverlap)
         var next = book
         next.inventorySourceLocationID = sourceLocationID
         next.inventory = plan.inventory

@@ -1,6 +1,31 @@
 import XCTest
 
 @MainActor final class CardShowInventoryUITests: XCTestCase {
+    func testReplaceRequiresConfirmationAndCancelDoesNotImport() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        if let path = ProcessInfo.processInfo.environment["DYLD_FALLBACK_LIBRARY_PATH"] {
+            app.launchEnvironment["DYLD_FALLBACK_LIBRARY_PATH"] = path
+        }
+        app.launchArguments = ["-autoDatabaseUpdates", "NO", "--uitest-card-show-inventory"]
+        app.launch(); defer { app.terminate() }
+        let mode = app.segmentedControls["cardShowInventory.importMode"]
+        XCTAssertTrue(mode.waitForExistence(timeout: 10))
+        XCTAssertTrue(mode.buttons["Merge"].isSelected)
+        UITestInteraction.tap(mode.buttons["Replace"], in: app)
+        let refresh = app.buttons["cardShowInventory.refresh"]
+        XCTAssertTrue(refresh.isHittable, "Import actions stay outside the scrolling snapshot")
+        UITestInteraction.tap(refresh, in: app)
+        XCTAssertTrue(app.buttons["Replace All Inventory"].waitForExistence(timeout: 5))
+        UITestInteraction.tap(app.buttons["Cancel"], in: app)
+        XCTAssertFalse(app.buttons["cardShowInventory.open"].exists)
+        XCTAssertFalse(app.staticTexts["cardShowInventory.quantity"].exists)
+        UITestInteraction.tap(mode.buttons["Merge"], in: app)
+        UITestInteraction.tap(refresh, in: app)
+        XCTAssertTrue(app.staticTexts["cardShowInventory.quantity"].waitForExistence(timeout: 5))
+        assertValue("2", title: "Physical cards", element: app.staticTexts["cardShowInventory.quantity"])
+    }
+
     func testExplicitImportAndRefreshKeepOneSavedInventoryRow() async throws {
         continueAfterFailure = false
         let app = XCUIApplication()

@@ -105,6 +105,40 @@ import SwiftData
         XCTAssertTrue(try XCTUnwrap(store.record(for: first.id)).needsLabels, "Checkout does not wait for printing")
     }
 
+    func testAdoptedLotWithPriorStickerRequiresItsOwnApprovalBeforeAutomaticCheckout() throws {
+        let original = item(quantity: 1, cost: 350), store = approvals()
+        var adopted = item(market: 20, quantity: 1, cost: 350)
+        adopted.sourceInventoryID = 77; adopted.sourceLocationID = 9
+        adopted.acquiredByReconciliationID = UUID(); adopted.adoptedFromInventoryID = original.id
+        try store.approve([.init(id: original.id, approvedTag: .individual(1_100), currentMarket: 10.49)])
+        let line = ShowTransactionCardLine(inventoryID: adopted.id, card: adopted.card, quantity: 1)
+        let inventory = [original, adopted]
+        XCTAssertNil(TagPricingContext.saleSuggestion(lines: [line], inventory: inventory, store: store),
+                     "Adoption must not silently replace the existing physical sticker with market rounding")
+        XCTAssertNil(store.record(for: adopted.id), "Reading checkout suggestions cannot create an approval")
+
+        try store.approve([.init(id: original.id, approvedTag: .individual(3_000), currentMarket: 30)])
+        XCTAssertNil(TagPricingContext.saleSuggestion(lines: [line], inventory: inventory, store: store),
+                     "Repricing remaining local copies must not reprice adopted copies")
+        try store.approve([.init(id: adopted.id, approvedTag: .individual(1_500), currentMarket: 20)])
+        let suggestion = try XCTUnwrap(TagPricingContext.saleSuggestion(lines: [line], inventory: inventory, store: store))
+        XCTAssertEqual(suggestion.totalCents, 1_500)
+        XCTAssertEqual(suggestion.allocations.map(\.inventoryID), [adopted.id])
+        XCTAssertTrue(suggestion.usesApprovedPrices)
+        XCTAssertEqual(store.record(for: original.id)?.approvedTag, .individual(3_000))
+    }
+
+    func testAdoptedLotWithoutPriorStickerRetainsNormalMarketSuggestion() throws {
+        let original = item(), store = approvals()
+        var adopted = item(quantity: 1)
+        adopted.adoptedFromInventoryID = original.id
+        let line = ShowTransactionCardLine(inventoryID: adopted.id, card: adopted.card, quantity: 1)
+        let suggestion = try XCTUnwrap(TagPricingContext.saleSuggestion(lines: [line], inventory: [original, adopted], store: store))
+        XCTAssertEqual(suggestion.totalCents, 1_000)
+        XCTAssertFalse(suggestion.usesApprovedPrices)
+        XCTAssertNil(store.record(for: original.id)); XCTAssertNil(store.record(for: adopted.id))
+    }
+
     func testBulkCheckoutRequiresCompleteProfitablePairsAndDoesNotAssumeUnknownCostsAreFree() throws {
         let stock = item(market: Decimal(string: "0.50"), quantity: 2, cost: 80), store = approvals()
         var preferences = store.preferences

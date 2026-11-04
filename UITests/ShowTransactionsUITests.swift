@@ -357,11 +357,88 @@ import XCTest
         assertStock("3", app: app)
     }
 
+    func testInventorySelectionAndConfirmationCartKeepStockUntilTheSaleIsRecorded() {
+        continueAfterFailure = false
+        let app = launch()
+        defer { app.terminate() }
+        tap(app.buttons["show.inventory"], app: app)
+        let action = app.buttons["showInventory.recordTransaction"]
+        tap(action, app: app)
+        XCTAssertTrue(app.navigationBars["Show Inventory"].exists, "Record starts selection on the inventory screen")
+        XCTAssertEqual(action.label, "Confirm Transaction")
+        let first = inventory("Stock A", app: app), second = inventory("Stock B", app: app)
+        let firstID = String(first.identifier.dropFirst("showInventory.item.".count))
+        let secondID = String(second.identifier.dropFirst("showInventory.item.".count))
+        XCTAssertNotNil(UUID(uuidString: firstID)); XCTAssertNotNil(UUID(uuidString: secondID))
+        tap(first, app: app); tap(second, app: app)
+        XCTAssertTrue(first.isSelected); XCTAssertTrue(second.isSelected)
+        let quantity = app.steppers["showInventory.selectionQuantity." + firstID]
+        tap(quantity.buttons["Increment"], app: app)
+        assertContains("3 selected", element: app.staticTexts["showInventory.selectedQuantity"])
+        assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
+        tap(action, app: app)
+        XCTAssertTrue(app.navigationBars["Confirm Transaction"].waitForExistence(timeout: 5))
+        for kind in ["sale", "trade", "purchase"] {
+            XCTAssertTrue(app.buttons["showTransaction.kind." + kind].isHittable)
+        }
+        assertRevealedContains("3", identifier: "showTransaction.selectedQuantity", app: app)
+        removeSelectedCard(firstID, app: app)
+        assertRevealedContains("1", identifier: "showTransaction.selectedQuantity", app: app)
+        _ = UITestInteraction.tapToolbar(app.buttons["Cancel"], in: app)
+        XCTAssertTrue(app.navigationBars["Show Inventory"].waitForExistence(timeout: 5))
+        assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
+        assertContains("1 selected", element: app.staticTexts["showInventory.selectedQuantity"])
+        XCTAssertFalse(first.isSelected); XCTAssertTrue(second.isSelected)
+        XCTAssertEqual(action.label, "Confirm Transaction", "Returning to inventory keeps the edited transaction selection")
+
+        tap(first, app: app)
+        tap(quantity.buttons["Increment"], app: app)
+        assertContains("3 selected", element: app.staticTexts["showInventory.selectedQuantity"])
+        tap(action, app: app)
+        assertRevealedContains("3", identifier: "showTransaction.selectedQuantity", app: app)
+        tap(app.buttons["showTransaction.editSaleAmount"], app: app)
+        enterSaleAmount("100", app: app); closeCashEditor(.done, app: app)
+        removeSelectedCard(firstID, app: app)
+        reveal(app.buttons["showTransaction.editSaleAmount"], app: app)
+        assertSaleAmount("100.00", app: app)
+        tap(app.buttons["showTransaction.selectInventory"], app: app)
+        let availableFirst = app.buttons["showTransaction.stock." + firstID]
+        assertContains("2 available", element: availableFirst)
+        XCTAssertTrue(app.buttons["showTransaction.stock." + secondID].isSelected)
+        tap(availableFirst, app: app)
+        tap(app.buttons["showInventorySelection.done"], app: app)
+        assertRevealedContains("2", identifier: "showTransaction.selectedQuantity", app: app)
+        reveal(app.buttons["showTransaction.editSaleAmount"], app: app)
+        assertSaleAmount("100.00", app: app)
+        for inventoryID in [firstID, secondID] {
+            let selected = app.descendants(matching: .any).matching(identifier: "showTransaction.selectedCard." + inventoryID).firstMatch
+            reveal(selected, app: app)
+            XCTAssertTrue(selected.exists)
+        }
+        tap(app.buttons["showTransaction.record"], app: app)
+        XCTAssertTrue(app.navigationBars["Show Inventory"].waitForExistence(timeout: 5))
+        assertContains("1 cards available", element: app.staticTexts["showInventory.quantity"])
+        XCTAssertEqual(action.label, "Record Transaction")
+        XCTAssertFalse(app.staticTexts["showInventory.selectedQuantity"].exists)
+        XCTAssertFalse(app.buttons["showInventory.item." + secondID].exists)
+
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 10))
+        assertStock("1", app: app)
+        assertBalances(available: "$365.00", saved: "$35.00", app: app)
+        tap(app.buttons["show.inventory"], app: app)
+        assertContains("Qty 1", element: app.buttons["showInventory.item." + firstID])
+        XCTAssertFalse(app.buttons["showInventory.item." + secondID].exists)
+    }
+
     func testLargeIncomingListKeepsInventoryCheckoutAndReceiptActionsReachable() {
         continueAfterFailure = false
         let app = launch(arguments: ["--show-transactions-large-incoming"])
         defer { app.terminate() }
         tap(app.buttons["show.inventory"], app: app)
+        tap(app.buttons["showInventory.recordTransaction"], app: app)
+        XCTAssertTrue(app.navigationBars["Show Inventory"].exists)
+        XCTAssertEqual(app.buttons["showInventory.recordTransaction"].label, "Confirm Transaction")
         tap(app.buttons["showInventory.recordTransaction"], app: app)
         for kind in ["sale", "trade", "purchase"] {
             XCTAssertTrue(app.buttons["showTransaction.kind." + kind].isHittable)
@@ -435,6 +512,19 @@ import XCTest
         _ = UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
         _ = UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
         assertStock("3", app: app)
+    }
+
+    private func removeSelectedCard(_ inventoryID: String, app: XCUIApplication,
+                                    file: StaticString = #filePath, line: UInt = #line) {
+        let row = app.descendants(matching: .any).matching(identifier: "showTransaction.selectedCard." + inventoryID).firstMatch
+        reveal(row, app: app, file: file, line: line)
+        row.swipeLeft()
+        let remove = app.buttons["showTransaction.remove." + inventoryID]
+        if remove.waitForExistence(timeout: 1) {
+            tap(remove, app: app, file: file, line: line)
+        }
+        let removed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: row)
+        XCTAssertEqual(XCTWaiter.wait(for: [removed], timeout: 5), .completed, file: file, line: line)
     }
 
     private func launch(arguments: [String] = []) -> XCUIApplication {

@@ -1,5 +1,10 @@
 # Local show inventory and transactions
 
+Build 64 adds [selection directly in Show Inventory](InventorySelectionAndImportModes.md):
+Record Transaction enables checkmarks, Confirm Transaction opens the existing
+editor, and swipe Remove/Add Cards edits only the draft. Merge/Replace imports
+keep local acquisition provenance available for future website synchronization.
+
 Build 35 makes **Show** the home for Inventory, Budget, Record Transaction and Transaction History. Working inventory persists across show dates, show deletion and app restarts. Lists retains scanned lists, physical scan order, offers and CSV export. No transaction writes to TCGTracking.
 
 ## Recording a deal

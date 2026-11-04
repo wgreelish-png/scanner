@@ -48,8 +48,74 @@ import SwiftData
         XCTAssertEqual(source.pendingWorkingSync, true)
         XCTAssertFalse(try XCTUnwrap(source.inventorySnapshotID).isEmpty)
         XCTAssertNil(source.workingRevision)
+        XCTAssertEqual(source.workingImportMode, .merge)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<CardList>()), 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<ScanSession>()), 0)
+    }
+
+    func testImportModesSurviveSourceReopenAndAcknowledgement() throws {
+        for mode in [ShowInventoryImportMode.merge, .replace] {
+            let directory = try folder(); defer { try? FileManager.default.removeItem(at: directory) }
+            let url = directory.appendingPathComponent("mode.store")
+            let expectedID: UUID
+            do {
+                let container = try AppPersistence.open(url: url)
+                let list = try CardShowInventoryService.apply(snapshot([row(1)]), context: container.mainContext,
+                    workingImportMode: mode)
+                expectedID = list.id
+            }
+            let reopened = try AppPersistence.open(url: url), context = reopened.mainContext
+            let list = try XCTUnwrap(CardShowInventoryService.importedList(context: context))
+            XCTAssertEqual(list.id, expectedID)
+            XCTAssertEqual(list.cardShowInventory?.workingImportMode, mode)
+            XCTAssertEqual(list.cardShowInventory?.effectiveImportMode, mode)
+            let token = try XCTUnwrap(list.cardShowInventory?.inventorySnapshotID)
+            try CardShowInventoryService.acknowledgeWorkingSync(list: list, expectedSnapshotID: token, context: context)
+            XCTAssertEqual(list.cardShowInventory?.workingImportMode, mode)
+            XCTAssertEqual(list.cardShowInventory?.inventorySnapshotID, token)
+            XCTAssertEqual(list.cardShowInventory?.pendingWorkingSync, false)
+        }
+    }
+
+    func testLegacyPendingDownloadRetainsReplaceAndUnknownModeFailsClosed() throws {
+        let container = try store(), context = container.mainContext
+        let list = try CardShowInventoryService.apply(snapshot([row(1)]), context: context)
+        var fields = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(list.inventorySourceData)) as? [String: Any])
+        fields.removeValue(forKey: "workingImportMode")
+        let legacy = try JSONDecoder().decode(CardShowInventoryLink.self, from: JSONSerialization.data(withJSONObject: fields))
+        XCTAssertNil(legacy.workingImportMode)
+        XCTAssertEqual(legacy.effectiveImportMode, .replace)
+        XCTAssertEqual(legacy.pendingWorkingSync, true)
+        fields["workingImportMode"] = "unexpected"
+        XCTAssertThrowsError(try JSONDecoder().decode(CardShowInventoryLink.self,
+            from: JSONSerialization.data(withJSONObject: fields)))
+    }
+
+    func testPendingReplaceRetryCannotBeChangedByRequestingMerge() async throws {
+        let container = try store(), context = container.mainContext
+        let provider = ImportModeFixtureProvider(snapshot: snapshot([row(1, quantity: 2)]))
+        let working = workingStore()
+        var attempts: [ShowInventoryImportMode] = []
+        let model = CardShowInventoryModel(provider: provider, workingStore: working,
+            synchronizeWorkingInventory: { list, context, store in
+                attempts.append(try XCTUnwrap(list.cardShowInventory).effectiveImportMode)
+                if attempts.count < 2 { throw SaveFailure.refused }
+                return try ShowInventoryBridge.synchronizeImportedList(list, context: context, store: store)
+            })
+        model.setActive(true); model.refresh(context: context, mode: .replace)
+        for _ in 0..<500 { if !model.isRefreshing { break }; await Task.yield() }
+        XCTAssertFalse(model.isRefreshing)
+        let pending = try XCTUnwrap(CardShowInventoryService.importedList(context: context))
+        XCTAssertEqual(pending.cardShowInventory?.workingImportMode, .replace)
+        XCTAssertEqual(pending.cardShowInventory?.pendingWorkingSync, true)
+        model.refresh(context: context, mode: .merge)
+        XCTAssertEqual(provider.requests, 1, "Finish a pending operation before authorizing another download")
+        XCTAssertEqual(attempts, [.replace], "A new Merge request must not silently execute the pending Replace")
+        model.retryWorkingInventory(context: context)
+        XCTAssertEqual(attempts, [.replace, .replace])
+        XCTAssertEqual(pending.cardShowInventory?.pendingWorkingSync, false)
+        XCTAssertEqual(pending.cardShowInventory?.workingImportMode, .replace)
+        XCTAssertEqual(working.inventory.reduce(0) { $0 + $1.quantity }, 2)
     }
 
     func testPendingWorkingSnapshotIdentitySurvivesReopenAndRepeatedReads() async throws {
@@ -87,7 +153,7 @@ import SwiftData
         let firstID = list.id, rowID = list.orderedCards[0].id
         var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(list.inventorySourceData)) as? [String: Any])
         legacy["version"] = 1
-        for key in ["syncID", "pendingWorkingSync", "inventorySnapshotID", "workingRevision"] { legacy.removeValue(forKey: key) }
+        for key in ["syncID", "pendingWorkingSync", "inventorySnapshotID", "workingRevision", "workingImportMode"] { legacy.removeValue(forKey: key) }
         list.inventorySourceData = try JSONSerialization.data(withJSONObject: legacy)
         try context.save()
         XCTAssertEqual(list.cardShowInventory?.version, 1)
@@ -465,4 +531,15 @@ import SwiftData
         let imported = try CardShowInventoryService.apply(snapshot([row(1)]), context: context)
         XCTAssertNotEqual(imported.id, list.id); XCTAssertEqual(list.orderedCards.map(\.data), encoded)
     }
+}
+
+@MainActor private final class ImportModeFixtureProvider: CardShowInventoryProviding {
+    let snapshot: CardShowInventorySnapshot
+    private(set) var requests = 0
+    init(snapshot: CardShowInventorySnapshot) { self.snapshot = snapshot }
+    func fetch(expectedLocationID: Int?) async throws -> CardShowInventorySnapshot {
+        requests += 1
+        return snapshot
+    }
+    func cancel() {}
 }

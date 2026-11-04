@@ -13,7 +13,7 @@ import SwiftData
     private(set) var requiresFreshInventoryRefresh = false
     let workingStore: ShowBudgetStore
     private let provider: any CardShowInventoryProviding
-    private let applySnapshot: @MainActor (CardShowInventorySnapshot, ModelContext) throws -> CardList
+    private let applySnapshot: @MainActor (CardShowInventorySnapshot, ModelContext, ShowInventoryImportMode) throws -> CardList
     private let synchronizeWorkingInventory: @MainActor (CardList, ModelContext, ShowBudgetStore) throws -> ShowInventoryReconciliationSummary
     private var active = false
     private var lookup: Task<Void, Never>?
@@ -26,8 +26,10 @@ import SwiftData
              try ShowInventoryBridge.synchronizeImportedList($0, context: $1, store: $2)
          }) {
         self.provider = provider ?? CardShowInventoryWebsiteClient()
-        self.applySnapshot = applySnapshot ?? { snapshot, context in
-            try CardShowInventoryService.apply(snapshot, context: context, workingRevision: ShowInventorySyncRevision(store: workingStore))
+        self.applySnapshot = { snapshot, context, mode in
+            if let applySnapshot { return try applySnapshot(snapshot, context) }
+            return try CardShowInventoryService.apply(snapshot, context: context,
+                workingRevision: ShowInventorySyncRevision(store: workingStore), workingImportMode: mode)
         }
         self.workingStore = workingStore; self.synchronizeWorkingInventory = synchronizeWorkingInventory
     }
@@ -38,7 +40,7 @@ import SwiftData
         if !active { cancel() }
     }
 
-    func refresh(context: ModelContext) {
+    func refresh(context: ModelContext, mode: ShowInventoryImportMode = .merge) {
         guard active, !isRefreshing else { return }
         let expectedLocationID: Int?, importedListID: UUID?, sourceData: Data?
         let workingVersion: ShowInventorySyncRevision
@@ -48,6 +50,11 @@ import SwiftData
             let saved = try CardShowInventoryService.importedList(context: context)
             // Finish a previous interrupted handoff before replacing its durable marker.
             if let saved, saved.cardShowInventory?.pendingWorkingSync == true, !pendingSnapshotIsStale(saved) {
+                if let pendingMode = saved.cardShowInventory?.effectiveImportMode, pendingMode != mode {
+                    workingSyncFailed = true; needsSignIn = false; requiresFreshInventoryRefresh = false
+                    message = "A \(pendingMode.title) inventory update is pending. Finish it with Retry Inventory Update before starting \(mode.title)."
+                    return
+                }
                 do { _ = try synchronizeWorkingInventory(saved, context, workingStore) }
                 catch { showWorkingSyncFailure(error); return }
             }
@@ -91,7 +98,7 @@ import SwiftData
                 }
                 DiagnosticLog.shared.record("inventory_import.working_before", ["records": String(self.workingStore.inventory.filter { $0.quantity > 0 }.count), "quantity": String(self.workingQuantity)])
                 DiagnosticLog.shared.record("inventory_import.apply_started", ["phase": "persistence", "records": String(snapshot.rows.count)])
-                let list = try self.applySnapshot(snapshot, context)
+                let list = try self.applySnapshot(snapshot, context, mode)
                 sourceSaved = true
                 _ = try self.synchronizeWorkingInventory(list, context, self.workingStore)
                 self.lastImportedListID = list.id

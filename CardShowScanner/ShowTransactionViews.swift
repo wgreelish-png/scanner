@@ -29,6 +29,7 @@ import UIKit
     @State private var selectingInventory = false
     @State private var editingIncomingList = false
     @State private var incomingDetailsExpanded = false
+    @State private var outgoingDetailsExpanded = false
     @State private var editingSaleCash = false
     @State private var editingSaleFee = false
     @State private var saleFeeCents: Int64 = 0
@@ -42,15 +43,25 @@ import UIKit
     @State private var tagApprovals = TagApprovalStore.shared
     @FocusState private var focused: MoneyField?
     private let initialInventoryID: UUID?
+    private let confirmingSelection: Bool
+    private let onSelectionChanged: ([UUID: Int]) -> Void
+    private let onRecorded: () -> Void
 
     private enum MoneyField: Hashable { case incoming, outgoing, note }
 
     init(store: ShowBudgetStore = .shared, initialKind: ShowTransactionKind = .sale,
-         initialListID: UUID? = nil, initialInventoryID: UUID? = nil) {
+         initialListID: UUID? = nil, initialInventoryID: UUID? = nil,
+         initialQuantities: [UUID: Int] = [:], confirmingSelection: Bool = false,
+         onSelectionChanged: @escaping ([UUID: Int]) -> Void = { _ in },
+         onRecorded: @escaping () -> Void = {}) {
         _store = State(initialValue: store)
         _kind = State(initialValue: initialKind)
         _incomingListID = State(initialValue: initialListID)
+        _outgoingQuantities = State(initialValue: initialQuantities)
+        _outgoingDetailsExpanded = State(initialValue: !initialQuantities.isEmpty)
         self.initialInventoryID = initialInventoryID
+        self.confirmingSelection = confirmingSelection
+        self.onSelectionChanged = onSelectionChanged; self.onRecorded = onRecorded
     }
 
     private var isTrade: Bool { kind != .sale && kind != .purchase }
@@ -103,7 +114,7 @@ import UIKit
             }
             .scrollDismissesKeyboard(.interactively)
             .safeAreaInset(edge: .top) { checkoutBar(evaluation.amounts, accounting: evaluation.accounting) }
-            .navigationTitle("Record \(kind.title)")
+            .navigationTitle(confirmingSelection ? "Confirm Transaction" : "Record \(kind.title)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -143,7 +154,9 @@ import UIKit
                 if previous == .purchase || next == .purchase { incomingValueEdited = false }
                 updateIncomingDefault()
             }
-            .onChange(of: outgoingQuantities) { _, _ in
+            .onChange(of: outgoingQuantities) { previous, quantities in
+                onSelectionChanged(quantities)
+                if confirmingSelection && previous.isEmpty && !quantities.isEmpty { outgoingDetailsExpanded = true }
                 makeEven = false
                 if !outgoingValueEdited { outgoingValue = outgoingReference.map(showTransactionInput) ?? "" }
                 if !saleReceivedEdited { saleReceived = stickerSuggestion.map { showTransactionInput($0.totalCents) } ?? "" }
@@ -413,15 +426,23 @@ import UIKit
             Button {
                 endEditing(); selectingInventory = true
             } label: {
-                Label(selectedLines.isEmpty ? "Select Inventory Cards" : "Change Selected Cards", systemImage: "shippingbox")
+                Label(selectedLines.isEmpty ? "Select Inventory Cards" : "Add Cards", systemImage: "shippingbox")
                     .frame(minHeight: 48)
             }.accessibilityIdentifier("showTransaction.selectInventory")
             LabeledContent("Selected quantity", value: outgoingQuantities.values.reduce(0, +).formatted())
                 .accessibilityIdentifier("showTransaction.selectedQuantity")
             if !selectedLines.isEmpty {
-                DisclosureGroup("Selected cards · \(selectedLines.count) rows") {
+                DisclosureGroup("Selected cards · \(selectedLines.count) rows", isExpanded: $outgoingDetailsExpanded) {
                     ForEach(selectedLines, id: \.inventoryID) { line in
                         ShowTransactionCardRow(card: line.card, quantity: line.quantity)
+                            .accessibilityIdentifier("showTransaction.selectedCard." + line.inventoryID.uuidString)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button("Remove", role: .destructive) {
+                                    guard !isRecording else { return }
+                                    endEditing(); outgoingQuantities.removeValue(forKey: line.inventoryID)
+                                }.disabled(isRecording)
+                                    .accessibilityIdentifier("showTransaction.remove." + line.inventoryID.uuidString)
+                            }
                     }
                 }
             }
@@ -596,7 +617,7 @@ import UIKit
         do { try ShowInventoryBridge.seedFromImportedList(context: context, store: store) }
         catch { inventoryError = error.localizedDescription }
         showID = store.eligibleActiveShow?.id ?? store.visibleShows.first(where: { store.canRecord(showID: $0.id) })?.id
-        if let initialInventoryID,
+        if outgoingQuantities.isEmpty, let initialInventoryID,
            store.inventory.contains(where: { $0.id == initialInventoryID && $0.quantity > 0 }) {
             outgoingQuantities[initialInventoryID] = 1
         }
@@ -742,6 +763,7 @@ import UIKit
         do {
             let draft = try preparedDraft()
             _ = try ShowTransactionListService.record(draft, showID: showID, context: context, store: store)
+            onRecorded()
             dismiss()
         } catch { self.error = error.localizedDescription }
     }
