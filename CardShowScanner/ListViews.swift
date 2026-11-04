@@ -18,6 +18,13 @@ struct CSVDocument: FileDocument {
     }
 }
 
+/// Keep selection feedback visible while a finger is still on the row.
+private struct ListSelectionButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+    }
+}
+
 @MainActor struct SavedListsView: View {
     var onOpenScan: (() -> Void)? = nil
     @Environment(\.modelContext) private var context
@@ -87,7 +94,7 @@ struct CSVDocument: FileDocument {
                                     selectionMark(list.id)
                                     savedListLabel(list)
                                 }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                            }.buttonStyle(.borderless)
+                            }.buttonStyle(ListSelectionButtonStyle())
                                 .accessibilityIdentifier("savedLists.select." + list.name)
                                 .accessibilityAddTraits(selectedListIDs.contains(list.id) ? .isSelected : [])
                         } else {
@@ -164,6 +171,11 @@ struct CSVDocument: FileDocument {
     private func selectionMark(_ id: UUID) -> some View {
         Image(systemName: selectedListIDs.contains(id) ? "checkmark.circle.fill" : "circle")
             .font(.title2).foregroundStyle(.indigo).frame(width: 28, height: 44).accessibilityHidden(true)
+            .contentTransition(.identity)
+            .transaction { transaction in
+                transaction.animation = nil
+                transaction.disablesAnimations = true
+            }
     }
     private func savedListLabel(_ list: CardList) -> some View {
                         HStack(alignment: .top, spacing: 14) {
