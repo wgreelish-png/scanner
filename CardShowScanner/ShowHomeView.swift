@@ -96,6 +96,7 @@ private struct ShowHomeRouteCard: View {
     @State private var visible = false
     @State private var store: ShowBudgetStore
     @State private var search = ""
+    @AppStorage("showInventorySort") private var sortPreference = ShowInventorySort.nameAscending.rawValue
     @State private var seedError: String?
     @State private var showingTransaction = false
     @State private var showingLabels = false
@@ -103,19 +104,19 @@ private struct ShowHomeRouteCard: View {
     init(store: ShowBudgetStore = .shared) { _store = State(initialValue: store) }
 
     private var available: [ShowInventoryItem] {
-        store.inventory.filter { $0.quantity > 0 }.sorted {
-            $0.card.name.localizedStandardCompare($1.card.name) == .orderedAscending
-        }
+        store.inventory.filter { $0.quantity > 0 }
     }
+
+    private var selectedSort: ShowInventorySort { ShowInventorySort(preference: sortPreference) }
 
     private var filtered: [ShowInventoryItem] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return available }
-        return available.filter { item in
-            [item.card.name, item.card.set, item.card.number, item.card.identity.printing,
+        let matches = available.filter { item in
+            query.isEmpty || [item.card.name, item.card.set, item.card.number, item.card.identity.printing,
              item.card.identity.condition, item.card.identity.language].joined(separator: " ")
                 .localizedCaseInsensitiveContains(query)
         }
+        return selectedSort.sorted(matches)
     }
 
     var body: some View {
@@ -146,11 +147,31 @@ private struct ShowHomeRouteCard: View {
             } else if store.isLoaded && filtered.isEmpty {
                 Section { ContentUnavailableView.search(text: search) }
             } else if store.isLoaded {
-                Section("Available cards") {
+                Section {
                     ForEach(filtered) { item in
                         NavigationLink { ShowWorkingInventoryDetailView(itemID: item.id, store: store) } label: {
                             ShowWorkingInventoryRow(item: item)
                         }.accessibilityIdentifier("showInventory.item." + item.id.uuidString)
+                    }
+                } header: {
+                    HStack {
+                        Text("Available cards")
+                        Spacer()
+                        Menu {
+                            Picker("Sort available cards", selection: Binding(
+                                get: { selectedSort }, set: { sortPreference = $0.rawValue })) {
+                                ForEach(ShowInventorySort.allCases) { option in
+                                    Text(option.title).tag(option)
+                                        .accessibilityIdentifier("showInventory.sort." + option.rawValue)
+                                }
+                            }
+                        } label: {
+                            Label("Sort", systemImage: "arrow.up.arrow.down")
+                                .font(.caption.weight(.semibold)).frame(minHeight: 44)
+                        }.textCase(nil).buttonStyle(.borderless)
+                            .accessibilityLabel("Sort available cards")
+                            .accessibilityValue(selectedSort.title)
+                            .accessibilityIdentifier("showInventory.sort")
                     }
                 }
             }
