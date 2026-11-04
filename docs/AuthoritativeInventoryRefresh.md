@@ -1,5 +1,10 @@
 # Website-authoritative inventory refresh — build 44
 
+Build 64 adds [Merge and Replace](InventorySelectionAndImportModes.md). Merge is
+the default and preserves unmatched local acquisitions; Replace explicitly
+retains the website-authoritative behavior described below. Matching local
+copies can become website-managed without duplicate quantities or lost costs.
+
 An explicit Card Show import now reconciles available working stock to the website’s current quantities. It no longer stops after refreshing the read-only source list. Opening inventory does not download or reapply an acknowledged snapshot.
 
 The supplied November 3 diagnostic contains three successful downloads of **74 rows / 80 physical cards**. Working inventory was seeded from an earlier **80 rows / 86 physical cards** snapshot and never refreshed. Build 44 fixes that handoff. Source rows, physical quantities and acquisition lots are separate counts: several copies can occupy a row, and financial lots can retain separate cost histories.

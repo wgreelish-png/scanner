@@ -7,6 +7,69 @@ import XCTest
             name: "Fixture", set: "Fixture", number: "1", marketPrice: nil, confidence: 95, printings: ["Normal"])
     }
 
+    func testAvailableLanguagesCanonicalizesMetadataAndRequiresARealSelectedQuote() {
+        let metadata = MarketDetails(quote: nil, pricedLanguages: ["JP", " japanese ", "FR", "French", "", "Unknown"])
+        XCTAssertEqual(metadata.availableLanguages(for: "English"), ["French", "Japanese"])
+        XCTAssertTrue(MarketDetails(quote: nil).availableLanguages(for: "English").isEmpty)
+        let zero = MarketDetails(quote: MarketQuote(marketPrice: 0, skuID: nil), pricedLanguages: ["JP"])
+        XCTAssertEqual(zero.availableLanguages(for: "en"), ["English", "Japanese"])
+        let invalidPrices: [Decimal?] = [nil, -1, .nan]
+        for price in invalidPrices {
+            let details = MarketDetails(quote: MarketQuote(marketPrice: price, skuID: nil))
+            XCTAssertTrue(details.availableLanguages(for: "English").isEmpty)
+        }
+        XCTAssertEqual(MarketDetails.languageName(" Simplified   Chinese "), "Simplified Chinese")
+        XCTAssertNil(MarketDetails.languageName("Unknown"))
+    }
+
+    func testLegacyDetailsAdvertiseOnlyExactPrintingConditionAndActualMarketPrices() throws {
+        let data = Data(#"""
+        {"items":{
+          "p:123":{"printings":[
+            {"key":"Normal","quotes":{
+              "English|Near Mint":{"market_price":0,"sku_id":1},
+              "Japanese|Near Mint":{"market_price":2,"sku_id":2},
+              "French|Lightly Played":{"market_price":3,"sku_id":3},
+              "German|Near Mint":{"market_price":null,"sku_id":4},
+              "Italian|Near Mint":{"sku_id":5},
+              "Spanish|Near Mint":{"market_price":-1,"sku_id":6},
+              "Unknown|Near Mint":{"market_price":8,"sku_id":7}
+            }},
+            {"key":"Foil","quotes":{"Portuguese|Near Mint":{"market_price":9,"sku_id":8}}}
+          ]},
+          "p:999":{"printings":[{"key":"Normal","quotes":{"Korean|Near Mint":{"market_price":10,"sku_id":9}}}]}
+        }}
+        """#.utf8)
+        var selected = card("p:123")
+        let normal = try OnlineMarketPricing.parseDetails(data, for: selected)
+        XCTAssertEqual(normal.quote?.marketPrice, 0)
+        XCTAssertEqual(normal.pricedLanguages, ["English", "Japanese"])
+        selected.identity.condition = "Lightly Played"
+        XCTAssertEqual(try OnlineMarketPricing.parseDetails(data, for: selected).pricedLanguages, ["French"])
+        selected.identity.condition = "Near Mint"; selected.identity.printing = "Foil"
+        XCTAssertEqual(try OnlineMarketPricing.parseDetails(data, for: selected).pricedLanguages, ["Portuguese"])
+    }
+
+    func testLegacyAliasOnlyQuoteDoesNotAdvertiseAnUnquotableCanonicalLanguage() throws {
+        let data = Data(#"""
+        {"items":{"p:123":{"printings":[{"key":"Normal","quotes":{
+          "EN|Near Mint":{"market_price":1,"sku_id":1},
+          " French |Near Mint":{"market_price":2,"sku_id":2},
+          "Japanese|Near Mint":{"market_price":0,"sku_id":3}
+        }}]}}}
+        """#.utf8)
+        let details = try OnlineMarketPricing.parseDetails(data, for: card("p:123"))
+        XCTAssertNil(details.quote)
+        XCTAssertEqual(details.pricedLanguages, ["Japanese"])
+    }
+
+    func testStandardProviderPreservesPricedLanguageMetadata() async throws {
+        let service = StandardMarketPricing(provider: SourcePricingSpy(price: nil, pricedLanguages: ["English", "Japanese"]))
+        let details = try await service.details(for: card(), candidates: [], forceRefresh: false)
+        XCTAssertNil(details.quote)
+        XCTAssertEqual(details.pricedLanguages, ["English", "Japanese"])
+    }
+
     func testMissingLegacyUnknownAndCorruptPreferencesAlwaysUseOpenAPI() async {
         let defaults = UserDefaults.standard, key = PricingSource.defaultsKey
         let previous = defaults.object(forKey: key)
@@ -154,10 +217,11 @@ private actor SourcePricingSpy: MarketPricing {
     private var loads = 0
     private let price: Decimal?
     private let metadata: MarketPriceMetadata?
+    private let pricedLanguages: [String]
     private var failure: SourcePricingFailure?
     private var cached = false
-    init(price: Decimal?, metadata: MarketPriceMetadata? = nil, failure: SourcePricingFailure? = nil) {
-        self.price = price; self.metadata = metadata; self.failure = failure
+    init(price: Decimal?, metadata: MarketPriceMetadata? = nil, failure: SourcePricingFailure? = nil, pricedLanguages: [String] = []) {
+        self.price = price; self.metadata = metadata; self.failure = failure; self.pricedLanguages = pricedLanguages
     }
     func prepare() async { preparations += 1 }
     func quote(for card: CardCandidate) async throws -> MarketQuote? {
@@ -167,7 +231,7 @@ private actor SourcePricingSpy: MarketPricing {
         requests.append(SourcePricingRequest(card: card, candidates: candidates, forceRefresh: forceRefresh))
         if let failure { throw failure }
         if forceRefresh || !cached { loads += 1; cached = true }
-        return MarketDetails(quote: price.map { MarketQuote(marketPrice: $0, skuID: nil) }, metadata: metadata)
+        return MarketDetails(quote: price.map { MarketQuote(marketPrice: $0, skuID: nil) }, metadata: metadata, pricedLanguages: pricedLanguages)
     }
     func setFailure(_ failure: SourcePricingFailure?) { self.failure = failure }
     func statistics() -> SourcePricingStatistics {

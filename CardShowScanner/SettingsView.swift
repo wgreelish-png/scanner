@@ -1,5 +1,25 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
+
+enum DiagnosticFileClipboard {
+    static func provider(for file: URL) throws -> NSItemProvider {
+        guard file.isFileURL else { throw CocoaError(.fileReadUnsupportedScheme) }
+        let values = try file.resourceValues(forKeys: [.isRegularFileKey])
+        guard values.isRegularFile == true, FileManager.default.isReadableFile(atPath: file.path) else {
+            throw CocoaError(.fileReadUnknown)
+        }
+        let item = NSItemProvider()
+        item.suggestedName = file.lastPathComponent
+        // Register only a file, independent of how this iOS version classifies
+        // the .jsonl extension. Do not offer a text representation of its bytes.
+        item.registerFileRepresentation(forTypeIdentifier: UTType.data.identifier, fileOptions: [], visibility: .all) { completion in
+            completion(file, false, nil)
+            return nil
+        }
+        return item
+    }
+}
 
 /// Everyday preferences stay on the tab; occasional maintenance is one step away.
 struct SettingsView: View {
@@ -237,10 +257,13 @@ private struct ScannerDatabaseSettingsView: View {
                 Button("Copy Diagnostic Log", systemImage: "doc.on.doc") {
                     copyNotice = nil
                     do {
-                        let text = try DiagnosticLog.shared.exportText()
-                        UIPasteboard.general.string = text
-                        copyNotice = "Diagnostic log copied. Paste it into your message."
-                    } catch { self.error = "Could not copy the diagnostic log: " + error.localizedDescription }
+                        let file = try DiagnosticLog.shared.exportForCopy()
+                        let item = try DiagnosticFileClipboard.provider(for: file)
+                        // Copy owns a separate temporary export. Share-sheet
+                        // dismissal must not delete the clipboard's attachment.
+                        UIPasteboard.general.setItemProviders([item], localOnly: true, expirationDate: nil)
+                        copyNotice = "Diagnostic file copied. Paste it as an attachment."
+                    } catch { self.error = "Could not copy the diagnostic file: " + error.localizedDescription }
                 }.accessibilityIdentifier("settings.copyDiagnostics")
                 if let copyNotice {
                     Label(copyNotice, systemImage: "checkmark.circle.fill")
@@ -255,7 +278,7 @@ private struct ScannerDatabaseSettingsView: View {
                     Text("Diagnostics could not be written to local storage.").foregroundStyle(.orange)
                 }
             } footer: {
-                Text("Keeps about 512 KB of recent local events, including scanner stages, timings and save errors. Card contents, credentials and camera images are excluded. Copy pastes log text; Export shares a file.")
+                Text("Keeps about 512 KB of recent local events, including scanner stages, timings and save errors. Card contents, credentials and camera images are excluded. Copy puts the diagnostic file on the clipboard; Export opens file sharing.")
             }
             Section {
                 Button("Clear Diagnostic Log", role: .destructive) { confirmClear = true }

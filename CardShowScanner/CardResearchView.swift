@@ -57,43 +57,48 @@ struct CardResearchView: View {
     var body: some View {
         List {
             Section {
-                if textSize.isAccessibilitySize {
-                    VStack(alignment: .leading, spacing: 12) { artwork; identity }
-                } else {
-                    HStack(alignment: .top, spacing: 14) { artwork; identity }
+                VStack(alignment: .leading, spacing: 10) {
+                    if textSize.isAccessibilitySize {
+                        VStack(alignment: .leading, spacing: 8) { artwork; price }
+                    } else {
+                        HStack(alignment: .center, spacing: 18) { artwork; price }
+                    }
+                    identity
+                    ResearchOptionButtons(title: "Printing", options: model.printings,
+                        selection: model.card.requiresPrintingSelection == true ? "" : model.card.identity.printing,
+                        accessibilityPrefix: "cardResearch.printing", onSelect: model.selectPrinting)
+                    if !model.languages.isEmpty {
+                        ResearchOptionButtons(title: "Language", options: model.languages,
+                            selection: model.card.identity.language,
+                            accessibilityPrefix: "cardResearch.language", compactLanguageLabels: true,
+                            onSelect: model.selectLanguage)
+                    }
+                    if model.section == .market {
+                        CardConditionPicker(selection: Binding(get: { model.card.identity.condition }, set: { model.selectCondition($0) }),
+                                            accessibilityPrefix: "cardResearch.condition")
+                    }
+                    if let url = MarketplaceLinks.tcgplayerProduct(model.card.identity.productID) {
+                        Link(destination: url) {
+                            Label("View Card on TCGplayer", systemImage: "arrow.up.right.square")
+                                .font(.subheadline.weight(.semibold)).multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.horizontal, 8).padding(.vertical, 6)
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .foregroundStyle(Color.white)
+                                .background(Color.indigo, in: RoundedRectangle(cornerRadius: 10))
+                        }.buttonStyle(.plain).accessibilityIdentifier("cardResearch.tcgplayer")
+                            .accessibilityHint("Opens raw-card listings and sales history. Choose the matching printing and condition on TCGplayer.")
+                    }
                 }
-                ResearchOptionButtons(title: "Printing", options: model.printings,
-                    selection: model.card.requiresPrintingSelection == true ? "" : model.card.identity.printing,
-                    accessibilityPrefix: "cardResearch.printing", onSelect: model.selectPrinting)
-                ResearchOptionButtons(title: "Language", options: model.languages,
-                    selection: model.card.identity.language,
-                    accessibilityPrefix: "cardResearch.language", compactLanguageLabels: true,
-                    onSelect: model.selectLanguage)
-                if let url = MarketplaceLinks.tcgplayerProduct(model.card.identity.productID) {
-                    Link(destination: url) {
-                        Label("View Card on TCGplayer", systemImage: "arrow.up.right.square")
-                            .font(.subheadline.weight(.semibold)).multilineTextAlignment(.center)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.horizontal, 8).padding(.vertical, 6)
-                            .frame(maxWidth: .infinity, minHeight: 44)
-                            .foregroundStyle(Color.white)
-                            .background(Color.indigo, in: RoundedRectangle(cornerRadius: 10))
-                    }.buttonStyle(.plain).accessibilityIdentifier("cardResearch.tcgplayer")
-                        .accessibilityHint("Opens raw-card listings and sales history. Choose the matching printing and condition on TCGplayer.")
-                }
+                .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
             }.listRowBackground(Color.indigo.opacity(0.07))
-            if model.section == .market {
-                Section {
-                    CardConditionPicker(selection: Binding(get: { model.card.identity.condition }, set: { model.selectCondition($0) }),
-                                        accessibilityPrefix: "cardResearch.condition")
-                }
-            }
             if model.section == .market {
                 MarketInsightsContent(model: model.market, window: $model.marketWindow)
             } else {
                 GradedResearchContent(model: model.graded)
             }
         }
+        .listSectionSpacing(8)
         .navigationTitle("Card Research").navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .tabBar)
         .safeAreaInset(edge: .top) {
@@ -101,10 +106,10 @@ struct CardResearchView: View {
                 Picker("Research view", selection: Binding(get: { model.section }, set: { model.selectSection($0) })) {
                     ForEach(CardResearchSection.allCases) { Text($0.title).tag($0) }
                 }.pickerStyle(.segmented).accessibilityIdentifier("cardResearch.section")
-                if let status = compactStatus {
+                if model.section == .graded, let status = compactStatus {
                     Text(status).font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("cardResearch.updated")
                 }
-            }.padding(.horizontal).padding(.vertical, 8).background(.regularMaterial)
+            }.padding(.horizontal).padding(.vertical, 6).background(.regularMaterial)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if let cardContext, case .showInventory(let id, let store) = cardContext {
@@ -168,25 +173,34 @@ struct CardResearchView: View {
         }.frame(width: 86, height: 120).clipShape(RoundedRectangle(cornerRadius: 8)).accessibilityHidden(true)
     }
     private var identity: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 2) {
             Text(model.card.name).font(.title3.bold()).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("cardResearch.name")
             Text(model.card.set).font(.subheadline).foregroundStyle(.secondary)
             Text(model.card.number.isEmpty ? model.card.identity.game : "#" + model.card.number + " · " + model.card.identity.game)
                 .font(.caption.weight(.medium)).foregroundStyle(.secondary)
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
-    private var compactStatus: String? {
-        if model.section == .graded {
-            if let date = model.graded.details?.meta.generatedAt { return "Experimental · Updated " + ResearchDateLabel.compact(date) }
-            return "Graded Research · Experimental"
+    @ViewBuilder private var price: some View {
+        if model.section == .market {
+            MarketPriceSummary(model: model.market)
+        } else {
+            let value = model.graded.selectedGrade?.guideValue ?? model.graded.selectedGrade?.marketValue
+            VStack(alignment: .leading, spacing: 4) {
+                Text(model.graded.selectedGrade?.guideValue == nil && value != nil ? "Research market value" : "Guide estimate")
+                    .font(.caption).foregroundStyle(.secondary)
+                if model.graded.loading { ProgressView("Checking price…") }
+                else {
+                    Text(value?.money ?? "Price unavailable")
+                        .font(value == nil ? .headline : .largeTitle.bold())
+                        .monospacedDigit().fixedSize(horizontal: false, vertical: true)
+                }
+                Text("USD per card · Experimental").font(.caption).foregroundStyle(.secondary)
+            }.frame(maxWidth: .infinity, alignment: .leading)
         }
-        guard let metadata = model.market.publicDetails?.metadata else { return nil }
-        var parts: [String] = []
-        if metadata.isOffline == true { parts.append("Offline cache") }
-        else if metadata.isCached == true { parts.append("Cached") }
-        if let date = metadata.updatedAt { parts.append("Updated " + date.formatted(date: .abbreviated, time: .omitted)) }
-        else { parts.append("Checked " + metadata.fetchedAt.formatted(date: .abbreviated, time: .omitted)) }
-        return parts.joined(separator: " · ")
+    }
+    private var compactStatus: String? {
+        if let date = model.graded.details?.meta.generatedAt { return "Experimental · Updated " + ResearchDateLabel.compact(date) }
+        return "Graded Research · Experimental"
     }
 }
 
@@ -206,9 +220,9 @@ private struct ResearchOptionButtons: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(compactLanguageLabels && !selection.isEmpty ? title + " · " + selection : title)
-                .font(.subheadline).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 4) {
+            Text(compactLanguageLabels && visibleOptions.contains(selection) ? title + " · " + selection : title)
+                .font(.caption).foregroundStyle(.secondary)
             if selection.isEmpty { Text("Choose \(title.lowercased())").font(.caption).foregroundStyle(.secondary) }
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: columns), spacing: 8) {
                 ForEach(visibleOptions, id: \.self) { option in
@@ -226,7 +240,7 @@ private struct ResearchOptionButtons: View {
                         .accessibilityIdentifier(accessibilityPrefix + "." + option)
                 }
             }
-        }.padding(.vertical, 3).accessibilityIdentifier(accessibilityPrefix)
+        }.accessibilityIdentifier(accessibilityPrefix)
     }
 
     private func displayLabel(_ value: String) -> String {

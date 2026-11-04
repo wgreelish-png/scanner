@@ -127,6 +127,13 @@ struct ActiveSessionCard: View {
     }
 }
 
+struct DraftScannerDestination: View {
+    let draft: ScanBatchDraft
+    var body: some View {
+        ScannerView(session: draft.session, list: draft.list, draft: draft)
+    }
+}
+
 struct BatchScannerDestination: View {
     let session: ScanSession
     @Query private var lists: [CardList]

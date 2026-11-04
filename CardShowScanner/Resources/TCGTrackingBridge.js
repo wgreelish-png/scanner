@@ -159,17 +159,22 @@
     window.addEventListener?.('unhandledrejection', onRejection);
     diagnostic('bridge_ready');
     const root = document.createElement('section');
-    root.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#111;color:white;font:16px system-ui;box-sizing:border-box';
+    root.style.cssText = 'position:fixed;inset:0;overflow:hidden;z-index:2147483647;background:#000;color:white;font:16px system-ui;box-sizing:border-box';
     const button = document.createElement('button');
     button.textContent = 'Open Game Database & Start Camera';
+    // Native UI already shows startup progress. Keep the camera surface clear;
+    // this page button is needed only for explicit manual startup or recovery.
+    button.hidden = config.autoStart === true;
     button.style.cssText = 'position:absolute;top:42%;left:24px;right:24px;z-index:2;font:600 17px system-ui;min-height:52px;border-radius:12px';
     const hint = document.createElement('div'); hint.setAttribute('role', 'status'); hint.style.cssText = 'position:absolute;top:calc(42% + 68px);left:24px;right:24px;z-index:2;text-align:center;pointer-events:none';
-    const frame = document.createElement('div'); frame.style.cssText = 'position:absolute;inset:0';
+    const frame = document.createElement('div'); frame.style.cssText = 'position:absolute;inset:0;overflow:hidden;background:#000';
     const video = document.createElement('video'); video.muted = true; video.autoplay = true; video.playsInline = true;
-    video.style.cssText = 'width:100%;height:100%;object-fit:cover';
-    const canvas = document.createElement('canvas'); canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none';
+    // Resolve the preview box before metadata/first playback; intrinsic video
+    // dimensions and the inline baseline must never size the camera surface.
+    video.style.cssText = 'position:absolute;inset:0;display:block;width:100%;height:100%;object-fit:cover;object-position:center;background:#000';
+    const canvas = document.createElement('canvas'); canvas.style.cssText = 'position:absolute;inset:0;display:block;width:100%;height:100%;pointer-events:none';
     frame.append(video, canvas); root.append(frame, button, hint); document.body.append(root);
-    const report = value => { hint.hidden = !!stream; hint.textContent = text(value); post({ kind: 'status', message: text(value) }); };
+    const report = value => { hint.hidden = config.autoStart === true || !!stream; hint.textContent = text(value); post({ kind: 'status', message: text(value) }); };
     const stopCamera = () => { clearManualAttempt(); heldRef = removalRef = removalAbsentSince = null; stopLoop?.(); stopLoop = null; stream?.getTracks().forEach(t => t.stop()); stream = null; video.srcObject = null; overlay?.destroy?.(); overlay = null; latestScan = null; heldScan = null; };
     const visibility = () => { if (document.hidden) { diagnostic('camera_backgrounded'); pending = null; stopCamera(); post({ kind: 'hide' }); button.disabled = false; button.hidden = false; button.textContent = 'Resume Camera'; } };
     document.addEventListener('visibilitychange', visibility);
@@ -177,7 +182,7 @@
     report('Ready. Saved databases are reused; the first download may be large.');
     button.onclick = async (options = {}) => {
       if (starting || !running) return;
-      starting = true; button.disabled = true;
+      starting = true; button.disabled = true; button.hidden = true;
       let stage = 'modules', began = clock(), lastStats = -Infinity;
       diagnostic('startup_started');
       try {
@@ -218,7 +223,7 @@
         backend.setPack(pack);
         diagnostic('backend_ready', { elapsedMS: clock() - began, backend: backend.kind });
         stage = 'camera'; began = clock(); diagnostic('camera_requested');
-        report('Requesting rear camera…');
+        report('Starting rear camera…');
         const captured = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
         if (!running || document.hidden) { captured.getTracks().forEach(t => t.stop()); return; }
         diagnostic('camera_acquired', { elapsedMS: clock() - began });
@@ -229,7 +234,7 @@
           diagnostic('camera_interrupted'); recover();
         }, { once: true });
         video.srcObject = stream; await video.play();
-        if (!running) { stopCamera(); return; }
+        if (!running || document.hidden || stream !== captured) { stopCamera(); return; }
         diagnostic('video_playing', { elapsedMS: clock() - began });
         stage = 'scan';
         overlay = overlays.createOverlay(canvas, { fit: 'cover' });

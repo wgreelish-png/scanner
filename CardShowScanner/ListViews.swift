@@ -256,19 +256,27 @@ struct ListDeletionConfirmationView: View {
                     Text("Saved offer estimates and session history will stay in All Sessions.")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
-                if let error = model.error {
-                    Section {
-                        Text(error).foregroundStyle(.red).accessibilityIdentifier("listDeletion.error")
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 12) {
+                    if let error = model.error {
+                        Text(error).font(.footnote).foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("listDeletion.error")
                     }
-                }
-                Section {
-                    Button(model.error == nil ? "Delete List" : "Retry Delete", role: .destructive) {
-                        if model.confirm(context: context) { dismiss() }
-                    }.disabled(model.isDeleting || model.didDelete)
-                        .accessibilityIdentifier("listDeletion.confirm")
                     if model.isDeleting { ProgressView("Deleting list…") }
+                    Button(role: .destructive) {
+                        if model.confirm(context: context) { dismiss() }
+                    } label: {
+                        Text(model.error == nil ? "Delete List" : "Retry Delete")
+                            .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                    }.buttonStyle(.borderedProminent).tint(.red).controlSize(.large)
+                        .disabled(model.isDeleting || model.didDelete)
+                        .accessibilityIdentifier("listDeletion.confirm")
                 }
-            }.navigationTitle("Delete List?").navigationBarTitleDisplayMode(.inline)
+                .padding(16).frame(maxWidth: .infinity).background(.regularMaterial)
+            }
+            .navigationTitle("Delete List?").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") { model.cancel(); dismiss() }
@@ -766,12 +774,6 @@ struct CardEditorView: View {
     }
 
     private var hasOfferOverrides: Bool { !cashOverride.isEmpty || !tradeOverride.isEmpty || !maximumOverride.isEmpty }
-    private var languages: [String] {
-        Array(Set([pricing.card.identity.language, "English", "Japanese", "French", "German", "Italian",
-                   "Spanish", "Portuguese", "Russian", "Korean", "Simplified Chinese", "Traditional Chinese"]))
-            .filter { !$0.isEmpty }.sorted()
-    }
-
     var body: some View {
         Form {
             Section {
@@ -787,9 +789,13 @@ struct CardEditorView: View {
                 Picker("Printing", selection: identityBinding(\.printing)) {
                     ForEach(Array(Set(pricing.card.printings + [pricing.card.identity.printing])).sorted(), id: \.self) { Text($0) }
                 }.pickerStyle(.menu).accessibilityIdentifier("cardEditor.printing")
-                Picker("Language", selection: identityBinding(\.language)) {
-                    ForEach(languages, id: \.self) { Text($0) }
-                }.pickerStyle(.menu).accessibilityIdentifier("cardEditor.language")
+                Menu {
+                    ForEach(pricing.languages, id: \.self) { language in
+                        Button(language) { pricing.changeIdentity { $0.language = language } }
+                    }
+                } label: {
+                    LabeledContent("Language", value: pricing.card.identity.language)
+                }.disabled(pricing.languages.isEmpty).accessibilityIdentifier("cardEditor.language")
             }
             Section("Your inventory") {
                 Stepper(value: $quantity, in: 1...100_000) {

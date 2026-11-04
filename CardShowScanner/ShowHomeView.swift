@@ -103,6 +103,8 @@ private struct ShowHomeRouteCard: View {
     @AppStorage("showInventorySort") private var sortPreference = ShowInventorySort.nameAscending.rawValue
     @State private var seedError: String?
     @State private var showingTransaction = false
+    @State private var selectingTransaction = false
+    @State private var transactionQuantities: [UUID: Int] = [:]
 
     init(store: ShowBudgetStore = .shared) { _store = State(initialValue: store) }
 
@@ -152,12 +154,16 @@ private struct ShowHomeRouteCard: View {
             } else if store.isLoaded {
                 Section {
                     ForEach(filtered) { item in
-                        NavigationLink {
-                            CardResearchView(card: item.card, initialSection: .market,
-                                context: .showInventory(item.id, store))
-                        } label: {
-                            ShowWorkingInventoryRow(item: item)
-                        }.accessibilityIdentifier("showInventory.item." + item.id.uuidString)
+                        if selectingTransaction {
+                            transactionSelectionRow(item)
+                        } else {
+                            NavigationLink {
+                                CardResearchView(card: item.card, initialSection: .market,
+                                    context: .showInventory(item.id, store))
+                            } label: {
+                                ShowWorkingInventoryRow(item: item)
+                            }.accessibilityIdentifier("showInventory.item." + item.id.uuidString)
+                        }
                     }
                 } header: {
                     HStack {
@@ -193,6 +199,12 @@ private struct ShowHomeRouteCard: View {
             }
         }
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                if selectingTransaction {
+                    Button("Cancel") { transactionQuantities.removeAll(); selectingTransaction = false }
+                        .accessibilityIdentifier("showInventory.cancelSelection")
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink { CardShowInventoryView() } label: { Text("Source") }
                     .accessibilityLabel("TCGTracking Source Snapshot")
@@ -204,13 +216,28 @@ private struct ShowHomeRouteCard: View {
                     .accessibilityIdentifier("showInventory.keyboardDone")
             }
         }
-        .sheet(isPresented: $showingTransaction) { ShowTransactionForm(store: store) }
+        .sheet(isPresented: $showingTransaction) {
+            ShowTransactionForm(store: store, initialQuantities: transactionQuantities, confirmingSelection: true,
+                                onSelectionChanged: { transactionQuantities = $0 }) {
+                transactionQuantities.removeAll(); selectingTransaction = false
+            }
+        }
         .onAppear { visible = true; seedInventory() }
         .onDisappear { visible = false }
     }
 
     private var inventorySummary: some View {
         VStack(alignment: .leading, spacing: 4) {
+            if selectingTransaction {
+                HStack {
+                    Text("\(transactionQuantities.values.reduce(0, +).formatted()) selected")
+                        .font(.headline).accessibilityIdentifier("showInventory.selectedQuantity")
+                    Spacer()
+                    Button("Clear") { transactionQuantities.removeAll() }
+                        .frame(minHeight: 44).disabled(transactionQuantities.isEmpty)
+                        .accessibilityIdentifier("showInventory.clearSelection")
+                }
+            }
             Text("\(available.reduce(0) { $0 + $1.quantity }.formatted()) cards available")
                 .font(.headline).monospacedDigit().accessibilityIdentifier("showInventory.quantity")
             Text("\(available.count.formatted()) acquisition lots · Quantities count physical cards")
@@ -230,13 +257,18 @@ private struct ShowHomeRouteCard: View {
             Button {
                 guard store.isLoaded, store.eligibleActiveShow != nil else { return }
                 endSearchEditing()
-                showingTransaction = true
+                if selectingTransaction {
+                    guard selectionIsAvailable else { return }
+                    showingTransaction = true
+                } else { selectingTransaction = true }
             } label: {
-                Label("Record Transaction", systemImage: "arrow.left.arrow.right")
+                Label(selectingTransaction ? "Confirm Transaction" : "Record Transaction",
+                      systemImage: selectingTransaction ? "checkmark.circle" : "arrow.left.arrow.right")
                     .frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(!store.isLoaded || store.eligibleActiveShow == nil)
+            .disabled(!store.isLoaded || store.isSaving || store.eligibleActiveShow == nil ||
+                      (selectingTransaction && !selectionIsAvailable))
             .accessibilityIdentifier("showInventory.recordTransaction")
             if !store.isLoaded {
                 Text("Load your show data to record transactions.")
@@ -246,11 +278,50 @@ private struct ShowHomeRouteCard: View {
                      ? "Choose an active show in Show Budget to record."
                      : "Recording opens on your show's dates.")
                     .font(.caption).foregroundStyle(.secondary)
+            } else if selectingTransaction && !selectionIsAvailable {
+                Text("Selected stock changed. Review quantities or clear your selection.")
+                    .font(.caption).foregroundStyle(.orange)
+            } else if selectingTransaction && transactionQuantities.isEmpty {
+                Text("Choose cards for a sale or trade. Purchases can continue without outgoing cards.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
         .background(.bar)
         .overlay(alignment: .top) { Divider() }
+    }
+
+    private var selectionIsAvailable: Bool {
+        transactionQuantities.allSatisfy { id, quantity in
+            quantity > 0 && available.contains { $0.id == id && $0.quantity >= quantity }
+        }
+    }
+
+    private func transactionSelectionRow(_ item: ShowInventoryItem) -> some View {
+        let selected = transactionQuantities[item.id] ?? 0
+        return VStack(alignment: .leading, spacing: 6) {
+            Button {
+                if transactionQuantities[item.id] != nil { transactionQuantities.removeValue(forKey: item.id) }
+                else { transactionQuantities[item.id] = 1 }
+            } label: {
+                HStack(spacing: 12) {
+                    ShowWorkingInventoryRow(item: item)
+                    Image(systemName: selected > 0 ? "checkmark.circle.fill" : "circle")
+                        .font(.title2).foregroundStyle(.indigo).accessibilityHidden(true)
+                        .contentTransition(.identity)
+                        .transaction { transaction in
+                            transaction.animation = nil; transaction.disablesAnimations = true
+                        }
+                }.contentShape(Rectangle())
+            }.buttonStyle(ShowInventoryTransactionSelectionStyle())
+                .accessibilityIdentifier("showInventory.item." + item.id.uuidString)
+                .accessibilityAddTraits(selected > 0 ? .isSelected : [])
+            if selected > 0 {
+                Stepper("Quantity: \(selected)", value: Binding(get: { transactionQuantities[item.id] ?? 1 },
+                    set: { transactionQuantities[item.id] = $0 }), in: 1...item.quantity)
+                    .accessibilityIdentifier("showInventory.selectionQuantity." + item.id.uuidString)
+            }
+        }
     }
 
     private func endSearchEditing() {
@@ -261,6 +332,10 @@ private struct ShowHomeRouteCard: View {
         do { try ShowInventoryBridge.seedFromImportedList(context: context, store: store); seedError = nil }
         catch { seedError = showViewError(error) }
     }
+}
+
+private struct ShowInventoryTransactionSelectionStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { configuration.label }
 }
 
 private struct ShowWorkingInventoryRow: View {
@@ -274,6 +349,9 @@ private struct ShowWorkingInventoryRow: View {
                 Text(showCardSetLabel(item.card)).font(.caption).foregroundStyle(.secondary)
                 Text([item.card.identity.printing, item.card.identity.condition, item.card.identity.language].joined(separator: " · "))
                     .font(.caption2).foregroundStyle(.secondary)
+                Text(item.originTitle)
+                    .font(.caption2.weight(.medium)).foregroundStyle(.indigo)
+                    .accessibilityIdentifier("showInventory.origin." + item.id.uuidString)
                 HStack {
                     Text(item.card.marketPrice?.money ?? "Market unavailable").font(.caption.weight(.medium)).monospacedDigit()
                     Spacer(minLength: 8)
@@ -309,6 +387,7 @@ private struct ShowWorkingInventoryRow: View {
                     LabeledContent("Available quantity", value: item.quantity.formatted())
                 }
                 Section("Cost & acquisition") {
+                    LabeledContent("Source", value: item.originTitle).accessibilityIdentifier("inventory.origin")
                     LabeledContent("Cost of remaining lot", value: item.remainingCostCents.map { ShowBudgetMoney.decimal($0).money } ?? "Cost unknown")
                         .monospacedDigit().accessibilityIdentifier("inventory.cost")
                     Text("Total cost for \(item.quantity.formatted()) remaining \(item.quantity == 1 ? "copy" : "copies") · USD")
@@ -316,7 +395,9 @@ private struct ShowWorkingInventoryRow: View {
                     Button(item.remainingCostCents == nil ? "Set Cost" : "Edit Cost") { showingCostEditor = true }
                         .disabled(!store.isLoaded || store.isSaving || item.quantity <= 0)
                         .accessibilityIdentifier("inventory.editCost")
-                    if let transactionID = item.acquiredByTransactionID {
+                    if let transactionID = item.acquiredByTransactionID ?? item.adoptedFromInventoryID.flatMap({ originID in
+                        store.inventory.first { $0.id == originID }?.acquiredByTransactionID
+                    }) {
                         NavigationLink { ShowTransactionDetailView(transactionID: transactionID, store: store) } label: {
                             if let receipt = store.transactions.first(where: { $0.id == transactionID }) {
                                 VStack(alignment: .leading, spacing: 4) {

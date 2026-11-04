@@ -30,12 +30,14 @@ import SwiftData
     func testSharedSelectionsRetireOldQuoteAndLoadOnlyActiveMode() async throws {
         let service = CombinedResearchService()
         let page = model(service)
-        page.selectSection(.graded)
         page.selectPrinting("Normal"); page.selectLanguage("Japanese")
         await settle()
         var stats = await service.counts()
         XCTAssertEqual(stats.0, 0); XCTAssertEqual(stats.2, 0)
+        XCTAssertEqual(page.card.identity.language, "English", "An unverified language is not selectable before prices load")
         page.start(); try await idle(page)
+        page.selectLanguage("Japanese"); try await idle(page)
+        page.selectSection(.graded); try await idle(page)
         let requests = await service.researchRequests
         XCTAssertEqual(requests.first?.0.identity.printing, "Normal")
         XCTAssertEqual(requests.first?.0.identity.language, "Japanese")
@@ -51,6 +53,96 @@ import SwiftData
         XCTAssertEqual(prices.last?.0.identity.printing, "Normal")
         stats = await service.counts()
         XCTAssertEqual(stats.2, 1, "Changing a Market selection must not start a hidden Research request")
+    }
+
+    func testMarketLanguageChoicesExcludeSavedUnpricedAndUnreturnedLanguages() async throws {
+        let service = CombinedResearchService(pricedLanguages: ["JP"], unpricedPublic: true)
+        let page = model(service)
+        XCTAssertTrue(page.languages.isEmpty)
+        page.start(); try await idle(page)
+        XCTAssertEqual(page.languages, ["Japanese"])
+        XCTAssertEqual(page.card.identity.language, "English", "Availability must not silently change the saved identity")
+        XCTAssertEqual(page.card.marketPrice, 7, "A saved quote must not advertise an otherwise unpriced language")
+        page.selectLanguage("French")
+        await settle()
+        XCTAssertEqual(page.card.identity.language, "English")
+        XCTAssertEqual(page.languages, ["Japanese"])
+        let counts = await service.counts()
+        XCTAssertEqual(counts.0, 1, "Language availability uses the existing card response, not one request per language")
+        XCTAssertEqual(counts.2, 0)
+    }
+
+    func testKnownZeroQuoteOffersItsLanguageButMissingQuoteDoesNot() async throws {
+        let service = CombinedResearchService(holdPrices: true)
+        let page = model(service)
+        page.start(); try await service.waitForPrices(1)
+        await service.finishPrice(0, price: 0); try await idle(page)
+        XCTAssertEqual(page.languages, ["English"])
+        page.refresh(); try await service.waitForPrices(2)
+        await service.finishPrice(1, price: nil); try await idle(page)
+        XCTAssertTrue(page.languages.isEmpty)
+        XCTAssertEqual(page.card.identity.language, "English")
+    }
+
+    func testLateMarketLanguageAvailabilityCannotSurviveAConditionChangeOrCancellation() async throws {
+        let service = CombinedResearchService(holdPrices: true)
+        let page = model(service)
+        page.start(); try await service.waitForPrices(1)
+        page.selectCondition("Lightly Played"); try await service.waitForPrices(2)
+        await service.finishPrice(1, price: nil, languages: ["Japanese"]); try await idle(page)
+        await service.finishPrice(0, price: 999, languages: ["German"]); await settle()
+        XCTAssertEqual(page.languages, ["Japanese"])
+        XCTAssertEqual(page.card.identity.condition, "Lightly Played")
+        page.refresh(); try await service.waitForPrices(3)
+        page.stop()
+        await service.finishPrice(2, price: 888, languages: ["French"]); await settle()
+        XCTAssertTrue(page.languages.isEmpty)
+    }
+
+    func testGradedLanguagesRequireExactPrintingAndUniquePricedSelectedGrade() async throws {
+        let variants: [String: Any] = [
+            "EN:Holofoil": ["language": "EN", "finish": "Holofoil", "grades": [
+                ["grader": "PSA", "grade": "9", "guide_value": "0"],
+                ["grader": "PSA", "grade": "10", "guide_value": NSNull()]
+            ]],
+            "JP:Holofoil": ["language": "JP", "finish": "Holofoil", "grades": [
+                ["grader": "PSA", "grade": "9", "market_value": "7"]
+            ]],
+            "FR:Holofoil": ["language": "FR", "finish": "Holofoil", "grades": [
+                ["grader": "PSA", "grade": "9", "sales": 8]
+            ]],
+            "DE:Normal": ["language": "DE", "finish": "Normal", "grades": [
+                ["grader": "PSA", "grade": "9", "guide_value": "100"]
+            ]],
+            "IT:Holofoil": ["language": "IT", "finish": "Holofoil", "grades": [
+                ["grader": "PSA", "grade": "10", "guide_value": "11"]
+            ]],
+            "ES:Holofoil": ["language": "ES", "finish": "Holofoil", "grades": [
+                ["grader": "PSA", "grade": "9", "guide_value": "4"],
+                ["grader": "PSA", "grade": "9", "guide_value": "4"]
+            ]],
+            "ZZ:Holofoil": ["language": "ZZ", "finish": "Holofoil", "grades": [
+                ["grader": "PSA", "grade": "9", "guide_value": "22"]
+            ]],
+            "ko:Holofoil": ["language": "ko", "finish": "Holofoil", "grades": [
+                ["grader": "PSA", "grade": "9", "guide_value": "23"]
+            ]],
+            "Portuguese:Holofoil": ["language": "Portuguese", "finish": "Holofoil", "grades": [
+                ["grader": "PSA", "grade": "9", "guide_value": "24"]
+            ]]
+        ]
+        let service = CombinedResearchService(researchDetails: try CombinedResearchFixtures.research(variants: variants))
+        let page = model(service, section: .graded)
+        page.start(); try await idle(page)
+        XCTAssertEqual(page.languages, ["English", "Japanese"])
+        page.graded.selectGrade(grader: "PSA", grade: "10")
+        XCTAssertEqual(page.languages, ["Italian"])
+        XCTAssertEqual(page.card.identity.language, "English", "A missing selected-grade price must not rewrite the card")
+        page.graded.selectGrade(grader: "PSA", grade: "")
+        XCTAssertEqual(page.languages, ["English", "Italian", "Japanese"])
+        let counts = await service.counts()
+        XCTAssertEqual(counts.0, 0, "Graded language choices must not request hidden raw-card pricing")
+        XCTAssertEqual(counts.2, 1)
     }
 
     func testAmbiguousPrintingRequiresExplicitSelectionEvenForTheCurrentLabel() async throws {
@@ -191,10 +283,10 @@ private enum CombinedResearchFixtures {
             name: "Fixture card", set: "Fixture set", number: "42", marketPrice: 7,
             confidence: 100, printings: ["Holofoil", "Normal"])
     }
-    static func research() throws -> ResearchProductDetails {
+    static func research(variants: [String: Any]? = nil) throws -> ResearchProductDetails {
         let body: [String: Any] = [
             "meta": ["category_id": 3, "group_id": 1430, "schema_version": "2.0-testing", "status": "in_testing"],
-            "product": ["product_id": 42, "name": "Fixture card", "variants": [
+            "product": ["product_id": 42, "name": "Fixture card", "variants": variants ?? [
                 "EN:Holofoil": ["language": "EN", "finish": "Holofoil", "grades": [
                     ["grader": "PSA", "grade": "9", "guide_value": "12.50", "sales": 3],
                     ["grader": "PSA", "grade": "10", "guide_value": "25", "sales": 2]
@@ -210,13 +302,19 @@ private actor CombinedResearchService: MarketPricing, OpportunitiesProviding, Re
     let holdPrices: Bool
     let holdResearch: Bool
     let researchFailure: ResearchFailure?
+    let pricedLanguages: [String]
+    let unpricedPublic: Bool
+    let researchDetails: ResearchProductDetails?
     private(set) var priceRequests: [(CardCandidate, Bool)] = []
     private(set) var researchRequests: [(CardCandidate, Bool)] = []
     private var activityCalls = 0
     private var pendingPrices: [CheckedContinuation<MarketDetails, Error>?] = []
     private var pendingResearch: [CheckedContinuation<ResearchProductDetails, Error>?] = []
-    init(holdPrices: Bool = false, holdResearch: Bool = false, researchFailure: ResearchFailure? = nil) {
+    init(holdPrices: Bool = false, holdResearch: Bool = false, researchFailure: ResearchFailure? = nil,
+         pricedLanguages: [String] = ["English", "Japanese"], unpricedPublic: Bool = false,
+         researchDetails: ResearchProductDetails? = nil) {
         self.holdPrices = holdPrices; self.holdResearch = holdResearch; self.researchFailure = researchFailure
+        self.pricedLanguages = pricedLanguages; self.unpricedPublic = unpricedPublic; self.researchDetails = researchDetails
     }
     func quote(for card: CardCandidate) async throws -> MarketQuote? {
         try await details(for: card, candidates: [card], forceRefresh: false).quote
@@ -224,9 +322,9 @@ private actor CombinedResearchService: MarketPricing, OpportunitiesProviding, Re
     func details(for card: CardCandidate, candidates: [CardCandidate], forceRefresh: Bool) async throws -> MarketDetails {
         priceRequests.append((card, forceRefresh))
         if holdPrices { return try await withCheckedThrowingContinuation { pendingPrices.append($0) } }
-        return MarketDetails(quote: MarketQuote(marketPrice: card.identity.condition == "Lightly Played" ? 5 : 10,
+        return MarketDetails(quote: MarketQuote(marketPrice: unpricedPublic ? nil : (card.identity.condition == "Lightly Played" ? 5 : 10),
                                                skuID: card.identity.condition == "Lightly Played" ? "200" : "100"),
-                             printings: ["Holofoil", "Normal"])
+                             printings: ["Holofoil", "Normal"], pricedLanguages: pricedLanguages)
     }
     func opportunities(for card: CardCandidate, forceRefresh: Bool) async throws -> OpportunitiesDetails {
         activityCalls += 1; throw OpportunitiesFailure.notCovered
@@ -235,12 +333,13 @@ private actor CombinedResearchService: MarketPricing, OpportunitiesProviding, Re
         researchRequests.append((card, forceRefresh))
         if let researchFailure { throw researchFailure }
         if holdResearch { return try await withCheckedThrowingContinuation { pendingResearch.append($0) } }
+        if let researchDetails { return researchDetails }
         return try CombinedResearchFixtures.research()
     }
     func counts() -> (Int, Int, Int) { (priceRequests.count, activityCalls, researchRequests.count) }
-    func finishPrice(_ index: Int, price: Decimal) {
+    func finishPrice(_ index: Int, price: Decimal?, languages: [String] = []) {
         let continuation = pendingPrices[index]; pendingPrices[index] = nil
-        continuation?.resume(returning: MarketDetails(quote: MarketQuote(marketPrice: price, skuID: "100")))
+        continuation?.resume(returning: MarketDetails(quote: MarketQuote(marketPrice: price, skuID: "100"), pricedLanguages: languages))
     }
     func finishResearch(_ index: Int) throws {
         let continuation = pendingResearch[index]; pendingResearch[index] = nil

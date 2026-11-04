@@ -222,22 +222,21 @@ enum ServiceDiagnosticFields {
         lastSamples.removeAll(); storageFailed = false
     }
     func export() throws -> URL {
-        record("diagnostics.export")
+        try exportFile(event: "diagnostics.export")
+    }
+
+    func exportForCopy() throws -> URL {
+        try exportFile(event: "diagnostics.copy")
+    }
+
+    private func exportFile(event: String) throws -> URL {
+        record(event)
         let data = try reportData()
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("CardShowDiagnostics-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = folder.appendingPathComponent("CardShowScanner-diagnostics.jsonl")
         try data.write(to: url, options: .atomic)
         return url
-    }
-
-    /// Text copying uses the same filtered report as file export, without a file URL.
-    func exportText() throws -> String {
-        record("diagnostics.copy")
-        guard let text = String(data: try reportData(), encoding: .utf8) else {
-            throw CocoaError(.fileReadInapplicableStringEncoding)
-        }
-        return text
     }
 
     private func reportData() throws -> Data {

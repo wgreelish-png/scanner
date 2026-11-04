@@ -1,5 +1,26 @@
 import Foundation
 import SwiftData
+import Observation
+
+/// A camera-only batch has no models in a persistence context. Its first
+/// confirmed card promotes a newly committed pair with these stable IDs.
+@MainActor @Observable final class ScanBatchDraft: Identifiable, Hashable {
+    nonisolated let id: UUID
+    private(set) var session: ScanSession
+    private(set) var list: CardList
+    private(set) var isCommitted = false
+
+    fileprivate init(session: ScanSession, list: CardList) {
+        id = session.id; self.session = session; self.list = list
+    }
+
+    fileprivate func promote(session: ScanSession, list: CardList) {
+        self.session = session; self.list = list; isCommitted = true
+    }
+
+    nonisolated static func == (lhs: ScanBatchDraft, rhs: ScanBatchDraft) -> Bool { lhs.id == rhs.id }
+    nonisolated func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
 
 enum BatchFailure: LocalizedError {
     case activeSessionExists, unavailable, wrongGame, invalidRates, invalidQuantity, invalidOfferAmount
@@ -75,6 +96,75 @@ enum ScannerUndoFailure: LocalizedError, Equatable {
         return OfferRates(cash: rate("cashPercentage", fallback: defaults.object(forKey: "pricingPercentage") == nil ? 70 : defaults.double(forKey: "pricingPercentage")),
             trade: rate("tradePercentage", fallback: 80), maximum: rate("maximumBuyPercentage", fallback: 75))
     }
+    static func prepareDraft(game: String, defaults: UserDefaults = .standard, now: Date = .now) throws -> ScanBatchDraft {
+        guard TCGGameRegistry.scannerKey(for: game) != nil else { throw BatchFailure.wrongGame }
+        let formatter = DateFormatter(); formatter.dateFormat = "MMM d, yyyy - h:mm a"
+        let list = CardList(name: formatter.string(from: now) + " - " + game); list.createdAt = now
+        let session = ScanSession(listName: list.name)
+        session.startedAt = now; session.listID = list.id; session.game = game; session.statusRaw = "active"
+        session.setRates(Self.defaults(defaults))
+        defaults.set(game, forKey: "defaultGame")
+        return ScanBatchDraft(session: session, list: list)
+    }
+
+    /// The templates never enter SwiftData: a failed save can discard its
+    /// staged copies without invalidating the live scanner's retry targets.
+    static func commitDraft(_ draft: ScanBatchDraft, card: CardCandidate, context: ModelContext,
+                            recognitionRef: String? = nil,
+                            saveCard: @MainActor (CardCandidate, ScanSession, CardList, ModelContext, String?) throws -> Void = {
+                                try SessionService.add($0, session: $1, list: $2, context: $3, recognitionRef: $4)
+                            }) throws {
+        if draft.isCommitted {
+            try withScanSave(session: draft.session, list: draft.list, context: context) {
+                try saveCard(card, draft.session, draft.list, context, recognitionRef)
+            }
+            return
+        }
+        let templateSession = draft.session, templateList = draft.list
+        guard templateSession.isActive, templateSession.listID == templateList.id,
+              templateSession.modelContext == nil, templateList.modelContext == nil,
+              templateList.cards.isEmpty, templateSession.addedQuantity == 0 else { throw BatchFailure.unavailable }
+        guard !templateList.isCardShowInventory else { throw CardShowInventoryFailure.readOnlyList }
+        guard templateSession.game == card.identity.game else { throw BatchFailure.wrongGame }
+
+        // Preserve unrelated edits before a first-card transaction that may
+        // need rollback. No draft model has been inserted at this point.
+        if context.hasChanges { try context.save() }
+        let previous = try active(context: context)
+        let previousStatus = previous?.statusRaw, previousCompletion = previous?.completedAt
+        guard previous?.id != templateSession.id else { throw BatchFailure.unavailable }
+
+        let list = CardList(name: templateList.name)
+        list.id = templateList.id; list.createdAt = templateList.createdAt
+        list.transactionOutcomeData = templateList.transactionOutcomeData
+        list.inventorySourceData = templateList.inventorySourceData
+        let session = ScanSession(listName: templateSession.listName)
+        session.id = templateSession.id; session.startedAt = templateSession.startedAt
+        session.listID = list.id; session.game = templateSession.game; session.statusRaw = "active"
+        session.cashRateText = templateSession.cashRateText
+        session.tradeRateText = templateSession.tradeRateText
+        session.maximumRateText = templateSession.maximumRateText
+        session.savedOffersData = templateSession.savedOffersData
+        session.lastConsumedRecognitionRef = templateSession.lastConsumedRecognitionRef
+        do {
+            previous?.statusRaw = "completed"; previous?.completedAt = .now
+            context.insert(list); context.insert(session)
+            try saveCard(card, session, list, context, recognitionRef)
+            guard !list.cards.isEmpty, session.addedQuantity > 0 else { throw BatchFailure.unavailable }
+            if context.hasChanges { try context.save() }
+            draft.promote(session: session, list: list)
+            DiagnosticLog.shared.record("batch.started")
+        } catch {
+            context.rollback()
+            // Restore the cached live values as well as the durable baseline.
+            if let previous, let previousStatus {
+                previous.statusRaw = previousStatus; previous.completedAt = previousCompletion
+            }
+            context.processPendingChanges()
+            throw error
+        }
+    }
+
     static func start(game: String, context: ModelContext, defaults: UserDefaults = .standard, now: Date = .now) throws -> ScanSession {
         guard try active(context: context) == nil else { throw BatchFailure.activeSessionExists }
         guard TCGGameRegistry.scannerKey(for: game) != nil else { throw BatchFailure.wrongGame }

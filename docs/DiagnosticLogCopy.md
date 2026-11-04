@@ -1,27 +1,31 @@
-# Copy diagnostics as text — build 57
+# Copy the diagnostic file — build 60
 
-Settings → Diagnostics now has Copy Diagnostic Log beside Export Diagnostic Log.
-Copy assembles the filtered environment header and recent JSONL events and
-writes that string directly to the system clipboard on the main actor. The
-screen confirms when the assignment has finished. A report-read or encoding
-failure shows an error before changing the clipboard.
+Settings → Diagnostics → Copy Diagnostic Log now puts the exported
+`CardShowScanner-diagnostics.jsonl` file on the clipboard using a file-backed
+`NSItemProvider` and its filename. It no longer assigns the report contents to
+the clipboard's string property. The confirmation says “Diagnostic file copied.
+Paste it as an attachment.”
 
-Previously, Export opened the shared file-URL activity sheet. Its system Copy
-action did not reliably supply pasteable text. File export and the generic
-ShareSheet remain available and unchanged for diagnostic/CSV attachments.
+Copy prepares an atomic report and the provider before changing the clipboard.
+It uses a separate temporary export from the share sheet, so dismissing sharing
+or leaving Settings does not remove the copied file. iOS manages the temporary
+file's eventual lifetime. The clipboard item stays on this device. Export
+Diagnostic Log still opens the existing file share sheet.
 
-Text and file export share report assembly and the existing privacy filters.
-Recording can be disabled and existing logs still copied. There is no new raw
-logging, clipboard read, upload or scanner startup change. The pending database,
-rear-camera status and preview-resizing investigation still awaits the user's
-log.
+Copy and Export share report assembly and the existing privacy filters. Copy
+records `diagnostics.copy`; sharing records `diagnostics.export`. Recording can
+be disabled and existing logs still copied. There is no clipboard read, upload,
+new raw logging or scanner change.
 
-All implementation completes before validation. Native cases cover the text
-header, sanitized fields, recording-disabled and rotated logs, and invalid UTF-8.
-After installing build 57, tap Copy Diagnostic Log, check the success message,
-and paste into a text field or chat. Physical-iPhone clipboard behavior remains
-unverified in this Linux workspace.
+Native cases cover the exported file header, sanitized fields, disabled
+recording, rotated log order, and loading the provider's attachment bytes.
+Physical iPhone verification remains pending: tap Copy Diagnostic Log and paste
+into a destination that accepts file attachments, confirming the `.jsonl`
+filename and contents. Export remains available for destinations that do not
+accept files from the clipboard. All implementation completes before checks;
+Linux checks cannot verify iOS clipboard delivery.
 
-Changed Swift grammar, source/target membership, build-57 metadata and whitespace
-checks passed locally. The three new native cases have not executed here;
-Xcode CI and iPhone paste validation remain pending after push.
+Local checks passed for all 192 Swift source grammars, source/target membership,
+build-60 metadata and whitespace. The three native file-copy cases have been
+updated but cannot run without Xcode. CI and physical iPhone pasting remain
+pending after push; simulator jobs are not awaited.

@@ -37,14 +37,16 @@ struct CardShowInventoryLink: Codable, Equatable, Sendable {
     let syncID: UUID?
     let pendingWorkingSync: Bool?
     let workingRevision: ShowInventorySyncRevision?
+    let workingImportMode: ShowInventoryImportMode?
 
     init(locationID: Int, locationName: String, refreshedAt: Date, version: Int = 1,
          syncID: UUID? = nil, pendingWorkingSync: Bool? = nil,
-         workingRevision: ShowInventorySyncRevision? = nil) {
+         workingRevision: ShowInventorySyncRevision? = nil, workingImportMode: ShowInventoryImportMode? = nil) {
         self.version = version; self.locationID = locationID
         self.locationName = locationName; self.refreshedAt = refreshedAt
         self.syncID = syncID; self.pendingWorkingSync = pendingWorkingSync
         self.workingRevision = workingRevision
+        self.workingImportMode = workingImportMode
     }
 
     /// This token survives acknowledgement unchanged, so a retry can identify
@@ -54,14 +56,17 @@ struct CardShowInventoryLink: Codable, Equatable, Sendable {
         return Data(syncID.uuidString.utf8)
     }
 
+    /// Older pending downloads were authorized as website-authoritative replacements.
+    var effectiveImportMode: ShowInventoryImportMode { workingImportMode ?? .replace }
+
     private enum CodingKeys: String, CodingKey {
-        case version, locationID, locationName, refreshedAt, syncID, pendingWorkingSync, workingRevision
+        case version, locationID, locationName, refreshedAt, syncID, pendingWorkingSync, workingRevision, workingImportMode
     }
     private var valid: Bool {
         guard locationID > 0, !locationName.isEmpty, locationName.count <= 200,
               refreshedAt.timeIntervalSince1970.isFinite else { return false }
         switch version {
-        case 1: return syncID == nil && pendingWorkingSync == nil && workingRevision == nil
+        case 1: return syncID == nil && pendingWorkingSync == nil && workingRevision == nil && workingImportMode == nil
         case 2: return syncID != nil && pendingWorkingSync != nil && (workingRevision?.isValid ?? true)
         default: return false
         }
@@ -75,6 +80,7 @@ struct CardShowInventoryLink: Codable, Equatable, Sendable {
         syncID = try values.decodeIfPresent(UUID.self, forKey: .syncID)
         pendingWorkingSync = try values.decodeIfPresent(Bool.self, forKey: .pendingWorkingSync)
         workingRevision = try values.decodeIfPresent(ShowInventorySyncRevision.self, forKey: .workingRevision)
+        workingImportMode = try values.decodeIfPresent(ShowInventoryImportMode.self, forKey: .workingImportMode)
         guard valid else {
             throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Invalid inventory link."))
         }
@@ -89,6 +95,7 @@ struct CardShowInventoryLink: Codable, Equatable, Sendable {
         try values.encodeIfPresent(syncID, forKey: .syncID)
         try values.encodeIfPresent(pendingWorkingSync, forKey: .pendingWorkingSync)
         try values.encodeIfPresent(workingRevision, forKey: .workingRevision)
+        try values.encodeIfPresent(workingImportMode, forKey: .workingImportMode)
     }
 }
 
@@ -120,6 +127,7 @@ extension CardList {
     /// Source order is retained on first import; new rows append thereafter.
     @discardableResult static func apply(_ snapshot: CardShowInventorySnapshot, context: ModelContext,
         workingRevision: ShowInventorySyncRevision? = nil,
+        workingImportMode: ShowInventoryImportMode = .merge,
         save: (@MainActor (ModelContext) throws -> Void)? = nil) throws -> CardList {
         guard snapshot.location.id > 0, snapshot.location.name.count <= 200,
               normalized(snapshot.location.name) == "card show", snapshot.fetchedAt.timeIntervalSince1970.isFinite,
@@ -153,7 +161,8 @@ extension CardList {
         }
         let metadata = try encoder.encode(CardShowInventoryLink(locationID: snapshot.location.id,
             locationName: snapshot.location.name, refreshedAt: snapshot.fetchedAt,
-            version: 2, syncID: UUID(), pendingWorkingSync: true, workingRevision: workingRevision))
+            version: 2, syncID: UUID(), pendingWorkingSync: true, workingRevision: workingRevision,
+            workingImportMode: workingImportMode))
         do {
             if existing == nil { context.insert(list) }
             var nextDate = list.orderedCards.last?.addedAt ?? snapshot.fetchedAt.addingTimeInterval(-0.001)
@@ -210,7 +219,8 @@ extension CardList {
         let previous = list.inventorySourceData
         let acknowledged = CardShowInventoryLink(locationID: link.locationID,
             locationName: link.locationName, refreshedAt: link.refreshedAt,
-            version: 2, syncID: link.syncID, pendingWorkingSync: false, workingRevision: link.workingRevision)
+            version: 2, syncID: link.syncID, pendingWorkingSync: false, workingRevision: link.workingRevision,
+            workingImportMode: link.workingImportMode)
         let metadata = try JSONEncoder().encode(acknowledged)
         do {
             list.inventorySourceData = metadata

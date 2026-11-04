@@ -341,6 +341,16 @@ struct ScannerReviewReleaseQueue {
         #if DEBUG
         webView.isInspectable = true
         #endif
+        // SwiftUI extends the preview beneath the safe areas. WebKit must use
+        // that same rectangle instead of adding its own top/bottom white inset.
+        webView.isOpaque = false
+        webView.backgroundColor = .black
+        webView.underPageBackgroundColor = .black
+        webView.scrollView.backgroundColor = .black
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.scrollView.bounces = false
+        webView.scrollView.showsVerticalScrollIndicator = false
+        webView.scrollView.showsHorizontalScrollIndicator = false
         webView.scrollView.isScrollEnabled = false
     }
     func start(game: String) {

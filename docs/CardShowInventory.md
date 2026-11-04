@@ -1,5 +1,10 @@
 # Card Show inventory
 
+Build 64 adds [inline transaction selection and Merge/Replace imports](InventorySelectionAndImportModes.md).
+Merge keeps unmatched local acquisitions and reconciles later matching website
+copies; Replace explicitly makes all available stock match TCGTracking. Origins
+remain visible and acquisition/financial history stays recorded.
+
 Build 44 makes explicit website imports [replace available working quantities](AuthoritativeInventoryRefresh.md), preserving cost/transaction history and providing a retryable handoff. Primary stock remains in **Show → Inventory** with [local sales, trades, purchases and Undo](ShowInventoryTransactions.md). Website quantities are authoritative on refresh; local transactions are not uploaded. The downloaded source and financial acquisition lots remain separate records.
 
 Build 29 adds **Lists → Card Show Inventory**. Import connects to the existing TCGTracking website sign-in, finds the active location named exactly **Card Show** and saves a dedicated list on this iPhone. **Card Show Need To Price** is a different location and is never included by a partial name match. The location ID is discovered from the account rather than hardcoded.

@@ -76,6 +76,25 @@ struct MarketDetails: Sendable {
     var printingsByProduct: [String: [String]] = [:]
     var metadata: MarketPriceMetadata? = nil
     var context: MarketPriceContext? = nil
+    var pricedLanguages: [String] = []
+
+    static func languageName(_ value: String) -> String? {
+        let names = ["EN": "English", "JP": "Japanese", "FR": "French", "DE": "German", "IT": "Italian", "ES": "Spanish",
+                     "PT": "Portuguese", "RU": "Russian", "KO": "Korean", "CS": "Simplified Chinese", "CT": "Traditional Chinese"]
+        let input = value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return names[input.uppercased()] ?? names.values.first { $0.caseInsensitiveCompare(input) == .orderedSame }
+    }
+
+    static func hasPrice(_ value: Decimal?) -> Bool {
+        guard let value else { return false }
+        return !value.isNaN && value >= 0 && NSDecimalNumber(decimal: value).doubleValue.isFinite
+    }
+
+    func availableLanguages(for selectedLanguage: String) -> [String] {
+        var available = pricedLanguages.compactMap(Self.languageName)
+        if Self.hasPrice(quote?.marketPrice), let selected = Self.languageName(selectedLanguage) { available.append(selected) }
+        return Array(Set(available)).sorted()
+    }
 }
 
 protocol MarketPricing: Sendable {
@@ -325,14 +344,25 @@ struct OnlineMarketPricing: MarketPricing {
         }
         guard let item = reply.items[card.identity.productID] else { return MarketDetails(quote: nil, printingsByProduct: choices) }
         let printings = choices[card.identity.productID] ?? []
-        guard
-              let printing = item.printings.first(where: { $0.label == card.identity.printing || $0.key == card.identity.printing }),
-              let quote = printing.quotes?[card.identity.language + "|" + card.identity.condition] else {
+        guard let printing = item.printings.first(where: { $0.label == card.identity.printing || $0.key == card.identity.printing }) else {
             return MarketDetails(quote: nil, printings: printings, printingsByProduct: choices)
         }
+        let pricedLanguages = Array(Set((printing.quotes ?? [:]).compactMap { key, quote -> String? in
+            let parts = key.split(separator: "|", omittingEmptySubsequences: false)
+            guard parts.count == 2, String(parts[1]) == card.identity.condition, MarketDetails.hasPrice(quote.market_price) else { return nil }
+            guard let language = MarketDetails.languageName(String(parts[0])),
+                  MarketDetails.hasPrice(printing.quotes?[language + "|" + card.identity.condition]?.market_price) else { return nil }
+            return language
+        })).sorted()
+        guard let quote = printing.quotes?[card.identity.language + "|" + card.identity.condition] else {
+            return MarketDetails(quote: nil, printings: printings, printingsByProduct: choices, pricedLanguages: pricedLanguages)
+        }
         let value = quote.market_price
-        guard value.map({ !$0.isNaN && $0 >= 0 }) ?? true else { return MarketDetails(quote: nil, printings: printings, printingsByProduct: choices) }
-        return MarketDetails(quote: MarketQuote(marketPrice: value, skuID: quote.sku_id?.value), printings: printings, printingsByProduct: choices)
+        guard value.map({ !$0.isNaN && $0 >= 0 }) ?? true else {
+            return MarketDetails(quote: nil, printings: printings, printingsByProduct: choices, pricedLanguages: pricedLanguages)
+        }
+        return MarketDetails(quote: MarketQuote(marketPrice: value, skuID: quote.sku_id?.value), printings: printings,
+            printingsByProduct: choices, pricedLanguages: pricedLanguages)
     }
     private struct DetailReply: Decodable { var items: [String: Detail] }
     private struct Detail: Decodable { var printings: [Printing] }

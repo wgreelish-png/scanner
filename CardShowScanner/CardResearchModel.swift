@@ -34,10 +34,28 @@ enum CardResearchSection: String, CaseIterable, Identifiable {
         return Array(Set(card.printings + [card.identity.printing] + (market.publicDetails?.printings ?? []) + returned)).sorted()
     }
     var languages: [String] {
-        let returned = graded.variantKeys.compactMap { graded.details?.product.variants[$0]?.language }
-            .map(Self.languageName)
-        return Array(Set([card.identity.language, "English", "Japanese", "French", "German", "Italian", "Spanish",
-                          "Portuguese", "Russian", "Korean", "Simplified Chinese", "Traditional Chinese"] + returned)).sorted()
+        if section == .market {
+            return market.publicDetails?.availableLanguages(for: card.identity.language) ?? []
+        }
+        let variants = graded.variantKeys.compactMap { graded.details?.product.variants[$0] }
+            .filter {
+                Self.normalized($0.finish) == Self.normalized(card.identity.printing) &&
+                $0.language.count == 2 && $0.language == $0.language.uppercased()
+            }
+        let byLanguage = Dictionary(grouping: variants) { MarketDetails.languageName($0.language) ?? "" }
+        return byLanguage.compactMap { language, variants -> String? in
+            guard !language.isEmpty, variants.count == 1, let variant = variants.first else { return nil }
+            let grades = variant.grades.filter {
+                $0.grader == graded.selectedGrader &&
+                (graded.selectedGradeLabel.isEmpty || $0.grade == graded.selectedGradeLabel)
+            }
+            let byGrade = Dictionary(grouping: grades, by: \.id)
+            return byGrade.values.contains { matches in
+                matches.count == 1 && matches.contains {
+                    MarketDetails.hasPrice($0.guideValue) || MarketDetails.hasPrice($0.marketValue)
+                }
+            } ? language : nil
+        }.sorted()
     }
 
     func start() {
@@ -107,8 +125,7 @@ enum CardResearchSection: String, CaseIterable, Identifiable {
         if graded.loading { gradedAttempted = false }
         graded.cancel()
     }
-    private static func languageName(_ code: String) -> String {
-        ["EN": "English", "JP": "Japanese", "FR": "French", "DE": "German", "IT": "Italian", "ES": "Spanish",
-         "PT": "Portuguese", "RU": "Russian", "KO": "Korean", "CS": "Simplified Chinese", "CT": "Traditional Chinese"][code] ?? code
+    private static func normalized(_ value: String) -> String {
+        value.split(whereSeparator: \.isWhitespace).joined(separator: " ").lowercased()
     }
 }

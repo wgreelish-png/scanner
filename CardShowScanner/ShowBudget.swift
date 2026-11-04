@@ -457,6 +457,13 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
                 guard let source = item.sourceInventoryID, source > 0, let location = inventorySourceLocationID,
                       item.sourceLocationID == location, sources.insert(source).inserted else { throw ShowTransactionFailure.invalidInventory }
             }
+            if let adoptedFrom = item.adoptedFromInventoryID {
+                guard adoptedFrom != item.id, item.acquiredByReconciliationID != nil,
+                      item.acquiredByTransactionID == nil, let origin = stock[adoptedFrom],
+                      origin.acquiredByTransactionID != nil, origin.card.identity == item.card.identity else {
+                    throw ShowTransactionFailure.invalidInventory
+                }
+            }
         }
         guard sources.count <= Self.maximumInventorySeeds else { throw ShowBudgetFailure.capacityExceeded }
         for receipt in transactions {

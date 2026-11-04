@@ -1,11 +1,12 @@
 import XCTest
+import UniformTypeIdentifiers
 @testable import CardShowScanner
 
 @MainActor final class ScannerDiagnosticsTests: XCTestCase {
-    func testTextExportIncludesEnvironmentAndSanitizedEventsForCopying() throws {
+    func testFileForCopyIncludesEnvironmentAndSanitizedEvents() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let suite = "DiagnosticTextExport." + UUID().uuidString
+        let suite = "DiagnosticFileCopy." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let log = DiagnosticLog(directory: directory, defaults: defaults)
@@ -15,7 +16,11 @@ import XCTest
             "url": "https://private.example", "mean_luma": "PRIVATE_VALUE"
         ]) { _, value in value })
 
-        let text = try log.exportText()
+        let file = try log.exportForCopy()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        XCTAssertTrue(file.isFileURL)
+        XCTAssertEqual(file.lastPathComponent, "CardShowScanner-diagnostics.jsonl")
+        let text = try String(contentsOf: file, encoding: .utf8)
         XCTAssertFalse(text.contains("PRIVATE_"))
         XCTAssertFalse(text.contains("private.example"))
         let rows = try diagnosticRows(text)
@@ -30,16 +35,18 @@ import XCTest
         XCTAssertEqual(rows[2]["fields"] as? [String: String], [:])
     }
 
-    func testTextExportWhileRecordingDisabledKeepsHeaderAndPreviousCurrentOrderWithoutChangingSavedLogs() throws {
+    func testFileForCopyWhileRecordingDisabledKeepsHeaderAndPreviousCurrentOrderWithoutChangingSavedLogs() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let suite = "DisabledDiagnosticTextExport." + UUID().uuidString
+        let suite = "DisabledDiagnosticFileCopy." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(false, forKey: "diagnosticsEnabled")
         let log = DiagnosticLog(directory: directory, defaults: defaults)
         XCTAssertFalse(log.enabled)
-        let emptyRows = try diagnosticRows(log.exportText())
+        let emptyFile = try log.exportForCopy()
+        defer { try? FileManager.default.removeItem(at: emptyFile.deletingLastPathComponent()) }
+        let emptyRows = try diagnosticRows(String(contentsOf: emptyFile, encoding: .utf8))
         XCTAssertEqual(emptyRows.compactMap { $0["event"] as? String }, ["diagnostics.environment"])
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path), "Copying an empty report does not create saved log files")
 
@@ -51,7 +58,9 @@ import XCTest
         try previousData.write(to: previous)
         try currentData.write(to: current)
         log.record("fixture.disabled", ["code": "403"])
-        let rows = try diagnosticRows(log.exportText())
+        let file = try log.exportForCopy()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let rows = try diagnosticRows(String(contentsOf: file, encoding: .utf8))
         XCTAssertEqual(rows.compactMap { $0["event"] as? String },
                        ["diagnostics.environment", "fixture.previous", "fixture.current"])
         XCTAssertEqual(rows[1]["fields"] as? [String: String], ["code": "401"])
@@ -62,24 +71,37 @@ import XCTest
                        ["current.jsonl", "previous.jsonl"])
     }
 
-    func testTextExportRejectsInvalidUTF8InsteadOfReturningDamagedText() throws {
+    func testClipboardProviderLoadsTheNamedDiagnosticFileWithoutPlainTextRepresentation() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let suite = "InvalidDiagnosticTextExport." + UUID().uuidString
+        let suite = "DiagnosticClipboardFile." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        defaults.set(false, forKey: "diagnosticsEnabled")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let current = directory.appendingPathComponent("current.jsonl")
-        let invalid = Data([0xff, 0xfe, 0x0a])
-        try invalid.write(to: current)
         let log = DiagnosticLog(directory: directory, defaults: defaults)
+        log.record("scanner.stop")
+        let file = try log.exportForCopy()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let expected = try Data(contentsOf: file)
+        let provider = try DiagnosticFileClipboard.provider(for: file)
 
-        XCTAssertThrowsError(try log.exportText()) { error in
-            XCTAssertEqual((error as NSError).domain, NSCocoaErrorDomain)
-            XCTAssertEqual((error as NSError).code, CocoaError.Code.fileReadInapplicableStringEncoding.rawValue)
+        XCTAssertEqual(provider.suggestedName, "CardShowScanner-diagnostics.jsonl")
+        XCTAssertTrue(provider.hasItemConformingToTypeIdentifier(UTType.data.identifier))
+        XCTAssertFalse(provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier))
+        let loaded: Data = try await withCheckedThrowingContinuation { continuation in
+            provider.loadFileRepresentation(forTypeIdentifier: UTType.data.identifier) { url, error in
+                do {
+                    if let error { throw error }
+                    guard let url else { throw CocoaError(.fileReadUnknown) }
+                    // The provider owns this temporary URL. Read it while its
+                    // completion handler is running, as a receiving app does.
+                    continuation.resume(returning: try Data(contentsOf: url))
+                } catch { continuation.resume(throwing: error) }
+            }
         }
-        XCTAssertEqual(try Data(contentsOf: current), invalid)
+        XCTAssertEqual(loaded, expected)
+        let rows = try diagnosticRows(String(decoding: loaded, as: UTF8.self))
+        XCTAssertEqual(rows.compactMap { $0["event"] as? String },
+                       ["diagnostics.environment", "scanner.stop", "diagnostics.copy"])
     }
 
     private func diagnosticRows(_ text: String) throws -> [[String: Any]] {
