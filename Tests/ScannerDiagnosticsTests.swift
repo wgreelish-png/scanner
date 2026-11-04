@@ -2,6 +2,92 @@ import XCTest
 @testable import CardShowScanner
 
 @MainActor final class ScannerDiagnosticsTests: XCTestCase {
+    func testTextExportIncludesEnvironmentAndSanitizedEventsForCopying() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = "DiagnosticTextExport." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let log = DiagnosticLog(directory: directory, defaults: defaults)
+        let safe = ["method": "direct", "phase": "research_product", "code": "403", "reason": "access_denied"]
+        log.record("research.lookup_failed", safe.merging([
+            "cookie": "PRIVATE_COOKIE", "api_key": "PRIVATE_KEY", "body": "PRIVATE_RESPONSE",
+            "url": "https://private.example", "mean_luma": "PRIVATE_VALUE"
+        ]) { _, value in value })
+
+        let text = try log.exportText()
+        XCTAssertFalse(text.contains("PRIVATE_"))
+        XCTAssertFalse(text.contains("private.example"))
+        let rows = try diagnosticRows(text)
+        XCTAssertEqual(rows.compactMap { $0["event"] as? String },
+                       ["diagnostics.environment", "research.lookup_failed", "diagnostics.copy"])
+        let header = try XCTUnwrap(rows.first)
+        XCTAssertEqual(header["schema"] as? Int, 1)
+        for key in ["app_version", "build", "revision", "os", "time"] {
+            XCTAssertFalse(try XCTUnwrap(header[key] as? String).isEmpty, "Missing environment field: \(key)")
+        }
+        XCTAssertEqual(rows[1]["fields"] as? [String: String], safe)
+        XCTAssertEqual(rows[2]["fields"] as? [String: String], [:])
+    }
+
+    func testTextExportWhileRecordingDisabledKeepsHeaderAndPreviousCurrentOrderWithoutChangingSavedLogs() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = "DisabledDiagnosticTextExport." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(false, forKey: "diagnosticsEnabled")
+        let log = DiagnosticLog(directory: directory, defaults: defaults)
+        XCTAssertFalse(log.enabled)
+        let emptyRows = try diagnosticRows(log.exportText())
+        XCTAssertEqual(emptyRows.compactMap { $0["event"] as? String }, ["diagnostics.environment"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path), "Copying an empty report does not create saved log files")
+
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let previous = directory.appendingPathComponent("previous.jsonl")
+        let current = directory.appendingPathComponent("current.jsonl")
+        let previousData = Data("{\"schema\":1,\"event\":\"fixture.previous\",\"fields\":{\"code\":\"401\"}}\n".utf8)
+        let currentData = Data("{\"schema\":1,\"event\":\"fixture.current\",\"fields\":{\"code\":\"200\"}}\n".utf8)
+        try previousData.write(to: previous)
+        try currentData.write(to: current)
+        log.record("fixture.disabled", ["code": "403"])
+        let rows = try diagnosticRows(log.exportText())
+        XCTAssertEqual(rows.compactMap { $0["event"] as? String },
+                       ["diagnostics.environment", "fixture.previous", "fixture.current"])
+        XCTAssertEqual(rows[1]["fields"] as? [String: String], ["code": "401"])
+        XCTAssertEqual(rows[2]["fields"] as? [String: String], ["code": "200"])
+        XCTAssertEqual(try Data(contentsOf: previous), previousData)
+        XCTAssertEqual(try Data(contentsOf: current), currentData)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted(),
+                       ["current.jsonl", "previous.jsonl"])
+    }
+
+    func testTextExportRejectsInvalidUTF8InsteadOfReturningDamagedText() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = "InvalidDiagnosticTextExport." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(false, forKey: "diagnosticsEnabled")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let current = directory.appendingPathComponent("current.jsonl")
+        let invalid = Data([0xff, 0xfe, 0x0a])
+        try invalid.write(to: current)
+        let log = DiagnosticLog(directory: directory, defaults: defaults)
+
+        XCTAssertThrowsError(try log.exportText()) { error in
+            XCTAssertEqual((error as NSError).domain, NSCocoaErrorDomain)
+            XCTAssertEqual((error as NSError).code, CocoaError.Code.fileReadInapplicableStringEncoding.rawValue)
+        }
+        XCTAssertEqual(try Data(contentsOf: current), invalid)
+    }
+
+    private func diagnosticRows(_ text: String) throws -> [[String: Any]] {
+        try text.split(separator: "\n").map {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])
+        }
+    }
+
     func testBetaIndexLimitDiagnosticsPersistOnlyBoundedCounts() throws {
         let failure = BetaAPIIndexValidationFailure(stage: .categories, reason: .tooManyEntries,
             observedCount: 257, entryLimit: 256)

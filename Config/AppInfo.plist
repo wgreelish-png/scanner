@@ -8,7 +8,7 @@
 		<true/>
 	</dict>
 	<key>ScannerWorkflowRevision</key>
-	<string>collapsible-scanner-details</string>
+	<string>diagnostics-copy-text</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Find the NIIMBOT printer you select and print inventory price labels while this app is open.</string>
 	<key>UIRequiresFullScreen</key>
