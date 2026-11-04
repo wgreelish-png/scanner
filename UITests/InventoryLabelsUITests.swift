@@ -117,7 +117,7 @@ import XCTest
         XCTAssertTrue(app.buttons["labels.prepare"].isHittable, "The final action stays available after reviewing every label")
         tap(app.buttons["labels.prepare"], app: app)
         assertUnstartedQueue(app: app)
-        tap(app.buttons["labels.close"], app: app)
+        closeBatchToInventory(app: app)
         assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
         UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
         assertBalances(app: app)
@@ -158,7 +158,7 @@ import XCTest
             element: app.staticTexts["labels.approvedNotice"])
         XCTAssertTrue(app.navigationBars["Review Labels"].exists)
         XCTAssertFalse(app.navigationBars["Label Print Queue"].exists)
-        tap(app.buttons["labels.close"], app: app)
+        closeBatchToInventory(app: app)
         assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
 
         app.terminate()
@@ -178,6 +178,112 @@ import XCTest
         assertNoBluetoothPrompt(app: app)
     }
 
+    func testPrintAllStartsWithStockQuantitiesAndPreviewCancelPreservesInventoryAndBudget() {
+        continueAfterFailure = false
+        let app = launch()
+        defer { app.terminate() }
+        assertBalances(app: app)
+        tap(app.buttons["show.inventory"], app: app)
+        assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
+        let stockAID = inventoryID(of: inventory("Stock A", app: app))
+        let stockBID = inventoryID(of: inventory("Stock B", app: app))
+        openPriceTags(app: app)
+        XCTAssertTrue(app.buttons["priceTags.all"].exists)
+        XCTAssertTrue(app.buttons["priceTags.changed"].exists)
+        XCTAssertTrue(app.buttons["priceTags.custom"].exists)
+        tap(app.buttons["priceTags.all"], app: app)
+
+        XCTAssertTrue(app.navigationBars["Label Details"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.navigationBars["Select Label Cards"].exists, "Print All opens details directly")
+        assertContains("3 labels", element: app.staticTexts["labels.totalCount"])
+        XCTAssertTrue(app.buttons["labels.continueReview"].isHittable,
+                      "Review stays pinned and does not require scrolling through the stock list")
+        XCTAssertTrue(app.buttons["labels.continueReview"].isEnabled)
+        let preview = app.images["labels.bitmapPreview"].firstMatch
+        reveal(preview, app: app)
+        XCTAssertTrue(preview.exists)
+        assertNoBluetoothPrompt(app: app)
+        tap(app.buttons["labels.continueReview"], app: app)
+        XCTAssertTrue(app.navigationBars["Review Labels"].waitForExistence(timeout: 5))
+        assertContains("3", element: app.descendants(matching: .any)["labels.reviewCount"])
+        for (id, price, copies) in [(stockAID, "$35", "2"), (stockBID, "$5", "1")] {
+            let amount = app.descendants(matching: .any)["labels.review.price." + id]
+            reveal(amount, app: app)
+            assertContains(price, element: amount)
+            assertContains(copies, element: app.descendants(matching: .any)["labels.review.copies." + id])
+        }
+        XCTAssertFalse(app.buttons["labels.prepare"].isEnabled, "Unknown costs still require explicit manual review")
+        XCTAssertFalse(app.navigationBars["Label Print Queue"].exists)
+        assertNoBluetoothPrompt(app: app)
+        closeBatchToInventory(app: app)
+
+        assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
+        assertContains("$35.00", element: inventory("Stock A", app: app))
+        assertContains("Qty 2", element: inventory("Stock A", app: app))
+        assertContains("$5.00", element: inventory("Stock B", app: app))
+        assertContains("Qty 1", element: inventory("Stock B", app: app))
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        assertBalances(app: app)
+        assertNoBluetoothPrompt(app: app)
+    }
+
+    func testCustomSelectAllAndSharedPriceRemainDraftsUntilApproval() {
+        continueAfterFailure = false
+        let app = launch()
+        defer { app.terminate() }
+        assertBalances(app: app)
+        tap(app.buttons["show.inventory"], app: app)
+        let stockAID = inventoryID(of: inventory("Stock A", app: app))
+        let stockBID = inventoryID(of: inventory("Stock B", app: app))
+        openBatch(app: app)
+        XCTAssertTrue(app.navigationBars["Select Label Cards"].waitForExistence(timeout: 5))
+        tap(app.buttons["labels.selectAll"], app: app)
+        assertContains("2 cards selected", element: app.staticTexts["labels.selectedCount"])
+        tap(app.buttons["labels.continueSelection"], app: app)
+        assertContains("2 labels", element: app.staticTexts["labels.totalCount"])
+
+        tap(app.buttons["labels.setBatchPrice"], app: app)
+        enter("6", field: app.textFields["labels.batchPrice.amount"], app: app)
+        tap(app.buttons["labels.batchPrice.cancel"], app: app)
+        assertContains("$35", element: app.buttons["labels.edit." + stockAID])
+        assertContains("$5", element: app.buttons["labels.edit." + stockBID])
+
+        tap(app.buttons["labels.setBatchPrice"], app: app)
+        enter("7", field: app.textFields["labels.batchPrice.amount"], app: app)
+        tap(app.buttons["labels.batchPrice.keyboardDone"], app: app)
+        tap(app.buttons["labels.batchPrice.apply"], app: app)
+        for id in [stockAID, stockBID] {
+            assertContains("$7", element: app.buttons["labels.edit." + id])
+        }
+        assertContains("2 labels", element: app.staticTexts["labels.totalCount"])
+        tap(app.buttons["labels.continueReview"], app: app)
+        XCTAssertTrue(app.navigationBars["Review Labels"].waitForExistence(timeout: 5))
+        for id in [stockAID, stockBID] {
+            let amount = app.descendants(matching: .any)["labels.review.price." + id]
+            reveal(amount, app: app)
+            assertContains("$7", element: amount)
+            let labels = [amount.label] + amount.staticTexts.allElementsBoundByIndex.map(\.label)
+            XCTAssertTrue(labels.contains { $0 == "$7" || $0.hasSuffix(", $7") || $0.hasSuffix(" $7") },
+                          "Each card must have the exact $7 shared asking price")
+            assertContains("1", element: app.descendants(matching: .any)["labels.review.copies." + id])
+        }
+        XCTAssertFalse(app.buttons["labels.prepare"].isEnabled, "Batch edits do not bypass unknown-cost warnings")
+        tap(app.switches["labels.acknowledgePricingWarnings"], app: app)
+        XCTAssertTrue(app.buttons["labels.prepare"].isEnabled)
+        XCTAssertFalse(app.navigationBars["Label Print Queue"].exists)
+        assertNoBluetoothPrompt(app: app)
+        closeBatchToInventory(app: app)
+
+        assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
+        assertContains("$35.00", element: inventory("Stock A", app: app))
+        assertContains("Qty 2", element: inventory("Stock A", app: app))
+        assertContains("$5.00", element: inventory("Stock B", app: app))
+        assertContains("Qty 1", element: inventory("Stock B", app: app))
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        assertBalances(app: app)
+        assertNoBluetoothPrompt(app: app)
+    }
+
     private func launch() -> XCUIApplication {
         let app = XCUIApplication()
         if let path = ProcessInfo.processInfo.environment["DYLD_FALLBACK_LIBRARY_PATH"] {
@@ -190,9 +296,25 @@ import XCTest
     }
 
     private func openBatch(app: XCUIApplication) {
-        UITestInteraction.tapToolbar(app.descendants(matching: .any).matching(identifier: "showInventory.options").firstMatch,
-                                     in: app, identifier: "showInventory.options")
-        tap(app.buttons["showInventory.printLabels"], app: app)
+        openPriceTags(app: app)
+        tap(app.buttons["priceTags.custom"], app: app)
+    }
+
+    private func openPriceTags(app: XCUIApplication) {
+        XCTAssertTrue(app.navigationBars["Show Inventory"].waitForExistence(timeout: 5))
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 5))
+        tap(app.buttons["show.priceTags"], app: app)
+        XCTAssertTrue(app.navigationBars["Price Tags"].waitForExistence(timeout: 5))
+    }
+
+    private func closeBatchToInventory(app: XCUIApplication) {
+        tap(app.buttons["labels.close"], app: app)
+        XCTAssertTrue(app.navigationBars["Price Tags"].waitForExistence(timeout: 5))
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 5))
+        tap(app.buttons["show.inventory"], app: app)
+        XCTAssertTrue(app.navigationBars["Show Inventory"].waitForExistence(timeout: 5))
     }
 
     private func assertUnstartedQueue(app: XCUIApplication) {

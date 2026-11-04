@@ -25,6 +25,10 @@ import UIKit
                             ShowHomeRouteCard(title: "Inventory", subtitle: "\(availableQuantity.formatted()) cards in local stock",
                                               symbol: "shippingbox.fill", color: .indigo)
                         }.buttonStyle(.plain).accessibilityIdentifier("show.inventory")
+                        NavigationLink { PriceTagsView(store: store) } label: {
+                            ShowHomeRouteCard(title: "Price Tags", subtitle: "Print all, changed prices, or custom tags",
+                                              symbol: "tag.fill", color: .indigo)
+                        }.buttonStyle(.plain).accessibilityIdentifier("show.priceTags")
                         Button { showingTransaction = true } label: {
                             ShowHomeRouteCard(title: "Record Transaction", subtitle: "Sell, trade, or buy cards",
                                               symbol: "arrow.left.arrow.right", color: .teal)
@@ -99,7 +103,6 @@ private struct ShowHomeRouteCard: View {
     @AppStorage("showInventorySort") private var sortPreference = ShowInventorySort.nameAscending.rawValue
     @State private var seedError: String?
     @State private var showingTransaction = false
-    @State private var showingLabels = false
 
     init(store: ShowBudgetStore = .shared) { _store = State(initialValue: store) }
 
@@ -188,14 +191,6 @@ private struct ShowHomeRouteCard: View {
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button("Print Price Tags", systemImage: "printer") { showingLabels = true }
-                        .disabled(!store.isLoaded || available.isEmpty)
-                        .accessibilityIdentifier("showInventory.printLabels")
-                } label: { Image(systemName: "ellipsis.circle").frame(width: 44, height: 44) }
-                    .accessibilityLabel("Inventory options").accessibilityIdentifier("showInventory.options")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink { CardShowInventoryView() } label: { Text("Source") }
                     .accessibilityLabel("TCGTracking Source Snapshot")
                     .accessibilityIdentifier("showInventory.importSnapshot")
@@ -207,10 +202,6 @@ private struct ShowHomeRouteCard: View {
             }
         }
         .sheet(isPresented: $showingTransaction) { ShowTransactionForm(store: store) }
-        .sheet(isPresented: $showingLabels) {
-            InventoryLabelFlowView(inventory: store.inventory,
-                marketQuotes: TagPricingContext.currentQuotes(inventory: store.inventory, context: context))
-        }
         .onAppear { visible = true; seedInventory() }
         .onDisappear { visible = false }
     }

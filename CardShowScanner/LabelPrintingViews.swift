@@ -14,7 +14,7 @@ import UIKit
                 NavigationLink { LabelPrintQueueView() } label: {
                     LabeledContent("Saved print queue", value: queue.entries.count.formatted())
                 }.accessibilityIdentifier("labelPrinter.queue")
-                Text("Create labels from Show Inventory. Asking prices and label copies are local drafts; printing never changes stock, costs, sales, or budgets.")
+                Text("Create labels from Show → Price Tags. Asking prices and label copies are local drafts; printing never changes stock, costs, sales, or budgets.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section {
@@ -75,10 +75,15 @@ import UIKit
 
 private enum InventoryLabelStep: Hashable { case configure, review, queue }
 
+private struct LabelSelectionButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { configuration.label }
+}
+
 /// The sheet owns navigation. All values copied here remain independent of stock.
 @MainActor struct InventoryLabelFlowView: View {
     let inventory: [ShowInventoryItem]
     let marketQuotes: [UUID: TagMarketQuote]
+    let mode: InventoryLabelBatchMode
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var path: [InventoryLabelStep]
@@ -98,17 +103,24 @@ private enum InventoryLabelStep: Hashable { case configure, review, queue }
     @State private var keepExistingStickerIDs: Set<UUID> = []
     @State private var showingDiscard = false
     @State private var preparing = false
+    @State private var expandedReviewIDs: Set<UUID> = []
+    @State private var showingIndividualEdits = false
+    @State private var showingBatchPriceEditor = false
 
     init(inventory: [ShowInventoryItem], initialInventoryID: UUID? = nil,
-         marketQuotes: [UUID: TagMarketQuote] = [:]) {
+         marketQuotes: [UUID: TagMarketQuote] = [:], mode: InventoryLabelBatchMode = .custom) {
         self.inventory = inventory
         self.marketQuotes = marketQuotes
+        self.mode = mode
         let initial = inventory.first { $0.id == initialInventoryID && $0.quantity > 0 }
-        _selectedIDs = State(initialValue: initial.map { [$0.id] } ?? [])
-        _drafts = State(initialValue: initial.map {
-            [TagPricingContext.draft(for: $0, marketQuotes: marketQuotes, store: .shared)]
-        } ?? [])
-        _path = State(initialValue: initial == nil ? [] : [.configure])
+        let batchDrafts = InventoryLabelBatch.drafts(mode: mode, inventory: inventory,
+            marketQuotes: marketQuotes, store: .shared)
+        let initialDrafts = initial.map {
+            [InventoryLabelBatch.draft(for: $0, mode: .custom, marketQuotes: marketQuotes, store: .shared)]
+        } ?? batchDrafts
+        _selectedIDs = State(initialValue: Set(initialDrafts.map(\.id)))
+        _drafts = State(initialValue: initialDrafts)
+        _path = State(initialValue: initialDrafts.isEmpty ? [] : [.configure])
     }
 
     private var available: [ShowInventoryItem] {
@@ -134,9 +146,8 @@ private enum InventoryLabelStep: Hashable { case configure, review, queue }
     }
     private var printableDrafts: [InventoryLabelDraft] {
         drafts.filter { draft in
-            guard !draft.isBulk, !keepExistingStickerIDs.contains(draft.id) else { return false }
-            guard let saved = approvals.record(for: draft.id) else { return true }
-            return saved.approvedTag != draft.tag || saved.needsLabels
+            InventoryLabelBatch.shouldPrint(draft, approval: approvals.record(for: draft.id),
+                reprintAll: mode == .all, keepExisting: keepExistingStickerIDs.contains(draft.id))
         }
     }
     private var labelCount: Int { printableDrafts.reduce(0) { $0 + $1.copies } }
@@ -182,6 +193,16 @@ private enum InventoryLabelStep: Hashable { case configure, review, queue }
         }
         .sheet(isPresented: $showingPricingSettings) {
             TagPricingSettingsView(store: approvals) { updateProfitInputs() }
+        }
+        .sheet(isPresented: $showingBatchPriceEditor) {
+            LabelBatchPriceEditor(cardCount: drafts.filter { !$0.isBulk }.count) { cents in
+                for index in drafts.indices where !drafts[index].isBulk {
+                    drafts[index].askingPriceText = InventoryLabelDraft.inputText(cents)
+                    drafts[index].isManualOverride = true
+                }
+                keepExistingStickerIDs.removeAll()
+                resetApprovalReview()
+            }
         }
         .alert("Label preparation", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
             Button("OK", role: .cancel) { error = nil }
@@ -243,8 +264,10 @@ private enum InventoryLabelStep: Hashable { case configure, review, queue }
                         }.frame(maxWidth: .infinity, alignment: .leading)
                         Image(systemName: selectedIDs.contains(item.id) ? "checkmark.circle.fill" : "circle")
                             .font(.title2).foregroundStyle(selectedIDs.contains(item.id) ? Color.indigo : Color.secondary)
+                            .contentTransition(.identity)
+                            .transaction { $0.animation = nil; $0.disablesAnimations = true }
                     }.contentShape(Rectangle())
-                }.buttonStyle(.plain)
+                }.buttonStyle(LabelSelectionButtonStyle())
                     .accessibilityLabel("\(item.card.name), \(item.quantity) available")
                     .accessibilityAddTraits(selectedIDs.contains(item.id) ? .isSelected : [])
                     .accessibilityIdentifier("labels.select." + item.id.uuidString)
@@ -254,6 +277,16 @@ private enum InventoryLabelStep: Hashable { case configure, review, queue }
         .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Name, set, or card number")
         .scrollDismissesKeyboard(.interactively)
         .onSubmit(of: .search) { endEditing() }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            HStack {
+                Button(search.isEmpty ? "Select All" : "Select All Results") {
+                    selectedIDs.formUnion(filtered.map(\.id))
+                }.disabled(filtered.isEmpty).accessibilityIdentifier("labels.selectAll")
+                Spacer()
+                Button("Clear") { selectedIDs.removeAll() }
+                    .disabled(selectedIDs.isEmpty).accessibilityIdentifier("labels.clearSelection")
+            }.font(.subheadline.weight(.semibold)).padding(.horizontal, 16).padding(.vertical, 12).background(.bar)
+        }
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
@@ -277,6 +310,19 @@ private enum InventoryLabelStep: Hashable { case configure, review, queue }
         List {
             savedQueueSection
             pricingSettingsSection
+            if drafts.contains(where: { $0.tag == nil }) {
+                Section("Missing prices") {
+                    Text("\(drafts.filter { $0.tag == nil }.count.formatted()) cards need a price. Edit them individually, or leave them out of this batch.")
+                        .font(.footnote).foregroundStyle(.orange)
+                    Button("Skip Unpriced Cards") {
+                        let missing = Set(drafts.filter { $0.tag == nil }.map(\.id))
+                        drafts.removeAll { missing.contains($0.id) }
+                        selectedIDs.subtract(missing)
+                        keepExistingStickerIDs.subtract(missing)
+                        resetApprovalReview()
+                    }.accessibilityIdentifier("labels.skipUnpriced")
+                }
+            }
             Section("Label layout") {
                 Picker("Style", selection: $style) {
                     ForEach(InventoryLabelStyle.allCases) { value in
@@ -305,30 +351,33 @@ private enum InventoryLabelStep: Hashable { case configure, review, queue }
                     resetApprovalReview()
                 }.accessibilityIdentifier("labels.oneEach")
             } header: { Text("Copies") } footer: {
-                Text("One copy per selected card by default. Maximum 100 per card and 250 individual labels per batch. Bulk copies are reviewed as a category and do not print individual tags. Matching stock keeps the requested counts for review.")
+                Text(mode == .custom
+                     ? "Custom batches start with one copy per entry. Match Stock Quantities makes one label per physical card. Maximum 100 per entry and 250 labels per batch. Bulk cards do not print individual tags."
+                     : "One label per available physical copy is selected automatically. Use One Label per Card to make one per inventory entry. Maximum 100 per entry and 250 labels per batch. Bulk cards do not print individual tags.")
+            }
+            Section("Bulk price changes") {
+                Button("Use Suggested Prices") {
+                    for index in drafts.indices where drafts[index].pricing.tag != nil {
+                        drafts[index].useSuggestedPrice()
+                    }
+                    keepExistingStickerIDs.removeAll()
+                    resetApprovalReview()
+                }.accessibilityIdentifier("labels.useSuggestedPrices")
+                if mode == .custom {
+                    Button("Set Same Price for Selected Cards") { showingBatchPriceEditor = true }
+                        .disabled(drafts.allSatisfy(\.isBulk))
+                        .accessibilityIdentifier("labels.setBatchPrice")
+                }
+                Text("These changes stay in the draft until approval. Use Suggested Prices replaces selected manual prices; cost and profit warnings still require review.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Asking prices & copies") {
-                ForEach(orderedDrafts) { draft in
-                    Button { editing = draft } label: {
-                        HStack(spacing: 12) {
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text(draft.cardName).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                                Text("\(draft.condition) · \(draft.copies.formatted()) \(draft.isBulk ? "bulk copies" : "copies")")
-                                    .font(.caption).foregroundStyle(.secondary)
-                                TagRepricingSummary(evaluation: TagPricingContext.review(for: draft, store: approvals))
-                                if draft.isManualOverride {
-                                    Text("Manual price retained").font(.caption).foregroundStyle(.secondary)
-                                }
-                                if let warning = draft.pricingWarnings.first {
-                                    Text(warning).font(.caption).foregroundStyle(.orange)
-                                }
-                            }.frame(maxWidth: .infinity, alignment: .leading)
-                            Text(draft.priceText ?? "Enter price")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(draft.tag == nil ? Color.orange : Color.primary)
-                            Image(systemName: "pencil").font(.caption).foregroundStyle(.secondary)
-                        }.contentShape(Rectangle())
-                    }.buttonStyle(.plain).accessibilityIdentifier("labels.edit." + draft.id.uuidString)
+                if mode != .custom && drafts.count > 1 {
+                    DisclosureGroup("Edit Individual Cards (\(drafts.count.formatted()))", isExpanded: $showingIndividualEdits) {
+                        configurationRows
+                    }.accessibilityIdentifier("labels.individualEdits")
+                } else {
+                    configurationRows
                 }
             }
             if bulkCount > 0 {
@@ -381,7 +430,9 @@ private enum InventoryLabelStep: Hashable { case configure, review, queue }
                 }
                 LabeledContent("Paper", value: paper.title)
                 LabeledContent("Style", value: style.title)
-                Text("Preparing explicitly approves every selected price and saves its current market as the new review baseline. Only individual tags still needing labels enter the queue. Printing requires a separate Print action.")
+                Text(mode == .all
+                     ? "Print All includes replacement copies of unchanged individual tags. Preparing approves the selected prices; printing still needs a separate Print action."
+                     : "Preparing approves selected prices and saves the market review baseline. Unchanged, already-labeled stickers are skipped. Printing needs a separate Print action.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             if requiresManualReview {
@@ -393,42 +444,16 @@ private enum InventoryLabelStep: Hashable { case configure, review, queue }
                 }
             }
             ForEach(orderedDrafts) { draft in
-                Section {
-                    if draft.isBulk {
-                        Label("2 for $1 category — no individual tag", systemImage: "tray.2")
-                    } else {
-                        InventoryLabelPreview(draft: draft)
-                    }
-                    LabeledContent("Asking price", value: draft.priceText ?? "Needs input")
-                        .accessibilityIdentifier("labels.review.price." + draft.id.uuidString)
-                    LabeledContent("Condition", value: draft.condition)
-                    LabeledContent("Copies", value: draft.copies.formatted())
-                        .accessibilityIdentifier("labels.review.copies." + draft.id.uuidString)
-                    TagRepricingSummary(evaluation: TagPricingContext.review(for: draft, store: approvals))
-                    if draft.isManualOverride {
-                        Text("Manual price retained. Use Suggested Price in the editor to replace it.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    ForEach(draft.pricingWarnings, id: \.self) { warning in
-                        Label(warning, systemImage: "exclamationmark.triangle")
-                            .font(.footnote).foregroundStyle(.orange)
-                    }
-                    TagPricingDisclosure(draft: draft)
-                    if !draft.isBulk {
-                        if let saved = approvals.record(for: draft.id), saved.approvedTag == draft.tag,
-                           !saved.needsLabels {
-                            Label("Existing sticker retained · no reprint", systemImage: "checkmark.circle")
-                                .font(.footnote).foregroundStyle(.secondary)
-                        } else if canKeepExistingSticker(for: draft) {
-                            Toggle("Keep Existing Sticker", isOn: keepExistingStickerBinding(for: draft.id))
-                                .accessibilityIdentifier("labels.keepExistingSticker." + draft.id.uuidString)
-                            Text("Confirm you checked the physical \(draft.priceText ?? "") sticker and already have the labels you need. This records it as labeled and skips printing.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    Button("Edit Price or Copies") { editing = draft }
-                        .accessibilityIdentifier("labels.reviewEdit." + draft.id.uuidString)
-                } header: { Text(draft.cardName) }
+                if mode != .custom && drafts.count > 1 {
+                    DisclosureGroup(isExpanded: Binding(get: { expandedReviewIDs.contains(draft.id) }, set: {
+                        if $0 { expandedReviewIDs.insert(draft.id) } else { expandedReviewIDs.remove(draft.id) }
+                    })) {
+                        reviewDetails(draft, summaryVisible: true)
+                    } label: { reviewSummary(draft) }
+                    .accessibilityIdentifier("labels.expandReview." + draft.id.uuidString)
+                } else {
+                    Section { reviewDetails(draft) } header: { Text(draft.cardName) }
+                }
             }
             TagBundleReviewSection(lines: TagPricingContext.bundleLines(drafts: drafts,
                 inventory: inventory, preferences: approvals.preferences), preferences: approvals.preferences)
@@ -452,6 +477,95 @@ private enum InventoryLabelStep: Hashable { case configure, review, queue }
             }
         }
         .accessibilityIdentifier("labels.review")
+    }
+
+    private var configurationRows: some View {
+        ForEach(orderedDrafts) { draft in
+            Button { editing = draft } label: {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(draft.cardName).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                        Text("\(draft.condition) · \(draft.copies.formatted()) \(draft.isBulk ? "bulk copies" : "copies")")
+                            .font(.caption).foregroundStyle(.secondary)
+                        TagRepricingSummary(evaluation: TagPricingContext.review(for: draft, store: approvals))
+                        if draft.isManualOverride {
+                            Text("Manual price retained").font(.caption).foregroundStyle(.secondary)
+                        }
+                        if let warning = draft.pricingWarnings.first {
+                            Text(warning).font(.caption).foregroundStyle(.orange)
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                    Text(draft.priceText ?? "Enter price")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(draft.tag == nil ? Color.orange : Color.primary)
+                    Image(systemName: "pencil").font(.caption).foregroundStyle(.secondary)
+                }.contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityIdentifier("labels.edit." + draft.id.uuidString)
+        }
+    }
+
+    private func reviewSummary(_ draft: InventoryLabelDraft) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(draft.cardName).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                Spacer(minLength: 8)
+                Text(draft.priceText ?? "Needs input").font(.subheadline.bold())
+                    .foregroundStyle(draft.tag == nil ? Color.orange : Color.primary)
+                    .accessibilityIdentifier("labels.review.price." + draft.id.uuidString)
+            }
+            HStack {
+                Text(draft.condition)
+                Text("·")
+                Text("\(draft.copies.formatted()) \(draft.isBulk ? "bulk copies" : "copies")")
+                    .accessibilityIdentifier("labels.review.copies." + draft.id.uuidString)
+                Spacer(minLength: 4)
+                if !draft.pricingWarnings.isEmpty {
+                    Label("Review", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                }
+            }.font(.caption).foregroundStyle(.secondary)
+            if draft.isManualOverride { Text("Manual price retained").font(.caption).foregroundStyle(.secondary) }
+        }.padding(.vertical, 4)
+    }
+
+    @ViewBuilder private func reviewDetails(_ draft: InventoryLabelDraft, summaryVisible: Bool = false) -> some View {
+        if draft.isBulk {
+            Label("2 for $1 category — no individual tag", systemImage: "tray.2")
+        } else {
+            InventoryLabelPreview(draft: draft)
+        }
+        if !summaryVisible {
+            LabeledContent("Asking price", value: draft.priceText ?? "Needs input")
+                .accessibilityIdentifier("labels.review.price." + draft.id.uuidString)
+            LabeledContent("Condition", value: draft.condition)
+            LabeledContent("Copies", value: draft.copies.formatted())
+                .accessibilityIdentifier("labels.review.copies." + draft.id.uuidString)
+        }
+        TagRepricingSummary(evaluation: TagPricingContext.review(for: draft, store: approvals))
+        if draft.isManualOverride {
+            Text("Manual price retained. Use Suggested Price in the editor to replace it.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        ForEach(draft.pricingWarnings, id: \.self) { warning in
+            Label(warning, systemImage: "exclamationmark.triangle")
+                .font(.footnote).foregroundStyle(.orange)
+        }
+        TagPricingDisclosure(draft: draft)
+        if !draft.isBulk {
+            if mode == .all {
+                Label("Print All includes this tag, even if already labeled.", systemImage: "printer")
+                    .font(.footnote).foregroundStyle(.secondary)
+            } else if let saved = approvals.record(for: draft.id), saved.approvedTag == draft.tag, !saved.needsLabels {
+                Label("Existing sticker retained · no reprint", systemImage: "checkmark.circle")
+                    .font(.footnote).foregroundStyle(.secondary)
+            } else if canKeepExistingSticker(for: draft) {
+                Toggle("Keep Existing Sticker", isOn: keepExistingStickerBinding(for: draft.id))
+                    .accessibilityIdentifier("labels.keepExistingSticker." + draft.id.uuidString)
+                Text("Confirm you checked the physical \(draft.priceText ?? "") sticker and already have the labels you need. This records it as labeled and skips printing.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        Button("Edit Price or Copies") { editing = draft }
+            .accessibilityIdentifier("labels.reviewEdit." + draft.id.uuidString)
     }
 
     private var pricingSettingsSection: some View {
@@ -495,7 +609,8 @@ private enum InventoryLabelStep: Hashable { case configure, review, queue }
     private func synchronizeDrafts() {
         let previous = Dictionary(uniqueKeysWithValues: drafts.map { ($0.id, $0) })
         drafts = available.filter { selectedIDs.contains($0.id) }.map { item in
-            var draft = previous[item.id] ?? TagPricingContext.draft(for: item, marketQuotes: marketQuotes, store: approvals)
+            var draft = previous[item.id] ?? InventoryLabelBatch.draft(for: item, mode: mode,
+                marketQuotes: marketQuotes, store: approvals)
             draft.style = style; draft.paperSize = paper
             return draft
         }
@@ -548,7 +663,7 @@ private enum InventoryLabelStep: Hashable { case configure, review, queue }
                 try approvals.markLabeled(ids: keepExistingStickerIDs)
             }
             var entries: [LabelQueueEntry] = []
-            for draft in drafts where !draft.isBulk && approvals.record(for: draft.id)?.needsLabels == true {
+            for draft in printableDrafts {
                 let bitmap = try InventoryLabelRenderer.render(draft)
                 for copy in 1...draft.copies {
                     entries.append(try LabelQueueEntry(draft: draft, raster: bitmap.raster, copyNumber: copy,

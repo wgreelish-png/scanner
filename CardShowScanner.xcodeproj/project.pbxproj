@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        8C5D4FCCDB0C4D28A9D21F58 /* InventoryLabelBatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E9F41D1E9A9A13C6898A419; };
+        7315DDE9944EB46FDF19027A /* PriceTagsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9D20839E20FBA33C1647A94; };
+        CD42EE19358413AF2E6F33F4 /* LabelBatchPriceEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68C4339E98F48DB1FA8677EE; };
+        C666ED381B43EA35D41E1F86 /* InventoryLabelBatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEF113A68E174E51CE1E31A1; };
         22F6B04AD9FB439A5D97F941 /* ShowInventorySortTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF8A54E53C11C0B88AB6C00A; };
         6185735D0CD109773752E473 /* ResearchScanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 344A0FFA7E3944F52A32EF92; };
         9E57EF578F3BFB7B29322EF7 /* ShowInventorySort.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4FA6E8C36645420A4CEB454; };
@@ -215,6 +219,10 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        7E9F41D1E9A9A13C6898A419 /* InventoryLabelBatchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InventoryLabelBatchTests.swift; sourceTree = "<group>"; };
+        D9D20839E20FBA33C1647A94 /* PriceTagsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PriceTagsView.swift; sourceTree = "<group>"; };
+        68C4339E98F48DB1FA8677EE /* LabelBatchPriceEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabelBatchPriceEditor.swift; sourceTree = "<group>"; };
+        EEF113A68E174E51CE1E31A1 /* InventoryLabelBatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InventoryLabelBatch.swift; sourceTree = "<group>"; };
         CF8A54E53C11C0B88AB6C00A /* ShowInventorySortTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowInventorySortTests.swift; sourceTree = "<group>"; };
         344A0FFA7E3944F52A32EF92 /* ResearchScanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchScanTests.swift; sourceTree = "<group>"; };
         D4FA6E8C36645420A4CEB454 /* ShowInventorySort.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowInventorySort.swift; sourceTree = "<group>"; };
@@ -463,6 +471,7 @@
 		59830EBC3A4184110566BF1A /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+                7E9F41D1E9A9A13C6898A419 /* InventoryLabelBatchTests.swift */,
                 CF8A54E53C11C0B88AB6C00A /* ShowInventorySortTests.swift */,
                 344A0FFA7E3944F52A32EF92 /* ResearchScanTests.swift */,
                 0B0E7CC06A967E77C77102F5 /* ForegroundMinuteScheduleTests.swift */,
@@ -536,6 +545,9 @@
 		878A52FC5FF6A57D50B7B870 /* CardShowScanner */ = {
 			isa = PBXGroup;
 			children = (
+                D9D20839E20FBA33C1647A94 /* PriceTagsView.swift */,
+                68C4339E98F48DB1FA8677EE /* LabelBatchPriceEditor.swift */,
+                EEF113A68E174E51CE1E31A1 /* InventoryLabelBatch.swift */,
                 D4FA6E8C36645420A4CEB454 /* ShowInventorySort.swift */,
                 0DD0A19D1DFD524522809132 /* ResearchScannerView.swift */,
                 A8734ED15AB2B2F7783B183F /* ResearchScanModel.swift */,
@@ -808,6 +820,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                8C5D4FCCDB0C4D28A9D21F58 /* InventoryLabelBatchTests.swift in Sources */,
                 22F6B04AD9FB439A5D97F941 /* ShowInventorySortTests.swift in Sources */,
                 6185735D0CD109773752E473 /* ResearchScanTests.swift in Sources */,
                 21247DB126C686B77391AFED /* ForegroundMinuteScheduleTests.swift in Sources */,
@@ -880,6 +893,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                7315DDE9944EB46FDF19027A /* PriceTagsView.swift in Sources */,
+                CD42EE19358413AF2E6F33F4 /* LabelBatchPriceEditor.swift in Sources */,
+                C666ED381B43EA35D41E1F86 /* InventoryLabelBatch.swift in Sources */,
                 9E57EF578F3BFB7B29322EF7 /* ShowInventorySort.swift in Sources */,
                 5005AAA1CA06C01A29242F6E /* ResearchScannerView.swift in Sources */,
                 04A113FB0CBF499D418751ED /* ResearchScanModel.swift in Sources */,
@@ -1045,7 +1061,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 49;
+				CURRENT_PROJECT_VERSION = 50;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -1082,7 +1098,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 49;
+				CURRENT_PROJECT_VERSION = 50;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
