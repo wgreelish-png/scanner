@@ -82,7 +82,7 @@ def checked_id(value: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("create", "boot", "shutdown"))
+    parser.add_argument("command", choices=("create", "boot", "ready", "shutdown"))
     parser.add_argument("device_id", nargs="?")
     arguments = parser.parse_args()
     stage = "device selection"
@@ -106,10 +106,11 @@ def main() -> int:
             device_id = checked_id(arguments.device_id)
             if arguments.command == "boot":
                 stage = "boot"
-                print("Booting dedicated UI simulator and waiting for readiness.", file=sys.stderr)
+                print("Starting dedicated UI simulator alongside compilation.", file=sys.stderr)
                 run("xcrun", "simctl", "boot", device_id)
+            elif arguments.command == "ready":
                 stage = "boot readiness"
-                run("xcrun", "simctl", "bootstatus", device_id, "-b", timeout=120)
+                run("xcrun", "simctl", "bootstatus", device_id, "-b", timeout=300)
                 print("Dedicated UI simulator is ready.", file=sys.stderr)
             else:
                 stage = "shutdown"
@@ -120,6 +121,11 @@ def main() -> int:
         # All commands and names above are local preparation, never credentials.
         if isinstance(error, subprocess.CalledProcessError):
             detail = (error.stderr or "simctl failed").strip()[:1_000]
+        elif isinstance(error, subprocess.TimeoutExpired):
+            progress = error.stdout or error.stderr or ""
+            if isinstance(progress, bytes):
+                progress = progress.decode("utf-8", errors="replace")
+            detail = f"Command exceeded {error.timeout} seconds. Last progress: {progress.strip()[-1_000:]}"
         else:
             detail = str(error)[:1_000]
         message = f"UI simulator {stage} failed: {detail}"

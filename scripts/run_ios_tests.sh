@@ -75,4 +75,17 @@ with open(sys.argv[1], 'wb') as output:
         'get-task-allow': True,
     }, output)
 PY
-xcodebuild test "${SCANNER_TEST_SELECTION[@]}" -parallel-testing-enabled NO -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 -project CardShowScanner.xcodeproj -scheme CardShowScanner -destination "platform=iOS Simulator,id=$DEVICE_ID" CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= CODE_SIGN_ENTITLEMENTS="$SCANNER_SIMULATOR_ENTITLEMENTS" -resultBundlePath TestResults.xcresult 2>&1 | tee NativeTests.log
+if [ "$SCANNER_UI_RUN" = true ]; then
+  # Compile while the cold simulator starts. Neither a failed build nor failed
+  # readiness may proceed to XCTest; both retain the failing command's status.
+  SCANNER_UI_BUILD_OPTIONS=(-parallel-testing-enabled NO -project CardShowScanner.xcodeproj
+    -scheme CardShowScanner -destination "platform=iOS Simulator,id=$DEVICE_ID"
+    -derivedDataPath "$RUNNER_TEMP/ScannerUITestBuild"
+    CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual
+    CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= CODE_SIGN_ENTITLEMENTS="$SCANNER_SIMULATOR_ENTITLEMENTS")
+  xcodebuild build-for-testing "${SCANNER_TEST_SELECTION[@]}" "${SCANNER_UI_BUILD_OPTIONS[@]}" 2>&1 | tee NativeTests.log
+  python3 scripts/prepare_ui_simulator.py ready "$DEVICE_ID" 2>&1 | tee -a NativeTests.log
+  xcodebuild test-without-building "${SCANNER_TEST_SELECTION[@]}" "${SCANNER_UI_BUILD_OPTIONS[@]}" -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 -resultBundlePath TestResults.xcresult 2>&1 | tee -a NativeTests.log
+else
+  xcodebuild test "${SCANNER_TEST_SELECTION[@]}" -parallel-testing-enabled NO -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 -project CardShowScanner.xcodeproj -scheme CardShowScanner -destination "platform=iOS Simulator,id=$DEVICE_ID" CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= CODE_SIGN_ENTITLEMENTS="$SCANNER_SIMULATOR_ENTITLEMENTS" -resultBundlePath TestResults.xcresult 2>&1 | tee NativeTests.log
+fi
