@@ -1,5 +1,9 @@
 # Local show inventory and transactions
 
+Build 65 adds [simple whole-dollar checkout](SimpleWholeDollarCheckout.md): blank
+inline actual cash, an explicit rounded offer button, direct list confirmation,
+and signed changes to buying funds. Detailed accounting remains in history.
+
 Build 64 adds [selection directly in Show Inventory](InventorySelectionAndImportModes.md):
 Record Transaction enables checkmarks, Confirm Transaction opens the existing
 editor, and swipe Remove/Add Cards edits only the draft. Merge/Replace imports

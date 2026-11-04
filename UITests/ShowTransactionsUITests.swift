@@ -9,9 +9,12 @@ import XCTest
         tap(app.buttons["showTransaction.kind.purchase"], app: app)
         tap(app.buttons["showTransaction.incomingList"], app: app)
         tap(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Profit Example")).firstMatch, app: app)
-        let paid = app.textFields["showTransaction.amount.incoming"]
+        let paid = app.buttons["showTransaction.editIncomingAmount"]
         reveal(paid, app: app)
-        XCTAssertEqual(paid.value as? String, "7.00", "Purchase cost comes from the actual 70% cash offer")
+        XCTAssertEqual(paid.value as? String, "Not entered")
+        XCTAssertFalse(app.buttons["showTransaction.record"].isEnabled)
+        tap(app.buttons["showTransaction.useCalculatedOffer"], app: app)
+        XCTAssertEqual(paid.value as? String, "7", "The calculated offer is used only after an explicit choice")
         tap(app.buttons["showTransaction.record"], app: app)
         XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 5))
         assertBalances(available: "$293.00", saved: "$0.00", app: app)
@@ -36,11 +39,13 @@ import XCTest
         tap(app.buttons["quickSell.sell"], app: app)
         assertRevealedContains("1", identifier: "showTransaction.selectedQuantity", app: app)
         reveal(app.buttons["showTransaction.editSaleAmount"], app: app)
-        assertSaleAmount("10.00", app: app)
-        reveal(app.buttons["showTransaction.editSaleFee"], app: app)
-        XCTAssertEqual(app.buttons["showTransaction.editSaleFee"].value as? String, "$0.00")
-        assertRevealedContains("$7.00", identifier: "showTransaction.preview.cost", app: app)
-        assertRevealedContains("$3.00", identifier: "showTransaction.preview.profit", app: app)
+        assertSaleAmount("Not entered", app: app)
+        XCTAssertFalse(app.buttons["showTransaction.editSaleFee"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["showTransaction.preview.cost"].exists)
+        tap(app.buttons["showTransaction.editSaleAmount"], app: app)
+        enterSaleAmount("10", app: app); closeCashEditor(.done, app: app)
+        assertSaleAmount("10", app: app)
+        assertRevealedContains("+$6.50", identifier: "showTransaction.preview.buyingFundsChange", app: app)
         tap(app.buttons["showTransaction.record"], app: app)
         assertMarketResearch(app: app)
         XCTAssertFalse(app.buttons["quickSell.sell"].isEnabled)
@@ -81,7 +86,7 @@ import XCTest
         assertStock("3", app: app)
     }
 
-    func testLegacyCostZeroAndUnknownStayDistinctAndQuickSaleFeeDebitsCashOnce() {
+    func testLegacyCostZeroAndUnknownStayDistinctAndQuickSaleHasNoFee() {
         continueAfterFailure = false
         let app = launch(arguments: ["--show-cost-profit-ui-fixture"])
         defer { app.terminate() }
@@ -117,33 +122,31 @@ import XCTest
         tap(app.buttons["quickSell.sell"], app: app)
         assertRevealedContains("1", identifier: "showTransaction.selectedQuantity", app: app)
         reveal(app.buttons["showTransaction.editSaleAmount"], app: app)
-        assertSaleAmount("35.00", app: app)
-        tap(app.buttons["showTransaction.editSaleFee"], app: app)
-        enter("1", field: app.textFields["showTransaction.amount.saleFee"], app: app)
-        tap(app.buttons["showTransaction.saleFee.done"], app: app)
-        XCTAssertEqual(app.buttons["showTransaction.editSaleFee"].value as? String, "$1.00")
-        assertRevealedContains("Unknown", identifier: "showTransaction.preview.cost", app: app)
-        assertRevealedContains("Unknown", identifier: "showTransaction.preview.profit", app: app)
+        assertSaleAmount("Not entered", app: app)
+        XCTAssertFalse(app.buttons["showTransaction.editSaleFee"].exists)
+        tap(app.buttons["showTransaction.editSaleAmount"], app: app)
+        enterSaleAmount("35", app: app); closeCashEditor(.done, app: app)
+        assertSaleAmount("35", app: app)
         tap(app.buttons["showTransaction.record"], app: app)
         assertMarketResearch(app: app)
         XCTAssertTrue(app.buttons["quickSell.sell"].isEnabled, "One of the two legacy copies remains available")
         openInventoryDetails(app: app)
         assertRevealedContains("Cost unknown", identifier: "inventory.cost", app: app)
         returnToShow(app: app)
-        assertBalances(available: "$321.75", saved: "$12.25", app: app)
+        assertBalances(available: "$322.75", saved: "$12.25", app: app)
         assertStock("2", app: app)
-        assertProfit(sales: "$35.00", fees: "$1.00", cost: "$0.00", knownProfit: "$0.00", unknown: "1", app: app)
+        assertProfit(sales: "$35.00", fees: "$0.00", cost: "$0.00", knownProfit: "$0.00", unknown: "1", app: app)
 
         app.terminate(); app.launch()
         XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 10))
-        assertBalances(available: "$321.75", saved: "$12.25", app: app)
+        assertBalances(available: "$322.75", saved: "$12.25", app: app)
         assertStock("2", app: app)
-        assertProfit(sales: "$35.00", fees: "$1.00", cost: "$0.00", knownProfit: "$0.00", unknown: "1", app: app)
+        assertProfit(sales: "$35.00", fees: "$0.00", cost: "$0.00", knownProfit: "$0.00", unknown: "1", app: app)
         tap(app.buttons["show.history"], app: app)
         tap(app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "showHistory.receipt.")).firstMatch, app: app)
         assertRevealedContains("$35.00", identifier: "showTransaction.receipt.received", app: app)
         assertRevealedContains("Unknown", identifier: "showTransaction.receipt.cost", app: app)
-        assertRevealedContains("$1.00", identifier: "showTransaction.receipt.fees", app: app)
+        assertRevealedContains("$0.00", identifier: "showTransaction.receipt.fees", app: app)
         assertRevealedContains("Unknown", identifier: "showTransaction.receipt.profit", app: app)
         undoTransaction(app: app)
         returnToShow(app: app)
@@ -167,11 +170,11 @@ import XCTest
         let selected = stock.allElementsBoundByIndex
         for row in selected { tap(row, app: app) }
         tap(app.buttons["showInventorySelection.done"], app: app)
-        assertSaleAmount("40.00", app: app)
+        assertSaleAmount("Not entered", app: app)
         tap(app.buttons["showTransaction.editSaleAmount"], app: app)
         enterSaleAmount("100", app: app)
         closeCashEditor(.done, app: app)
-        assertSaleAmount("100.00", app: app)
+        assertSaleAmount("100", app: app)
         tap(app.buttons["showTransaction.record"], app: app)
         XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 5))
         assertBalances(available: "$365.00", saved: "$35.00", app: app)
@@ -203,13 +206,14 @@ import XCTest
         tap(stockA, app: app)
         tap(app.buttons["showInventorySelection.done"], app: app)
         tap(app.buttons["showTransaction.makeEven"], app: app)
-        let paid = app.descendants(matching: .any)["showTransaction.preview.paid"]
-        let received = app.descendants(matching: .any)["showTransaction.preview.received"]
-        assertContains("$0.00", element: paid); assertContains("$0.00", element: received)
+        XCTAssertTrue(app.buttons["showTransaction.record"].isEnabled)
+        XCTAssertFalse(app.descendants(matching: .any)["showTransaction.preview.paid"].exists)
         tap(app.buttons["showTransaction.record"], app: app)
         assertBalances(available: "$300.00", saved: "$0.00", app: app)
         tap(app.buttons["show.history"], app: app)
         tap(app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "showHistory.receipt.")).firstMatch, app: app)
+        assertRevealedContains("$0.00", identifier: "showTransaction.receipt.paid", app: app)
+        assertRevealedContains("$0.00", identifier: "showTransaction.receipt.received", app: app)
         let concession = app.descendants(matching: .any)["showTransaction.receipt.concession"]
         for _ in 0..<6 {
             if concession.exists && concession.isHittable { break }
@@ -218,7 +222,7 @@ import XCTest
         assertContains("$3.00", element: concession)
     }
 
-    func testInventorySearchDoneDismissesKeyboardAndReturnsToPinnedAutomaticCheckout() {
+    func testInventorySearchDoneDismissesKeyboardAndReturnsToPinnedCheckout() {
         continueAfterFailure = false
         let app = launch()
         defer { app.terminate() }
@@ -234,8 +238,12 @@ import XCTest
         tap(stockA, app: app)
         tap(app.buttons["showInventorySelection.done"], app: app)
         let record = app.buttons["showTransaction.record"]
-        XCTAssertTrue(record.waitForExistence(timeout: 5)); XCTAssertTrue(record.isHittable); XCTAssertTrue(record.isEnabled)
-        assertSaleAmount("35.00", app: app)
+        XCTAssertTrue(record.waitForExistence(timeout: 5)); XCTAssertTrue(record.isHittable); XCTAssertFalse(record.isEnabled)
+        assertSaleAmount("Not entered", app: app)
+        tap(app.buttons["showTransaction.editSaleAmount"], app: app)
+        enterSaleAmount("35", app: app); closeCashEditor(.done, app: app)
+        assertSaleAmount("35", app: app)
+        XCTAssertTrue(record.isEnabled)
         // Checkout is pinned even when the form is scrolled to its final note.
         _ = UITestInteraction.scrollContent(in: app, towardTop: false); _ = UITestInteraction.scrollContent(in: app, towardTop: false)
         XCTAssertTrue(record.isHittable)
@@ -244,7 +252,7 @@ import XCTest
         assertStock("3", app: app)
     }
 
-    func testSaleCashEditorKeepsAutomaticTotalForUnchangedAndCancelledEditsAndRejectsInvalidAmounts() {
+    func testInlineSaleCashStartsBlankAndRejectsChangeWithoutOpeningAnotherScreen() {
         continueAfterFailure = false
         let app = launch()
         defer { app.terminate() }
@@ -252,42 +260,38 @@ import XCTest
         tap(app.buttons["showTransaction.selectInventory"], app: app)
         tap(stock("Stock A", app: app), app: app)
         tap(app.buttons["showInventorySelection.done"], app: app)
-        assertSaleAmount("35.00", app: app)
+        assertSaleAmount("Not entered", app: app)
+        XCTAssertFalse(app.buttons["showTransaction.record"].isEnabled)
 
         tap(app.buttons["showTransaction.editSaleAmount"], app: app)
-        tap(app.textFields["showTransaction.amount.sale"], app: app)
-        closeCashEditor(.done, app: app)
-        _ = UITestInteraction.scrollContent(in: app, towardTop: true); _ = UITestInteraction.scrollContent(in: app, towardTop: true)
-        tap(app.buttons["showTransaction.selectInventory"], app: app)
-        tap(stock("Stock B", app: app), app: app)
-        tap(app.buttons["showInventorySelection.done"], app: app)
-        assertSaleAmount("40.00", app: app)
-
-        tap(app.buttons["showTransaction.editSaleAmount"], app: app)
-        enterSaleAmount("32", app: app)
-        closeCashEditor(.cancel, app: app)
-        assertSaleAmount("40.00", app: app)
-
-        tap(app.buttons["showTransaction.editSaleAmount"], app: app)
+        XCTAssertTrue(app.navigationBars["Record Sale"].exists, "Cash edits stay in the transaction screen")
+        XCTAssertFalse(app.navigationBars["Sale Amount"].exists)
+        assertBlankCashField("sale", app: app)
         let done = app.buttons["showTransaction.cashEditor.done"]
-        enterSaleAmount("", app: app)
         XCTAssertFalse(done.isEnabled)
+        enterSaleAmount("34.50", app: app)
+        XCTAssertFalse(done.isEnabled, "Actual show cash accepts whole dollars only")
         enterSaleAmount("1.234", app: app)
         XCTAssertFalse(done.isEnabled)
         closeCashEditor(.cancel, app: app)
-        assertSaleAmount("40.00", app: app)
-        _ = UITestInteraction.scrollContent(in: app, towardTop: true); _ = UITestInteraction.scrollContent(in: app, towardTop: true)
-        tap(app.buttons["showTransaction.selectInventory"], app: app)
-        tap(stock("Stock B", app: app), app: app)
-        tap(app.buttons["showInventorySelection.done"], app: app)
-        assertSaleAmount("35.00", app: app)
+        assertSaleAmount("Not entered", app: app)
+        XCTAssertFalse(app.buttons["showTransaction.record"].isEnabled)
+
+        tap(app.buttons["showTransaction.editSaleAmount"], app: app)
+        assertBlankCashField("sale", app: app)
+        enterSaleAmount("35", app: app); closeCashEditor(.done, app: app)
+        assertSaleAmount("35", app: app)
         XCTAssertTrue(app.buttons["showTransaction.record"].isEnabled)
+        tap(app.buttons["showTransaction.editSaleAmount"], app: app)
+        assertBlankCashField("sale", app: app)
+        enterSaleAmount("32", app: app); closeCashEditor(.cancel, app: app)
+        assertSaleAmount("35", app: app)
         _ = UITestInteraction.tapToolbar(app.buttons["Cancel"], in: app)
         assertBalances(available: "$300.00", saved: "$0.00", app: app)
         assertStock("3", app: app)
     }
 
-    func testRepeatedSaleCashEditsApplyDiscountAndKeepManualTotalUntilReset() {
+    func testRepeatedInlineSaleCashReplacesTheAmountAndKeepsItWhenCardsChange() {
         continueAfterFailure = false
         let app = launch()
         defer { app.terminate() }
@@ -296,32 +300,24 @@ import XCTest
         tap(stock("Stock A", app: app), app: app)
         tap(stock("Stock B", app: app), app: app)
         tap(app.buttons["showInventorySelection.done"], app: app)
-        assertSaleAmount("40.00", app: app)
+        assertSaleAmount("Not entered", app: app)
 
-        for (input, total, percentage) in [("36", "36.00", "90%"), ("32", "32.00", "80%")] {
+        for input in ["36", "32"] {
             tap(app.buttons["showTransaction.editSaleAmount"], app: app)
-            enterSaleAmount(input, app: app)
-            closeCashEditor(.done, app: app)
-            assertSaleAmount(total, app: app)
-            assertContains(percentage, element: app.descendants(matching: .any)["showTransaction.salePercentage"])
+            assertBlankCashField("sale", app: app)
+            enterSaleAmount(input, app: app); closeCashEditor(.done, app: app)
+            assertSaleAmount(input, app: app)
             XCTAssertTrue(app.buttons["showTransaction.record"].isHittable)
         }
-        assertContains("$32.00", element: app.descendants(matching: .any)["showTransaction.preview.received"])
-
-        _ = UITestInteraction.scrollContent(in: app, towardTop: true); _ = UITestInteraction.scrollContent(in: app, towardTop: true)
+        XCTAssertFalse(app.descendants(matching: .any)["showTransaction.preview.received"].exists)
+        XCTAssertFalse(app.buttons["showTransaction.resetSaleTotal"].exists,
+                       "Rounded market estimates do not become an assumed cash amount")
         tap(app.buttons["showTransaction.selectInventory"], app: app)
         tap(stock("Stock B", app: app), app: app)
         tap(app.buttons["showInventorySelection.done"], app: app)
-        assertSaleAmount("32.00", app: app)
-        tap(app.buttons["showTransaction.resetSaleTotal"], app: app)
-        assertSaleAmount("35.00", app: app)
-
-        _ = UITestInteraction.scrollContent(in: app, towardTop: true); _ = UITestInteraction.scrollContent(in: app, towardTop: true)
-        tap(app.buttons["showTransaction.selectInventory"], app: app)
-        tap(stock("Stock B", app: app), app: app)
-        tap(app.buttons["showInventorySelection.done"], app: app)
-        assertSaleAmount("40.00", app: app)
+        assertSaleAmount("32", app: app)
         XCTAssertTrue(app.buttons["showTransaction.record"].isEnabled)
+        assertRevealedContains("+$20.80", identifier: "showTransaction.preview.buyingFundsChange", app: app)
         _ = UITestInteraction.tapToolbar(app.buttons["Cancel"], in: app)
         assertBalances(available: "$300.00", saved: "$0.00", app: app)
         assertStock("3", app: app)
@@ -335,8 +331,10 @@ import XCTest
         tap(app.buttons["showTransaction.kind.purchase"], app: app)
         tap(app.buttons["showTransaction.incomingList"], app: app)
         tap(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Buy 14")).firstMatch, app: app)
+        tap(app.buttons["showTransaction.editIncomingAmount"], app: app)
+        assertBlankCashField("incoming", app: app)
         enter("12", field: app.textFields["showTransaction.amount.incoming"], app: app)
-        tap(app.buttons["showTransaction.keyboardDone"], app: app)
+        tap(app.buttons["showTransaction.incomingCashEditor.done"], app: app)
         _ = UITestInteraction.scrollContent(in: app, towardTop: true)
         tap(app.buttons["showTransaction.editIncomingList"], app: app)
         XCTAssertFalse(app.buttons["list.recordTransaction"].exists)
@@ -350,7 +348,7 @@ import XCTest
         tap(rename.buttons["Save"], app: app)
         tap(app.buttons["showTransaction.returnFromEdit"], app: app)
         assertContains("Your agreed total was kept", element: app.staticTexts["showTransaction.incomingEditStatus"])
-        XCTAssertEqual(app.textFields["showTransaction.amount.incoming"].value as? String, "12")
+        XCTAssertEqual(app.buttons["showTransaction.editIncomingAmount"].value as? String, "12")
         XCTAssertTrue(app.buttons["showTransaction.record"].isHittable)
         _ = UITestInteraction.tapToolbar(app.buttons["Cancel"], in: app)
         assertBalances(available: "$300.00", saved: "$0.00", app: app)
@@ -400,7 +398,7 @@ import XCTest
         enterSaleAmount("100", app: app); closeCashEditor(.done, app: app)
         removeSelectedCard(firstID, app: app)
         reveal(app.buttons["showTransaction.editSaleAmount"], app: app)
-        assertSaleAmount("100.00", app: app)
+        assertSaleAmount("100", app: app)
         tap(app.buttons["showTransaction.selectInventory"], app: app)
         let availableFirst = app.buttons["showTransaction.stock." + firstID]
         assertContains("2 available", element: availableFirst)
@@ -409,7 +407,7 @@ import XCTest
         tap(app.buttons["showInventorySelection.done"], app: app)
         assertRevealedContains("2", identifier: "showTransaction.selectedQuantity", app: app)
         reveal(app.buttons["showTransaction.editSaleAmount"], app: app)
-        assertSaleAmount("100.00", app: app)
+        assertSaleAmount("100", app: app)
         for inventoryID in [firstID, secondID] {
             let selected = app.descendants(matching: .any).matching(identifier: "showTransaction.selectedCard." + inventoryID).firstMatch
             reveal(selected, app: app)
@@ -429,6 +427,104 @@ import XCTest
         tap(app.buttons["show.inventory"], app: app)
         assertContains("Qty 1", element: app.buttons["showInventory.item." + firstID])
         XCTAssertFalse(app.buttons["showInventory.item." + secondID].exists)
+    }
+
+    func testOfferCheckoutUsesTheSelectedListAndExplicitWholeDollarCashWithoutChangingReferences() {
+        continueAfterFailure = false
+        let app = launch(arguments: ["--show-offer-checkout-fixture"])
+        defer { app.terminate() }
+        tap(app.buttons["showFixture.reviewOffer"], app: app)
+        XCTAssertTrue(app.navigationBars["Review & Offer"].waitForExistence(timeout: 5))
+        assertContains("1 cards", element: app.staticTexts["list.quantity"])
+        XCTAssertTrue(app.staticTexts["$6.25 market"].exists)
+        tap(app.segmentedControls["list.section"].buttons["Offer"], app: app)
+        tap(app.buttons["list.recordTransaction"], app: app)
+        XCTAssertTrue(app.navigationBars["Confirm Transaction"].waitForExistence(timeout: 5))
+        for identifier in ["kind.purchase", "kind.trade", "incomingList", "editIncomingList", "reloadIncoming"] {
+            XCTAssertFalse(app.buttons["showTransaction." + identifier].exists)
+        }
+        XCTAssertFalse(app.staticTexts["Transaction preview"].exists)
+        let amount = app.buttons["showTransaction.editOfferCashAmount"]
+        XCTAssertEqual(amount.value as? String, "Not entered")
+        XCTAssertFalse(app.buttons["showTransaction.record"].isEnabled)
+        let calculated = app.buttons["showTransaction.useCalculatedOffer"]
+        assertContains("Use calculated cash offer", element: calculated)
+        assertContains("$4", element: calculated)
+        XCTAssertFalse(calculated.label.contains(".00"), "The suggested cash offer displays whole dollars")
+        let card = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "showTransaction.incomingCard.")).firstMatch
+        reveal(card, app: app)
+        assertContains("Market reference", element: card)
+        assertContains("$6.25", element: card)
+
+        tap(calculated, app: app)
+        XCTAssertEqual(amount.value as? String, "4", "The $4.375 offer rounds to the nearest whole dollar only when selected")
+        assertRevealedContains("-$4", identifier: "showTransaction.preview.buyingFundsChange", app: app)
+        tap(amount, app: app)
+        assertBlankCashField("offerCash", app: app)
+        enter("5", field: app.textFields["showTransaction.amount.offerCash"], app: app)
+        tap(app.buttons["showTransaction.offerCashEditor.done"], app: app)
+        XCTAssertEqual(amount.value as? String, "5")
+        reveal(card, app: app)
+        assertContains("Acquisition cost", element: card)
+        assertContains("$5.00", element: card)
+        assertContains("$6.25", element: card)
+        assertRevealedContains("-$5", identifier: "showTransaction.preview.buyingFundsChange", app: app)
+        tap(app.buttons["showTransaction.record"], app: app)
+        XCTAssertTrue(app.navigationBars["Review & Offer"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons["list.recordTransaction"].label, "View Transaction")
+        assertContains("1 cards", element: app.staticTexts["list.quantity"])
+        XCTAssertTrue(app.staticTexts["$6.25 market"].exists, "Recording keeps the original list quantities and market reference")
+        tap(app.buttons["list.recordTransaction"], app: app)
+        assertRevealedContains("$5.00", identifier: "showTransaction.receipt.paid", app: app)
+        _ = UITestInteraction.tapToolbar(app.buttons["Done"], in: app)
+        returnToShow(app: app)
+        assertStock("4", app: app)
+        assertBalances(available: "$295.00", saved: "$0.00", app: app)
+
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 10))
+        assertStock("4", app: app)
+        assertBalances(available: "$295.00", saved: "$0.00", app: app)
+        tap(app.buttons["show.inventory"], app: app)
+        tap(inventory("Trade 5", app: app), app: app)
+        openInventoryDetails(app: app)
+        assertRevealedContains("$5.00", identifier: "inventory.cost", app: app)
+        assertRevealedContains("Acquired locally", identifier: "inventory.origin", app: app)
+    }
+
+    func testLongOfferCheckoutKeepsCashEntryImmediatelyReachableAndRecordFixedWhileCardsScroll() {
+        continueAfterFailure = false
+        let app = launch(arguments: ["--show-offer-checkout-fixture", "--show-transactions-large-incoming"])
+        defer { app.terminate() }
+        tap(app.buttons["showFixture.reviewOffer"], app: app)
+        XCTAssertTrue(app.navigationBars["Review & Offer"].waitForExistence(timeout: 5))
+        assertContains("80 cards", element: app.staticTexts["list.quantity"])
+        tap(app.buttons["list.recordTransaction"], app: app)
+        XCTAssertTrue(app.navigationBars["Confirm Transaction"].waitForExistence(timeout: 5))
+        let cash = app.buttons["showTransaction.editOfferCashAmount"]
+        let calculated = app.buttons["showTransaction.useCalculatedOffer"]
+        XCTAssertTrue(cash.isHittable, "Actual cash entry precedes the long selected-card list")
+        XCTAssertTrue(calculated.isHittable, "The calculated offer is usable immediately without scrolling")
+        XCTAssertEqual(cash.value as? String, "Not entered")
+        let record = app.buttons["showTransaction.record"]
+        XCTAssertTrue(record.isHittable); XCTAssertFalse(record.isEnabled)
+        tap(calculated, app: app)
+        XCTAssertEqual(cash.value as? String, "4")
+        XCTAssertTrue(record.isEnabled)
+        let recordY = record.frame.midY
+        for _ in 0..<5 {
+            _ = UITestInteraction.scrollContent(in: app, towardTop: false)
+            XCTAssertTrue(record.isHittable)
+            XCTAssertTrue(record.isEnabled)
+            XCTAssertEqual(record.frame.midY, recordY, accuracy: 1)
+        }
+        _ = UITestInteraction.tapToolbar(app.buttons["Cancel"], in: app)
+        XCTAssertTrue(app.navigationBars["Review & Offer"].waitForExistence(timeout: 5))
+        assertContains("80 cards", element: app.staticTexts["list.quantity"])
+        XCTAssertEqual(app.buttons["list.recordTransaction"].label, "Record Transaction")
+        returnToShow(app: app)
+        assertStock("3", app: app)
+        assertBalances(available: "$300.00", saved: "$0.00", app: app)
     }
 
     func testLargeIncomingListKeepsInventoryCheckoutAndReceiptActionsReachable() {
@@ -451,6 +547,8 @@ import XCTest
         tap(app.buttons["showTransaction.incomingList"], app: app)
         tap(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Buy 14")).firstMatch, app: app)
         assertContains("80 cards · 80 rows", element: app.descendants(matching: .any)["showTransaction.incomingSummary"])
+        tap(app.buttons["showTransaction.useCalculatedOffer"], app: app)
+        XCTAssertEqual(app.buttons["showTransaction.editIncomingAmount"].value as? String, "14")
 
         let incoming = app.descendants(matching: .any)["showTransaction.incomingCards"]
         XCTAssertTrue(incoming.waitForExistence(timeout: 5))
@@ -554,9 +652,18 @@ import XCTest
     private func enterSaleAmount(_ value: String, app: XCUIApplication) {
         let field = app.textFields["showTransaction.amount.sale"]
         tap(field, app: app)
-        let clear = app.buttons["showTransaction.cashEditor.clear"]
-        if clear.isEnabled { tap(clear, app: app) }
+        if let existing = field.value as? String, existing != field.placeholderValue, !existing.isEmpty {
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: existing.count))
+        }
         if !value.isEmpty { field.typeText(value) }
+    }
+    private func assertBlankCashField(_ identifier: String, app: XCUIApplication,
+                                      file: StaticString = #filePath, line: UInt = #line) {
+        let field = app.textFields["showTransaction.amount." + identifier]
+        XCTAssertTrue(field.waitForExistence(timeout: 5), file: file, line: line)
+        let value = field.value as? String
+        XCTAssertTrue(value == nil || value == "" || value == field.placeholderValue,
+                      "Every edit starts with blank input; received \(value ?? "nil")", file: file, line: line)
     }
     private enum CashEditorAction: String { case done, cancel }
     private func closeCashEditor(_ action: CashEditorAction, app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {

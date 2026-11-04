@@ -78,8 +78,11 @@ import XCTest
             XCTAssertEqual(record.frame.midY, footerY, accuracy: 1)
         }
         record.tap()
-        XCTAssertTrue(app.buttons["Purchase"].firstMatch.waitForExistence(timeout: 5))
-        app.buttons["Cancel"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Confirm Transaction"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["showTransaction.kind.purchase"].exists)
+        XCTAssertFalse(app.buttons["showTransaction.incomingList"].exists)
+        XCTAssertTrue(app.buttons["showTransaction.record"].isHittable)
+        _ = UITestInteraction.tapToolbar(app.buttons["Cancel"].firstMatch, in: app)
         selectOffer(in: app)
         let nothing = app.buttons["list.nothingHappened"]
         reveal(nothing, in: app)

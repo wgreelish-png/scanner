@@ -17,14 +17,6 @@ import UIKit
                 .localizedCaseInsensitiveContains(query)
         }
     }
-    private var suggested: Int64? {
-        let lines = store.inventory.compactMap { item -> ShowTransactionCardLine? in
-            guard let quantity = quantities[item.id], quantity > 0 else { return nil }
-            return .init(inventoryID: item.id, card: item.card, quantity: quantity)
-        }
-        return ShowSaleMath.suggestedTotal(lines)
-    }
-
     var body: some View {
         List {
             if available.isEmpty {
@@ -63,7 +55,6 @@ import UIKit
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("\(quantities.values.reduce(0, +)) selected").font(.headline)
-                    if let suggested { Text("Rounded market total " + ShowBudgetMoney.decimal(suggested).money).font(.caption).foregroundStyle(.secondary) }
                 }
                 Spacer()
                 if !quantities.isEmpty { Button("Clear") { quantities.removeAll() } }

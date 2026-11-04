@@ -115,3 +115,56 @@ enum TradeTransactionCalculator {
         return OfferCalculator.cents(percentage)
     }
 }
+
+/// Ephemeral checkout context from the offer the user is already reviewing.
+/// This routes the form without persisting or recalculating saved estimates.
+struct ShowTransactionOfferContext: Equatable {
+    let kind: ShowTransactionKind
+    let outgoingValueCents: Int64?
+    let incomingTradeValueCents: Int64?
+    let cashSuggestionCents: Int64?
+    let makeEven: Bool
+
+    static func make(totals: OfferTotals, input: TradeTransactionInput) throws -> Self {
+        // Credit-only estimates can be viewed before selecting a selling price,
+        // but recording a card trade requires that price to be explicit.
+        if input.mode != .cashOnly && input.myCardPrice == nil { throw TradeTransactionFailure.missingPrice }
+        let result = try TradeTransactionCalculator.calculate(totals: totals, input: input)
+        let incoming = try exactCents(totals.trade)
+        let outgoing = try input.myCardPrice.map(exactCents)
+        let kind: ShowTransactionKind
+        let makeEven: Bool
+        if input.mode == .cashOnly {
+            kind = .purchase; makeEven = false
+        } else {
+            switch result.outcome {
+            case .customerPays: kind = .tradeReceiveCash; makeEven = false
+            case .payCustomer: kind = .tradePayCustomer; makeEven = false
+            case .evenTrade, .unusedCredit: kind = .trade; makeEven = true
+            case .cashOffer: throw TradeTransactionFailure.invalidTotals
+            }
+        }
+        let cash: Int64?
+        if result.isPartial { cash = nil }
+        else if makeEven { cash = 0 }
+        else {
+            let suggestion = ShowTransactionCashInput.nearestWholeDollarCents(try exactCents(result.finalAmount))
+            // A rounded receipt cannot exceed the outgoing cards' agreed value:
+            // doing so would require a negative incoming card value at checkout.
+            if kind == .tradeReceiveCash, let outgoing, let suggestion, suggestion > outgoing { cash = nil }
+            else { cash = suggestion }
+        }
+        return Self(kind: kind, outgoingValueCents: outgoing, incomingTradeValueCents: incoming,
+            cashSuggestionCents: cash, makeEven: makeEven)
+    }
+
+    private static func exactCents(_ amount: Decimal) throws -> Int64 {
+        guard !amount.isNaN, amount >= 0, amount <= ShowBudgetMoney.decimal(ShowBudgetMoney.maximumCents) else {
+            throw TradeTransactionFailure.invalidTotals
+        }
+        let scaled = amount * 100
+        let cents = NSDecimalNumber(decimal: scaled).int64Value
+        guard ShowBudgetMoney.isValid(cents), Decimal(cents) == scaled else { throw TradeTransactionFailure.invalidTotals }
+        return cents
+    }
+}

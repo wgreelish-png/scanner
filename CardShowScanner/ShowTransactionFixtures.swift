@@ -7,13 +7,28 @@ import SwiftData
     @State private var fixture: ShowTransactionFixtureStore
     init() { _fixture = State(initialValue: ShowTransactionFixtureStore()) }
     var body: some View {
-        NavigationStack { ShowHomeView(store: fixture.store) }.modelContainer(fixture.container)
+        NavigationStack {
+            ShowHomeView(store: fixture.store)
+                .toolbar {
+                    if ProcessInfo.processInfo.arguments.contains("--show-offer-checkout-fixture"),
+                       let list = fixture.offerList {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            NavigationLink("Review Offer") {
+                                CardListView(list: list, transactionStore: fixture.store)
+                            }.accessibilityIdentifier("showFixture.reviewOffer")
+                        }
+                    }
+                }
+        }.modelContainer(fixture.container)
     }
 }
 
 @MainActor private final class ShowTransactionFixtureStore {
     let container: ModelContainer
     let store: ShowBudgetStore
+    var offerList: CardList? {
+        (try? container.mainContext.fetch(FetchDescriptor<CardList>()))?.first { $0.name == "Trade 5" }
+    }
     init() {
         let argument = ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--show-transactions-fixture-id=") }
         let token = argument.flatMap { UUID(uuidString: String($0.dropFirst("--show-transactions-fixture-id=".count))) } ?? UUID()
