@@ -323,14 +323,15 @@ struct SessionReviewHeader: View {
 
 struct FinishSessionButton: View {
     let session: ScanSession
+    var title = "Finish Session"
     var onFinish: () -> Void = {}
     @Environment(\.modelContext) private var context
     @State private var confirm = false
     @State private var error: String?
     var body: some View {
         Button { confirm = true } label: {
-            Label("Finish Session", systemImage: "checkmark.circle").frame(minHeight: 44)
-        }
+            Label(title, systemImage: "checkmark.circle").frame(minHeight: 44)
+        }.accessibilityLabel("Finish Session")
             .confirmationDialog("Finish this session?", isPresented: $confirm) {
                 Button("Finish & Keep List") {
                     do { try SessionService.finish(session, context: context); onFinish() }
