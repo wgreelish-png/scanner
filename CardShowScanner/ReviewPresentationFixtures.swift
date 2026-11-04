@@ -67,7 +67,9 @@ import SwiftData
         let editableCard = CardCandidate(identity: CardIdentity(game: "Pokémon", productID: "mock:navigation:editable", printing: "Normal"),
             name: "Navigation Draft Card", set: "Synthetic navigation set", number: "1", marketPrice: 25,
             confidence: 100, printings: ["Normal"])
-        try! CardListService.add(editableCard, to: editable, context: context)
+        let editableRow = try! InventoryCard(card: editableCard)
+        editableRow.id = UUID(uuidString: "10000000-0000-0000-0000-000000000001")!
+        context.insert(editableRow); editable.cards.append(editableRow)
 
         let imported = CardList(name: "Card Show")
         context.insert(imported)
@@ -75,6 +77,7 @@ import SwiftData
             name: "Navigation Imported Card", set: "Synthetic navigation set", number: "2", marketPrice: 10,
             confidence: 100, printings: ["Holofoil"])
         let importedRow = try! InventoryCard(card: importedCard, quantity: 2)
+        importedRow.id = UUID(uuidString: "10000000-0000-0000-0000-000000000002")!
         importedRow.sourceInventoryID = 9_001
         context.insert(importedRow); imported.cards.append(importedRow)
         imported.inventorySourceData = try! JSONEncoder().encode(CardShowInventoryLink(locationID: 9_001,

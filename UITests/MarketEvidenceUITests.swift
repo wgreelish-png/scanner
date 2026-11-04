@@ -9,10 +9,10 @@ import XCTest
         let modes = app.segmentedControls["cardResearch.section"]
         XCTAssertTrue(modes.waitForExistence(timeout: 5))
         let condition = app.buttons["cardResearch.condition.LP"]
-        reveal(condition, in: app); condition.tap()
+        UITestInteraction.tap(condition, in: app, identifier: "cardResearch.condition.LP")
         let period = app.segmentedControls["marketDetails.period"]
-        reveal(period, in: app); period.buttons["90D"].tap()
-        modes.buttons["Graded"].tap()
+        UITestInteraction.tap(period.buttons["90D"], in: app, identifier: "marketDetails.period.90D")
+        UITestInteraction.tap(modes.buttons["Graded"], in: app, identifier: "cardResearch.section.Graded")
         let grade = app.buttons["research.grade"]
         reveal(grade, in: app)
         XCTAssertTrue(grade.exists)
@@ -21,7 +21,7 @@ import XCTest
         XCTAssertEqual(app.staticTexts.matching(identifier: "cardResearch.name").count, 1)
         XCTAssertFalse(app.staticTexts["Evidence at a glance"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["research.historyChart"].exists)
-        modes.buttons["Market"].tap()
+        UITestInteraction.tap(modes.buttons["Market"], in: app, identifier: "cardResearch.section.Market")
         scrollToTop(in: app)
         reveal(condition, in: app)
         XCTAssertTrue(condition.isSelected)
@@ -44,10 +44,10 @@ import XCTest
         reveal(manapool, in: app)
         assertReportedValue("12", title: "TCGplayer reported units", element: tcg)
         assertReportedValue("0", title: "Manapool reported units", element: manapool)
-        windows.buttons["365 days"].tap()
+        UITestInteraction.tap(windows.buttons["365 days"], in: app)
         assertReportedValue("120", title: "TCGplayer reported units", element: tcg)
         assertReportedValue("Unavailable", title: "Manapool reported units", element: manapool)
-        windows.buttons["90 days"].tap()
+        UITestInteraction.tap(windows.buttons["90 days"], in: app)
         assertReportedValue("30", title: "TCGplayer reported units", element: tcg)
         assertReportedValue("7", title: "Manapool reported units", element: manapool)
         revealChart(app.descendants(matching: .any)["marketEvidence.volumeChart"], in: app)
@@ -66,10 +66,10 @@ import XCTest
         let sales = app.staticTexts["research.evidenceSales"]
         reveal(sales, in: app)
         assertReportedValue("5", title: "Sales in returned days", element: sales)
-        windows.buttons["30d"].tap()
+        UITestInteraction.tap(windows.buttons["30d"], in: app)
         assertReportedValue("2", title: "Reported days in this period", element: days)
         assertReportedValue("2", title: "Sales in returned days", element: sales)
-        windows.buttons["All"].tap()
+        UITestInteraction.tap(windows.buttons["All"], in: app)
         assertReportedValue("4", title: "Reported days in this period", element: days)
         assertReportedValue("6", title: "Sales in returned days", element: sales)
         revealChart(app.descendants(matching: .any)["research.historyChart"], in: app)
@@ -82,6 +82,9 @@ import XCTest
     // expected value; substring matches would confuse 12 with 120 or 0.
     private func assertReportedValue(_ expected: String, title: String, element: XCUIElement,
                                      file: StaticString = #filePath, line: UInt = #line) {
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@ OR label == %@", expected, title + ", " + expected), object: element)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 5), .completed,
+                       "The reported value must settle after a window change", file: file, line: line)
         let actual = element.label
         XCTAssertTrue([expected, title + ", " + expected].contains(actual),
                       "Expected \(title): \(expected); got \(actual)", file: file, line: line)
@@ -98,17 +101,12 @@ import XCTest
     }
 
     private func scrollToTop(in app: XCUIApplication) {
-        let list = app.collectionViews.firstMatch
-        for _ in 0..<4 { list.swipeDown() }
+        UITestInteraction.scrollToTop(in: app)
     }
 
-    private func reveal(_ element: XCUIElement, in app: XCUIApplication) {
-        for _ in 0..<12 {
-            if element.exists && element.isHittable { return }
-            scrollAlongEdge(in: app)
-        }
-        XCTAssertTrue(element.waitForExistence(timeout: 5))
-        XCTAssertTrue(element.isHittable)
+    private func reveal(_ element: XCUIElement, in app: XCUIApplication,
+                        file: StaticString = #filePath, line: UInt = #line) {
+        UITestInteraction.reveal(element, in: app, file: file, line: line)
     }
 
     private func revealChart(_ element: XCUIElement, in app: XCUIApplication,
@@ -133,11 +131,9 @@ import XCTest
     }
 
     private func scrollAlongEdge(in app: XCUIApplication) {
-        // The chart's selection gesture can consume a swipe that begins in its
-        // plot. Drag in the List's trailing margin rather than through the plot.
-        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.80))
-        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.27))
-        start.press(forDuration: 0.05, thenDragTo: end)
+        // Scroll only the visible List's margin so the chart does not consume
+        // the gesture and an off-screen retained container is never selected.
+        UITestInteraction.scrollContent(in: app, towardTop: false)
     }
 
 }

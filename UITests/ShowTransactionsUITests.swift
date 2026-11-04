@@ -29,7 +29,7 @@ import XCTest
         assertContains("Purchase Receipt", element: source)
         tap(source, app: app)
         assertRevealedContains("$7.00", identifier: "showTransaction.receipt.paid", app: app)
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        _ = UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
 
         tap(app.buttons["quickSell.sell"], app: app)
         assertRevealedContains("1", identifier: "showTransaction.selectedQuantity", app: app)
@@ -61,7 +61,7 @@ import XCTest
         tap(app.descendants(matching: .any)["showTransaction.receipt.releasedCards"], app: app)
         tap(app.buttons["showTransaction.receipt.source." + inventoryID], app: app)
         assertRevealedContains("$7.00", identifier: "showTransaction.receipt.paid", app: app)
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        _ = UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
         undoTransaction(app: app)
         returnToShow(app: app)
         assertBalances(available: "$293.00", saved: "$0.00", app: app)
@@ -200,7 +200,7 @@ import XCTest
         let concession = app.descendants(matching: .any)["showTransaction.receipt.concession"]
         for _ in 0..<6 {
             if concession.exists && concession.isHittable { break }
-            app.swipeUp()
+            _ = UITestInteraction.scrollContent(in: app, towardTop: false)
         }
         assertContains("$3.00", element: concession)
     }
@@ -224,9 +224,9 @@ import XCTest
         XCTAssertTrue(record.waitForExistence(timeout: 5)); XCTAssertTrue(record.isHittable); XCTAssertTrue(record.isEnabled)
         assertSaleAmount("35.00", app: app)
         // Checkout is pinned even when the form is scrolled to its final note.
-        app.swipeUp(); app.swipeUp()
+        _ = UITestInteraction.scrollContent(in: app, towardTop: false); _ = UITestInteraction.scrollContent(in: app, towardTop: false)
         XCTAssertTrue(record.isHittable)
-        app.buttons["Cancel"].tap()
+        _ = UITestInteraction.tapToolbar(app.buttons["Cancel"], in: app)
         assertBalances(available: "$300.00", saved: "$0.00", app: app)
         assertStock("3", app: app)
     }
@@ -244,7 +244,7 @@ import XCTest
         tap(app.buttons["showTransaction.editSaleAmount"], app: app)
         tap(app.textFields["showTransaction.amount.sale"], app: app)
         closeCashEditor(.done, app: app)
-        app.swipeDown(); app.swipeDown()
+        _ = UITestInteraction.scrollContent(in: app, towardTop: true); _ = UITestInteraction.scrollContent(in: app, towardTop: true)
         tap(app.buttons["showTransaction.selectInventory"], app: app)
         tap(stock("Stock B", app: app), app: app)
         tap(app.buttons["showInventorySelection.done"], app: app)
@@ -263,13 +263,13 @@ import XCTest
         XCTAssertFalse(done.isEnabled)
         closeCashEditor(.cancel, app: app)
         assertSaleAmount("40.00", app: app)
-        app.swipeDown(); app.swipeDown()
+        _ = UITestInteraction.scrollContent(in: app, towardTop: true); _ = UITestInteraction.scrollContent(in: app, towardTop: true)
         tap(app.buttons["showTransaction.selectInventory"], app: app)
         tap(stock("Stock B", app: app), app: app)
         tap(app.buttons["showInventorySelection.done"], app: app)
         assertSaleAmount("35.00", app: app)
         XCTAssertTrue(app.buttons["showTransaction.record"].isEnabled)
-        app.buttons["Cancel"].tap()
+        _ = UITestInteraction.tapToolbar(app.buttons["Cancel"], in: app)
         assertBalances(available: "$300.00", saved: "$0.00", app: app)
         assertStock("3", app: app)
     }
@@ -295,7 +295,7 @@ import XCTest
         }
         assertContains("$32.00", element: app.descendants(matching: .any)["showTransaction.preview.received"])
 
-        app.swipeDown(); app.swipeDown()
+        _ = UITestInteraction.scrollContent(in: app, towardTop: true); _ = UITestInteraction.scrollContent(in: app, towardTop: true)
         tap(app.buttons["showTransaction.selectInventory"], app: app)
         tap(stock("Stock B", app: app), app: app)
         tap(app.buttons["showInventorySelection.done"], app: app)
@@ -303,13 +303,13 @@ import XCTest
         tap(app.buttons["showTransaction.resetSaleTotal"], app: app)
         assertSaleAmount("35.00", app: app)
 
-        app.swipeDown(); app.swipeDown()
+        _ = UITestInteraction.scrollContent(in: app, towardTop: true); _ = UITestInteraction.scrollContent(in: app, towardTop: true)
         tap(app.buttons["showTransaction.selectInventory"], app: app)
         tap(stock("Stock B", app: app), app: app)
         tap(app.buttons["showInventorySelection.done"], app: app)
         assertSaleAmount("40.00", app: app)
         XCTAssertTrue(app.buttons["showTransaction.record"].isEnabled)
-        app.buttons["Cancel"].tap()
+        _ = UITestInteraction.tapToolbar(app.buttons["Cancel"], in: app)
         assertBalances(available: "$300.00", saved: "$0.00", app: app)
         assertStock("3", app: app)
     }
@@ -324,22 +324,22 @@ import XCTest
         tap(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Buy 14")).firstMatch, app: app)
         enter("12", field: app.textFields["showTransaction.amount.incoming"], app: app)
         tap(app.buttons["showTransaction.keyboardDone"], app: app)
-        app.swipeDown()
+        _ = UITestInteraction.scrollContent(in: app, towardTop: true)
         tap(app.buttons["showTransaction.editIncomingList"], app: app)
         XCTAssertFalse(app.buttons["list.recordTransaction"].exists)
         let options = app.navigationBars.buttons["list.options"]
         XCTAssertTrue(options.waitForExistence(timeout: 5))
-        options.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        app.buttons["Rename"].tap()
+        _ = UITestInteraction.tapToolbar(options, in: app)
+        tap(app.buttons["Rename"], app: app)
         let rename = app.alerts["Rename List"]
         XCTAssertTrue(rename.waitForExistence(timeout: 5))
         enter("Edited purchase", field: rename.textFields.firstMatch, app: app)
-        rename.buttons["Save"].tap()
+        tap(rename.buttons["Save"], app: app)
         tap(app.buttons["showTransaction.returnFromEdit"], app: app)
         assertContains("Your agreed total was kept", element: app.staticTexts["showTransaction.incomingEditStatus"])
         XCTAssertEqual(app.textFields["showTransaction.amount.incoming"].value as? String, "12")
         XCTAssertTrue(app.buttons["showTransaction.record"].isHittable)
-        app.buttons["Cancel"].tap()
+        _ = UITestInteraction.tapToolbar(app.buttons["Cancel"], in: app)
         assertBalances(available: "$300.00", saved: "$0.00", app: app)
         assertStock("3", app: app)
     }
@@ -370,31 +370,31 @@ import XCTest
         let firstIncomingPrice = app.staticTexts["Market reference: $20.00 each"]
         for _ in 0..<3 {
             if firstIncomingPrice.exists && firstIncomingPrice.isHittable { break }
-            app.swipeUp()
+            _ = UITestInteraction.scrollContent(in: app, towardTop: false)
         }
         XCTAssertTrue(firstIncomingPrice.isHittable)
         let record = app.buttons["showTransaction.record"]
         for _ in 0..<3 {
-            app.swipeUp()
+            _ = UITestInteraction.scrollContent(in: app, towardTop: false)
             XCTAssertTrue(record.isHittable)
             XCTAssertTrue(record.isEnabled)
         }
-        record.tap()
+        tap(record, app: app)
         XCTAssertTrue(app.navigationBars["Show Inventory"].waitForExistence(timeout: 5))
         let quantity = app.staticTexts["showInventory.quantity"]
         assertContains("83 cards available", element: quantity)
         let source = app.buttons["showInventory.importSnapshot"]
         let inventoryRecord = app.buttons["showInventory.recordTransaction"]
         for _ in 0..<3 {
-            app.swipeUp()
+            _ = UITestInteraction.scrollContent(in: app, towardTop: false)
             XCTAssertTrue(quantity.isHittable)
             XCTAssertTrue(source.isHittable)
             XCTAssertTrue(inventoryRecord.isHittable)
         }
-        source.tap()
+        _ = UITestInteraction.tapToolbar(source, in: app)
         XCTAssertTrue(app.navigationBars["Card Show Inventory"].waitForExistence(timeout: 5))
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        _ = UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        _ = UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
         tap(app.buttons["show.history"], app: app)
         tap(app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "showHistory.receipt.")).firstMatch, app: app)
         let paid = app.descendants(matching: .any)["showTransaction.receipt.paid"]
@@ -404,30 +404,30 @@ import XCTest
         tap(app.descendants(matching: .any)["showTransaction.receipt.acquiredCards"], app: app)
         let undo = app.buttons["showTransaction.undo"]
         for _ in 0..<3 {
-            app.swipeUp()
+            _ = UITestInteraction.scrollContent(in: app, towardTop: false)
             XCTAssertTrue(undo.isHittable)
         }
-        undo.tap()
+        tap(undo, app: app)
         let confirm = app.buttons["showTransaction.confirmUndo"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 5))
-        app.swipeUp()
+        _ = UITestInteraction.scrollContent(in: app, towardTop: false)
         XCTAssertTrue(confirm.isHittable)
-        confirm.tap()
+        tap(confirm, app: app)
         let undone = app.descendants(matching: .any)["showTransaction.undone"]
         for _ in 0..<6 {
             if undone.exists && undone.isHittable { break }
-            app.swipeDown()
+            _ = UITestInteraction.scrollContent(in: app, towardTop: true)
         }
         XCTAssertTrue(undone.waitForExistence(timeout: 5))
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        _ = UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        _ = UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
         assertStock("3", app: app)
     }
 
     private func launch(arguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         if let path = ProcessInfo.processInfo.environment["DYLD_FALLBACK_LIBRARY_PATH"] { app.launchEnvironment["DYLD_FALLBACK_LIBRARY_PATH"] = path }
-        app.launchArguments = ["--show-transactions-ui-fixture", "--show-transactions-fixture-id=" + UUID().uuidString] + arguments
+        app.launchArguments = ["-autoDatabaseUpdates", "NO", "-betaAutomaticIPAllowlist", "NO", "--show-transactions-ui-fixture", "--show-transactions-fixture-id=" + UUID().uuidString] + arguments
         app.launch()
         XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 10))
         return app
@@ -436,12 +436,12 @@ import XCTest
         tap(app.buttons["budget.summary"], app: app)
         assertContains(available, element: app.staticTexts["budget.available"])
         assertContains(saved, element: app.staticTexts["budget.saved"])
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        _ = UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
     }
     private func assertStock(_ count: String, app: XCUIApplication) {
         tap(app.buttons["show.inventory"], app: app)
         assertContains(count + " cards available", element: app.staticTexts["showInventory.quantity"])
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        _ = UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
     }
     private func assertSaleAmount(_ value: String, app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
         let row = app.buttons["showTransaction.editSaleAmount"]
@@ -469,22 +469,18 @@ import XCTest
         app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "showInventory.item.", name)).firstMatch
     }
     private func reveal(_ element: XCUIElement, app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
-        for _ in 0..<10 {
-            if element.exists && element.isHittable { return }
-            app.swipeUp()
-        }
-        XCTFail("Expected transaction detail was not visible: \(element.identifier)", file: file, line: line)
+        _ = UITestInteraction.reveal(element, in: app, file: file, line: line)
     }
     private func assertRevealedContains(_ value: String, identifier: String, app: XCUIApplication,
                                         file: StaticString = #filePath, line: UInt = #line) {
         let element = app.descendants(matching: .any)[identifier]
-        reveal(element, app: app, file: file, line: line)
+        _ = UITestInteraction.reveal(element, in: app, identifier: identifier, file: file, line: line)
         assertContains(value, element: element, file: file, line: line)
     }
     private func returnToShow(app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
         for _ in 0..<4 {
             if app.navigationBars["Show"].exists { return }
-            app.navigationBars.buttons.element(boundBy: 0).tap()
+            _ = UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
         }
         XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 5), file: file, line: line)
     }
@@ -494,7 +490,7 @@ import XCTest
         for _ in 0..<6 {
             let undone = app.descendants(matching: .any)["showTransaction.undone"]
             if undone.exists && undone.isHittable { break }
-            app.swipeDown()
+            _ = UITestInteraction.scrollContent(in: app, towardTop: true)
         }
         assertRevealedContains("Undone", identifier: "showTransaction.undone", app: app)
     }
@@ -506,7 +502,7 @@ import XCTest
         assertRevealedContains(cost, identifier: "profit.cost", app: app)
         assertRevealedContains(knownProfit, identifier: "profit.knownProfit", app: app)
         if let unknown { assertRevealedContains(unknown, identifier: "profit.unknown", app: app) }
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        _ = UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
     }
     private func assertContains(_ value: String, element: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertTrue(element.waitForExistence(timeout: 5), file: file, line: line)
@@ -520,11 +516,8 @@ import XCTest
         }
         field.typeText(value)
     }
-    private func tap(_ element: XCUIElement, app: XCUIApplication) {
-        for _ in 0..<10 {
-            if element.exists && element.isHittable { element.tap(); return }
-            app.swipeUp()
-        }
-        XCTFail("Requested transaction control was not visible: \(element.identifier)")
+    private func tap(_ element: XCUIElement, app: XCUIApplication,
+                     file: StaticString = #filePath, line: UInt = #line) {
+        _ = UITestInteraction.tap(element, in: app, file: file, line: line)
     }
 }

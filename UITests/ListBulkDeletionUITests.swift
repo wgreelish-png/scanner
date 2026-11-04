@@ -10,22 +10,22 @@ import XCTest
         app.launchArguments = ["-autoDatabaseUpdates", "NO", "--uitest-bulk-list-delete"]
         app.launch(); defer { app.terminate() }
         XCTAssertTrue(app.navigationBars["My Lists"].waitForExistence(timeout: 10))
-        app.buttons["savedLists.selectionMode"].tap()
+        _ = UITestInteraction.tapToolbar(app.buttons["savedLists.selectionMode"], in: app)
         let delete = app.buttons["savedLists.deleteSelected"]
         XCTAssertTrue(delete.waitForExistence(timeout: 5)); XCTAssertFalse(delete.isEnabled)
         let first = app.buttons["savedLists.select.Bulk Fixture Alpha"]
         let second = app.buttons["savedLists.select.Bulk Fixture Beta"]
-        reveal(first, in: app); first.tap()
-        reveal(second, in: app); second.tap()
+        _ = UITestInteraction.tap(first, in: app)
+        _ = UITestInteraction.tap(second, in: app)
         XCTAssertEqual(delete.label, "Delete Selected (2)")
         delete.tap()
         let cancel = app.buttons["bulkDeletion.cancel"]
-        XCTAssertTrue(cancel.waitForExistence(timeout: 5)); cancel.tap()
+        _ = UITestInteraction.tapToolbar(cancel, in: app)
         XCTAssertTrue(app.navigationBars["My Lists"].waitForExistence(timeout: 5))
         XCTAssertEqual(delete.label, "Delete Selected (2)")
         delete.tap()
         let confirm = app.buttons["bulkDeletion.confirm"]
-        reveal(confirm, in: app); confirm.tap()
+        _ = UITestInteraction.tap(confirm, in: app)
         XCTAssertTrue(app.navigationBars["My Lists"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Bulk Fixture Alpha"].exists)
         XCTAssertFalse(app.staticTexts["Bulk Fixture Beta"].exists)
@@ -37,13 +37,6 @@ import XCTest
 
     private func reveal(_ element: XCUIElement, in app: XCUIApplication,
                         file: StaticString = #filePath, line: UInt = #line) {
-        for _ in 0..<8 {
-            if element.exists && element.isHittable { return }
-            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.79))
-            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.30))
-            start.press(forDuration: 0.05, thenDragTo: end)
-        }
-        XCTAssertTrue(element.waitForExistence(timeout: 5), file: file, line: line)
-        XCTAssertTrue(element.isHittable, file: file, line: line)
+        _ = UITestInteraction.reveal(element, in: app, file: file, line: line)
     }
 }

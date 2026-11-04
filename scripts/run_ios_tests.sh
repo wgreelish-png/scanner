@@ -3,11 +3,13 @@
 set -euo pipefail
 SCANNER_TEST_TARGET="${1:?Expected an allowlisted native or UI suite}"
 SCANNER_TEST_SELECTION=(-only-testing:"$SCANNER_TEST_TARGET")
+SCANNER_UI_RUN=false
 for SCANNER_ALLOWED_TARGET in "$@"; do
   case "$SCANNER_ALLOWED_TARGET" in
     CardShowScannerTests|CardShowScannerUITests|CardShowScannerUITests/ResearchUITests|CardShowScannerUITests/MarketEvidenceUITests|CardShowScannerUITests/AppNavigationUITests|CardShowScannerUITests/ShowBudgetUITests|CardShowScannerUITests/ShowTransactionsUITests|CardShowScannerUITests/CardShowInventoryUITests|CardShowScannerUITests/ReviewPresentationUITests|CardShowScannerUITests/ListBulkDeletionUITests) ;;
     *) echo "Unknown test target" >&2; exit 2 ;;
   esac
+  if [[ "$SCANNER_ALLOWED_TARGET" == CardShowScannerUITests* ]]; then SCANNER_UI_RUN=true; fi
 done
 if [ "$#" -gt 1 ]; then
   shift
@@ -26,7 +28,22 @@ if [ "$SCANNER_TEST_TARGET" = CardShowScannerUITests ]; then
   SCANNER_TEST_SELECTION+=(-skip-testing:CardShowScannerUITests/ReviewPresentationUITests)
   SCANNER_TEST_SELECTION+=(-skip-testing:CardShowScannerUITests/ListBulkDeletionUITests)
 fi
-DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for k,v in d["devices"].items() if "iOS" in k for x in v if x["name"].startswith("iPhone")))')
+if [ "$SCANNER_UI_RUN" = true ]; then
+  # UI geometry and startup must not depend on simctl's listing order or data
+  # from a previously used device. Only this newly created simulator is stopped.
+  DEVICE_ID=$(python3 scripts/prepare_ui_simulator.py create)
+  scanner_finish_ui_simulator() {
+    SCANNER_UI_EXIT_CODE=$?
+    trap - EXIT
+    python3 scripts/prepare_ui_simulator.py shutdown "$DEVICE_ID" || true
+    exit "$SCANNER_UI_EXIT_CODE"
+  }
+  trap scanner_finish_ui_simulator EXIT
+  python3 scripts/prepare_ui_simulator.py boot "$DEVICE_ID"
+  SCANNER_TEST_SELECTION+=(-testLanguage en -testRegion US)
+else
+  DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for k,v in d["devices"].items() if "iOS" in k for x in v if x["name"].startswith("iPhone")))')
+fi
 # Xcode 16.3/16.4's iOS 18.4/18.5 simulator omits a Swift WebKit symlink.
 # Forward Apple's runtime-only workaround to XCTest; keep the app's iOS minimum.
 SCANNER_SWIFT_OVERLAY_DIR=$(python3 -c '
@@ -58,4 +75,17 @@ with open(sys.argv[1], 'wb') as output:
         'get-task-allow': True,
     }, output)
 PY
-xcodebuild test "${SCANNER_TEST_SELECTION[@]}" -parallel-testing-enabled NO -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 -project CardShowScanner.xcodeproj -scheme CardShowScanner -destination "platform=iOS Simulator,id=$DEVICE_ID" CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= CODE_SIGN_ENTITLEMENTS="$SCANNER_SIMULATOR_ENTITLEMENTS" -resultBundlePath TestResults.xcresult 2>&1 | tee NativeTests.log
+if [ "$SCANNER_UI_RUN" = true ]; then
+  # Compile while the cold simulator starts. Neither a failed build nor failed
+  # readiness may proceed to XCTest; both retain the failing command's status.
+  SCANNER_UI_BUILD_OPTIONS=(-parallel-testing-enabled NO -project CardShowScanner.xcodeproj
+    -scheme CardShowScanner -destination "platform=iOS Simulator,id=$DEVICE_ID"
+    -derivedDataPath "$RUNNER_TEMP/ScannerUITestBuild"
+    CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual
+    CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= CODE_SIGN_ENTITLEMENTS="$SCANNER_SIMULATOR_ENTITLEMENTS")
+  xcodebuild build-for-testing "${SCANNER_TEST_SELECTION[@]}" "${SCANNER_UI_BUILD_OPTIONS[@]}" 2>&1 | tee NativeTests.log
+  python3 scripts/prepare_ui_simulator.py ready "$DEVICE_ID" 2>&1 | tee -a NativeTests.log
+  xcodebuild test-without-building "${SCANNER_TEST_SELECTION[@]}" "${SCANNER_UI_BUILD_OPTIONS[@]}" -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 -resultBundlePath TestResults.xcresult 2>&1 | tee -a NativeTests.log
+else
+  xcodebuild test "${SCANNER_TEST_SELECTION[@]}" -parallel-testing-enabled NO -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 -project CardShowScanner.xcodeproj -scheme CardShowScanner -destination "platform=iOS Simulator,id=$DEVICE_ID" CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= CODE_SIGN_ENTITLEMENTS="$SCANNER_SIMULATOR_ENTITLEMENTS" -resultBundlePath TestResults.xcresult 2>&1 | tee NativeTests.log
+fi

@@ -12,14 +12,14 @@ import XCTest
         XCTAssertTrue(app.navigationBars["Card Show Inventory"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["cardShowInventory.open"].exists, "Opening the page alone must not import")
         let refresh = app.buttons["cardShowInventory.refresh"]
-        reveal(refresh, in: app); refresh.tap()
+        UITestInteraction.tap(refresh, in: app, identifier: "cardShowInventory.refresh")
         let quantity = app.staticTexts["cardShowInventory.quantity"]
         reveal(quantity, in: app)
         assertValue("2", title: "Physical cards", element: quantity)
         assertValue("1", title: "Inventory rows", element: app.staticTexts["cardShowInventory.rows"])
         assertValue("2", title: "Available in local stock", element: app.staticTexts["cardShowInventory.workingQuantity"])
         XCTAssertTrue(app.staticTexts["cardShowInventory.updated"].exists)
-        reveal(refresh, in: app); refresh.tap()
+        UITestInteraction.tap(refresh, in: app, identifier: "cardShowInventory.refresh")
         reveal(quantity, in: app)
         let updated = NSPredicate(format: "label == %@ OR label == %@", "3", "Physical cards, 3")
         let changed = expectation(for: updated, evaluatedWith: quantity)
@@ -27,14 +27,23 @@ import XCTest
         assertValue("1", title: "Inventory rows", element: app.staticTexts["cardShowInventory.rows"])
         assertValue("3", title: "Available in local stock", element: app.staticTexts["cardShowInventory.workingQuantity"])
         let open = app.buttons["cardShowInventory.open"]
-        reveal(open, in: app); open.tap()
-        let options = app.buttons["list.options"]
-        XCTAssertTrue(options.waitForExistence(timeout: 5)); options.tap()
+        UITestInteraction.tap(open, in: app, identifier: "cardShowInventory.open")
+        let options = app.descendants(matching: .any).matching(identifier: "list.options").firstMatch
+        UITestInteraction.tapToolbar(options, in: app, identifier: "list.options")
         let export = app.buttons["list.exportCSV"]
         XCTAssertTrue(export.waitForExistence(timeout: 5)); XCTAssertTrue(export.isEnabled)
-        app.navigationBars.firstMatch.staticTexts.firstMatch.tap()
+        // The menu's dismissing backdrop covers the bar for accessibility.
+        // Its title remains visibly outside the popover; tap that verified
+        // location without asking AXScrollToVisible to scroll the fixed bar.
+        let title = app.navigationBars["Card Show"].staticTexts["Card Show"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.windows.firstMatch.frame.contains(title.frame))
+        XCTAssertGreaterThan(title.frame.width, 0)
+        XCTAssertGreaterThan(title.frame.height, 0)
+        title.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertFalse(app.buttons["list.searchAndAdd"].exists)
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app,
+                                     identifier: "navigation.back")
         XCTAssertTrue(app.navigationBars["Card Show Inventory"].waitForExistence(timeout: 5))
         reveal(quantity, in: app)
         assertValue("3", title: "Physical cards", element: app.staticTexts["cardShowInventory.quantity"])
@@ -43,14 +52,7 @@ import XCTest
 
     private func reveal(_ element: XCUIElement, in app: XCUIApplication,
                         file: StaticString = #filePath, line: UInt = #line) {
-        let list = app.collectionViews.firstMatch
-        for _ in 0..<3 { list.swipeDown() }
-        for _ in 0..<8 {
-            if element.exists && element.isHittable { return }
-            list.swipeUp()
-        }
-        XCTAssertTrue(element.waitForExistence(timeout: 5), file: file, line: line)
-        XCTAssertTrue(element.isHittable, file: file, line: line)
+        UITestInteraction.reveal(element, in: app, file: file, line: line)
     }
 
     private func assertValue(_ expected: String, title: String, element: XCUIElement,

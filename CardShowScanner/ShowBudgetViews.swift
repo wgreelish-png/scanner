@@ -9,7 +9,7 @@ import SwiftUI
     init(store: ShowBudgetStore = .shared) { _store = State(initialValue: store) }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 60, paused: !isVisible || scenePhase != .active)) { _ in summary }
+        TimelineView(ForegroundMinuteSchedule(enabled: isVisible && scenePhase == .active)) { _ in summary }
             .onAppear { isVisible = true }.onDisappear { isVisible = false }
     }
 
@@ -67,7 +67,7 @@ import SwiftUI
     init(store: ShowBudgetStore = .shared) { _store = State(initialValue: store) }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 60, paused: !isVisible || scenePhase != .active)) { _ in dashboard }
+        TimelineView(ForegroundMinuteSchedule(enabled: isVisible && scenePhase == .active)) { _ in dashboard }
         .onAppear { isVisible = true }.onDisappear { isVisible = false }
         .navigationTitle("Show Budget")
         .navigationBarTitleDisplayMode(.inline)
@@ -502,7 +502,7 @@ private enum BudgetTradeDirection: String, CaseIterable, Identifiable {
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 60, paused: !isVisible || scenePhase != .active)) { _ in
+        TimelineView(ForegroundMinuteSchedule(enabled: isVisible && scenePhase == .active)) { _ in
             form.toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Record") { record() }

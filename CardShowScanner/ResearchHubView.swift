@@ -1,13 +1,16 @@
 import SwiftUI
 
 /// Top-level, read-only research entry. Search uses the downloaded catalog and
-/// never creates a list, adds inventory or starts a camera.
+/// never creates a list or adds inventory. Camera capture is explicitly opened.
 struct ResearchHubView: View {
     @AppStorage("defaultGame") private var game = "Pokémon"
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var search: ManualCardSearchModel
     @State private var selectedCard: CardCandidate?
+    @State private var showingScanner = false
+    @State private var pendingScannedCard: CardCandidate?
     @State private var isVisible = false
+    @FocusState private var searchFocused: Bool
     private let onOpenScan: (() -> Void)?
     private let openSettings: (() -> Void)?
 
@@ -36,6 +39,12 @@ struct ResearchHubView: View {
         .navigationDestination(item: $selectedCard) { card in
             CardResearchView(card: card)
         }
+        .fullScreenCover(isPresented: $showingScanner, onDismiss: finishScanning) {
+            ResearchScannerView(game: game) { card in
+                pendingScannedCard = card
+                showingScanner = false
+            }
+        }
         .onAppear {
             isVisible = true
             if !CatalogOptions.games.contains(game) { game = search.game }
@@ -59,6 +68,20 @@ struct ResearchHubView: View {
                     Text("Search by name, number or set.").font(.subheadline).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
+                Button {
+                    searchFocused = false
+                    search.cancel()
+                    pendingScannedCard = nil
+                    showingScanner = true
+                } label: {
+                    VStack(spacing: 3) {
+                        Image(systemName: "camera").font(.title3.weight(.semibold))
+                        Text("Scan").font(.caption.weight(.semibold))
+                    }.frame(minWidth: 44, minHeight: 44)
+                }
+                .buttonStyle(.plain).foregroundStyle(.tint)
+                .accessibilityLabel("Scan a card for research")
+                .accessibilityIdentifier("researchHub.scan")
             }
             Picker("Game", selection: $game) {
                 ForEach(CatalogOptions.games, id: \.self) { Text($0).tag($0) }
@@ -67,6 +90,7 @@ struct ResearchHubView: View {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)
                 TextField("Name, number or set", text: Binding(get: { search.query }, set: { search.updateQuery($0) }))
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .focused($searchFocused)
                     .submitLabel(.search).accessibilityIdentifier("researchHub.search")
                 if !search.query.isEmpty {
                     Button { search.updateQuery("") } label: {
@@ -77,6 +101,16 @@ struct ResearchHubView: View {
             .padding(12).background(Color(uiColor: .tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
         }
         .researchHubPanel()
+    }
+
+    private func finishScanning() {
+        if let card = pendingScannedCard {
+            pendingScannedCard = nil
+            selectedCard = card
+        } else {
+            searchFocused = true
+            if !search.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { search.load() }
+        }
     }
 
     private var slabEntry: some View {
@@ -147,7 +181,7 @@ struct ResearchHubView: View {
     }
 }
 
-private struct ResearchSearchTile: View {
+struct ResearchSearchTile: View {
     let card: CardCandidate
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
