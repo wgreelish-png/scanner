@@ -12,6 +12,7 @@ import AudioToolbox
     var paused = false
     var error: String?
     var session: ScanSession?
+    private var scanDraft: ScanBatchDraft?
     var waitingForRemoval = false
     var selectionInProgress = false
     private var pendingConfirmation: (@MainActor () -> Void)?
@@ -67,12 +68,12 @@ import AudioToolbox
         self.pricing = pricing; self.saveCard = saveCard; self.confirmationTimeout = confirmationTimeout
         self.quickActionCooldown = quickActionCooldown; self.undoCard = undoCard
     }
-    func start(game: String, list: CardList, context: ModelContext, session: ScanSession) {
+    func start(game: String, list: CardList, context: ModelContext, session: ScanSession, draft: ScanBatchDraft? = nil) {
         guard consumer == nil, !paused else { return }
         guard session.isActive, session.listID == list.id, session.game == game else {
             error = BatchFailure.unavailable.localizedDescription; return
         }
-        self.session = session; actionList = list
+        self.session = session; actionList = list; scanDraft = draft
         DiagnosticLog.shared.record("scanner.start", ["provider": liveProvider == nil ? "mock" : "live"])
         if selected == nil { waitingForRemoval = false; savedRecognitionRef = nil; savedRecognitionEpisode = nil }
         Task { [pricing] in await pricing.prepare() }
@@ -116,7 +117,9 @@ import AudioToolbox
     }
     func togglePause(game: String, list: CardList, context: ModelContext, session: ScanSession) {
         paused.toggle()
-        if paused { stop() } else { start(game: game, list: list, context: context, session: session) }
+        if paused { stop() }
+        else { start(game: game, list: scanDraft?.list ?? list, context: context,
+                     session: scanDraft?.session ?? session, draft: scanDraft) }
     }
     func choose(_ candidate: CardCandidate) {
         guard !selectionInProgress else { return }
@@ -288,6 +291,7 @@ import AudioToolbox
         return true
     }
     func addSelected(list: CardList, context: ModelContext) {
+        let list = scanDraft?.list ?? list
         guard confirmed, !saving, !priceLoading, let selected, let session else { return }
         saving = true
         defer { saving = false }
@@ -296,11 +300,20 @@ import AudioToolbox
         let previousIDs = Set(list.cards.map(\.id)), previousRef = session.lastConsumedRecognitionRef
         let review = result, printingChoices = candidatePrintings
         do {
-            try SessionService.withScanSave(session: session, list: list, context: context) {
-                try self.saveCard(selected, session, list, context, self.result?.candidates.first?.identity.productID)
+            let savedSession: ScanSession, savedList: CardList
+            if let draft = scanDraft, !draft.isCommitted {
+                try SessionService.commitDraft(draft, card: selected, context: context,
+                    recognitionRef: self.result?.candidates.first?.identity.productID, saveCard: saveCard)
+                savedSession = draft.session; savedList = draft.list
+                self.session = savedSession; actionList = savedList
+            } else {
+                try SessionService.withScanSave(session: session, list: list, context: context) {
+                    try self.saveCard(selected, session, list, context, self.result?.candidates.first?.identity.productID)
+                }
+                savedSession = session; savedList = list
             }
-            rememberAddition(previousIDs: previousIDs, previousRef: previousRef, list: list,
-                             session: session, review: review, printings: printingChoices)
+            rememberAddition(previousIDs: previousIDs, previousRef: previousRef, list: savedList,
+                             session: savedSession, review: review, printings: printingChoices)
             // Only a committed transaction releases the review snapshot.
             priceTask?.cancel(); priceRequestID = UUID()
             result = nil; candidatePrintings = [:]; self.selected = nil; confirmed = false; priceMessage = nil; priceConnectionRequired = false
@@ -320,6 +333,7 @@ import AudioToolbox
     /// Explicitly confirms one more physical copy using the last committed quote.
     /// It never merges quantities, requotes another condition, or restarts capture.
     func addAnotherCopy(list: CardList, context: ModelContext) {
+        let list = scanDraft?.list ?? list
         guard canAddAnotherCopy, let last = currentAddition, let session,
               last.receipt.listID == list.id else { return }
         saving = true
@@ -341,6 +355,7 @@ import AudioToolbox
     /// Undo is available only for this scanner's latest unchanged physical row.
     /// A scanned match reopens for correction; undoing a copy stays camera-ready.
     func undoLastAdd(list: CardList, context: ModelContext) {
+        let list = scanDraft?.list ?? list
         guard canUndoLastAdd, let last = currentAddition, let session,
               last.receipt.listID == list.id else { return }
         saving = true

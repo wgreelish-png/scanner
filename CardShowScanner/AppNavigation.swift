@@ -82,6 +82,7 @@ private struct ScanHomeView: View {
     @AppStorage("autoDatabaseUpdates") private var autoDatabaseUpdates = true
     @State private var isVisible = false
     @State private var destination: UUID?
+    @State private var draft: ScanBatchDraft?
     @State private var error: String?
 
     private var active: ScanSession? { sessions.first { $0.isActive } }
@@ -127,6 +128,9 @@ private struct ScanHomeView: View {
         .navigationDestination(item: $destination) { id in
             if let session = sessions.first(where: { $0.id == id }) { BatchScannerDestination(session: session) }
         }
+        .navigationDestination(item: $draft) { draft in
+            DraftScannerDestination(draft: draft)
+        }
         .failureAlert($error)
         .onAppear {
             isVisible = true
@@ -147,6 +151,9 @@ private struct ScanHomeView: View {
             // Retire that route instead of reopening a deleted list's scanner.
             if previous != nil && current == nil { destination = nil }
         }
+        .onChange(of: draft?.session.listID) { previous, current in
+            if previous != nil && current == nil && draft?.isCommitted == true { draft = nil }
+        }
         .onChange(of: autoDatabaseUpdates) { _, enabled in ScannerDatabaseUpdater.shared.setEnabled(enabled) }
         .onChange(of: scenePhase) { _, phase in ScannerDatabaseUpdater.shared.setForeground(phase == .active) }
     }
@@ -158,7 +165,7 @@ private struct ScanHomeView: View {
                     .foregroundStyle(.indigo).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Start a new list").font(.title3.bold())
-                    Text("Every confirmed card is saved in order.").font(.caption).foregroundStyle(.secondary)
+                    Text("Your list is saved when you confirm its first card.").font(.caption).foregroundStyle(.secondary)
                 }
             }
             Picker("Game", selection: $game) {
@@ -192,14 +199,11 @@ private struct ScanHomeView: View {
     }
 
     private func start() {
-        guard destination == nil else { return }
+        guard destination == nil, draft == nil else { return }
         ScannerDatabaseUpdater.shared.setHomeVisible(false, game: game)
         do {
-            let batch: ScanSession
-            if let active { batch = try SessionService.replace(active, game: game, context: context) }
-            else { batch = try SessionService.start(game: game, context: context) }
+            draft = try SessionService.prepareDraft(game: game)
             hasChosenGame = true
-            destination = batch.id
         } catch {
             self.error = error.localizedDescription
             ScannerDatabaseUpdater.shared.setHomeVisible(isVisible, game: game)

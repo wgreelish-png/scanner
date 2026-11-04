@@ -62,11 +62,22 @@ import SwiftData
         var draft = card; draft.identity.condition = "Near Mint"; draft.marketPrice = nil; draft.identity.skuID = nil; draft.marketPriceMetadata = nil
         self.pricing = CardEditorPricingModel(card: draft, pricing: pricing, manualPriceAllowed: false); self.saveCard = saveCard
     }
-    @discardableResult func add(to list: CardList, context: ModelContext, finishingOtherSession: Bool = false) -> Bool {
+    @discardableResult func add(to list: CardList, context: ModelContext, finishingOtherSession: Bool = false,
+                               draft: ScanBatchDraft? = nil) -> Bool {
         guard !isSaving, !isSaved, !pricing.priceLoading else { return false }
         isSaving = true; error = nil
         defer { isSaving = false }
         do {
+            if let draft, !draft.isCommitted {
+                guard list.id == draft.list.id else { throw BatchFailure.unavailable }
+                try SessionService.commitDraft(draft, card: pricing.card, context: context, saveCard: { card, session, list, context, _ in
+                    try self.saveCard(card, session, list, context)
+                })
+                isSaved = true; needsSessionSwitch = false
+                DiagnosticLog.shared.record("catalog.card_added", ["priced": String(pricing.card.marketPrice != nil)])
+                return true
+            }
+            let list = draft?.list ?? list
             if let current = try SessionService.active(context: context), current.listID != list.id, !finishingOtherSession {
                 needsSessionSwitch = true
                 return false

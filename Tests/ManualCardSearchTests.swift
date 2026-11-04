@@ -137,6 +137,84 @@ import SwiftData
         XCTAssertEqual(list.orderedCards.map(\.quantity), [1, 1]); XCTAssertNotEqual(list.orderedCards[0].id, list.orderedCards[1].id)
         XCTAssertEqual(next.pricing.card.identity.condition, "Near Mint")
     }
+    func testSearchingAndReviewingForAnUncommittedScanDoNotCreateSavedModels() async throws {
+        let container = try store(), context = container.mainContext
+        let draft = try SessionService.prepareDraft(game: "Pokémon")
+        let catalog = ControlledCardCatalog()
+        let search = ManualCardSearchModel(game: "Pokémon", catalog: catalog, debounce: .zero)
+        search.updateQuery("darkrai"); try await requests(1, catalog)
+        await catalog.resolve(0, with: [card(99)]); await idle(search)
+        let selection = ManualCardAddModel(card: try XCTUnwrap(search.results.first), pricing: ExactManualPricing())
+        selection.pricing.refreshPrice(); await priceIdle(selection.pricing)
+        search.cancel()
+        try context.save()
+
+        XCTAssertFalse(draft.isCommitted)
+        XCTAssertEqual(draft.list.quantity, 0)
+        XCTAssertFalse(selection.isSaved)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<CardList>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<ScanSession>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<InventoryCard>()), 0)
+    }
+    func testFirstManualAddCommitsDraftAndLaterAddsUseTheSameSavedList() async throws {
+        let container = try store(), context = container.mainContext
+        let draft = try SessionService.prepareDraft(game: "Pokémon")
+        let openedList = draft.list, listID = draft.list.id, sessionID = draft.session.id
+        let first = ManualCardAddModel(card: card(99), pricing: ExactManualPricing())
+        first.pricing.changeIdentity { $0.condition = "Lightly Played" }; await priceIdle(first.pricing)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<CardList>()), 0)
+
+        XCTAssertTrue(first.add(to: openedList, context: context, draft: draft))
+        XCTAssertFalse(first.add(to: openedList, context: context, draft: draft), "A repeated confirmation must not add twice")
+        XCTAssertTrue(draft.isCommitted)
+        XCTAssertEqual(draft.list.id, listID); XCTAssertEqual(draft.session.id, sessionID)
+        XCTAssertEqual(draft.list.orderedCards.first?.snapshot.marketPrice, 0)
+        XCTAssertEqual(draft.list.orderedCards.first?.snapshot.identity.condition, "Lightly Played")
+
+        // The sheet may still hold its original, uninserted list argument.
+        // Its shared draft must resolve the promoted list for a later Add.
+        let next = ManualCardAddModel(card: card(100), pricing: ExactManualPricing())
+        XCTAssertTrue(next.add(to: openedList, context: context, draft: draft))
+        XCTAssertEqual(draft.list.orderedCards.map { $0.snapshot.identity.productID }, ["p:99", "p:100"])
+        XCTAssertEqual(draft.list.orderedCards.map(\.quantity), [1, 1])
+        XCTAssertEqual(draft.session.addedQuantity, 2)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<CardList>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<ScanSession>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<InventoryCard>()), 2)
+    }
+    func testFailedFirstManualAddKeepsDraftUnsavedAndSelectionRetryable() async throws {
+        let container = try store(), context = container.mainContext
+        let draft = try SessionService.prepareDraft(game: "Pokémon")
+        let openedList = draft.list, listID = draft.list.id, sessionID = draft.session.id
+        var calls = 0
+        let model = ManualCardAddModel(card: card(99), pricing: ExactManualPricing(), saveCard: { card, session, list, context in
+            calls += 1
+            if calls == 1 {
+                try CardListService.add(card, to: list, context: context); session.record(card)
+                throw URLError(.cannotWriteToFile)
+            }
+            try SessionService.add(card, session: session, list: list, context: context)
+        })
+        model.pricing.changeIdentity { $0.condition = "Lightly Played" }; await priceIdle(model.pricing)
+
+        XCTAssertFalse(model.add(to: openedList, context: context, draft: draft))
+        XCTAssertFalse(draft.isCommitted); XCTAssertFalse(model.isSaved); XCTAssertNotNil(model.error)
+        XCTAssertEqual(draft.list.id, listID); XCTAssertEqual(draft.session.id, sessionID)
+        XCTAssertEqual(draft.list.quantity, 0); XCTAssertEqual(draft.session.addedQuantity, 0)
+        XCTAssertEqual(model.pricing.card.identity.condition, "Lightly Played")
+        XCTAssertEqual(model.pricing.card.identity.skuID, "222")
+        try context.save()
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<CardList>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<ScanSession>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<InventoryCard>()), 0)
+
+        XCTAssertTrue(model.add(to: openedList, context: context, draft: draft))
+        XCTAssertTrue(draft.isCommitted); XCTAssertTrue(model.isSaved); XCTAssertNil(model.error)
+        XCTAssertEqual(calls, 2); XCTAssertEqual(draft.list.quantity, 1)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<CardList>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<ScanSession>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<InventoryCard>()), 1)
+    }
     func testManualAddConfirmsSessionSwitchAndPreservesExistingListAndOffers() async throws {
         let container = try store(), context = container.mainContext
         let session = try SessionService.start(game: "Pokémon", context: context)

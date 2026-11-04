@@ -24,6 +24,13 @@ import XCTest
         app.launch()
         defer { app.terminate() }
 
+        let listsTab = app.tabBars.buttons["Lists"], scanTab = app.tabBars.buttons["Scan"]
+        XCTAssertTrue(listsTab.waitForExistence(timeout: 10)); listsTab.tap()
+        let savedCount = app.staticTexts["savedLists.count"]
+        XCTAssertTrue(savedCount.waitForExistence(timeout: 5))
+        let initialListCount = savedCount.label
+        scanTab.tap()
+        let hadActiveScan = app.buttons["home.continueScan"].exists
         let start = app.buttons["home.startNewScan"]
         XCTAssertTrue(start.waitForExistence(timeout: 10)); start.tap()
         acceptInitialCameraPermission()
@@ -33,6 +40,20 @@ import XCTest
             "label == %@ OR label == %@", "Continue to Scanner", "Return to Scanner")).firstMatch
         if connectionReturn.waitForExistence(timeout: 3) {
             tapFixedControl(connectionReturn, in: app)
+        }
+        // Both ways of closing a zero-card scan must leave saved lists and the
+        // prior continuation unchanged. Reopening must still permit a real Add.
+        for closeID in ["scanner.close", "scanner.finishSession"] {
+            let pendingList = app.buttons["scanner.viewList"]
+            assertOverlayVisible(pendingList, in: app)
+            XCTAssertFalse(pendingList.isEnabled, "An uncommitted scan has no saved list to review")
+            tapFixedControl(app.buttons[closeID], in: app)
+            XCTAssertTrue(start.waitForExistence(timeout: 10))
+            XCTAssertEqual(app.buttons["home.continueScan"].exists, hadActiveScan)
+            listsTab.tap()
+            XCTAssertTrue(savedCount.waitForExistence(timeout: 5))
+            XCTAssertEqual(savedCount.label, initialListCount, "Closing a zero-card scan must not save a list")
+            scanTab.tap(); start.tap()
         }
         // Exercise the live footer before starting Mock's six-second timer.
         let totals = app.staticTexts["scanner.totals"]

@@ -9,13 +9,14 @@ private struct ManualSearchSelection: Identifiable {
 struct ManualCardSearchView: View {
     let list: CardList
     let allowsGameChange: Bool
+    let draft: ScanBatchDraft?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var model: ManualCardSearchModel
     @State private var selection: ManualSearchSelection?
     @State private var lastAdded: String?
-    init(list: CardList, game: String, allowsGameChange: Bool) {
-        self.list = list; self.allowsGameChange = allowsGameChange
+    init(list: CardList, game: String, allowsGameChange: Bool, draft: ScanBatchDraft? = nil) {
+        self.list = list; self.allowsGameChange = allowsGameChange; self.draft = draft
         _model = State(initialValue: ManualCardSearchModel(game: TCGGameRegistry.scannerKey(for: game) != nil ? game : "Pokémon"))
     }
     var body: some View {
@@ -59,7 +60,7 @@ struct ManualCardSearchView: View {
                 .scrollDismissesKeyboard(.interactively)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
                 .sheet(item: $selection) { selected in
-                    ManualCardConfirmationView(card: selected.card, list: list) { card in
+                    ManualCardConfirmationView(card: selected.card, list: list, draft: draft) { card in
                         lastAdded = card.name; selection = nil
                     }
                 }
@@ -104,13 +105,14 @@ private struct CatalogCardPreview: View {
 
 private struct ManualCardConfirmationView: View {
     let list: CardList
+    let draft: ScanBatchDraft?
     let onAdded: (CardCandidate) -> Void
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
     @State private var model: ManualCardAddModel
     @State private var hasRequestedPrice = false
-    init(card: CardCandidate, list: CardList, onAdded: @escaping (CardCandidate) -> Void) {
-        self.list = list; self.onAdded = onAdded; _model = State(initialValue: ManualCardAddModel(card: card))
+    init(card: CardCandidate, list: CardList, draft: ScanBatchDraft?, onAdded: @escaping (CardCandidate) -> Void) {
+        self.list = list; self.draft = draft; self.onAdded = onAdded; _model = State(initialValue: ManualCardAddModel(card: card))
     }
     private var validPrinting: Bool {
         model.pricing.card.printings.isEmpty || model.pricing.card.printings.contains(model.pricing.card.identity.printing)
@@ -161,6 +163,6 @@ private struct ManualCardConfirmationView: View {
         })
     }
     private func add(finishingOtherSession: Bool = false) {
-        if model.add(to: list, context: context, finishingOtherSession: finishingOtherSession) { onAdded(model.pricing.card) }
+        if model.add(to: list, context: context, finishingOtherSession: finishingOtherSession, draft: draft) { onAdded(model.pricing.card) }
     }
 }

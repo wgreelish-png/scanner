@@ -5,6 +5,7 @@ import UIKit
 struct ScannerView: View {
     let session: ScanSession
     let list: CardList
+    let draft: ScanBatchDraft?
     @Environment(\.modelContext) private var context
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -12,11 +13,10 @@ struct ScannerView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("steadyCardBorder") private var steadyCardBorder = true
     @AppStorage("scannerDetailsCollapsed") private var detailsCollapsed = false
-    @Query private var sessions: [ScanSession]
     @State private var game: String
     @State private var pendingGame: String?
     @State private var confirmGame = false
-    @State private var nextSessionID: UUID?
+    @State private var nextDraft: ScanBatchDraft?
     @State private var model = ScannerViewModel()
     @State private var mode = "Live"
     @State private var showingConnection = false
@@ -24,8 +24,8 @@ struct ScannerView: View {
     @State private var showingListReview = false
     @State private var showingManualSearchPrompt = false
     @State private var showingManualSearch = false
-    init(session: ScanSession, list: CardList) {
-        self.session = session; self.list = list
+    init(session: ScanSession, list: CardList, draft: ScanBatchDraft? = nil) {
+        self.session = session; self.list = list; self.draft = draft
         _game = State(initialValue: session.game ?? "Pokémon")
     }
     @State private var visible = false
@@ -81,7 +81,7 @@ struct ScannerView: View {
         }
         .fullScreenCover(isPresented: $showingConnection, onDismiss: finishConnection) { connectionView }
         .sheet(isPresented: $showingManualSearch, onDismiss: { startIfReady() }) {
-            ManualCardSearchView(list: list, game: session.game ?? game, allowsGameChange: false)
+            ManualCardSearchView(list: list, game: session.game ?? game, allowsGameChange: false, draft: draft)
         }
         .onAppear {
             visible = true
@@ -102,18 +102,21 @@ struct ScannerView: View {
             pendingGame = newGame; game = session.game ?? "Pokémon"; confirmGame = true
         }
         .onChange(of: session.isActive) { _, active in if !active { model.stop() } }
-        .confirmationDialog("Finish this batch and start a new game?", isPresented: $confirmGame) {
-            Button("Finish & Start New Session") {
+        .confirmationDialog("Start a new scan for another game?", isPresented: $confirmGame) {
+            Button("Start New Scan") {
                 guard let pendingGame else { return }
                 do {
-                    let next = try SessionService.replace(session, game: pendingGame, context: context)
-                    model.stop(); nextSessionID = next.id
+                    let next = try SessionService.prepareDraft(game: pendingGame)
+                    model.stop(); nextDraft = next
                 } catch { model.error = error.localizedDescription }
             }
             Button("Cancel", role: .cancel) { pendingGame = nil }
-        } message: { Text("The current list and estimates will be kept. Changing games creates a separate batch.") }
-        .navigationDestination(item: $nextSessionID) { id in
-            if let next = sessions.first(where: { $0.id == id }) { BatchScannerDestination(session: next) }
+        } message: { Text("Saved cards and offers will be kept. The new list is saved when you confirm its first card.") }
+        .navigationDestination(item: $nextDraft) { draft in
+            DraftScannerDestination(draft: draft)
+        }
+        .onChange(of: nextDraft?.session.listID) { previous, current in
+            if previous != nil && current == nil && nextDraft?.isCommitted == true { nextDraft = nil }
         }
         .navigationDestination(isPresented: $showingListReview) {
             SessionReviewView(session: session, list: list, onContinueScanning: {
@@ -265,8 +268,12 @@ struct ScannerView: View {
                 } label: {
                     Label(detailsCollapsed ? "List" : "View List", systemImage: "list.bullet").frame(minHeight: 44)
                 }.buttonStyle(.borderless).accessibilityLabel("View List").accessibilityIdentifier("scanner.viewList")
+                    .disabled(draft?.isCommitted == false)
                 Spacer()
-                if session.isActive {
+                if draft?.isCommitted == false {
+                    Button("Close Scan", systemImage: "xmark") { model.stop(); dismiss() }
+                        .frame(minHeight: 44).accessibilityIdentifier("scanner.finishSession")
+                } else if session.isActive {
                     FinishSessionButton(session: session, title: detailsCollapsed ? "Finish" : "Finish Session") { model.stop(); dismiss() }
                         .accessibilityIdentifier("scanner.finishSession")
                 }
@@ -399,7 +406,7 @@ struct ScannerView: View {
     private func startIfReady() {
         guard visible, session.isActive, !model.paused, !showingConnection, !showingListReview,
               !returningFromConnection, !showingManualSearchPrompt, !showingManualSearch else { return }
-        model.start(game: session.game ?? game, list: list, context: context, session: session)
+        model.start(game: session.game ?? game, list: list, context: context, session: session, draft: draft)
     }
 
     private func restart() {

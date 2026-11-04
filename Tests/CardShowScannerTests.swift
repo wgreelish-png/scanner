@@ -211,6 +211,140 @@ import SwiftData
         XCTAssertThrowsError(try SessionService.start(game: "Pokémon", context: context))
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<CardList>()), 1)
     }
+    func testOpeningAndAbandoningDraftScansNeverPersistsEmptyListsOrSessions() throws {
+        let container = try store(), context = container.mainContext
+        for _ in 0..<4 {
+            let draft = try SessionService.prepareDraft(game: "Pokémon")
+            XCTAssertFalse(draft.isCommitted)
+            XCTAssertNil(draft.session.modelContext); XCTAssertNil(draft.list.modelContext)
+            try context.save() // Includes autosave or an unrelated action while the camera is open.
+        }
+        let reopened = ModelContext(container)
+        XCTAssertEqual(try reopened.fetchCount(FetchDescriptor<CardList>()), 0)
+        XCTAssertEqual(try reopened.fetchCount(FetchDescriptor<ScanSession>()), 0)
+        XCTAssertEqual(try reopened.fetchCount(FetchDescriptor<InventoryCard>()), 0)
+        XCTAssertNil(try SessionService.active(context: reopened))
+    }
+
+    func testFirstConfirmedDraftCardCreatesOneListAndLaterCardsKeepItsIdentity() throws {
+        let container = try store(), context = container.mainContext
+        let instant = Date(timeIntervalSince1970: 1_800_000_000)
+        let draft = try SessionService.prepareDraft(game: "Pokémon", now: instant)
+        let sessionID = draft.session.id, listID = draft.list.id
+        let card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]
+        try SessionService.commitDraft(draft, card: card, context: context, recognitionRef: "p:123")
+        XCTAssertTrue(draft.isCommitted)
+        XCTAssertEqual(draft.session.id, sessionID); XCTAssertEqual(draft.list.id, listID)
+        XCTAssertEqual(draft.list.createdAt, instant); XCTAssertEqual(draft.session.startedAt, instant)
+        XCTAssertEqual(draft.session.lastConsumedRecognitionRef, "p:123")
+        try SessionService.commitDraft(draft, card: card, context: context)
+        let reopened = ModelContext(container)
+        XCTAssertEqual(try reopened.fetchCount(FetchDescriptor<CardList>()), 1)
+        XCTAssertEqual(try reopened.fetchCount(FetchDescriptor<ScanSession>()), 1)
+        XCTAssertEqual(try reopened.fetchCount(FetchDescriptor<InventoryCard>()), 2)
+        let list = try XCTUnwrap(reopened.fetch(FetchDescriptor<CardList>()).first)
+        XCTAssertEqual(list.id, listID); XCTAssertEqual(list.orderedCards.map(\.quantity), [1, 1])
+    }
+
+    func testFirstDraftCardCreatesAListWhenPriceIsUnavailableOrKnownZero() throws {
+        let prices: [Decimal?] = [nil, 0]
+        for price in prices {
+            let container = try store(), context = container.mainContext
+            let draft = try SessionService.prepareDraft(game: "Pokémon")
+            var card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]
+            card.marketPrice = price
+            try SessionService.commitDraft(draft, card: card, context: context)
+            XCTAssertEqual(try context.fetchCount(FetchDescriptor<CardList>()), 1)
+            XCTAssertEqual(draft.list.quantity, 1)
+            XCTAssertEqual(draft.list.orderedCards.first?.snapshot.marketPrice, price)
+            XCTAssertEqual(draft.session.unpricedQuantity, price == nil ? 1 : 0)
+        }
+    }
+
+    func testFailedFirstDraftCardLeavesNoSavedListAndKeepsTemplatesForRetry() throws {
+        let container = try store(), context = container.mainContext
+        let draft = try SessionService.prepareDraft(game: "Pokémon")
+        let templateSession = draft.session, templateList = draft.list
+        let card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]
+        XCTAssertThrowsError(try SessionService.commitDraft(draft, card: card, context: context, saveCard: { card, session, list, context, _ in
+            try CardListService.add(card, to: list, context: context); session.record(card)
+            throw NSError(domain: "DraftSave", code: 1)
+        }))
+        XCTAssertFalse(draft.isCommitted)
+        XCTAssertTrue(draft.session === templateSession); XCTAssertTrue(draft.list === templateList)
+        XCTAssertNil(draft.session.modelContext); XCTAssertNil(draft.list.modelContext)
+        XCTAssertEqual(draft.list.quantity, 0); XCTAssertEqual(draft.session.addedQuantity, 0)
+        let reopened = ModelContext(container)
+        XCTAssertEqual(try reopened.fetchCount(FetchDescriptor<CardList>()), 0)
+        XCTAssertEqual(try reopened.fetchCount(FetchDescriptor<ScanSession>()), 0)
+        XCTAssertEqual(try reopened.fetchCount(FetchDescriptor<InventoryCard>()), 0)
+        try SessionService.commitDraft(draft, card: card, context: context)
+        XCTAssertTrue(draft.isCommitted); XCTAssertEqual(draft.list.quantity, 1)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<CardList>()), 1)
+    }
+
+    func testEmptyOrFailedReplacementDraftPreservesPreviousSessionOffersAndUnrelatedList() throws {
+        let container = try store(), context = container.mainContext
+        let previous = try SessionService.start(game: "Pokémon", context: context)
+        let previousList = try XCTUnwrap(SessionService.list(for: previous, context: context))
+        let card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]
+        try SessionService.add(card, session: previous, list: previousList, context: context)
+        try SessionService.saveOffer(previous, list: previousList, context: context)
+        let offers = previous.savedOffersData, originalID = previousList.id
+        _ = try SessionService.prepareDraft(game: "Magic: The Gathering") // Abandoned before any card.
+        XCTAssertTrue(previous.isActive); XCTAssertNil(previous.completedAt)
+        let draft = try SessionService.prepareDraft(game: "Pokémon")
+        let unrelated = CardList(name: "Manually created empty list"); context.insert(unrelated)
+        XCTAssertThrowsError(try SessionService.commitDraft(draft, card: card, context: context, saveCard: { card, session, list, context, _ in
+            try CardListService.add(card, to: list, context: context); session.record(card)
+            throw NSError(domain: "DraftSave", code: 2)
+        }))
+        XCTAssertTrue(previous.isActive); XCTAssertNil(previous.completedAt)
+        XCTAssertEqual(previous.savedOffersData, offers); XCTAssertEqual(previousList.quantity, 1)
+        let reopened = ModelContext(container)
+        let savedLists = try reopened.fetch(FetchDescriptor<CardList>())
+        XCTAssertEqual(Set(savedLists.map(\.id)), [originalID, unrelated.id])
+        XCTAssertEqual(savedLists.first { $0.id == unrelated.id }?.name, "Manually created empty list")
+        XCTAssertEqual(try reopened.fetchCount(FetchDescriptor<ScanSession>()), 1)
+        XCTAssertEqual(try reopened.fetchCount(FetchDescriptor<InventoryCard>()), 1)
+        XCTAssertEqual(try SessionService.active(context: reopened)?.id, previous.id)
+        try SessionService.commitDraft(draft, card: card, context: context)
+        XCTAssertFalse(previous.isActive); XCTAssertNotNil(previous.completedAt)
+        XCTAssertEqual(previous.savedOffersData, offers); XCTAssertEqual(previousList.quantity, 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<CardList>()), 3)
+        XCTAssertEqual(try SessionService.active(context: context)?.id, draft.session.id)
+    }
+
+    func testDraftScannerConfirmationPromotesModelAndUndoKeepsItsSavedList() async throws {
+        let container = try store(), context = container.mainContext
+        let draft = try SessionService.prepareDraft(game: "Pokémon")
+        let templateSession = draft.session, templateList = draft.list
+        let model = ScannerViewModel(provider: TestScannerProvider(), pricing: TestMarketPricing(), quickActionCooldown: .zero)
+        model.start(game: "Pokémon", list: draft.list, context: context, session: draft.session, draft: draft)
+        defer { model.stop() }
+        model.receive(ScanResult(id: UUID(), candidates: MockScannerProvider.samples(game: "Pokémon", index: 0), accepted: true, same: false))
+        for _ in 0..<50 { if !model.priceLoading { break }; await Task.yield() }
+        XCTAssertNotNil(model.selected)
+        XCTAssertFalse(draft.isCommitted)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<CardList>()), 0, "Recognition alone must not create a list")
+        model.addSelected(list: draft.list, context: context)
+        XCTAssertNil(model.error); XCTAssertNil(model.selected)
+        XCTAssertTrue(draft.isCommitted); XCTAssertTrue(model.session === draft.session)
+        XCTAssertFalse(draft.session === templateSession)
+        XCTAssertEqual(model.lastAddedCard, draft.list.orderedCards.first?.snapshot)
+        XCTAssertTrue(model.canUndoLastAdd)
+        model.addAnotherCopy(list: templateList, context: context)
+        XCTAssertNil(model.error); XCTAssertEqual(draft.list.quantity, 2,
+            "A retained button closure must use the promoted list, not insert its old template")
+        model.undoLastAdd(list: templateList, context: context)
+        XCTAssertEqual(draft.list.quantity, 1)
+        model.undoLastAdd(list: templateList, context: context)
+        XCTAssertEqual(draft.list.quantity, 0); XCTAssertTrue(draft.isCommitted)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<CardList>()), 1,
+                       "A list with an explicitly confirmed card remains saved after Undo")
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<InventoryCard>()), 0)
+    }
+
     func testFinishAndReplacementKeepSeparateListsAndQuantities() async throws {
         let container = try store(), context = container.mainContext
         let original = try SessionService.start(game: "Pokémon", context: context)
