@@ -344,6 +344,103 @@ import XCTest
         assertNoBluetoothPrompt(app: app)
     }
 
+    func testPaperModeCanBeChosenOfflineAndPersistsWithoutChangingTheSavedQueue() {
+        continueAfterFailure = false
+        let app = launch()
+        defer {
+            let gap = app.segmentedControls["labelPrinter.paperMode"].buttons["Gap"]
+            if app.state == .runningForeground && gap.exists && gap.isHittable { gap.tap() }
+            app.terminate()
+        }
+        assertBalances(app: app)
+        tap(app.buttons["show.priceTags"], app: app)
+        tap(app.buttons["priceTags.custom"], app: app)
+        enter("5", field: app.textFields["customLabels.price"], app: app)
+        enter("3", field: app.textFields["customLabels.copies"], app: app)
+        tap(app.buttons["customLabels.keyboardDone"], app: app)
+        tap(app.buttons["customLabels.prepare"], app: app)
+        XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
+        assertContains("0/3 completed", element: app.staticTexts["labelQueue.progress"])
+        assertContains("3", element: app.descendants(matching: .any)["labelQueue.totalCount"])
+        XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled)
+        XCTAssertFalse(app.buttons["labelQueue.pause"].exists)
+        let queued = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "labelQueue.entry.")).firstMatch
+        reveal(queued, app: app)
+        XCTAssertTrue(queued.exists)
+        let queuedID = queued.identifier, queuedDescription = queued.label
+
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        XCTAssertTrue(app.navigationBars["Custom Price Tag"].waitForExistence(timeout: 5))
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        XCTAssertTrue(app.navigationBars["Price Tags"].waitForExistence(timeout: 5))
+        tap(app.buttons["priceTags.printer"], app: app)
+        XCTAssertTrue(app.navigationBars["Label Printer"].waitForExistence(timeout: 5))
+        let mode = app.segmentedControls["labelPrinter.paperMode"]
+        XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        tap(mode.buttons["Gap"], app: app)
+        XCTAssertTrue(mode.buttons["Gap"].isSelected)
+        let connection = app.descendants(matching: .any)["labelPrinter.connection"]
+        let status = app.staticTexts["labelPrinter.status"]
+        let originalConnection = connection.label, originalStatus = status.label
+        assertContains("not connected", element: connection)
+        XCTAssertTrue(app.buttons["labelPrinter.applyPaperMode"].exists)
+        XCTAssertTrue(app.buttons["labelPrinter.readPaperMode"].exists)
+        XCTAssertFalse(app.buttons["labelPrinter.applyPaperMode"].isEnabled)
+        XCTAssertFalse(app.buttons["labelPrinter.readPaperMode"].isEnabled)
+        XCTAssertFalse(app.staticTexts["labelPrinter.paperModeStatus"].exists)
+
+        tap(mode.buttons["Transparent"], app: app)
+        XCTAssertTrue(mode.buttons["Transparent"].isSelected)
+        XCTAssertFalse(mode.buttons["Gap"].isSelected)
+        XCTAssertEqual(connection.label, originalConnection)
+        XCTAssertEqual(status.label, originalStatus, "Choosing paper offline cannot start a Bluetooth search or connection")
+        XCTAssertFalse(app.buttons["labelPrinter.disconnect"].exists)
+        XCTAssertFalse(app.buttons["labelPrinter.applyPaperMode"].isEnabled)
+        XCTAssertFalse(app.buttons["labelPrinter.readPaperMode"].isEnabled)
+        XCTAssertFalse(app.staticTexts["labelPrinter.paperModeStatus"].exists,
+                       "Changing the preference alone must not claim to have configured a printer")
+        assertNoBluetoothPrompt(app: app)
+
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 10))
+        tap(app.buttons["show.priceTags"], app: app)
+        tap(app.buttons["priceTags.printer"], app: app)
+        XCTAssertTrue(app.navigationBars["Label Printer"].waitForExistence(timeout: 5))
+        XCTAssertTrue(mode.buttons["Transparent"].isSelected, "The explicitly selected stock mode survives relaunch")
+        XCTAssertEqual(connection.label, originalConnection)
+        XCTAssertEqual(status.label, originalStatus)
+        XCTAssertFalse(app.buttons["labelPrinter.applyPaperMode"].isEnabled)
+        XCTAssertFalse(app.buttons["labelPrinter.readPaperMode"].isEnabled)
+        assertNoBluetoothPrompt(app: app)
+        tap(mode.buttons["Gap"], app: app)
+        XCTAssertTrue(mode.buttons["Gap"].isSelected)
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        XCTAssertTrue(app.navigationBars["Price Tags"].waitForExistence(timeout: 5))
+        tap(app.buttons["priceTags.queue"], app: app)
+        XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
+        reveal(mode, app: app)
+        XCTAssertTrue(mode.buttons["Gap"].isSelected, "Settings and the saved queue use the same paper preference")
+        XCTAssertEqual(connection.label, originalConnection)
+        XCTAssertEqual(status.label, originalStatus)
+        XCTAssertFalse(app.buttons["labelPrinter.applyPaperMode"].isEnabled)
+        XCTAssertFalse(app.buttons["labelPrinter.readPaperMode"].isEnabled)
+        assertContains("0/3 completed", element: app.staticTexts["labelQueue.progress"])
+        assertContains("3", element: app.descendants(matching: .any)["labelQueue.totalCount"])
+        let unchangedEntry = app.buttons[queuedID]
+        reveal(unchangedEntry, app: app)
+        XCTAssertEqual(unchangedEntry.label, queuedDescription, "Paper preferences do not replace, complete or reprint saved labels")
+        XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled)
+        XCTAssertFalse(app.buttons["labelQueue.pause"].exists)
+        assertNoBluetoothPrompt(app: app)
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        XCTAssertTrue(app.navigationBars["Price Tags"].waitForExistence(timeout: 5))
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 5))
+        assertBalances(app: app)
+        tap(app.buttons["show.inventory"], app: app)
+        assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
+    }
+
     private func launch() -> XCUIApplication {
         let app = XCUIApplication()
         if let path = ProcessInfo.processInfo.environment["DYLD_FALLBACK_LIBRARY_PATH"] {

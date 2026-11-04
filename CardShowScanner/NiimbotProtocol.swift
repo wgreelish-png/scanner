@@ -103,6 +103,15 @@ struct NiimbotD110Identity: Equatable, Sendable {
     var modelName: String { modelID == 2320 ? "D110-M" : "D110" }
 }
 
+/// The printer's configured media mode, separate from physical label size.
+/// These are the documented SetLabelType values supported by this app.
+enum NiimbotPaperMode: String, CaseIterable, Identifiable, Codable, Sendable {
+    case gap, transparent
+    var id: Self { self }
+    var title: String { self == .gap ? "Gap" : "Transparent" }
+    var commandValue: UInt8 { self == .gap ? 1 : 5 }
+}
+
 struct NiimbotPrintStatus: Equatable, Sendable {
     let completedPages: Int
     let printProgress: Int
@@ -284,7 +293,8 @@ enum NiimbotProtocol {
 
     /// Stock height is feed direction; LabelRaster is already in head direction,
     /// MSB first. No second rotation or image re-render is performed here.
-    static func printRequests(for raster: LabelRaster, identity: NiimbotD110Identity? = nil) throws -> [NiimbotRequest] {
+    static func printRequests(for raster: LabelRaster, identity: NiimbotD110Identity? = nil,
+                              paperMode: NiimbotPaperMode = .gap) throws -> [NiimbotRequest] {
         do { try raster.validate() } catch { throw LabelPrinterIssue.invalidLabel }
         guard [240, 320, 400].contains(raster.height) else { throw LabelPrinterIssue.invalidLabel }
         let task = try printTask(for: identity)
@@ -294,7 +304,7 @@ enum NiimbotProtocol {
             // Preserve the established standard-D110 bytes and ordering.
             requests = [
                 NiimbotRequest(0x21, [2], response: 0x31),
-                NiimbotRequest(0x23, [1], response: 0x33),
+                NiimbotRequest(0x23, [paperMode.commandValue], response: 0x33),
                 NiimbotRequest(0x01, response: 0x02, beginsPrint: true),
                 NiimbotRequest(0x20, response: 0x30),
                 NiimbotRequest(0x03, response: 0x04, requiresTrue: true),
@@ -304,14 +314,14 @@ enum NiimbotProtocol {
         case .b1:
             requests = [
                 NiimbotRequest(0x21, [3], response: 0x31),
-                NiimbotRequest(0x23, [1], response: 0x33),
+                NiimbotRequest(0x23, [paperMode.commandValue], response: 0x33),
                 NiimbotRequest(0x01, [0, 1, 0, 0, 0, 0, 0], response: 0x02, beginsPrint: true),
                 NiimbotRequest(0x03, response: 0x04, requiresTrue: true),
                 NiimbotRequest(0x13, u16(raster.height) + u16(raster.width) + [0, 1], response: 0x14)
             ]
         case .d110MV4:
             requests = [
-                NiimbotRequest(0x23, [1], response: 0x33),
+                NiimbotRequest(0x23, [paperMode.commandValue], response: 0x33),
                 NiimbotRequest(0x21, [3], response: 0x31),
                 NiimbotRequest(0x01, [0, 1, 0, 0, 0, 0, 0, 1, 0], response: 0x02, beginsPrint: true),
                 // The v4 task deliberately does not wait for this status reply.
@@ -363,6 +373,25 @@ enum NiimbotProtocol {
 @MainActor enum NiimbotD110Session {
     typealias Exchange = @MainActor (NiimbotRequest) async throws -> NiimbotPacket?
 
+    /// Read the configured label-type property. This does not establish which
+    /// roll is physically loaded, and it does not change printer settings.
+    static func readPaperMode(exchange: Exchange) async throws -> NiimbotPaperMode {
+        let request = NiimbotRequest(0x40, [3], response: 0x43)
+        guard let packet = try await exchange(request), packet.command == 0x43,
+              packet.data.count == 1, let value = packet.data.first,
+              let mode = NiimbotPaperMode.allCases.first(where: { $0.commandValue == value }) else {
+            throw LabelPrinterIssue.unsupportedResponse
+        }
+        return mode
+    }
+
+    /// SetLabelType acknowledges by opcode; replies may echo Transparent's 5
+    /// rather than a boolean 1. No undocumented calibration/feed command runs.
+    static func applyPaperMode(_ mode: NiimbotPaperMode, exchange: Exchange) async throws {
+        let request = NiimbotRequest(0x23, [mode.commandValue], response: 0x33)
+        try request.validateResponse(try await exchange(request))
+    }
+
     static func identify(exchange: Exchange) async throws -> NiimbotD110Identity {
         guard let connect = try await exchange(NiimbotRequest(0xc1, response: 0xc2)) else {
             throw LabelPrinterIssue.unsupportedResponse
@@ -393,9 +422,10 @@ enum NiimbotProtocol {
     }
 
     static func printLabel(_ raster: LabelRaster, identity: NiimbotD110Identity,
+                           paperMode: NiimbotPaperMode = .gap,
                            exchange: Exchange, pause: @MainActor () async throws -> Void) async throws {
         // Validate the entire raster before sending the first print command.
-        let requests = try NiimbotProtocol.printRequests(for: raster, identity: identity)
+        let requests = try NiimbotProtocol.printRequests(for: raster, identity: identity, paperMode: paperMode)
         let advanced = identity.protocolVersion >= 3
         let readiness = NiimbotRequest(0xdc, [advanced ? 4 : 1], response: advanced ? 0xd9 : 0xdd,
                                       responseAlternatives: [0xdd, 0xd9])

@@ -17,6 +17,9 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     private(set) var isConnected = false
     private(set) var isScanning = false
     private(set) var isPrinting = false
+    private(set) var isConfiguringPaper = false
+    private(set) var paperMode: NiimbotPaperMode
+    private(set) var paperModeStatus: String?
     private(set) var status = "Search for a NIIMBOT D110 or D110-M to connect."
     var modelName: String { identity?.modelName ?? "D110 / D110-M" }
     var error: String?
@@ -39,11 +42,16 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     @ObservationIgnored private var printWasDispatched = false
     @ObservationIgnored private var printCancellation: LabelPrinterIssue?
     @ObservationIgnored private var identity: NiimbotD110Identity?
+    @ObservationIgnored private var paperTask: Task<Void, Never>?
+    private static let paperModeDefaultsKey = "niimbotPaperMode"
 
     private enum DiagnosticPhase: String {
         case search, connect, identified, cancel, complete, uncertain
         case connectFailed = "connect_failed"
         case notSent = "not_sent"
+        case paperRead = "paper_read"
+        case paperApplied = "paper_applied"
+        case paperFailed = "paper_failed"
     }
 
     private final class Transfer {
@@ -70,6 +78,8 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     }
 
     private override init() {
+        paperMode = UserDefaults.standard.string(forKey: NiimbotPrinter.paperModeDefaultsKey)
+            .flatMap(NiimbotPaperMode.init(rawValue:)) ?? .gap
         super.init()
         NotificationCenter.default.addObserver(self, selector: #selector(applicationWillResignActive),
                                                name: UIApplication.willResignActiveNotification, object: nil)
@@ -114,7 +124,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             present(.notActive)
             return
         }
-        guard !isPrinting else { present(.printerBusy); return }
+        guard !isPrinting, !isConfiguringPaper else { present(.printerBusy); return }
         guard peripheral == nil else {
             status = isConnected ? "\(modelName) connected." : "Connecting to printer…"
             return
@@ -133,7 +143,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
 
     func connect(_ id: UUID) {
         guard UIApplication.shared.applicationState == .active else { present(.notActive); return }
-        guard !isPrinting else { present(.printerBusy); return }
+        guard !isPrinting, !isConfiguringPaper else { present(.printerBusy); return }
         guard let central, central.state == .poweredOn else { present(.bluetoothUnavailable); return }
         guard let selected = discovered[id] else { present(.notConnected); return }
         if selected === peripheral {
@@ -184,9 +194,32 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     }
 
     func printLabel(_ raster: LabelRaster) async -> LabelSendOutcome {
+        await printLabel(raster, paperMode: paperMode)
+    }
+
+    /// A queue captures the physical roll setting once, before its first copy.
+    /// Saved artwork and completion receipts do not need to be rewritten.
+    func senderForCurrentPaperMode() -> any LabelPrinterSending {
+        PaperModeSender(printer: self, paperMode: paperMode)
+    }
+
+    @MainActor private final class PaperModeSender: LabelPrinterSending {
+        let printer: NiimbotPrinter
+        let paperMode: NiimbotPaperMode
+
+        init(printer: NiimbotPrinter, paperMode: NiimbotPaperMode) {
+            self.printer = printer; self.paperMode = paperMode
+        }
+        func printLabel(_ raster: LabelRaster) async -> LabelSendOutcome {
+            await printer.printLabel(raster, paperMode: paperMode)
+        }
+        func cancelPrinting() { printer.cancelPrinting() }
+    }
+
+    private func printLabel(_ raster: LabelRaster, paperMode: NiimbotPaperMode) async -> LabelSendOutcome {
         guard UIApplication.shared.applicationState == .active else { return .notSent(.notActive) }
         guard isConnected else { return .notSent(.notConnected) }
-        guard !isPrinting, pending == nil else { return .notSent(.printerBusy) }
+        guard !isPrinting, !isConfiguringPaper, pending == nil else { return .notSent(.printerBusy) }
         do { try raster.validate() } catch { return .notSent(.invalidLabel) }
 
         let operation = UUID()
@@ -207,7 +240,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         return await withTaskCancellationHandler {
             do {
                 try checkPrintOperation(operation)
-                try await sendLabel(raster, operation: operation)
+                try await sendLabel(raster, operation: operation, paperMode: paperMode)
                 try checkPrintOperation(operation)
                 status = "Label printed."
                 diagnostic(.complete)
@@ -225,6 +258,67 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             Task { @MainActor [weak self] in
                 guard let self, self.printOperation == operation else { return }
                 self.cancelPrinting()
+            }
+        }
+    }
+
+    func selectPaperMode(_ mode: NiimbotPaperMode) {
+        guard !isPrinting, !isConfiguringPaper else { return }
+        savePaperMode(mode)
+        paperModeStatus = nil
+    }
+
+    func readPaperMode() { configurePaper(reading: true) }
+    func applyPaperMode() { configurePaper(reading: false) }
+
+    private func savePaperMode(_ mode: NiimbotPaperMode) {
+        paperMode = mode
+        UserDefaults.standard.set(mode.rawValue, forKey: Self.paperModeDefaultsKey)
+    }
+
+    private func configurePaper(reading: Bool) {
+        guard UIApplication.shared.applicationState == .active else { present(.notActive); return }
+        guard isConnected, identity != nil else { present(.notConnected); return }
+        guard !isPrinting, !isConfiguringPaper, pending == nil else { present(.printerBusy); return }
+        let generation = connectionGeneration, selected = paperMode
+        isConfiguringPaper = true
+        paperModeStatus = reading ? "Reading printer setting…" : "Applying \(selected.title)…"
+        error = nil
+        paperTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.connectionGeneration == generation {
+                    self.isConfiguringPaper = false
+                    self.paperTask = nil
+                }
+            }
+            do {
+                let exchange: NiimbotD110Session.Exchange = { [weak self] request in
+                    guard let self, self.connectionGeneration == generation,
+                          self.isConfiguringPaper else { throw LabelPrinterIssue.connectionLost }
+                    return try await self.exchange(request)
+                }
+                if reading {
+                    let mode = try await NiimbotD110Session.readPaperMode(exchange: exchange)
+                    try Task.checkCancellation()
+                    guard self.connectionGeneration == generation else { return }
+                    self.savePaperMode(mode)
+                    self.paperModeStatus = "Printer setting: \(mode.title)"
+                    self.diagnostic(.paperRead)
+                } else {
+                    try await NiimbotD110Session.applyPaperMode(selected, exchange: exchange)
+                    try Task.checkCancellation()
+                    guard self.connectionGeneration == generation else { return }
+                    self.paperModeStatus = "\(selected.title) applied to printer."
+                    self.diagnostic(.paperApplied)
+                }
+            } catch {
+                guard self.connectionGeneration == generation else { return }
+                let issue = (error as? LabelPrinterIssue) ?? .unsupportedResponse
+                self.paperModeStatus = reading
+                    ? "The printer setting could not be read. Choose the paper type manually."
+                    : "Paper type was not confirmed. Try again before printing."
+                self.diagnostic(.paperFailed, issue: issue)
             }
         }
     }
@@ -301,6 +395,10 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         connectionTimeout = nil
         handshakeTask?.cancel()
         handshakeTask = nil
+        paperTask?.cancel()
+        paperTask = nil
+        isConfiguringPaper = false
+        paperModeStatus = nil
         failTransfer(issue)
         isConnected = false
         identity = nil
@@ -469,11 +567,11 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                                   responseAlternatives: request.responseAlternatives, beginsPrint: request.beginsPrint)
     }
 
-    private func sendLabel(_ raster: LabelRaster, operation: UUID) async throws {
+    private func sendLabel(_ raster: LabelRaster, operation: UUID, paperMode: NiimbotPaperMode) async throws {
         guard let identity else { throw LabelPrinterIssue.unsupportedPrinter }
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(60))
-        try await NiimbotD110Session.printLabel(raster, identity: identity) { [weak self] request in
+        try await NiimbotD110Session.printLabel(raster, identity: identity, paperMode: paperMode) { [weak self] request in
             guard let self else { throw LabelPrinterIssue.connectionLost }
             try self.checkPrintOperation(operation)
             guard clock.now < deadline else { throw LabelPrinterIssue.responseTimeout }

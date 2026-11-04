@@ -403,6 +403,101 @@ final class NiimbotProtocolTests: XCTestCase {
         }
     }
 
+    func testTransparentModeChangesOnlyTheMediaCommandAcrossAllThreePrintTasks() throws {
+        let standard = NiimbotD110Identity(modelID: 2304, protocolVersion: 1, firmwareBytes: Data([5, 34]))
+        for identity in [standard, d110MIdentity(version: 3), d110MIdentity()] {
+            let defaultGap = try NiimbotProtocol.printRequests(for: denseRaster, identity: identity)
+            let explicitGap = try NiimbotProtocol.printRequests(for: denseRaster, identity: identity, paperMode: .gap)
+            let transparent = try NiimbotProtocol.printRequests(for: denseRaster, identity: identity, paperMode: .transparent)
+
+            XCTAssertEqual(defaultGap, explicitGap, "Existing calls keep their original Gap packets")
+            XCTAssertEqual(defaultGap.filter { $0.command == 0x23 }.map(\.data), [Data([1])])
+            XCTAssertEqual(transparent.filter { $0.command == 0x23 }.map(\.data), [Data([5])])
+            XCTAssertEqual(transparent.filter { $0.command != 0x23 }, defaultGap.filter { $0.command != 0x23 },
+                           "Paper mode cannot alter the raster, page dimensions, print task or completion commands")
+            XCTAssertEqual(transparent.filter(\.beginsPrint).map(\.command), [0x01])
+            XCTAssertFalse(transparent.contains { $0.command == 0x8e }, "Changing media is not an undocumented calibration/feed command")
+        }
+        XCTAssertEqual(NiimbotPaperMode.gap.title, "Gap")
+        XCTAssertEqual(NiimbotPaperMode.transparent.title, "Transparent")
+    }
+
+    @MainActor func testReadPaperModeReadsOnlyTheConfiguredPropertyAndRejectsUnknownResponses() async throws {
+        for expected in NiimbotPaperMode.allCases {
+            var requests: [NiimbotRequest] = []
+            let mode = try await NiimbotD110Session.readPaperMode { request in
+                requests.append(request)
+                return .init(command: 0x43, data: Data([expected.commandValue]))
+            }
+            XCTAssertEqual(mode, expected)
+            XCTAssertEqual(requests.map(\.command), [0x40])
+            XCTAssertEqual(requests.first?.data, Data([3]))
+            XCTAssertEqual(requests.first?.response, 0x43)
+            XCTAssertFalse(requests.contains(where: \.beginsPrint))
+        }
+        let invalid: [NiimbotPacket?] = [nil, .init(command: 0x33, data: Data([5])),
+            .init(command: 0x43, data: Data()), .init(command: 0x43, data: Data([1, 5])),
+            .init(command: 0x43, data: Data([0])), .init(command: 0x43, data: Data([2])),
+            .init(command: 0x43, data: Data([3])), .init(command: 0x43, data: Data([255]))]
+        for response in invalid {
+            var exchanges = 0
+            do {
+                _ = try await NiimbotD110Session.readPaperMode { _ in exchanges += 1; return response }
+                XCTFail("Unsupported or malformed configured media must not become a guessed paper mode")
+            } catch { XCTAssertEqual(error as? LabelPrinterIssue, .unsupportedResponse) }
+            XCTAssertEqual(exchanges, 1)
+        }
+    }
+
+    @MainActor func testApplyPaperModeAcceptsEchoedTransparentAcknowledgmentWithoutStartingOrFeeding() async throws {
+        for mode in NiimbotPaperMode.allCases {
+            var requests: [NiimbotRequest] = []
+            try await NiimbotD110Session.applyPaperMode(mode) { request in
+                requests.append(request)
+                return .init(command: 0x33, data: Data([mode.commandValue]))
+            }
+            XCTAssertEqual(requests.map(\.command), [0x23])
+            XCTAssertEqual(requests.first?.data, Data([mode.commandValue]))
+            XCTAssertEqual(requests.first?.response, 0x33)
+            XCTAssertEqual(requests.first?.requiresTrue, false, "SetLabelType replies can echo 5 rather than boolean 1")
+            XCTAssertFalse(requests.contains(where: \.beginsPrint))
+        }
+        let rejected: [NiimbotPacket?] = [nil, NiimbotPacket(command: 0x43, data: Data([5]))]
+        for response in rejected {
+            do {
+                try await NiimbotD110Session.applyPaperMode(.transparent) { _ in response }
+                XCTFail("A missing or unrelated reply cannot confirm the new printer mode")
+            } catch { XCTAssertEqual(error as? LabelPrinterIssue, .unsupportedResponse) }
+        }
+    }
+
+    @MainActor func testSessionPrintUsesTheSelectedTransparentModeBeforePrintingAndNeverCalibrates() async throws {
+        let standard = NiimbotD110Identity(modelID: 2304, protocolVersion: 1, firmwareBytes: Data([5, 34]))
+        for identity in [standard, d110MIdentity(version: 3), d110MIdentity()] {
+            var requests: [NiimbotRequest] = []
+            try await NiimbotD110Session.printLabel(denseRaster, identity: identity, paperMode: .transparent) { request in
+                requests.append(request)
+                if request.command == 0xdc {
+                    if request.response == nil { return nil }
+                    return identity.modelID == 2320 ? self.d110MReadiness
+                        : .init(command: 0xdd, data: Data([0, 0, 0, 0, 0, 0, 0, 0, 1, 4]))
+                }
+                if request.command == 0xa3 {
+                    if request.response == nil { return nil }
+                    return .init(command: 0xb3, data: Data([0, 1, 100, 100]))
+                }
+                return request.response.map { .init(command: $0, data: Data([request.command == 0x23 ? 5 : 1])) }
+            } pause: {}
+            XCTAssertEqual(requests.filter { $0.command == 0x23 }.map(\.data), [Data([5])])
+            let mediaIndex = try XCTUnwrap(requests.firstIndex { $0.command == 0x23 })
+            let printIndex = try XCTUnwrap(requests.firstIndex(where: \.beginsPrint))
+            XCTAssertLessThan(mediaIndex, printIndex)
+            XCTAssertEqual(requests.filter(\.beginsPrint).count, 1)
+            XCTAssertTrue(requests.contains { $0.command == 0xf3 })
+            XCTAssertFalse(requests.contains { $0.command == 0x8e })
+        }
+    }
+
     @MainActor func testFullWorkflowPollsUntilCompletedAndOnlyThenEndsPrint() async throws {
         var seen: [UInt8] = []
         var statusPolls = 0
