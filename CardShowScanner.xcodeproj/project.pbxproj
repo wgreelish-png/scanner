@@ -7,6 +7,15 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        A5E681491101111115D9534C /* TCGGameRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 923CB9EBF0BD3E9B131EF630; };
+        C8CD793E1A97B91B823D41E0 /* TCGGamePricingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02DA35EC122736B6C7453AF9; };
+        36CA8B180855D97510990222 /* ScannerGameCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9413C12E911BCCE893D7469E; };
+        117C82789D1557FA91C375F0 /* TCGGameRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8673CF1D925E68E84977CDC1; };
+        E33F36F44A9692E78F612A17 /* ScannerGameCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A61C1F93E239C17ECAC08A5; };
+        957D1E69BA431AF57BB729DD /* CustomPriceTagTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE7ADFE706B5712B097616B7; };
+        22B48C46ED7BF98D06A69D09 /* CustomLabelQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 630D9A0BC07C8290DC07AFA2; };
+        2247332A2F2394DAEB08CD33 /* CustomPriceTagView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 773DE2FFDCF091FA6971B5BC; };
+        811C56D028286E43C1EB65DC /* CustomPriceTag.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E172021C3E2B0854087F6F7; };
         8C5D4FCCDB0C4D28A9D21F58 /* InventoryLabelBatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E9F41D1E9A9A13C6898A419; };
         7315DDE9944EB46FDF19027A /* PriceTagsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9D20839E20FBA33C1647A94; };
         CD42EE19358413AF2E6F33F4 /* LabelBatchPriceEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68C4339E98F48DB1FA8677EE; };
@@ -219,6 +228,15 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        923CB9EBF0BD3E9B131EF630 /* TCGGameRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TCGGameRegistryTests.swift; sourceTree = "<group>"; };
+        02DA35EC122736B6C7453AF9 /* TCGGamePricingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TCGGamePricingTests.swift; sourceTree = "<group>"; };
+        9413C12E911BCCE893D7469E /* ScannerGameCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerGameCatalogTests.swift; sourceTree = "<group>"; };
+        8673CF1D925E68E84977CDC1 /* TCGGameRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TCGGameRegistry.swift; sourceTree = "<group>"; };
+        6A61C1F93E239C17ECAC08A5 /* ScannerGameCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerGameCatalog.swift; sourceTree = "<group>"; };
+        DE7ADFE706B5712B097616B7 /* CustomPriceTagTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomPriceTagTests.swift; sourceTree = "<group>"; };
+        630D9A0BC07C8290DC07AFA2 /* CustomLabelQueueTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomLabelQueueTests.swift; sourceTree = "<group>"; };
+        773DE2FFDCF091FA6971B5BC /* CustomPriceTagView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomPriceTagView.swift; sourceTree = "<group>"; };
+        7E172021C3E2B0854087F6F7 /* CustomPriceTag.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomPriceTag.swift; sourceTree = "<group>"; };
         7E9F41D1E9A9A13C6898A419 /* InventoryLabelBatchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InventoryLabelBatchTests.swift; sourceTree = "<group>"; };
         D9D20839E20FBA33C1647A94 /* PriceTagsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PriceTagsView.swift; sourceTree = "<group>"; };
         68C4339E98F48DB1FA8677EE /* LabelBatchPriceEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabelBatchPriceEditor.swift; sourceTree = "<group>"; };
@@ -471,6 +489,11 @@
 		59830EBC3A4184110566BF1A /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+                923CB9EBF0BD3E9B131EF630 /* TCGGameRegistryTests.swift */,
+                02DA35EC122736B6C7453AF9 /* TCGGamePricingTests.swift */,
+                9413C12E911BCCE893D7469E /* ScannerGameCatalogTests.swift */,
+                DE7ADFE706B5712B097616B7 /* CustomPriceTagTests.swift */,
+                630D9A0BC07C8290DC07AFA2 /* CustomLabelQueueTests.swift */,
                 7E9F41D1E9A9A13C6898A419 /* InventoryLabelBatchTests.swift */,
                 CF8A54E53C11C0B88AB6C00A /* ShowInventorySortTests.swift */,
                 344A0FFA7E3944F52A32EF92 /* ResearchScanTests.swift */,
@@ -545,6 +568,10 @@
 		878A52FC5FF6A57D50B7B870 /* CardShowScanner */ = {
 			isa = PBXGroup;
 			children = (
+                8673CF1D925E68E84977CDC1 /* TCGGameRegistry.swift */,
+                6A61C1F93E239C17ECAC08A5 /* ScannerGameCatalog.swift */,
+                773DE2FFDCF091FA6971B5BC /* CustomPriceTagView.swift */,
+                7E172021C3E2B0854087F6F7 /* CustomPriceTag.swift */,
                 D9D20839E20FBA33C1647A94 /* PriceTagsView.swift */,
                 68C4339E98F48DB1FA8677EE /* LabelBatchPriceEditor.swift */,
                 EEF113A68E174E51CE1E31A1 /* InventoryLabelBatch.swift */,
@@ -820,6 +847,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                A5E681491101111115D9534C /* TCGGameRegistryTests.swift in Sources */,
+                C8CD793E1A97B91B823D41E0 /* TCGGamePricingTests.swift in Sources */,
+                36CA8B180855D97510990222 /* ScannerGameCatalogTests.swift in Sources */,
+                957D1E69BA431AF57BB729DD /* CustomPriceTagTests.swift in Sources */,
+                22B48C46ED7BF98D06A69D09 /* CustomLabelQueueTests.swift in Sources */,
                 8C5D4FCCDB0C4D28A9D21F58 /* InventoryLabelBatchTests.swift in Sources */,
                 22F6B04AD9FB439A5D97F941 /* ShowInventorySortTests.swift in Sources */,
                 6185735D0CD109773752E473 /* ResearchScanTests.swift in Sources */,
@@ -893,6 +925,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                117C82789D1557FA91C375F0 /* TCGGameRegistry.swift in Sources */,
+                E33F36F44A9692E78F612A17 /* ScannerGameCatalog.swift in Sources */,
+                2247332A2F2394DAEB08CD33 /* CustomPriceTagView.swift in Sources */,
+                811C56D028286E43C1EB65DC /* CustomPriceTag.swift in Sources */,
                 7315DDE9944EB46FDF19027A /* PriceTagsView.swift in Sources */,
                 CD42EE19358413AF2E6F33F4 /* LabelBatchPriceEditor.swift in Sources */,
                 C666ED381B43EA35D41E1F86 /* InventoryLabelBatch.swift in Sources */,
@@ -1061,7 +1097,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 51;
+				CURRENT_PROJECT_VERSION = 58;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -1098,7 +1134,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 51;
+				CURRENT_PROJECT_VERSION = 58;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";

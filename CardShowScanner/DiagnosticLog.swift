@@ -223,6 +223,24 @@ enum ServiceDiagnosticFields {
     }
     func export() throws -> URL {
         record("diagnostics.export")
+        let data = try reportData()
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("CardShowDiagnostics-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appendingPathComponent("CardShowScanner-diagnostics.jsonl")
+        try data.write(to: url, options: .atomic)
+        return url
+    }
+
+    /// Text copying uses the same filtered report as file export, without a file URL.
+    func exportText() throws -> String {
+        record("diagnostics.copy")
+        guard let text = String(data: try reportData(), encoding: .utf8) else {
+            throw CocoaError(.fileReadInapplicableStringEncoding)
+        }
+        return text
+    }
+
+    private func reportData() throws -> Data {
         let bundle = Bundle.main
         let header: [String: Any] = ["schema": 1, "event": "diagnostics.environment", "time": ISO8601DateFormatter().string(from: .now),
             "app_version": bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
@@ -234,10 +252,6 @@ enum ServiceDiagnosticFields {
         for url in [previous, current] where FileManager.default.fileExists(atPath: url.path) {
             data.append(try Data(contentsOf: url))
         }
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("CardShowDiagnostics-" + UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let url = folder.appendingPathComponent("CardShowScanner-diagnostics.jsonl")
-        try data.write(to: url, options: .atomic)
-        return url
+        return data
     }
 }

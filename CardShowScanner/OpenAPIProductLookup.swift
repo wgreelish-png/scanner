@@ -44,7 +44,7 @@ actor OpenAPIProductLookup: OpenAPIProductLookingUp {
 
     func product(for productID: String, categoryID: Int) async throws -> OpenAPIProductMetadata {
         try Task.checkCancellation()
-        guard let id = Self.productID(productID), [1, 2, 3].contains(categoryID) else { throw OpenAPIPricingFailure.unsupportedCard }
+        guard let id = Self.productID(productID), TCGGameRegistry.isProductCategory(categoryID) else { throw OpenAPIPricingFailure.unsupportedCard }
         let key = Self.key(id, categoryID), current = now()
         let saved = entries[key] ?? read(key: key, now: current)
         if let saved, saved.fetchedAt <= current, current < saved.fetchedAt.addingTimeInterval(Self.lifetime) {
@@ -76,7 +76,7 @@ actor OpenAPIProductLookup: OpenAPIProductLookingUp {
 
     static func parse(_ data: Data, productID: String, categoryID: Int) throws -> OpenAPIProductMetadata {
         guard data.count <= maximumResponseBytes else { throw OpenAPIPricingFailure.responseTooLarge }
-        guard let id = Self.productID(productID), [1, 2, 3].contains(categoryID),
+        guard let id = Self.productID(productID), TCGGameRegistry.isProductCategory(categoryID),
               let reply = try? JSONDecoder().decode(Reply.self, from: data), reply.success,
               reply.product_id == id, reply.product.product_id == id,
               reply.product.category_id == categoryID else { throw OpenAPIPricingFailure.invalidResponse }
@@ -129,7 +129,7 @@ actor OpenAPIProductLookup: OpenAPIProductLookingUp {
     }
     private func read(file: URL, now: Date) -> Entry? {
         let components = file.deletingPathExtension().lastPathComponent.split(separator: "-")
-        guard components.count == 2, let category = Int(components[0]), [1, 2, 3].contains(category),
+        guard components.count == 2, let category = Int(components[0]), TCGGameRegistry.isProductCategory(category),
               let product = Self.productID(String(components[1])),
               let values = try? file.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey]),
               values.isRegularFile == true, values.isSymbolicLink != true,

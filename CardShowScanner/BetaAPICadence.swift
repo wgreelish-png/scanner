@@ -221,7 +221,7 @@ actor BetaAPICadence {
     func setInfo(family: BetaAPIFamily, category: Int, group: Int, forceRefresh: Bool = false,
                  credentials: DirectResearchCredentials, loader: any ResearchHTTPDataLoading) async throws -> BetaAPISetInfo {
         try Task.checkCancellation()
-        guard (1...3).contains(category), group > 0 else { throw BetaAPICadenceFailure.invalidRequest }
+        guard TCGGameRegistry.isProductCategory(category), group > 0 else { throw BetaAPICadenceFailure.invalidRequest }
         let key = Self.account(for: credentials) + ":" + family.rawValue
         if forceRefresh { unsupportedIndices[key] = nil }
         else if let rejectedAt = unsupportedIndices[key] {

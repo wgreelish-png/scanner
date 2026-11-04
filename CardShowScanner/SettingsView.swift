@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Everyday preferences stay on the tab; occasional maintenance is one step away.
 struct SettingsView: View {
@@ -12,7 +13,7 @@ struct SettingsView: View {
         Form {
             Section("Scan preferences") {
                 Picker("Default game", selection: $game) {
-                    ForEach(CatalogOptions.games, id: \.self) { Text($0) }
+                    ForEach(CatalogOptions.games(including: game), id: \.self) { Text($0) }
                 }.accessibilityIdentifier("settings.defaultGame")
                 Toggle("Sound effects", isOn: $sound).accessibilityIdentifier("settings.sound")
                 Toggle("Haptic feedback", isOn: $haptics).accessibilityIdentifier("settings.haptics")
@@ -119,6 +120,7 @@ private struct OfferDefaultsSettingsView: View {
 private struct ScannerDatabaseSettingsView: View {
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var databaseUpdater = ScannerDatabaseUpdater.shared
+    @State private var gameCatalog = ScannerGameCatalog.shared
     @AppStorage("defaultGame") private var game = "Pokémon"
     @AppStorage("autoDatabaseUpdates") private var autoDatabaseUpdates = true
     @State private var isVisible = false
@@ -129,12 +131,24 @@ private struct ScannerDatabaseSettingsView: View {
     var body: some View {
         Form {
             Section {
-                LabeledContent("Game", value: game)
+                Picker("Game", selection: $game) {
+                    ForEach(CatalogOptions.games(including: game), id: \.self) { Text($0).tag($0) }
+                }.pickerStyle(.menu).accessibilityIdentifier("settings.databaseGame")
+                Button(gameCatalog.isLoading ? "Checking Available Games…" : "Refresh Available Games") {
+                    Task {
+                        guard isVisible, scenePhase == .active else { return }
+                        await gameCatalog.refresh()
+                    }
+                }.disabled(gameCatalog.isLoading).accessibilityIdentifier("settings.refreshDatabaseGames")
+                if let status = gameCatalog.status {
+                    Text(status).font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("settings.databaseGamesStatus")
+                }
                 Toggle("Automatic Database Updates", isOn: $autoDatabaseUpdates)
                     .accessibilityIdentifier("settings.autoDatabaseUpdates")
                     .onChange(of: autoDatabaseUpdates) { _, enabled in databaseUpdater.setEnabled(enabled) }
             } footer: {
-                Text("Your saved recognition database is checked at most once every seven days. The first download happens when you begin scanning.")
+                Text("Choose a game for future scans. Existing sessions keep their game. Recognition databases are checked at most once every seven days; the first download happens when you begin scanning.")
             }
             Section("Database status") {
                 Text(databaseUpdater.status).font(.subheadline).foregroundStyle(.secondary)
@@ -173,6 +187,10 @@ private struct ScannerDatabaseSettingsView: View {
             }
         }
         .navigationTitle("Scanner Database").navigationBarTitleDisplayMode(.inline)
+        .task {
+            guard scenePhase == .active else { return }
+            await gameCatalog.refreshIfNeeded()
+        }
         .onAppear {
             isVisible = true
             databaseUpdater.setForeground(scenePhase == .active)
@@ -180,12 +198,22 @@ private struct ScannerDatabaseSettingsView: View {
         }
         .onDisappear {
             isVisible = false
+            gameCatalog.cancel()
             databaseUpdater.setSettingsVisible(false, game: game)
         }
         .onChange(of: game) { _, game in
             if isVisible { databaseUpdater.setSettingsVisible(true, game: game) }
         }
-        .onChange(of: scenePhase) { _, phase in databaseUpdater.setForeground(phase == .active) }
+        .onChange(of: scenePhase) { _, phase in
+            databaseUpdater.setForeground(phase == .active)
+            if phase != .active { gameCatalog.cancel() }
+            else if isVisible {
+                Task {
+                    guard isVisible, scenePhase == .active else { return }
+                    await gameCatalog.refreshIfNeeded()
+                }
+            }
+        }
         .failureAlert($error)
         .alert("Scanner cache cleared", isPresented: $cacheMessage) {
             Button("OK", role: .cancel) {}
@@ -195,16 +223,30 @@ private struct ScannerDatabaseSettingsView: View {
     }
 }
 
-private struct DiagnosticsSettingsView: View {
+@MainActor private struct DiagnosticsSettingsView: View {
     @AppStorage("diagnosticsEnabled") private var diagnosticsEnabled = true
     @State private var diagnosticURL: URL?
     @State private var error: String?
     @State private var confirmClear = false
+    @State private var copyNotice: String?
 
     var body: some View {
         Form {
             Section {
                 Toggle("Record diagnostics", isOn: $diagnosticsEnabled).accessibilityIdentifier("settings.recordDiagnostics")
+                Button("Copy Diagnostic Log", systemImage: "doc.on.doc") {
+                    copyNotice = nil
+                    do {
+                        let text = try DiagnosticLog.shared.exportText()
+                        UIPasteboard.general.string = text
+                        copyNotice = "Diagnostic log copied. Paste it into your message."
+                    } catch { self.error = "Could not copy the diagnostic log: " + error.localizedDescription }
+                }.accessibilityIdentifier("settings.copyDiagnostics")
+                if let copyNotice {
+                    Label(copyNotice, systemImage: "checkmark.circle.fill")
+                        .font(.footnote).foregroundStyle(.green)
+                        .accessibilityIdentifier("settings.diagnosticsCopied")
+                }
                 Button("Export Diagnostic Log", systemImage: "square.and.arrow.up") {
                     do { diagnosticURL = try DiagnosticLog.shared.export() }
                     catch { self.error = "Could not export the diagnostic file: " + error.localizedDescription }
@@ -213,7 +255,7 @@ private struct DiagnosticsSettingsView: View {
                     Text("Diagnostics could not be written to local storage.").foregroundStyle(.orange)
                 }
             } footer: {
-                Text("Keeps about 512 KB of recent local events, including scanner stages, timings and save errors. Card contents, credentials and camera images are excluded. Logs leave this device when you share them.")
+                Text("Keeps about 512 KB of recent local events, including scanner stages, timings and save errors. Card contents, credentials and camera images are excluded. Copy pastes log text; Export shares a file.")
             }
             Section {
                 Button("Clear Diagnostic Log", role: .destructive) { confirmClear = true }
@@ -226,7 +268,7 @@ private struct DiagnosticsSettingsView: View {
         }
         .confirmationDialog("Clear saved diagnostic events?", isPresented: $confirmClear) {
             Button("Clear Log", role: .destructive) {
-                do { try DiagnosticLog.shared.clear() }
+                do { try DiagnosticLog.shared.clear(); copyNotice = nil }
                 catch { self.error = error.localizedDescription }
             }
         }

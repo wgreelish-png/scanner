@@ -33,8 +33,10 @@ import SwiftData
                         symbol: "square.stack.3d.up.fill", count: available.count)
                     batchButton(.priceChanged, title: "Print Price Changed", subtitle: "New cards, unprinted tags and prices due for review.",
                         symbol: "arrow.triangle.2.circlepath", count: approvals.isLoaded ? changedIDs.count : nil)
-                    batchButton(.custom, title: "Custom Price Tags", subtitle: "Choose cards, adjust prices and set copies.",
-                        symbol: "slider.horizontal.3", count: nil)
+                    NavigationLink { CustomPriceTagView() } label: {
+                        routeLabel(title: "Custom Price Tag", subtitle: "Enter a price and copies. No inventory needed.",
+                            symbol: "square.and.pencil", count: nil)
+                    }.buttonStyle(.plain).accessibilityIdentifier("priceTags.custom")
                 }
                 if !store.isLoaded || !approvals.isLoaded {
                     VStack(alignment: .leading, spacing: 10) {
@@ -44,9 +46,19 @@ import SwiftData
                     }
                 } else if available.isEmpty {
                     ContentUnavailableView("No available cards", systemImage: "shippingbox",
-                        description: Text("Import Card Show inventory or record a purchase to prepare tags."))
+                        description: Text("Create a custom sticker above, or import inventory to prepare card labels."))
                 }
                 VStack(spacing: 0) {
+                    Button { batch = .custom } label: {
+                        HStack {
+                            Label("Choose Inventory Cards", systemImage: "rectangle.stack")
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .disabled(!store.isLoaded || !approvals.isLoaded || available.isEmpty)
+                    .accessibilityIdentifier("priceTags.chooseCards")
+                    Divider().padding(.vertical, 14)
                     NavigationLink { LabelPrintQueueView() } label: {
                         HStack {
                             Label("Saved Print Queue", systemImage: "tray.full")
@@ -82,27 +94,31 @@ import SwiftData
     private func batchButton(_ mode: InventoryLabelBatchMode, title: String, subtitle: String,
                              symbol: String, count: Int?) -> some View {
         Button { batch = mode } label: {
-            HStack(spacing: 14) {
-                Image(systemName: symbol).font(.title3.weight(.semibold)).foregroundStyle(.tint)
-                    .frame(width: 46, height: 46)
-                    .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 13))
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack {
-                        Text(title).font(.headline)
-                        Spacer(minLength: 4)
-                        if let count { Text(count.formatted()).font(.subheadline.monospacedDigit()).foregroundStyle(.secondary) }
-                    }
-                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
-                }
-                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
-            }
-            .foregroundStyle(.primary).padding(16).frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
-            .contentShape(RoundedRectangle(cornerRadius: 20))
+            routeLabel(title: title, subtitle: subtitle, symbol: symbol, count: count)
         }
         .buttonStyle(.plain)
         .disabled(!store.isLoaded || !approvals.isLoaded || available.isEmpty || (mode == .priceChanged && count == 0))
         .accessibilityIdentifier("priceTags." + (mode == .priceChanged ? "changed" : mode.rawValue))
+    }
+
+    private func routeLabel(title: String, subtitle: String, symbol: String, count: Int?) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: symbol).font(.title3.weight(.semibold)).foregroundStyle(.tint)
+                .frame(width: 46, height: 46)
+                .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 13))
+            VStack(alignment: .leading, spacing: 5) {
+                HStack {
+                    Text(title).font(.headline)
+                    Spacer(minLength: 4)
+                    if let count { Text(count.formatted()).font(.subheadline.monospacedDigit()).foregroundStyle(.secondary) }
+                }
+                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+            }
+            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+        }
+        .foregroundStyle(.primary).padding(16).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
+        .contentShape(RoundedRectangle(cornerRadius: 20))
     }
 
     private func refreshQuotes() {

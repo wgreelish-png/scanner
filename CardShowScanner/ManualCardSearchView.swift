@@ -16,7 +16,7 @@ struct ManualCardSearchView: View {
     @State private var lastAdded: String?
     init(list: CardList, game: String, allowsGameChange: Bool) {
         self.list = list; self.allowsGameChange = allowsGameChange
-        _model = State(initialValue: ManualCardSearchModel(game: CatalogOptions.games.contains(game) ? game : "Pokémon"))
+        _model = State(initialValue: ManualCardSearchModel(game: TCGGameRegistry.scannerKey(for: game) != nil ? game : "Pokémon"))
     }
     var body: some View {
         NavigationStack {
@@ -24,7 +24,7 @@ struct ManualCardSearchView: View {
                 Section {
                     if allowsGameChange && list.cards.isEmpty {
                         Picker("Game", selection: Binding(get: { model.game }, set: { model.changeGame($0) })) {
-                            ForEach(CatalogOptions.games, id: \.self) { Text($0) }
+                            ForEach(CatalogOptions.games(including: model.game), id: \.self) { Text($0) }
                         }
                     }
                     TextField("Name, card number or set", text: Binding(get: { model.query }, set: { model.updateQuery($0) }))

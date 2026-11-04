@@ -114,7 +114,12 @@ import XCTest
         continueAfterFailure = false
         let app = launch(persistentNavigation: true)
         defer { app.terminate() }
-        openFixtureEditor(in: app)
+        openFixtureResearch(in: app)
+        tapVisible(app.buttons["cardResearch.condition.LP"], in: app)
+        openEditorFromResearch(in: app)
+        let savedCondition = app.buttons["cardEditor.condition.NM"]
+        reveal(savedCondition, in: app)
+        XCTAssertTrue(savedCondition.isSelected, "Research selections must not change the saved card")
         setFixtureDraft(price: "18", in: app)
         tapVisible(app.buttons["cardEditor.research"], in: app)
         XCTAssertTrue(app.navigationBars["Card Research"].waitForExistence(timeout: 5))
@@ -151,11 +156,14 @@ import XCTest
         XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5))
         assertDraft(price: "18", quantity: 2, in: app)
         _ = UITestInteraction.tapToolbar(app.buttons["cardEditor.cancel"], in: app)
-        XCTAssertTrue(app.navigationBars["Navigation Test List"].waitForExistence(timeout: 5))
+        assertDirectMarket(in: app, cardName: "Navigation Draft Card")
 
-        tapVisible(app.buttons["list.card.10000000-0000-0000-0000-000000000001"], in: app)
+        openEditorFromResearch(in: app)
         assertDraft(price: "25", quantity: 1, in: app)
         _ = UITestInteraction.tapToolbar(app.buttons["cardEditor.cancel"], in: app)
+        assertDirectMarket(in: app, cardName: "Navigation Draft Card")
+        goBack(from: "Card Research", in: app)
+        XCTAssertTrue(app.navigationBars["Navigation Test List"].waitForExistence(timeout: 5))
         goBack(from: "Navigation Test List", in: app)
         XCTAssertEqual(app.staticTexts["savedLists.count"].label, "1", "Tab navigation must not create lists")
         XCTAssertFalse(app.buttons["scanner.options"].exists)
@@ -174,10 +182,12 @@ import XCTest
         assertMainTabs(in: app)
         assertDraft(price: "18", quantity: 2, in: app)
         _ = UITestInteraction.tapToolbar(app.buttons["cardEditor.save"], in: app)
-        XCTAssertTrue(app.navigationBars["Navigation Test List"].waitForExistence(timeout: 5))
-        tapVisible(app.buttons["list.card.10000000-0000-0000-0000-000000000001"], in: app)
+        assertDirectMarket(in: app, cardName: "Navigation Draft Card")
+        openEditorFromResearch(in: app)
         assertDraft(price: "18", quantity: 2, in: app)
         _ = UITestInteraction.tapToolbar(app.buttons["cardEditor.cancel"], in: app)
+        assertDirectMarket(in: app, cardName: "Navigation Draft Card")
+        goBack(from: "Card Research", in: app)
         XCTAssertTrue(app.navigationBars["Navigation Test List"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["scanner.options"].exists)
     }
@@ -190,13 +200,26 @@ import XCTest
         tapVisible(app.buttons["show.inventory"], in: app)
         tapVisible(app.buttons["showInventory.importSnapshot"], in: app)
         XCTAssertTrue(app.navigationBars["Card Show Inventory"].waitForExistence(timeout: 5))
+        let updated = app.staticTexts["cardShowInventory.updated"]
+        reveal(updated, in: app)
+        let importedAt = updated.label
+        XCTAssertFalse(importedAt.isEmpty)
         tapVisible(app.buttons["cardShowInventory.open"], in: app)
+        XCTAssertTrue(app.navigationBars["Card Show"].waitForExistence(timeout: 5))
+        let source = app.staticTexts["This list mirrors your Card Show location. Use an editable copy to scan or change cards locally."]
+        reveal(source, in: app)
+        XCTAssertTrue(source.exists)
         tapVisible(app.buttons["list.card.10000000-0000-0000-0000-000000000002"], in: app)
+        assertDirectMarket(in: app, cardName: "Navigation Imported Card")
+        openResearchOptions(in: app)
+        XCTAssertFalse(app.buttons["cardResearch.editCard"].exists, "Imported cards remain read-only")
+        tapVisible(app.buttons["cardResearch.importedDetails"], in: app)
         XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5))
         assertMainTabs(in: app)
         XCTAssertFalse(app.buttons["cardEditor.save"].exists)
-        tapVisible(app.buttons["cardShowInventory.cardResearch"], in: app)
-        XCTAssertTrue(app.navigationBars["Card Research"].waitForExistence(timeout: 5))
+        assertImportedCardUnchanged(in: app)
+        _ = UITestInteraction.tapToolbar(app.navigationBars["Card Details"].buttons["Done"], in: app)
+        assertDirectMarket(in: app, cardName: "Navigation Imported Card")
         _ = UITestInteraction.tapToolbar(app.buttons["cardResearch.connection"], in: app)
         XCTAssertTrue(app.navigationBars["TCGTracking API Connection"].waitForExistence(timeout: 5))
         assertMainTabs(in: app)
@@ -213,23 +236,80 @@ import XCTest
         selectTab("Show", in: app)
         XCTAssertTrue(app.navigationBars["TCGTracking API Connection"].waitForExistence(timeout: 5))
         goBack(from: "TCGTracking API Connection", in: app)
-        goBack(from: "Card Research", in: app)
-        let quantity = app.staticTexts["cardShowInventory.cardQuantity"]
-        reveal(quantity, in: app)
-        XCTAssertTrue(["2", "Quantity, 2"].contains(quantity.label))
+        assertDirectMarket(in: app, cardName: "Navigation Imported Card")
+        openResearchOptions(in: app)
+        tapVisible(app.buttons["cardResearch.importedDetails"], in: app)
+        assertImportedCardUnchanged(in: app)
         _ = UITestInteraction.tapToolbar(app.navigationBars["Card Details"].buttons["Done"], in: app)
+        assertDirectMarket(in: app, cardName: "Navigation Imported Card")
+        goBack(from: "Card Research", in: app)
         XCTAssertTrue(app.navigationBars["Card Show"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["scanner.options"].exists)
         XCTAssertFalse(app.buttons["list.searchAndAdd"].exists)
+        reveal(source, in: app)
+        XCTAssertTrue(source.exists)
+        goBack(from: "Card Show", in: app)
+        XCTAssertTrue(app.navigationBars["Card Show Inventory"].waitForExistence(timeout: 5))
+        reveal(updated, in: app)
+        XCTAssertEqual(updated.label, importedAt, "Research must not refresh or replace the saved snapshot")
+        let quantity = app.descendants(matching: .any)["cardShowInventory.quantity"]
+        reveal(quantity, in: app)
+        XCTAssertTrue(["2", "Physical cards, 2"].contains(quantity.label))
     }
 
     private func openFixtureEditor(in app: XCUIApplication) {
+        openFixtureResearch(in: app)
+        openEditorFromResearch(in: app)
+    }
+
+    private func openFixtureResearch(in app: XCUIApplication) {
         selectTab("Lists", in: app)
         XCTAssertEqual(app.staticTexts["savedLists.count"].label, "1")
         tapVisible(app.staticTexts["Navigation Test List"], in: app)
         tapVisible(app.buttons["list.card.10000000-0000-0000-0000-000000000001"], in: app)
+        assertDirectMarket(in: app, cardName: "Navigation Draft Card")
+    }
+
+    private func openResearchOptions(in app: XCUIApplication) {
+        _ = UITestInteraction.tapToolbar(app.descendants(matching: .any)
+            .matching(identifier: "cardResearch.options").firstMatch, in: app,
+            identifier: "cardResearch.options")
+    }
+
+    private func openEditorFromResearch(in app: XCUIApplication) {
+        XCTAssertTrue(app.navigationBars["Card Research"].waitForExistence(timeout: 5))
+        openResearchOptions(in: app)
+        tapVisible(app.buttons["cardResearch.editCard"], in: app)
         XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5))
         assertMainTabs(in: app)
+    }
+
+    private func assertDirectMarket(in app: XCUIApplication, cardName: String,
+                                    file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(app.navigationBars["Card Research"].waitForExistence(timeout: 5), file: file, line: line)
+        let sections = app.segmentedControls["cardResearch.section"]
+        XCTAssertTrue(sections.waitForExistence(timeout: 5), file: file, line: line)
+        XCTAssertTrue(sections.buttons["Market"].isSelected,
+                      "Cards open directly in Market research", file: file, line: line)
+        XCTAssertEqual(app.staticTexts["cardResearch.name"].label, cardName, file: file, line: line)
+        XCTAssertFalse(app.buttons["cardEditor.save"].exists,
+                       "Viewing research must not enter the editable card draft", file: file, line: line)
+        assertMainTabs(in: app, file: file, line: line)
+    }
+
+    private func assertImportedCardUnchanged(in app: XCUIApplication,
+                                              file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5), file: file, line: line)
+        let price = app.staticTexts["cardShowInventory.cardPrice"]
+        reveal(price, in: app, file: file, line: line)
+        XCTAssertEqual(price.label, "$10.00", file: file, line: line)
+        let quantity = app.staticTexts["cardShowInventory.cardQuantity"]
+        reveal(quantity, in: app, file: file, line: line)
+        XCTAssertTrue(["2", "Quantity, 2"].contains(quantity.label), file: file, line: line)
+        XCTAssertFalse(app.buttons["cardEditor.save"].exists, file: file, line: line)
+        let source = app.staticTexts["Refresh Card Show Inventory to update this saved card. Make an editable copy of the list for local changes."]
+        reveal(source, in: app, file: file, line: line)
+        XCTAssertTrue(source.exists, file: file, line: line)
     }
 
     private func setFixtureDraft(price: String, in app: XCUIApplication) {

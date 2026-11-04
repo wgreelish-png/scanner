@@ -22,7 +22,7 @@ import Observation
     }
 
     func start(game: String) {
-        guard TCGTrackingScannerProvider.gameKeys[game] != nil else {
+        guard TCGGameRegistry.scannerKey(for: game) != nil else {
             stop()
             error = "Choose a supported game before scanning."
             DiagnosticLog.shared.record("research.scan_blocked", ["reason": "unsupported_game"])

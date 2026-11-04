@@ -8,8 +8,10 @@ struct ScannerView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dismiss) private var dismiss
     @AppStorage("steadyCardBorder") private var steadyCardBorder = true
+    @AppStorage("scannerDetailsCollapsed") private var detailsCollapsed = false
     @Query private var sessions: [ScanSession]
     @State private var game: String
     @State private var pendingGame: String?
@@ -145,7 +147,7 @@ struct ScannerView: View {
                     Image(systemName: model.paused ? "play.fill" : "pause.fill").frame(width: 44, height: 44)
                 }.accessibilityLabel(model.paused ? "Resume camera" : "Pause camera")
                 Menu {
-                    Picker("Game", selection: $game) { ForEach(CatalogOptions.games, id: \.self) { Text($0) } }
+                    Picker("Game", selection: $game) { ForEach(CatalogOptions.games(including: game), id: \.self) { Text($0) } }
                     Button("Retry Live Scanner") {
                         model.stop(); model.paused = false
                         startIfReady()
@@ -189,24 +191,47 @@ struct ScannerView: View {
     }
 
     private var cameraFooter: some View {
-        VStack(spacing: 10) {
-            if let last = model.lastAddedCard {
+        let totals = OfferCalculator.calculate(list.cards.map(\.offerLine), rates: session.rates)
+        return VStack(spacing: detailsCollapsed ? 6 : 10) {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("\(totals.quantity) cards • \(totals.market.money) market").font(.subheadline.bold())
+                        .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("scanner.totals")
+                    if totals.unpricedQuantity > 0 {
+                        Text("\(totals.unpricedQuantity) unpriced • partial total").font(.caption).foregroundStyle(.orange)
+                            .accessibilityIdentifier("scanner.unpriced")
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                Button {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { detailsCollapsed.toggle() }
+                } label: {
+                    Image(systemName: detailsCollapsed ? "chevron.up" : "chevron.down")
+                        .font(.subheadline.weight(.semibold)).frame(width: 44, height: 44)
+                }.buttonStyle(.plain)
+                    .accessibilityLabel(detailsCollapsed ? "Expand scan details" : "Minimize scan details")
+                    .accessibilityValue(detailsCollapsed ? "Collapsed" : "Expanded")
+                    .accessibilityHint("Card totals and quick actions stay visible.")
+                    .accessibilityIdentifier("scanner.detailsToggle")
+            }
+            if !detailsCollapsed, let last = model.lastAddedCard {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Last added: \(last.name)").font(.subheadline.bold()).lineLimit(2)
                         .accessibilityIdentifier("scanner.lastAdded")
                     Text("\(last.identity.printing) • \(last.identity.condition) • \(last.marketPrice?.money ?? "Price unavailable")")
                         .font(.caption)
-                    scannerQuickActions
                     Text("Another copy uses this printing, condition and market quote.")
                         .font(.caption).foregroundStyle(.white.opacity(0.8))
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
+            if model.lastAddedCard != nil { scannerQuickActions }
             if model.waitingForRemoval {
                 Text(model.paused ? "Camera paused" : "Saved. Ready for the next card.").font(.subheadline)
                     .accessibilityIdentifier("scanner.nextCardReady")
-                Text("Move the saved card out of view, then show the next. For an identical copy, use Add Another Copy.")
-                    .font(.caption).multilineTextAlignment(.center)
-            } else {
+                if !detailsCollapsed {
+                    Text("Move the saved card out of view, then show the next. For an identical copy, use Add Another Copy.")
+                        .font(.caption).multilineTextAlignment(.center)
+                }
+            } else if !detailsCollapsed {
                 Text(model.paused ? "Resume when you're ready" : "Hold a card steady inside the camera")
                     .font(.subheadline)
                 if !model.paused {
@@ -214,15 +239,21 @@ struct ScannerView: View {
                         .font(.caption).multilineTextAlignment(.center)
                 }
             }
+            footerNavigationActions
+        }.foregroundStyle(.white).tint(.white).padding(detailsCollapsed ? 12 : 16)
+            .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 18))
+    }
+
+    private var footerNavigationActions: some View {
+        let layout = detailsCollapsed && !dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(HStackLayout(alignment: .center, spacing: 12))
+            : AnyLayout(VStackLayout(spacing: 8))
+        return layout {
             if !model.paused {
-                Button("Search Manually", systemImage: "magnifyingglass") { openManualSearch() }
+                Button(detailsCollapsed ? "Search" : "Search Manually", systemImage: "magnifyingglass") { openManualSearch() }
                     .buttonStyle(.borderless).frame(minHeight: 44)
+                    .accessibilityLabel("Search Manually")
                     .accessibilityIdentifier("scanner.manualSearch")
-            }
-            let totals = OfferCalculator.calculate(list.cards.map(\.offerLine), rates: session.rates)
-            Text("\(totals.quantity) cards • \(totals.market.money) market").font(.subheadline.bold())
-            if totals.unpricedQuantity > 0 {
-                Text("\(totals.unpricedQuantity) unpriced • partial total").font(.caption).foregroundStyle(.orange)
             }
             HStack {
                 Button {
@@ -232,13 +263,15 @@ struct ScannerView: View {
                     model.stop(); showingListReview = true
                     DiagnosticLog.shared.record("navigation.review_opened", ["phase": "scanner"])
                 } label: {
-                    Label("View List", systemImage: "list.bullet").frame(minHeight: 44)
-                }.buttonStyle(.borderless).accessibilityIdentifier("scanner.viewList")
+                    Label(detailsCollapsed ? "List" : "View List", systemImage: "list.bullet").frame(minHeight: 44)
+                }.buttonStyle(.borderless).accessibilityLabel("View List").accessibilityIdentifier("scanner.viewList")
                 Spacer()
-                if session.isActive { FinishSessionButton(session: session) { model.stop(); dismiss() } }
-            }.font(.subheadline)
-        }.foregroundStyle(.white).tint(.white).padding(16)
-            .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 18))
+                if session.isActive {
+                    FinishSessionButton(session: session, title: detailsCollapsed ? "Finish" : "Finish Session") { model.stop(); dismiss() }
+                        .accessibilityIdentifier("scanner.finishSession")
+                }
+            }
+        }.font(.subheadline)
     }
 
     private var scannerQuickActions: some View {

@@ -180,7 +180,7 @@ export function parsePack(game, buf, refs) {
 // publishes the verified marker only while its idle/camera gate permits it.
 // Ordinary camera/manual loads retain their existing behavior and fallbacks.
 export async function prepareCachedPackUpdate(gameKey) {
-    if (!['tcgp:1', 'tcgp:2', 'tcgp:3'].includes(gameKey) || !nativeAvailable()) throw new Error('Automatic update unavailable');
+    if (typeof gameKey !== 'string' || !/^tcgp:[1-9][0-9]{0,5}$/.test(gameKey) || !nativeAvailable()) throw new Error('Automatic update unavailable');
     const current = await readNativeValue(`cur:${gameKey}`);
     if (current == null) return { status: 'skipped', downloadedBytes: 0, cachedShards: 0 };
     validateManifestPath(current);

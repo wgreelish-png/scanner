@@ -311,7 +311,7 @@ struct ListDeletionConfirmationView: View {
     @State private var rename = false
     @State private var name = ""
     @State private var error: String?
-    @State private var editing: InventoryCard?
+    @State private var selectedCard: InventoryCard?
     @State private var showingCatalogSearch = false
     @State private var showingInventoryImport = false
     @State private var showingOfferRates = false
@@ -433,9 +433,9 @@ struct ListDeletionConfirmationView: View {
                 Button("Save") { if !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { list.name = name; save() } }
                 Button("Cancel", role: .cancel) {}
             }
-            .navigationDestination(item: $editing) { item in
-                if list.isCardShowInventory { CardShowInventoryCardView(item: item) }
-                else { CardEditorView(item: item) }
+            .navigationDestination(item: $selectedCard) { item in
+                CardResearchView(card: item.snapshot, initialSection: .market,
+                    context: list.isCardShowInventory ? .importedCard(item) : .savedCard(item))
             }
             .sheet(isPresented: $showingOfferRates) {
                 if let session = reviewSession { SessionRatesView(session: session) }
@@ -483,7 +483,7 @@ struct ListDeletionConfirmationView: View {
         ForEach(filtered) { item in
             Button {
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                editing = item
+                selectedCard = item
             } label: {
                 HStack(alignment: .top, spacing: 12) {
                     AsyncImage(url: item.snapshot.imageURL) { phase in
@@ -531,7 +531,7 @@ struct ListDeletionConfirmationView: View {
                 if !transactionEditing { listOutcomeActions(totals: currentOfferTotals, transaction: nil) }
                 if !list.isCardShowInventory {
                     Picker("Game for continued scanning", selection: $continueGame) {
-                        ForEach(CatalogOptions.games, id: \.self) { Text($0) }
+                        ForEach(CatalogOptions.games(including: continueGame), id: \.self) { Text($0) }
                     }
                 }
             }
@@ -1043,14 +1043,14 @@ private struct CardMatchCorrectionSheet: View {
     @State private var search: ManualCardSearchModel
     init(game: String, onSelect: @escaping (CardCandidate) -> Void) {
         self.onSelect = onSelect
-        _search = State(initialValue: ManualCardSearchModel(game: CatalogOptions.games.contains(game) ? game : "Pokémon"))
+        _search = State(initialValue: ManualCardSearchModel(game: TCGGameRegistry.scannerKey(for: game) != nil ? game : "Pokémon"))
     }
     var body: some View {
         NavigationStack {
             List {
                 Section {
                     Picker("Game", selection: Binding(get: { search.game }, set: { search.changeGame($0) })) {
-                        ForEach(CatalogOptions.games, id: \.self) { Text($0) }
+                        ForEach(CatalogOptions.games(including: search.game), id: \.self) { Text($0) }
                     }.accessibilityIdentifier("cardCorrection.game")
                     TextField("Name, card number or set", text: Binding(get: { search.query }, set: { search.updateQuery($0) }))
                         .textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("cardCorrection.query")

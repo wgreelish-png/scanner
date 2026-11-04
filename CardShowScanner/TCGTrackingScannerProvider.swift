@@ -134,7 +134,8 @@ struct TCGBridgeCandidate: Decodable {
         guard imageURL == nil || (image?.scheme == "https" && image?.host != nil && image?.user == nil && image?.password == nil) else {
             throw BridgeFailure.invalidPayload
         }
-        return CardCandidate(identity: CardIdentity(game: game, productID: ref, skuID: skuID, printing: printing),
+        return CardCandidate(identity: CardIdentity(game: game, productID: ref, skuID: skuID, printing: printing,
+            language: TCGGameRegistry.defaultLanguage(for: game)),
             name: name, set: set, number: number, marketPrice: marketPrice, imageURL: image,
             confidence: confidence, printings: Array(Set(printings.map(\.label))).sorted(),
             printingQuotes: printings, requiresPrintingSelection: requiresPrintingSelection)
@@ -321,7 +322,7 @@ struct ScannerReviewReleaseQueue {
     private var reviewRelease = ScannerReviewReleaseQueue()
     private var databaseLease: UUID?
     static let pageURL = LocalScannerServer.pageURL
-    static let gameKeys = ["Pokémon": "tcgp:3", "Magic: The Gathering": "tcgp:1", "Yu-Gi-Oh!": "tcgp:2"]
+    static let gameKeys = TCGGameRegistry.gameKeys
     private var messageProxy: WeakScanMessageHandler?
     private static let deniedCameraStatus = "Camera access is off. Enable Camera in iPhone Settings → Card Show Scanner, then tap Retry Live Scanner."
 
@@ -344,10 +345,21 @@ struct ScannerReviewReleaseQueue {
     }
     func start(game: String) {
         stop()
+        guard TCGGameRegistry.scannerKey(for: game) != nil else {
+            status = "This game has no supported scanner configuration. Choose another game."
+            return
+        }
         databaseLease = ScannerDatabaseUpdater.shared.beginScannerUse()
         let stream = AsyncStream<ScanResult>.makeStream(bufferingPolicy: .bufferingNewest(1))
         results = stream.stream; continuation = stream.continuation
-        DiagnosticLog.shared.record("web.load_started", ["game": Self.gameKeys[game] == "tcgp:3" ? "pokemon" : (Self.gameKeys[game] == "tcgp:1" ? "magic" : "yugioh")])
+        let diagnosticGame: String
+        switch TCGGameRegistry.scannerKey(for: game) {
+        case "tcgp:3": diagnosticGame = "pokemon"
+        case "tcgp:1": diagnosticGame = "magic"
+        case "tcgp:2": diagnosticGame = "yugioh"
+        default: diagnosticGame = TCGGameRegistry.categoryID(for: game).map { "tcgp_\($0)" } ?? "unsupported"
+        }
+        DiagnosticLog.shared.record("web.load_started", ["game": diagnosticGame])
         self.game = game; active = true; nonce = UUID().uuidString; normalizer = TCGBridgeNormalizer()
         recoveryAttempts = 0
         status = "Starting bundled scanner…"
@@ -479,7 +491,7 @@ struct ScannerReviewReleaseQueue {
         DiagnosticLog.shared.record("web.page_loaded")
         guard let url = Bundle.main.url(forResource: "TCGTrackingBridge", withExtension: "js"),
               let source = try? String(contentsOf: url, encoding: .utf8),
-              let gameKey = Self.gameKeys[game],
+              let gameKey = TCGGameRegistry.scannerKey(for: game),
               let data = try? JSONSerialization.data(withJSONObject: ["nonce": nonce, "game": gameKey, "autoStart": true, "cacheToken": LocalScannerServer.shared.cacheToken,
                   "steadyCardBorder": UserDefaults.standard.object(forKey: "steadyCardBorder") as? Bool ?? true]),
               let config = String(data: data, encoding: .utf8) else {

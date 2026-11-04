@@ -18,7 +18,7 @@ import SwiftData
     }
     func load() { updateQuery(query) }
     func changeGame(_ game: String) {
-        guard CatalogOptions.games.contains(game), game != self.game else { return }
+        guard TCGGameRegistry.scannerKey(for: game) != nil, game != self.game else { return }
         self.game = game; results = []; updateQuery(query)
     }
     func updateQuery(_ value: String) {

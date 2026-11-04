@@ -43,6 +43,19 @@ test('database maintenance rejects unsupported configuration before importing or
   assert.equal((await h.run(config)).status, 'failed'); assert.equal(h.imports.length, 0);
 });
 
+test('maintenance accepts additional canonical TCG keys without substituting Pokemon', async () => {
+  for (const game of ['tcgp:16', 'tcgp:62', 'tcgp:68', 'tcgp:71', 'tcgp:85', 'tcgp:86', 'tcgp:89']) {
+    const h = harness();
+    assert.equal((await h.run({ ...config, game })).status, 'updated');
+    assert.deepEqual(h.games, [game]);
+  }
+  for (const game of ['tcgp:0', 'tcgp:01', 'tcgp:-3', 'tcgp:1000000', 'tcgp:68/../3', 'tcgp:68?x=3']) {
+    const h = harness();
+    assert.equal((await h.run({ ...config, game })).status, 'failed');
+    assert.equal(h.imports.length, 0);
+  }
+});
+
 test('maintenance skips uncached games and never leaks arbitrary errors or result fields', async () => {
   const skipped = harness({ result: { status: 'skipped', downloadedBytes: 0, cachedShards: 0, secret: 'discard' } });
   assert.deepEqual(JSON.parse(JSON.stringify(await skipped.run(config))), { status: 'skipped', downloadedBytes: 0, cachedShards: 0 });

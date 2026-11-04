@@ -44,7 +44,7 @@ extension ScannerDatabaseCache {
     /// maintenance only opens its local document for an existing native v2 pack.
     func hasUpdateableManifest(gameKey: String) throws -> Bool {
         try Task.checkCancellation()
-        guard ["tcgp:1", "tcgp:2", "tcgp:3"].contains(gameKey) else { return false }
+        guard TCGGameRegistry.isScannerKey(gameKey) else { return false }
         do {
             guard let marker = try read("cur:" + gameKey), marker.first == 0,
                   let path = try JSONSerialization.jsonObject(with: Data(marker.dropFirst()), options: [.fragmentsAllowed]) as? String,
@@ -74,7 +74,7 @@ extension ScannerDatabaseCache {
     @discardableResult
     func replaceManifestIfCurrent(key: String, expected: String?, data: Data) throws -> Bool {
         try Task.checkCancellation()
-        guard ["cur:tcgp:1", "cur:tcgp:2", "cur:tcgp:3"].contains(key),
+        guard key.hasPrefix("cur:"), TCGGameRegistry.isScannerKey(String(key.dropFirst(4))),
               expected.map({ !$0.hasPrefix("/") && Self.validKey("M:" + $0) }) ?? true,
               data.first == 0,
               let proposed = (try? JSONSerialization.jsonObject(with: Data(data.dropFirst()), options: [.fragmentsAllowed])) as? String,
@@ -138,7 +138,7 @@ extension ScannerDatabaseCache {
     /// Staging never removes the old pack or publishes a pointer from JavaScript.
     func commitPreparedManifest(gameKey: String, previous: String, proposed: String) throws {
         try Task.checkCancellation()
-        guard ["tcgp:1", "tcgp:2", "tcgp:3"].contains(gameKey),
+        guard TCGGameRegistry.isScannerKey(gameKey),
               Self.validKey("M:" + previous), Self.validKey("M:" + proposed),
               !previous.hasPrefix("/"), !proposed.hasPrefix("/") else { throw ScannerDatabaseUpdateFailure.invalidResult }
         guard let currentData = try read("cur:" + gameKey), currentData.first == 0,
@@ -274,7 +274,7 @@ extension ScannerDatabaseCache {
         reconsider()
     }
     private static func gameKey(_ game: String) -> String? {
-        ["Pokémon": "tcgp:3", "Magic: The Gathering": "tcgp:1", "Yu-Gi-Oh!": "tcgp:2"][game]
+        TCGGameRegistry.scannerKey(for: game)
     }
     private static func successKey(_ gameKey: String) -> String { "scanner.databaseUpdate.lastSuccess." + gameKey }
     private static func attemptKey(_ gameKey: String) -> String { "scanner.databaseUpdate.lastAttempt." + gameKey }

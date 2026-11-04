@@ -23,6 +23,7 @@ import XCTest
         let inventoryID = String(acquired.identifier.dropFirst("showInventory.item.".count))
         XCTAssertNotNil(UUID(uuidString: inventoryID))
         tap(acquired, app: app)
+        openInventoryDetails(app: app)
         assertRevealedContains("$7.00", identifier: "inventory.cost", app: app)
         let source = app.buttons["inventory.acquisitionReceipt"]
         reveal(source, app: app)
@@ -30,6 +31,7 @@ import XCTest
         tap(source, app: app)
         assertRevealedContains("$7.00", identifier: "showTransaction.receipt.paid", app: app)
         _ = UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        returnToResearch(app: app)
 
         tap(app.buttons["quickSell.sell"], app: app)
         assertRevealedContains("1", identifier: "showTransaction.selectedQuantity", app: app)
@@ -40,7 +42,7 @@ import XCTest
         assertRevealedContains("$7.00", identifier: "showTransaction.preview.cost", app: app)
         assertRevealedContains("$3.00", identifier: "showTransaction.preview.profit", app: app)
         tap(app.buttons["showTransaction.record"], app: app)
-        XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5))
+        assertMarketResearch(app: app)
         XCTAssertFalse(app.buttons["quickSell.sell"].isEnabled)
         returnToShow(app: app)
         assertBalances(available: "$299.50", saved: "$3.50", app: app)
@@ -70,6 +72,7 @@ import XCTest
 
         tap(app.buttons["show.inventory"], app: app)
         tap(app.buttons["showInventory.item." + inventoryID], app: app)
+        openInventoryDetails(app: app)
         assertRevealedContains("$7.00", identifier: "inventory.cost", app: app)
         tap(app.buttons["inventory.acquisitionReceipt"], app: app)
         undoTransaction(app: app)
@@ -87,6 +90,12 @@ import XCTest
         reveal(row, app: app)
         let inventoryID = String(row.identifier.dropFirst("showInventory.item.".count))
         tap(row, app: app)
+        assertMarketResearch(app: app)
+        tap(app.buttons["quickSell.sell"], app: app)
+        assertRevealedContains("1", identifier: "showTransaction.selectedQuantity", app: app)
+        _ = UITestInteraction.tapToolbar(app.buttons["Cancel"], in: app)
+        assertMarketResearch(app: app)
+        openInventoryDetails(app: app)
         assertRevealedContains("Cost unknown", identifier: "inventory.cost", app: app)
         tap(app.buttons["inventory.editCost"], app: app)
         enter("0", field: app.textFields["inventory.costAmount"], app: app)
@@ -99,10 +108,12 @@ import XCTest
         XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 10))
         tap(app.buttons["show.inventory"], app: app)
         tap(app.buttons["showInventory.item." + inventoryID], app: app)
+        openInventoryDetails(app: app)
         assertRevealedContains("$0.00", identifier: "inventory.cost", app: app)
         tap(app.buttons["inventory.editCost"], app: app)
         tap(app.buttons["inventory.clearCost"], app: app)
         assertRevealedContains("Cost unknown", identifier: "inventory.cost", app: app)
+        returnToResearch(app: app)
         tap(app.buttons["quickSell.sell"], app: app)
         assertRevealedContains("1", identifier: "showTransaction.selectedQuantity", app: app)
         reveal(app.buttons["showTransaction.editSaleAmount"], app: app)
@@ -114,8 +125,9 @@ import XCTest
         assertRevealedContains("Unknown", identifier: "showTransaction.preview.cost", app: app)
         assertRevealedContains("Unknown", identifier: "showTransaction.preview.profit", app: app)
         tap(app.buttons["showTransaction.record"], app: app)
-        XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5))
+        assertMarketResearch(app: app)
         XCTAssertTrue(app.buttons["quickSell.sell"].isEnabled, "One of the two legacy copies remains available")
+        openInventoryDetails(app: app)
         assertRevealedContains("Cost unknown", identifier: "inventory.cost", app: app)
         returnToShow(app: app)
         assertBalances(available: "$321.75", saved: "$12.25", app: app)
@@ -139,6 +151,7 @@ import XCTest
         assertStock("3", app: app)
         tap(app.buttons["show.inventory"], app: app)
         tap(app.buttons["showInventory.item." + inventoryID], app: app)
+        openInventoryDetails(app: app)
         assertRevealedContains("Cost unknown", identifier: "inventory.cost", app: app)
     }
 
@@ -467,6 +480,26 @@ import XCTest
     }
     private func inventory(_ name: String, app: XCUIApplication) -> XCUIElement {
         app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "showInventory.item.", name)).firstMatch
+    }
+    private func assertMarketResearch(app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(app.navigationBars["Card Research"].waitForExistence(timeout: 5), file: file, line: line)
+        let market = app.segmentedControls["cardResearch.section"].buttons["Market"]
+        XCTAssertTrue(market.waitForExistence(timeout: 5), file: file, line: line)
+        XCTAssertTrue(market.isSelected, "Card taps open Market research directly", file: file, line: line)
+        XCTAssertFalse(app.buttons["scanner.close"].exists, file: file, line: line)
+    }
+    private func openInventoryDetails(app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        assertMarketResearch(app: app, file: file, line: line)
+        _ = UITestInteraction.tapToolbar(app.descendants(matching: .any).matching(identifier: "cardResearch.options").firstMatch,
+                                         in: app, identifier: "cardResearch.options", file: file, line: line)
+        tap(app.buttons["cardResearch.inventoryDetails"], app: app, file: file, line: line)
+        XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5), file: file, line: line)
+    }
+    private func returnToResearch(app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5), file: file, line: line)
+        _ = UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app,
+                                         identifier: "navigation.back", file: file, line: line)
+        assertMarketResearch(app: app, file: file, line: line)
     }
     private func reveal(_ element: XCUIElement, app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
         _ = UITestInteraction.reveal(element, in: app, file: file, line: line)

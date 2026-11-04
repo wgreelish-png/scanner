@@ -8,9 +8,11 @@ import XCTest
         if let path = ProcessInfo.processInfo.environment["DYLD_FALLBACK_LIBRARY_PATH"] {
             app.launchEnvironment["DYLD_FALLBACK_LIBRARY_PATH"] = path
         }
-        // Launch-domain defaults acknowledge the optional connection step only.
+        // Launch-domain defaults acknowledge the optional connection step and
+        // isolate the footer preference from earlier test runs.
         // Mock recognition is still selected explicitly through the normal UI.
-        app.launchArguments = ["-tcgTrackingConnectionIntroduced", "YES", "-defaultGame", "Pokémon"]
+        app.launchArguments = ["-tcgTrackingConnectionIntroduced", "YES", "-defaultGame", "Pokémon",
+                               "-scannerDetailsCollapsed", "NO"]
         addUIInterruptionMonitor(withDescription: "Camera permission") { alert in
             let text = ([alert.label] + alert.staticTexts.allElementsBoundByIndex.map(\.label)).joined(separator: " ").lowercased()
             guard text.contains("camera") else { return false }
@@ -32,6 +34,21 @@ import XCTest
         if connectionReturn.waitForExistence(timeout: 3) {
             tapFixedControl(connectionReturn, in: app)
         }
+        // Exercise the live footer before starting Mock's six-second timer.
+        let totals = app.staticTexts["scanner.totals"]
+        let manualSearch = app.buttons["scanner.manualSearch"]
+        let viewList = app.buttons["scanner.viewList"]
+        let details = app.buttons["scanner.detailsToggle"]
+        assertOverlayVisible(totals, in: app)
+        assertOverlayVisible(manualSearch, in: app)
+        XCTAssertTrue(waitForValue("Expanded", of: details))
+        tapFixedControl(details, in: app)
+        XCTAssertTrue(waitForValue("Collapsed", of: details))
+        assertOverlayVisible(totals, in: app)
+        assertOverlayVisible(manualSearch, in: app)
+        assertOverlayVisible(viewList, in: app)
+        tapFixedControl(details, in: app)
+        XCTAssertTrue(waitForValue("Expanded", of: details))
         let options = app.buttons["scanner.options"]
         tapCameraOptions(options, in: app)
         tapMenuItem("Developer Testing", in: app)
@@ -81,6 +98,16 @@ import XCTest
         let export = app.buttons["list.exportCSV"], share = app.buttons["list.shareCSV"]
         XCTAssertTrue(export.waitForExistence(timeout: 5)); XCTAssertTrue(export.isHittable); XCTAssertTrue(export.isEnabled)
         XCTAssertTrue(share.waitForExistence(timeout: 5)); XCTAssertTrue(share.isHittable); XCTAssertTrue(share.isEnabled)
+    }
+
+    private func assertOverlayVisible(_ element: XCUIElement, in app: XCUIApplication,
+                                      file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(element.waitForExistence(timeout: 10), file: file, line: line)
+        // Live WebKit video can report false AX hit-testing for native overlays.
+        // Check actual bounds, as the fixed overlay interaction helpers do.
+        let bounds = element.frame
+        XCTAssertTrue(bounds.width > 0 && bounds.height > 0 && app.windows.firstMatch.frame.contains(bounds),
+                      "Scanner control must remain on screen: \(element.identifier)", file: file, line: line)
     }
 
     private func menuItem(_ title: String, in app: XCUIApplication) -> XCUIElement {
