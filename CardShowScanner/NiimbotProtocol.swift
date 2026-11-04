@@ -112,6 +112,14 @@ enum NiimbotPaperMode: String, CaseIterable, Identifiable, Codable, Sendable {
     var commandValue: UInt8 { self == .gap ? 1 : 5 }
 }
 
+enum NiimbotIdentificationStep: String, Sendable {
+    case connect = "connect_command"
+    case model = "model"
+    case protocolVersion = "protocol_version"
+    case head = "print_head"
+    case firmware = "firmware"
+}
+
 struct NiimbotPrintStatus: Equatable, Sendable {
     let completedPages: Int
     let printProgress: Int
@@ -392,32 +400,49 @@ enum NiimbotProtocol {
         try request.validateResponse(try await exchange(request))
     }
 
-    static func identify(exchange: Exchange) async throws -> NiimbotD110Identity {
+    static func identify(onStep: @MainActor (NiimbotIdentificationStep) -> Void = { _ in },
+                         exchange: Exchange) async throws -> NiimbotD110Identity {
+        try Task.checkCancellation()
+        onStep(.connect)
         guard let connect = try await exchange(NiimbotRequest(0xc1, response: 0xc2)) else {
             throw LabelPrinterIssue.unsupportedResponse
         }
         // Validate the connect result before sending further commands.
         guard connect.command == 0xc2, connect.data.count == 1,
               [UInt8(1), 2, 3].contains(connect.data.first ?? 0) else { throw LabelPrinterIssue.unsupportedPrinter }
-        var status: NiimbotPacket?
-        if connect.data.first == 3 { status = try await exchange(NiimbotRequest(0xa5, response: 0xb5)) }
-        let version = try NiimbotProtocol.negotiatedVersion(connect: connect, status: status)
+        // The captured NIIMBOT D110-M exchange asks for model immediately after
+        // Connect, then negotiates the newer protocol before requesting head info.
+        try Task.checkCancellation()
+        onStep(.model)
         guard let modelPacket = try await exchange(NiimbotRequest(0x40, [8], response: 0x48)) else {
             throw LabelPrinterIssue.unsupportedResponse
         }
         let model = try NiimbotProtocol.modelID(modelPacket)
+        var status: NiimbotPacket?
+        if connect.data.first == 3 {
+            try Task.checkCancellation()
+            onStep(.protocolVersion)
+            status = try await exchange(NiimbotRequest(0xa5, response: 0xb5))
+        }
+        let version = try NiimbotProtocol.negotiatedVersion(connect: connect, status: status)
         var headInfo: NiimbotPacket?
         if model == 2305 || model == 2320 {
+            try Task.checkCancellation()
+            onStep(.head)
             headInfo = try await exchange(NiimbotRequest(0xdc, [3], response: 0xdf, responseAlternatives: [0xde]))
         }
+        try Task.checkCancellation()
         try NiimbotProtocol.validateModel(model, headInfo: headInfo)
         if model == 2320, let headInfo {
             return NiimbotD110Identity(modelID: model, protocolVersion: version,
                 firmwareBytes: Data(headInfo.data.dropFirst(2).prefix(2)))
         }
+        try Task.checkCancellation()
+        onStep(.firmware)
         guard let firmware = try await exchange(NiimbotRequest(0x40, [9], response: 0x49)),
               firmware.command == 0x49, firmware.data.count == 2,
               firmware.data.contains(where: { $0 != 0 }) else { throw LabelPrinterIssue.unsupportedPrinter }
+        try Task.checkCancellation()
         return NiimbotD110Identity(modelID: model, protocolVersion: version, firmwareBytes: firmware.data)
     }
 

@@ -110,6 +110,70 @@ import UniformTypeIdentifiers
         }
     }
 
+    func testPrinterHandshakeExportKeepsOnlyBoundedTransportMetadataWithoutDeviceOrPacketContents() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = "PrinterHandshakeDiagnostics." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let log = DiagnosticLog(directory: directory, defaults: defaults)
+        let expected: [[String: String]] = [
+            ["phase": "handshake", "stage": "connect", "request_code": "193", "response_code": "194",
+             "last_response_code": "194", "sent_bytes": "9", "notification_bytes": "8", "notification_count": "1",
+             "packet_count": "1", "write_mode": "acknowledged", "mean_luma": "71.500"],
+            ["phase": "handshake", "stage": "printer_info", "request_code": "0", "response_code": "255",
+             "last_response_code": "0", "sent_bytes": "0", "notification_bytes": "1000000", "notification_count": "0",
+             "packet_count": "1000000", "write_mode": "unacknowledged"]
+        ]
+        for fields in expected {
+            log.record("label.handshake_completed", fields.merging([
+                "device_name": "D110_M-PRIVATE_DEVICE", "peripheral_id": "PRIVATE_PERIPHERAL",
+                "serial": "PRIVATE_SERIAL", "packet_hex": "PRIVATE_PACKET_5555", "raw_data": "PRIVATE_RAW_BYTES",
+                "characteristic_uuid": "PRIVATE_CHARACTERISTIC", "url": "https://private.example"
+            ]) { _, value in value })
+        }
+        let file = try log.export()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let text = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertFalse(text.contains("PRIVATE_"))
+        XCTAssertFalse(text.contains("private.example"))
+        let rows = try diagnosticRows(text).filter { $0["event"] as? String == "label.handshake_completed" }
+        XCTAssertEqual(rows.compactMap { $0["fields"] as? [String: String] }, expected,
+                       "Native progress remains diagnosable without logging packet payloads or printer identity")
+    }
+
+    func testPrinterHandshakeExportDropsNondecimalOutOfRangeAndFreeFormTransportValues() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = "RejectedPrinterHandshakeDiagnostics." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let log = DiagnosticLog(directory: directory, defaults: defaults)
+        let numericKeys = ["request_code", "response_code", "last_response_code", "sent_bytes", "notification_bytes", "notification_count", "packet_count"]
+        let invalidValues = ["D110_M-PRIVATE_DEVICE", "PRIVATE_PACKET_5555", "-1", "1.5", "1e3", "0xff",
+                             "1000001", "18446744073709551616", "01", "+1", " 1", "1\n", ""]
+        for value in invalidValues {
+            var fields = Dictionary(uniqueKeysWithValues: numericKeys.map { ($0, value) })
+            fields["write_mode"] = "acknowledged-PRIVATE_DEVICE"
+            fields["phase"] = "handshake"
+            fields["mean_luma"] = "PRIVATE_LIGHTING"
+            log.record("label.handshake_failed", fields)
+        }
+        log.record("label.handshake_failed", ["phase": "handshake", "request_code": "256", "response_code": "999",
+            "last_response_code": "256", "sent_bytes": "1000001", "notification_bytes": "1000001",
+            "notification_count": "1000001", "packet_count": "1000001", "write_mode": "withResponse"])
+        let file = try log.exportForCopy()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let text = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertFalse(text.contains("PRIVATE_"))
+        let rows = try diagnosticRows(text).filter { $0["event"] as? String == "label.handshake_failed" }
+        XCTAssertEqual(rows.count, invalidValues.count + 1)
+        for row in rows {
+            XCTAssertEqual(row["fields"] as? [String: String], ["phase": "handshake"],
+                           "Both scan and printer validators must run at the final storage boundary")
+        }
+    }
+
     func testBetaIndexLimitDiagnosticsPersistOnlyBoundedCounts() throws {
         let failure = BetaAPIIndexValidationFailure(stage: .categories, reason: .tooManyEntries,
             observedCount: 257, entryLimit: 256)

@@ -43,8 +43,11 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     @ObservationIgnored private var printCancellation: LabelPrinterIssue?
     @ObservationIgnored private var identity: NiimbotD110Identity?
     @ObservationIgnored private var paperTask: Task<Void, Never>?
+    @ObservationIgnored private var connectionStage: ConnectionStage?
+    @ObservationIgnored private var identificationStep: NiimbotIdentificationStep?
     private static let paperModeDefaultsKey = "niimbotPaperMode"
 
+    private enum ConnectionStage: String { case connecting, services, characteristics, notifications, identification }
     private enum DiagnosticPhase: String {
         case search, connect, identified, cancel, complete, uncertain
         case connectFailed = "connect_failed"
@@ -52,10 +55,19 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         case paperRead = "paper_read"
         case paperApplied = "paper_applied"
         case paperFailed = "paper_failed"
+        case linkReady = "link_ready"
+        case servicesReady = "services_ready"
+        case channelReady = "channel_ready"
+        case notificationsReady = "notifications_ready"
+        case requestStarted = "request_started"
+        case requestSent = "request_sent"
+        case writeBlocked = "write_blocked"
+        case replyReceived = "reply_received"
     }
 
     private final class Transfer {
         let id: UUID
+        let command: UInt8
         let bytes: Data
         let expectedResponse: UInt8?
         let responseAlternatives: Set<UInt8>
@@ -65,10 +77,17 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         var awaitingWriteResponse = false
         var response: NiimbotPacket?
         var timeout: Task<Void, Never>?
+        var reportedSent = false
+        var reportedWriteBlocked = false
+        var notificationCount = 0
+        var notificationBytes = 0
+        var packetCount = 0
+        var lastResponseCode: UInt8?
 
-        init(id: UUID, bytes: Data, expectedResponse: UInt8?, responseAlternatives: Set<UInt8>, beginsPrint: Bool,
+        init(id: UUID, command: UInt8, bytes: Data, expectedResponse: UInt8?, responseAlternatives: Set<UInt8>, beginsPrint: Bool,
              continuation: CheckedContinuation<NiimbotPacket?, Error>) {
             self.id = id
+            self.command = command
             self.bytes = bytes
             self.expectedResponse = expectedResponse
             self.responseAlternatives = responseAlternatives
@@ -154,6 +173,8 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         endConnection(issue: .cancelled)
         stopScanning()
         error = nil
+        connectionStage = .connecting
+        identificationStep = nil
         status = "Connecting to printer…"
         peripheral = selected
         selected.delegate = self
@@ -391,6 +412,8 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     private func endConnection(issue: LabelPrinterIssue) {
         if isPrinting, printCancellation == nil { printCancellation = issue }
         connectionGeneration = UUID()
+        connectionStage = nil
+        identificationStep = nil
         connectionTimeout?.cancel()
         connectionTimeout = nil
         handshakeTask?.cancel()
@@ -413,9 +436,14 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     }
 
     private func connectionFailed(_ issue: LabelPrinterIssue) {
-        endConnection(issue: issue)
-        present(issue)
+        let duringSetup = !isConnected && !isPrinting
+        // Preserve the pending command and progress before teardown clears it.
         diagnostic(.connectFailed, issue: issue)
+        endConnection(issue: issue)
+        if duringSetup && issue == .responseTimeout {
+            let message = "Printer setup timed out. Turn the printer off and on, then search and connect again."
+            error = message; status = message
+        } else { present(issue) }
     }
 
     private func present(_ issue: LabelPrinterIssue) {
@@ -429,6 +457,19 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         // notification payloads, raster bytes, or label text.
         var fields = ["phase": phase.rawValue]
         if let issue { fields["reason"] = issue.rawValue }
+        if !isConnected, let connectionStage {
+            fields["stage"] = identificationStep?.rawValue ?? connectionStage.rawValue
+            fields["write_mode"] = writeType == .withResponse ? "acknowledged" : "unacknowledged"
+            if let transaction = pending {
+                fields["request_code"] = String(transaction.command)
+                if let response = transaction.expectedResponse { fields["response_code"] = String(response) }
+                if let response = transaction.lastResponseCode { fields["last_response_code"] = String(response) }
+                fields["sent_bytes"] = String(transaction.offset)
+                fields["notification_count"] = String(transaction.notificationCount)
+                fields["notification_bytes"] = String(transaction.notificationBytes)
+                fields["packet_count"] = String(transaction.packetCount)
+            }
+        }
         if phase == .identified, let identity {
             fields["code"] = String(identity.modelID)
             fields["stage"] = "protocol_" + String(identity.protocolVersion)
@@ -451,10 +492,11 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 guard !Task.isCancelled else { continuation.resume(throwing: LabelPrinterIssue.cancelled); return }
-                let transaction = Transfer(id: id, bytes: bytes, expectedResponse: response,
+                let transaction = Transfer(id: id, command: command, bytes: bytes, expectedResponse: response,
                                            responseAlternatives: responseAlternatives, beginsPrint: beginsPrint,
                                            continuation: continuation)
                 pending = transaction
+                if !isConnected { diagnostic(.requestStarted) }
                 transaction.timeout = Task { [weak self] in
                     do { try await Task.sleep(for: timeout) } catch { return }
                     guard let self, self.pending?.id == id else { return }
@@ -485,7 +527,13 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         let chunkLength = maximumLength
 
         while transaction.offset < transaction.bytes.count {
-            if writeType == .withoutResponse && !peripheral.canSendWriteWithoutResponse { return }
+            if writeType == .withoutResponse && !peripheral.canSendWriteWithoutResponse {
+                if !isConnected && !transaction.reportedWriteBlocked {
+                    transaction.reportedWriteBlocked = true
+                    diagnostic(.writeBlocked)
+                }
+                return
+            }
             let end = min(transaction.offset + chunkLength, transaction.bytes.count)
             let chunk = transaction.bytes.subdata(in: transaction.offset..<end)
             transaction.offset = end
@@ -493,6 +541,10 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             if writeType == .withResponse { transaction.awaitingWriteResponse = true }
             peripheral.writeValue(chunk, for: writeCharacteristic, type: writeType)
             if writeType == .withResponse { return }
+        }
+        if !isConnected && !transaction.reportedSent {
+            transaction.reportedSent = true
+            diagnostic(.requestSent)
         }
         finishTransferIfReady()
     }
@@ -514,7 +566,15 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     }
 
     private func receive(_ bytes: Data) {
+        if !isConnected, let transaction = pending {
+            transaction.notificationCount = min(1_000_000, transaction.notificationCount + 1)
+            transaction.notificationBytes = min(1_000_000, transaction.notificationBytes + bytes.count)
+        }
         for packet in parser.append(bytes) {
+            if !isConnected, let transaction = pending {
+                transaction.packetCount = min(1_000_000, transaction.packetCount + 1)
+                transaction.lastResponseCode = packet.command
+            }
             if packet.command == 0xdb {
                 connectionFailed(NiimbotProtocol.issueForPrintError(packet))
                 return
@@ -528,6 +588,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                   transaction.expectedResponse == packet.command || transaction.responseAlternatives.contains(packet.command),
                   transaction.response == nil else { continue }
             transaction.response = packet
+            if !isConnected { diagnostic(.replyReceived) }
             finishTransferIfReady()
         }
     }
@@ -535,11 +596,15 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     private func beginHandshake() {
         guard handshakeTask == nil else { return }
         let generation = connectionGeneration
+        connectionStage = .identification
         status = "Identifying printer…"
         handshakeTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let identity = try await NiimbotD110Session.identify { [weak self] request in
+                let identity = try await NiimbotD110Session.identify(onStep: { [weak self] step in
+                    guard let self, self.connectionGeneration == generation else { return }
+                    self.identificationStep = step
+                }) { [weak self] request in
                     guard let self, self.connectionGeneration == generation else { throw LabelPrinterIssue.connectionLost }
                     return try await self.exchange(request)
                 }
@@ -580,6 +645,14 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             try await Task.sleep(for: .milliseconds(300))
         }
     }
+
+    /// CoreBluetooth callbacks need not reuse the discovery wrapper object.
+    /// The current peripheral and selected service/channel identify the link.
+    private func matchesChannel(_ characteristic: CBCharacteristic, _ selected: CBCharacteristic?) -> Bool {
+        guard let selected, let expectedService = selected.service?.uuid,
+              let actualService = characteristic.service?.uuid else { return false }
+        return characteristic.uuid == selected.uuid && actualService == expectedService
+    }
 }
 
 extension NiimbotPrinter: @preconcurrency CBCentralManagerDelegate {
@@ -603,6 +676,8 @@ extension NiimbotPrinter: @preconcurrency CBCentralManagerDelegate {
             central.cancelPeripheralConnection(peripheral)
             return
         }
+        connectionStage = .services
+        diagnostic(.linkReady)
         status = "Checking printer services…"
         peripheral.discoverServices([CBUUID(string: NiimbotProtocol.serviceUUID)])
     }
@@ -624,6 +699,8 @@ extension NiimbotPrinter: @preconcurrency CBPeripheralDelegate {
         guard error == nil, let service = peripheral.services?.first(where: {
             $0.uuid == CBUUID(string: NiimbotProtocol.serviceUUID)
         }) else { connectionFailed(.unsupportedPrinter); return }
+        connectionStage = .characteristics
+        diagnostic(.servicesReady)
         // The reference discovers the UART channel by properties. It does not
         // assume fixed FFE1/FFE2 characteristic UUIDs, or two separate channels.
         peripheral.discoverCharacteristics(nil, for: service)
@@ -640,25 +717,30 @@ extension NiimbotPrinter: @preconcurrency CBPeripheralDelegate {
         }
         writeCharacteristic = channel
         notifyCharacteristic = channel
-        writeType = .withoutResponse
+        // Use ATT acknowledgement when this UART channel explicitly supports it.
+        // Firmware with only writeWithoutResponse retains the reference path.
+        writeType = channel.properties.contains(.write) ? .withResponse : .withoutResponse
+        connectionStage = .notifications
+        diagnostic(.channelReady)
         peripheral.setNotifyValue(true, for: channel)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic,
                     error: Error?) {
-        guard peripheral === self.peripheral, characteristic === notifyCharacteristic else { return }
+        guard peripheral === self.peripheral, matchesChannel(characteristic, notifyCharacteristic) else { return }
         guard error == nil, characteristic.isNotifying else { connectionFailed(.unsupportedPrinter); return }
+        diagnostic(.notificationsReady)
         beginHandshake()
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        guard peripheral === self.peripheral, characteristic === notifyCharacteristic else { return }
+        guard peripheral === self.peripheral, matchesChannel(characteristic, notifyCharacteristic) else { return }
         guard error == nil, let value = characteristic.value else { connectionFailed(.connectionLost); return }
         receive(value)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
-        guard peripheral === self.peripheral, characteristic === writeCharacteristic,
+        guard peripheral === self.peripheral, matchesChannel(characteristic, writeCharacteristic),
               let transaction = pending, transaction.awaitingWriteResponse else { return }
         guard error == nil else { connectionFailed(.writeFailed); return }
         transaction.awaitingWriteResponse = false
