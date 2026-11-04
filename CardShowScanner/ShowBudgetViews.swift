@@ -35,6 +35,13 @@ import SwiftUI
                             Text(budgetMoney(totals.savedCents)).font(.headline).foregroundStyle(.indigo)
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    HStack {
+                        Text("Cash on hand").foregroundStyle(.secondary)
+                        Spacer()
+                        Text(budgetMoney(totals.cashOnHandCents)).fontWeight(.semibold).monospacedDigit()
+                            .foregroundStyle(totals.cashOnHandCents < 0 ? Color.orange : Color.primary)
+                            .accessibilityIdentifier("budget.summaryCashOnHand")
+                    }.font(.subheadline)
                     Text(show.name).font(.caption).foregroundStyle(.secondary)
                     Text(show.scheduleStatus(on: store.currentDate, calendar: store.calendar).title)
                         .font(.caption.weight(.medium)).foregroundStyle(.secondary)
@@ -43,7 +50,7 @@ import SwiftUI
                         Text(dates).font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("budget.summaryDates")
                     }
                 } else {
-                    Text(store.isLoaded ? "Set buying funds and keep 35% of gross sales for you." : "Your budget needs attention. Open it to retry loading.")
+                    Text(store.isLoaded ? "Enter the cash you bring to the show and keep 35% of gross sales for you." : "Your budget needs attention. Open it to retry loading.")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
             }
@@ -81,6 +88,8 @@ import SwiftUI
                     if let show = store.visibleShows.first(where: { $0.id == id }) {
                         BudgetSetupForm(store: store, editing: show) { _ in sheet = nil }
                     } else { ContentUnavailableView("Show unavailable", systemImage: "tray") }
+                case .startingCash(let id):
+                    StartingShowCashForm(store: store, showID: id) { sheet = nil }
                 case .record(let id, let kind):
                     BudgetEntryForm(store: store, showID: id, initialKind: kind) { sheet = nil }
                 }
@@ -103,6 +112,7 @@ import SwiftUI
                 if !store.visibleShows.isEmpty { showSelector }
                 if let show = store.activeShow, let totals = try? show.totals() {
                     balanceSection(show, totals: totals)
+                    startingCashSection(show, totals: totals)
                     dateSection(show)
                     recordSection(show)
                     totalsSection(totals)
@@ -112,7 +122,7 @@ import SwiftUI
                         ContentUnavailableView {
                             Label("Your show buying budget", systemImage: "wallet.bifold")
                         } description: {
-                            Text("Start with your buying funds. Sales put 65% toward buying and 35% aside for you. Cash received in trades stays available for buying.")
+                            Text("Enter the cash you bring to the show. It also sets your initial buying funds. Sales put 65% toward buying and 35% aside for you; cash received in trades stays available for buying.")
                         } actions: {
                             Button("Set Up Show Budget") { sheet = .newShow }
                                 .buttonStyle(.borderedProminent).accessibilityIdentifier("budget.setup")
@@ -188,6 +198,19 @@ import SwiftUI
         } header: { Text(show.name) }
     }
 
+    private func startingCashSection(_ show: ShowBudgetEvent, totals: ShowBudgetTotals) -> some View {
+        Section("Cash on hand") {
+            LabeledContent("Starting cash on hand", value: budgetMoney(totals.startingCents))
+                .accessibilityIdentifier("budget.startingCash")
+            LabeledContent("Cash on hand", value: budgetMoney(totals.cashOnHandCents))
+                .accessibilityIdentifier("budget.cashOnHand")
+            Button("Edit Starting Cash", systemImage: "pencil") { sheet = .startingCash(show.id) }
+                .disabled(store.isSaving).accessibilityIdentifier("budget.editStartingCash")
+            Text("Cash on hand includes funds saved for you. Starting cash also sets your initial buying balance.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
     private func dateSection(_ show: ShowBudgetEvent) -> some View {
         Section("Show dates") {
             LabeledContent("Status", value: show.scheduleStatus(on: store.currentDate, calendar: store.calendar).title)
@@ -232,14 +255,12 @@ import SwiftUI
 
     private func totalsSection(_ totals: ShowBudgetTotals) -> some View {
         Section("Cash breakdown") {
-            LabeledContent("Starting funds", value: budgetMoney(totals.startingCents))
             LabeledContent("Gross cash received", value: budgetMoney(totals.grossReceivedCents))
                 .accessibilityIdentifier("budget.grossReceived")
             LabeledContent("Allocated for buying", value: budgetMoney(totals.reinvestedCents))
             LabeledContent("Cash spent", value: budgetMoney(totals.paidCents))
             LabeledContent("Fees", value: budgetMoney(totals.feesCents))
-            LabeledContent("Cash remaining, including savings", value: budgetMoney(totals.cashOnHandCents))
-            Text("Available to buy = starting funds + buying allocation − cash spent − fees. Agreed card values and make-even concessions are separate from cash.")
+            Text("Available to buy = starting cash + buying allocation − cash spent − fees. Agreed card values and make-even concessions are separate from cash.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -284,11 +305,12 @@ import SwiftUI
 }
 
 private enum BudgetDashboardSheet: Identifiable {
-    case newShow, edit(UUID), record(UUID, ShowBudgetEntryKind)
+    case newShow, edit(UUID), startingCash(UUID), record(UUID, ShowBudgetEntryKind)
     var id: String {
         switch self {
         case .newShow: return "new"
         case .edit(let id): return "edit." + id.uuidString
+        case .startingCash(let id): return "startingCash." + id.uuidString
         case .record(let id, let kind): return "record." + id.uuidString + kind.rawValue
         }
     }
@@ -382,8 +404,16 @@ private enum BudgetDashboardSheet: Identifiable {
                 TextField("Show name", text: $name).focused($focused, equals: .name)
                     .submitLabel(.done).onSubmit { focused = nil }.accessibilityIdentifier("budget.name")
                     .onChange(of: name) { _, value in if value.count > 120 { name = String(value.prefix(120)) } }
-                TextField("Starting buying funds, e.g. 300", text: $starting)
-                    .keyboardType(.decimalPad).focused($focused, equals: .starting).accessibilityIdentifier("budget.starting")
+            }
+            Section("Starting cash on hand") {
+                HStack {
+                    Text("$").foregroundStyle(.secondary)
+                    TextField("0.00", text: $starting)
+                        .keyboardType(.decimalPad).focused($focused, equals: .starting).accessibilityIdentifier("budget.starting")
+                        .accessibilityLabel("Starting cash on hand")
+                }
+                Text("Enter the cash you bring to this show. This also sets your initial buying funds; the sale split applies only to new sale proceeds.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Show dates") {
                 Toggle("Set show dates", isOn: $hasDates).accessibilityIdentifier("budget.hasDates")
@@ -406,7 +436,7 @@ private enum BudgetDashboardSheet: Identifiable {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if editing != nil {
-                    Text("Changing starting funds recalculates the available balance. Recorded transactions and their allocations are kept.")
+                    Text("Changing starting cash corrects the opening balance. Recorded transactions and their allocations are kept.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -444,6 +474,75 @@ private enum BudgetDashboardSheet: Identifiable {
                 id = editing.id
             } else { id = try store.create(name: name, startingCents: cents, startDate: start, endDate: end) }
             saved = true; onSaved(id)
+        } catch { self.error = budgetError(error) }
+    }
+}
+
+/// Corrects the show's opening cash without replacing its receipts or schedule.
+@MainActor private struct StartingShowCashForm: View {
+    let store: ShowBudgetStore
+    let showID: UUID
+    let onSaved: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var starting: String
+    @State private var error: String?
+    @State private var saving = false
+    @State private var saved = false
+    @FocusState private var focused: Bool
+
+    init(store: ShowBudgetStore, showID: UUID, onSaved: @escaping () -> Void) {
+        self.store = store; self.showID = showID; self.onSaved = onSaved
+        let show = store.visibleShows.first { $0.id == showID }
+        _starting = State(initialValue: show.map { CSVExportService.number(ShowBudgetMoney.decimal($0.startingCents)) } ?? "")
+    }
+
+    private var show: ShowBudgetEvent? { store.visibleShows.first { $0.id == showID } }
+
+    var body: some View {
+        Form {
+            if let show {
+                Section("Starting cash on hand") {
+                    Text(show.name).font(.headline)
+                    HStack {
+                        Text("$").foregroundStyle(.secondary)
+                        TextField("0.00", text: $starting).keyboardType(.decimalPad).focused($focused)
+                            .accessibilityLabel("Starting cash on hand").accessibilityIdentifier("budget.starting")
+                    }
+                    Text("Cash brought at the beginning of this show. Updating it corrects the opening cash and buying balance; your recorded deals and dates are kept.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            } else {
+                ContentUnavailableView("Show unavailable", systemImage: "wallet.bifold")
+            }
+            if let error { Section { Text(error).foregroundStyle(.orange).accessibilityIdentifier("budget.error") } }
+        }
+        .navigationTitle("Starting Cash").navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }.disabled(saving).accessibilityIdentifier("budget.cancelStartingCash")
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Save") { save() }
+                    .disabled(show == nil || !store.isLoaded || saving || saved || ShowBudgetMoney.parse(starting) == nil)
+                    .accessibilityIdentifier("budget.saveStartingCash")
+            }
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { focused = false }.fixedSize().frame(minWidth: 64, minHeight: 44)
+                    .accessibilityIdentifier("budget.keyboardDone")
+            }
+        }
+        .interactiveDismissDisabled(saving)
+    }
+
+    private func save() {
+        guard !saving, !saved, let show, let cents = ShowBudgetMoney.parse(starting) else { return }
+        saving = true; error = nil
+        defer { saving = false }
+        do {
+            try store.update(showID: showID, name: show.name, startingCents: cents)
+            saved = true
+            onSaved()
         } catch { self.error = budgetError(error) }
     }
 }

@@ -17,7 +17,10 @@ import XCTest
         XCTAssertTrue(app.descendants(matching: .any)["budget.endDate"].exists)
         tapVisible(app.buttons["budget.create"], in: app)
         assertMoney("$300.00", title: "Available to buy", element: app.staticTexts["budget.available"])
+        assertMoney("$300.00", title: "Starting cash on hand", element: app.staticTexts["budget.startingCash"])
+        assertMoney("$300.00", title: "Cash on hand", element: app.staticTexts["budget.cashOnHand"])
         let dates = app.staticTexts["budget.showDates"]
+        _ = UITestInteraction.reveal(dates, in: app)
         XCTAssertTrue(dates.waitForExistence(timeout: 5))
         let showDates = dates.label
         let status = app.staticTexts["budget.scheduleStatus"]
@@ -32,6 +35,7 @@ import XCTest
         tapVisible(app.buttons["budget.record"], in: app)
         assertMoney("$420.00", title: "Available to buy", element: app.staticTexts["budget.available"])
         assertMoney("$70.00", title: "Saved for you", element: app.staticTexts["budget.saved"])
+        assertMoney("$490.00", title: "Cash on hand", element: app.staticTexts["budget.cashOnHand"])
 
         tapVisible(app.buttons["budget.buy"], in: app)
         enter("100", into: app.textFields["budget.amount"], in: app)
@@ -39,24 +43,67 @@ import XCTest
         tapVisible(app.buttons["budget.record"], in: app)
         assertMoney("$320.00", title: "Available to buy", element: app.staticTexts["budget.available"])
         assertMoney("$70.00", title: "Saved for you", element: app.staticTexts["budget.saved"])
+        assertMoney("$390.00", title: "Cash on hand", element: app.staticTexts["budget.cashOnHand"])
+        let entries = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "budget.entry."))
+        _ = UITestInteraction.reveal(entries.firstMatch, in: app)
+        let entryIDs = entries.allElementsBoundByIndex.map(\.identifier).sorted()
+        XCTAssertEqual(entryIDs.count, 2)
 
         app.terminate(); app.launch()
+        _ = UITestInteraction.reveal(app.staticTexts["budget.showDates"], in: app)
         XCTAssertTrue(app.staticTexts["budget.showDates"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.staticTexts["budget.showDates"].label, showDates)
         XCTAssertTrue(["Active today", "Status, Active today"].contains(app.staticTexts["budget.scheduleStatus"].label))
         assertMoney("$320.00", title: "Available to buy", element: app.staticTexts["budget.available"])
         assertMoney("$70.00", title: "Saved for you", element: app.staticTexts["budget.saved"])
+        assertMoney("$300.00", title: "Starting cash on hand", element: app.staticTexts["budget.startingCash"])
+        assertMoney("$390.00", title: "Cash on hand", element: app.staticTexts["budget.cashOnHand"])
+
+        tapVisible(app.buttons["budget.editStartingCash"], in: app)
+        enter("400", into: app.textFields["budget.starting"], in: app)
+        _ = UITestInteraction.tapToolbar(app.buttons["budget.keyboardDone"], in: app)
+        tapVisible(app.buttons["budget.cancelStartingCash"], in: app)
+        assertMoney("$300.00", title: "Starting cash on hand", element: app.staticTexts["budget.startingCash"])
+        assertMoney("$390.00", title: "Cash on hand", element: app.staticTexts["budget.cashOnHand"])
+        assertMoney("$320.00", title: "Available to buy", element: app.staticTexts["budget.available"])
+        assertMoney("$70.00", title: "Saved for you", element: app.staticTexts["budget.saved"])
+
+        tapVisible(app.buttons["budget.editStartingCash"], in: app)
+        enter("400", into: app.textFields["budget.starting"], in: app)
+        _ = UITestInteraction.tapToolbar(app.buttons["budget.keyboardDone"], in: app)
+        tapVisible(app.buttons["budget.saveStartingCash"], in: app)
+        assertMoney("$400.00", title: "Starting cash on hand", element: app.staticTexts["budget.startingCash"])
+        assertMoney("$490.00", title: "Cash on hand", element: app.staticTexts["budget.cashOnHand"])
+        assertMoney("$420.00", title: "Available to buy", element: app.staticTexts["budget.available"])
+        assertMoney("$70.00", title: "Saved for you", element: app.staticTexts["budget.saved"])
+
+        app.terminate(); app.launch()
+        _ = UITestInteraction.reveal(app.staticTexts["budget.showDates"], in: app)
+        XCTAssertTrue(app.staticTexts["budget.showDates"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["budget.showDates"].label, showDates)
+        XCTAssertTrue(["Active today", "Status, Active today"].contains(app.staticTexts["budget.scheduleStatus"].label))
+        assertMoney("$400.00", title: "Starting cash on hand", element: app.staticTexts["budget.startingCash"])
+        assertMoney("$490.00", title: "Cash on hand", element: app.staticTexts["budget.cashOnHand"])
+        assertMoney("$420.00", title: "Available to buy", element: app.staticTexts["budget.available"])
+        assertMoney("$70.00", title: "Saved for you", element: app.staticTexts["budget.saved"])
+        _ = UITestInteraction.reveal(entries.firstMatch, in: app)
+        XCTAssertEqual(entries.allElementsBoundByIndex.map(\.identifier).sorted(), entryIDs,
+                       "Changing starting cash preserves both the sale and purchase records")
         XCTAssertFalse(app.alerts.firstMatch.exists)
     }
 
     private func enter(_ value: String, into field: XCUIElement, in app: XCUIApplication,
                        file: StaticString = #filePath, line: UInt = #line) {
         guard UITestInteraction.tap(field, in: app, file: file, line: line) else { return }
+        if let existing = field.value as? String, existing != field.placeholderValue, !existing.isEmpty {
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: existing.count))
+        }
         field.typeText(value)
     }
 
     private func assertMoney(_ expected: String, title: String, element: XCUIElement,
                              file: StaticString = #filePath, line: UInt = #line) {
+        _ = UITestInteraction.reveal(element, in: XCUIApplication(), file: file, line: line)
         XCTAssertTrue(element.waitForExistence(timeout: 5), file: file, line: line)
         let value = element.label
         XCTAssertTrue([expected, title + ", " + expected].contains(value),
