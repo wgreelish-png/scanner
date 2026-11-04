@@ -13,6 +13,13 @@ import XCTest
         let row = inventory("Stock A", app: app)
         let inventoryID = inventoryID(of: row)
         tap(row, app: app)
+        XCTAssertTrue(app.navigationBars["Card Research"].waitForExistence(timeout: 5))
+        let market = app.segmentedControls["cardResearch.section"].buttons["Market"]
+        XCTAssertTrue(market.waitForExistence(timeout: 5)); XCTAssertTrue(market.isSelected)
+        UITestInteraction.tapToolbar(app.descendants(matching: .any).matching(identifier: "cardResearch.options").firstMatch,
+                                     in: app, identifier: "cardResearch.options")
+        tap(app.buttons["cardResearch.inventoryDetails"], app: app)
+        XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5))
         assertContains("$35.00", element: app.staticTexts["$35.00"])
         assertContains("Cost unknown", element: app.descendants(matching: .any)["inventory.cost"])
         UITestInteraction.tapToolbar(app.descendants(matching: .any).matching(identifier: "inventory.options").firstMatch,
@@ -55,6 +62,9 @@ import XCTest
         XCTAssertTrue(app.staticTexts["$35.00"].exists, "Label price edits must not change the saved market price")
         assertContains("Cost unknown", element: app.descendants(matching: .any)["inventory.cost"])
         UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        XCTAssertTrue(app.navigationBars["Card Research"].waitForExistence(timeout: 5))
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        XCTAssertTrue(app.navigationBars["Show Inventory"].waitForExistence(timeout: 5))
         assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
         UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
         assertBalances(app: app)

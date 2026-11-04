@@ -152,7 +152,10 @@ private struct ShowHomeRouteCard: View {
             } else if store.isLoaded {
                 Section {
                     ForEach(filtered) { item in
-                        NavigationLink { ShowWorkingInventoryDetailView(itemID: item.id, store: store) } label: {
+                        NavigationLink {
+                            CardResearchView(card: item.card, initialSection: .market,
+                                context: .showInventory(item.id, store))
+                        } label: {
                             ShowWorkingInventoryRow(item: item)
                         }.accessibilityIdentifier("showInventory.item." + item.id.uuidString)
                     }
@@ -284,11 +287,8 @@ private struct ShowWorkingInventoryRow: View {
 
 @MainActor struct ShowWorkingInventoryDetailView: View {
     @Environment(\.modelContext) private var context
-    @Environment(\.scenePhase) private var scenePhase
     let itemID: UUID
     let store: ShowBudgetStore
-    @State private var visible = false
-    @State private var showingTransaction = false
     @State private var showingCostEditor = false
     @State private var showingLabel = false
     private var item: ShowInventoryItem? { store.inventory.first { $0.id == itemID } }
@@ -365,21 +365,33 @@ private struct ShowWorkingInventoryRow: View {
                 marketQuotes: TagPricingContext.currentQuotes(inventory: store.inventory, context: context))
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            TimelineView(ForegroundMinuteSchedule(enabled: visible && scenePhase == .active)) { _ in
-                quickSellAction
-            }
-        }
-        .sheet(isPresented: $showingTransaction) {
-            ShowTransactionForm(store: store, initialKind: .sale, initialInventoryID: itemID)
+            ShowInventoryQuickSellAction(itemID: itemID, store: store)
         }
         .sheet(isPresented: $showingCostEditor) {
             if let item { ShowInventoryCostEditor(item: item, store: store) }
         }
-        .onAppear { visible = true }
-        .onDisappear { visible = false }
+    }
+}
+
+/// The same guarded sale action is available from research and inventory details.
+@MainActor struct ShowInventoryQuickSellAction: View {
+    let itemID: UUID
+    let store: ShowBudgetStore
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var visible = false
+    @State private var showingTransaction = false
+    private var item: ShowInventoryItem? { store.inventory.first { $0.id == itemID } }
+
+    var body: some View {
+        TimelineView(ForegroundMinuteSchedule(enabled: visible && scenePhase == .active)) { _ in action }
+            .sheet(isPresented: $showingTransaction) {
+                ShowTransactionForm(store: store, initialKind: .sale, initialInventoryID: itemID)
+            }
+            .onAppear { visible = true }
+            .onDisappear { visible = false }
     }
 
-    private var quickSellAction: some View {
+    private var action: some View {
         VStack(alignment: .leading, spacing: 6) {
             Button {
                 guard store.isLoaded, store.eligibleActiveShow != nil,

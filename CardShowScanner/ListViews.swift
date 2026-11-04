@@ -311,7 +311,7 @@ struct ListDeletionConfirmationView: View {
     @State private var rename = false
     @State private var name = ""
     @State private var error: String?
-    @State private var editing: InventoryCard?
+    @State private var selectedCard: InventoryCard?
     @State private var showingCatalogSearch = false
     @State private var showingInventoryImport = false
     @State private var showingOfferRates = false
@@ -433,9 +433,9 @@ struct ListDeletionConfirmationView: View {
                 Button("Save") { if !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { list.name = name; save() } }
                 Button("Cancel", role: .cancel) {}
             }
-            .navigationDestination(item: $editing) { item in
-                if list.isCardShowInventory { CardShowInventoryCardView(item: item) }
-                else { CardEditorView(item: item) }
+            .navigationDestination(item: $selectedCard) { item in
+                CardResearchView(card: item.snapshot, initialSection: .market,
+                    context: list.isCardShowInventory ? .importedCard(item) : .savedCard(item))
             }
             .sheet(isPresented: $showingOfferRates) {
                 if let session = reviewSession { SessionRatesView(session: session) }
@@ -483,7 +483,7 @@ struct ListDeletionConfirmationView: View {
         ForEach(filtered) { item in
             Button {
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                editing = item
+                selectedCard = item
             } label: {
                 HStack(alignment: .top, spacing: 12) {
                     AsyncImage(url: item.snapshot.imageURL) { phase in

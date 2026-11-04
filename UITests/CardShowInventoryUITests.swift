@@ -42,6 +42,26 @@ import XCTest
         XCTAssertGreaterThan(title.frame.height, 0)
         title.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertFalse(app.buttons["list.searchAndAdd"].exists)
+        let card = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "list.card.")).firstMatch
+        UITestInteraction.tap(card, in: app)
+        XCTAssertTrue(app.navigationBars["Card Research"].waitForExistence(timeout: 5))
+        let market = app.segmentedControls["cardResearch.section"].buttons["Market"]
+        XCTAssertTrue(market.waitForExistence(timeout: 5)); XCTAssertTrue(market.isSelected)
+        XCTAssertFalse(app.buttons["cardEditor.save"].exists, "Imported cards open read-only research")
+        UITestInteraction.tapToolbar(app.descendants(matching: .any).matching(identifier: "cardResearch.options").firstMatch,
+                                     in: app, identifier: "cardResearch.options")
+        UITestInteraction.tap(app.buttons["cardResearch.importedDetails"], in: app)
+        XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5))
+        let savedQuantity = app.descendants(matching: .any)["cardShowInventory.cardQuantity"]
+        reveal(savedQuantity, in: app)
+        assertValue("3", title: "Quantity", element: savedQuantity)
+        XCTAssertFalse(app.buttons["cardEditor.save"].exists)
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app,
+                                     identifier: "navigation.back")
+        XCTAssertTrue(app.navigationBars["Card Research"].waitForExistence(timeout: 5))
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app,
+                                     identifier: "navigation.back")
+        XCTAssertTrue(app.navigationBars["Card Show"].waitForExistence(timeout: 5))
         UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app,
                                      identifier: "navigation.back")
         XCTAssertTrue(app.navigationBars["Card Show Inventory"].waitForExistence(timeout: 5))
