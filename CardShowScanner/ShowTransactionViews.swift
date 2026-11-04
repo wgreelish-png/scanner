@@ -21,6 +21,7 @@ import UIKit
     @State private var incomingValue = ""
     @State private var outgoingValue = ""
     @State private var saleReceived = ""
+    @State private var offerCash = ""
     @State private var incomingDefault: Int64?
     @State private var incomingValueEdited = false
     @State private var outgoingValueEdited = false
@@ -30,13 +31,11 @@ import UIKit
     @State private var editingIncomingList = false
     @State private var incomingDetailsExpanded = false
     @State private var outgoingDetailsExpanded = false
-    @State private var editingSaleCash = false
-    @State private var editingSaleFee = false
-    @State private var saleFeeCents: Int64 = 0
+    @State private var editingCashAmount = false
     @State private var editingIncomingCost: ShowIncomingCard?
     @State private var incomingCostsExpanded = false
     @State private var incomingEditMessage: String?
-    @State private var saleReceivedEdited = false
+    @State private var saleReceivedEdited = true
     @State private var error: String?
     @State private var isRecording = false
     @State private var didPrepare = false
@@ -44,6 +43,8 @@ import UIKit
     @FocusState private var focused: MoneyField?
     private let initialInventoryID: UUID?
     private let confirmingSelection: Bool
+    private let contextualList: Bool
+    private let offerContext: ShowTransactionOfferContext?
     private let onSelectionChanged: ([UUID: Int]) -> Void
     private let onRecorded: () -> Void
 
@@ -52,15 +53,18 @@ import UIKit
     init(store: ShowBudgetStore = .shared, initialKind: ShowTransactionKind = .sale,
          initialListID: UUID? = nil, initialInventoryID: UUID? = nil,
          initialQuantities: [UUID: Int] = [:], confirmingSelection: Bool = false,
+         offerContext: ShowTransactionOfferContext? = nil,
          onSelectionChanged: @escaping ([UUID: Int]) -> Void = { _ in },
          onRecorded: @escaping () -> Void = {}) {
         _store = State(initialValue: store)
-        _kind = State(initialValue: initialKind)
+        _kind = State(initialValue: offerContext?.kind ?? initialKind)
         _incomingListID = State(initialValue: initialListID)
         _outgoingQuantities = State(initialValue: initialQuantities)
         _outgoingDetailsExpanded = State(initialValue: !initialQuantities.isEmpty)
         self.initialInventoryID = initialInventoryID
         self.confirmingSelection = confirmingSelection
+        contextualList = initialListID != nil
+        self.offerContext = offerContext
         self.onSelectionChanged = onSelectionChanged; self.onRecorded = onRecorded
     }
 
@@ -77,36 +81,48 @@ import UIKit
     private var stickerSuggestion: TagSaleSuggestion? {
         TagPricingContext.saleSuggestion(lines: selectedLines, inventory: store.inventory, store: tagApprovals)
     }
-    private var saleText: String { saleReceivedEdited ? saleReceived : stickerSuggestion.map { showTransactionInput($0.totalCents) } ?? "" }
-    private var outgoingText: String { outgoingValueEdited ? outgoingValue : outgoingReference.map(showTransactionInput) ?? "" }
-    private var evaluatedPreview: (amounts: ShowTransactionAmounts?, accounting: ShowTransactionAccounting?, message: String?) {
+    private var saleText: String { saleReceived }
+    private var outgoingText: String {
+        if let amount = offerContext?.outgoingValueCents { return showTransactionInput(amount) }
+        return outgoingValueEdited ? outgoingValue : outgoingReference.map(showTransactionInput) ?? ""
+    }
+    private var contextualTrade: Bool { contextualList && isTrade && offerContext != nil }
+    private var needsOfferCash: Bool { contextualList && offerContext != nil && kind != .trade }
+    private var showNeedsSelection: Bool { showID.map { !store.canRecord(showID: $0) } ?? true }
+    private var evaluatedPreview: (amounts: ShowTransactionAmounts?, accounting: ShowTransactionAccounting?, message: String?, needsCostAllocation: Bool) {
         do {
             let draft = try preparedDraft()
             let percent = selectedShow?.reinvestmentPercent ?? 65
             let amounts = try ShowTransactionMath.calculate(draft, saleReinvestmentPercent: percent)
             do {
                 return (amounts, try ShowTransactionMath.preview(draft, inventory: store.inventory,
-                    saleReinvestmentPercent: percent), nil)
-            } catch { return (amounts, nil, error.localizedDescription) }
-        } catch { return (nil, nil, error.localizedDescription) }
+                    saleReinvestmentPercent: percent), nil, false)
+            } catch {
+                return (amounts, nil, error.localizedDescription, error as? ShowTransactionFailure == .costAllocationRequired)
+            }
+        } catch { return (nil, nil, error.localizedDescription, false) }
     }
     private func canRecord(preview: ShowTransactionAmounts?, accounting: ShowTransactionAccounting?) -> Bool {
         guard let showID else { return false }
-        return store.isLoaded && !store.isSaving && !isRecording && !selectingInventory && !editingIncomingList && !editingSaleCash && !editingSaleFee && editingIncomingCost == nil && !context.hasChanges && store.canRecord(showID: showID) && preview != nil && accounting != nil
+        return store.isLoaded && !store.isSaving && !isRecording && !selectingInventory && !editingIncomingList && !editingCashAmount && editingIncomingCost == nil && !context.hasChanges && store.canRecord(showID: showID) && preview != nil && accounting != nil
     }
 
     var body: some View {
         let evaluation = evaluatedPreview
         NavigationStack {
             Form {
-                transactionSection
-                if kind != .sale { incomingSection(evaluation.accounting) }
-                if kind != .purchase { outgoingSection }
+                if !contextualList || showNeedsSelection || !store.isLoaded { transactionSection }
                 valuesSection
-                previewSection(evaluation.amounts, accounting: evaluation.accounting, message: evaluation.message)
-                Section {
-                    TextField("Note, optional", text: $note, axis: .vertical)
-                        .lineLimit(2...4).focused($focused, equals: .note).accessibilityIdentifier("showTransaction.note")
+                if kind != .sale { incomingSection(evaluation.accounting, needsCostAllocation: evaluation.needsCostAllocation) }
+                if kind != .purchase { outgoingSection(evaluation.accounting) }
+                if let message = evaluation.message, cashAmountWasEntered {
+                    Section { Text(message).font(.subheadline).foregroundStyle(.orange) }
+                }
+                if !contextualList {
+                    Section {
+                        TextField("Note, optional", text: $note, axis: .vertical)
+                            .lineLimit(2...4).focused($focused, equals: .note).accessibilityIdentifier("showTransaction.note")
+                    }
                 }
                 if let error {
                     Section { Text(error).foregroundStyle(.orange).accessibilityIdentifier("showTransaction.error") }
@@ -114,14 +130,14 @@ import UIKit
             }
             .scrollDismissesKeyboard(.interactively)
             .safeAreaInset(edge: .top) { checkoutBar(evaluation.amounts, accounting: evaluation.accounting) }
-            .navigationTitle(confirmingSelection ? "Confirm Transaction" : "Record \(kind.title)")
+            .navigationTitle(confirmingSelection || contextualList ? "Confirm Transaction" : "Record \(kind.title)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     if !selectingInventory && !editingIncomingList { Button("Cancel") { dismiss() } }
                 }
                 ToolbarItemGroup(placement: .keyboard) {
-                    if !selectingInventory && !editingIncomingList && !editingSaleCash && !editingSaleFee && editingIncomingCost == nil {
+                    if !selectingInventory && !editingIncomingList && !editingCashAmount && editingIncomingCost == nil {
                         Spacer()
                         Button("Done") { endEditing() }.fixedSize()
                             .frame(minWidth: 64, minHeight: 44).accessibilityIdentifier("showTransaction.keyboardDone")
@@ -156,29 +172,12 @@ import UIKit
             }
             .onChange(of: outgoingQuantities) { previous, quantities in
                 onSelectionChanged(quantities)
-                if confirmingSelection && previous.isEmpty && !quantities.isEmpty { outgoingDetailsExpanded = true }
-                makeEven = false
+                if (confirmingSelection || contextualList) && previous.isEmpty && !quantities.isEmpty { outgoingDetailsExpanded = true }
+                makeEven = offerContext?.makeEven ?? false
                 if !outgoingValueEdited { outgoingValue = outgoingReference.map(showTransactionInput) ?? "" }
-                if !saleReceivedEdited { saleReceived = stickerSuggestion.map { showTransactionInput($0.totalCents) } ?? "" }
-            }
-        }
-        .sheet(isPresented: $editingSaleCash, onDismiss: {
-            DiagnosticLog.shared.record("show_transaction.cash_edit", ["phase": "dismissed"])
-        }) {
-            ShowSaleAmountEditor(initialText: saleText) { amount in
-                // Opening/focusing or accepting an unchanged value must not
-                // turn the automatic rounded total into a manual override.
-                if ShowBudgetMoney.parse(saleText) != amount {
-                    saleReceived = showTransactionInput(amount)
-                    saleReceivedEdited = true
-                }
-            }
-        }
-        .sheet(isPresented: $editingSaleFee) {
-            ShowTransactionCostEditor(title: "Sale Fee", label: "Fee paid",
-                detail: "Enter any fee paid on this sale. The fee reduces profit and buying funds once.",
-                identifier: "saleFee", initialText: showTransactionInput(saleFeeCents)) { amount in
-                saleFeeCents = amount
+                // Actual cash is an explicit agreement. Changing the cart keeps
+                // it and invalidates the previous per-card sticker allocation.
+                saleReceivedEdited = true
             }
         }
         .sheet(item: $editingIncomingCost) { line in
@@ -199,13 +198,18 @@ import UIKit
                 if let preview {
                     Text(preview.receivedCents > 0 ? "You receive" : preview.paidCents > 0 ? "You pay" : isTrade ? "Even trade" : "Cash total")
                     Spacer()
-                    Text(showTransactionMoney(max(preview.paidCents, preview.receivedCents))).bold().monospacedDigit()
+                    Text(ShowTransactionCashInput.money(max(preview.paidCents, preview.receivedCents))).bold().monospacedDigit()
                 } else {
                     Text("Review transaction amounts").foregroundStyle(.secondary)
                     Spacer()
                     Text("—").monospacedDigit()
                 }
             }.font(.subheadline)
+            if let accounting {
+                LabeledContent("Change to buying funds", value: ShowTransactionCashInput.signedMoney(accounting.buyingFundsDeltaCents))
+                    .font(.caption).monospacedDigit()
+                    .accessibilityIdentifier("showTransaction.preview.buyingFundsChange")
+            }
             Button(action: record) {
                 HStack {
                     if isRecording { ProgressView() }
@@ -223,15 +227,17 @@ import UIKit
 
     private var transactionSection: some View {
         Section {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Transaction").font(.subheadline).foregroundStyle(.secondary)
-                transactionTypeButtons
-                if isTrade {
-                    Text("Cash difference").font(.subheadline).foregroundStyle(.secondary)
-                    tradeTypeButtons
-                }
-            }.accessibilityElement(children: .contain)
-                .accessibilityIdentifier("showTransaction.kind")
+            if !contextualList {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Transaction").font(.subheadline).foregroundStyle(.secondary)
+                    transactionTypeButtons
+                    if isTrade {
+                        Text("Cash difference").font(.subheadline).foregroundStyle(.secondary)
+                        tradeTypeButtons
+                    }
+                }.accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("showTransaction.kind")
+            }
             Picker("Show", selection: $showID) {
                 Text("Choose a show").tag(Optional<UUID>.none)
                 ForEach(store.visibleShows) { show in
@@ -311,7 +317,27 @@ import UIKit
             .accessibilityIdentifier("showTransaction.kind." + identifier)
     }
 
-    private func incomingSection(_ accounting: ShowTransactionAccounting?) -> some View {
+    @ViewBuilder private func incomingSection(_ accounting: ShowTransactionAccounting?, needsCostAllocation: Bool) -> some View {
+        if contextualList {
+            Section("Selected cards") {
+                let costs = Dictionary(uniqueKeysWithValues: (accounting?.incoming ?? []).map { ($0.inventoryID, $0) })
+                ForEach(incoming) { line in
+                    compactCardRow(card: line.card, quantity: line.quantity,
+                        acquisitionCost: line.allocatedCostCents ?? costs[line.id]?.totalCostCents)
+                        .accessibilityIdentifier("showTransaction.incomingCard." + line.id.uuidString)
+                }
+                if needsCostAllocation { incomingCostDisclosure(accounting) }
+                if incoming.isEmpty {
+                    Text(error ?? "This list is unavailable. Return to the list and try again.")
+                        .foregroundStyle(.secondary)
+                }
+            }.accessibilityIdentifier("showTransaction.incomingCards")
+        } else {
+            genericIncomingSection(accounting)
+        }
+    }
+
+    private func genericIncomingSection(_ accounting: ShowTransactionAccounting?) -> some View {
         Section {
             Picker("Incoming scanned list", selection: $incomingListID) {
                 Text("Choose a list").tag(Optional<UUID>.none)
@@ -362,6 +388,26 @@ import UIKit
         } footer: {
             Text("The whole selected list becomes local stock. Your scanned list and its market reference prices stay as saved.")
         }
+    }
+
+    private func compactCardRow(card: CardCandidate, quantity: Int, acquisitionCost: Int64?) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(card.name).font(.headline)
+                Spacer(minLength: 12)
+                Text("Qty \(quantity)").font(.subheadline).foregroundStyle(.secondary)
+            }
+            HStack {
+                Text("Acquisition cost").foregroundStyle(.secondary)
+                Spacer()
+                Text(acquisitionCost.map(showTransactionMoney) ?? "Unknown").monospacedDigit()
+            }.font(.caption)
+            HStack {
+                Text("Market reference").foregroundStyle(.secondary)
+                Spacer()
+                Text(card.marketPrice.map { ($0 * Decimal(quantity)).money } ?? "Unavailable").monospacedDigit()
+            }.font(.caption)
+        }.padding(.vertical, 4).accessibilityElement(children: .combine)
     }
 
     @ViewBuilder private func incomingCostDisclosure(_ accounting: ShowTransactionAccounting?) -> some View {
@@ -421,7 +467,7 @@ import UIKit
         }
     }
 
-    private var outgoingSection: some View {
+    private func outgoingSection(_ accounting: ShowTransactionAccounting?) -> some View {
         Section {
             Button {
                 endEditing(); selectingInventory = true
@@ -433,8 +479,10 @@ import UIKit
                 .accessibilityIdentifier("showTransaction.selectedQuantity")
             if !selectedLines.isEmpty {
                 DisclosureGroup("Selected cards · \(selectedLines.count) rows", isExpanded: $outgoingDetailsExpanded) {
+                    let costs = Dictionary(uniqueKeysWithValues: (accounting?.outgoing ?? []).map { ($0.inventoryID, $0) })
+                    let stock = Dictionary(uniqueKeysWithValues: store.inventory.map { ($0.id, $0) })
                     ForEach(selectedLines, id: \.inventoryID) { line in
-                        ShowTransactionCardRow(card: line.card, quantity: line.quantity)
+                        compactCardRow(card: line.card, quantity: line.quantity, acquisitionCost: costs[line.inventoryID]?.totalCostCents ?? outgoingCost(line, in: stock))
                             .accessibilityIdentifier("showTransaction.selectedCard." + line.inventoryID.uuidString)
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 Button("Remove", role: .destructive) {
@@ -452,96 +500,97 @@ import UIKit
     private var valuesSection: some View {
         Section {
             if kind == .sale {
-                Button {
-                    guard !isRecording else { return }
-                    endEditing()
-                    DiagnosticLog.shared.record("show_transaction.cash_edit", ["phase": "requested"])
-                    editingSaleCash = true
-                } label: {
-                    HStack {
-                        Text("Actual cash received").foregroundStyle(.primary)
-                        Spacer()
-                        Text(ShowBudgetMoney.parse(saleText).map(showTransactionMoney) ?? "Enter amount")
-                            .monospacedDigit()
-                        Image(systemName: "pencil")
-                    }.frame(minHeight: 44).contentShape(Rectangle())
-                }.accessibilityLabel("Edit actual cash received")
-                    .accessibilityValue(saleText)
-                    .accessibilityIdentifier("showTransaction.editSaleAmount")
-                if let suggestion = stickerSuggestion {
-                    let suggested = suggestion.totalCents
-                    LabeledContent(suggestion.usesApprovedPrices ? "Approved sticker total" : "Rounded market total", value: showTransactionMoney(suggested))
-                    Text(suggestion.usesApprovedPrices
-                         ? "Approved prices are active in checkout. Review the actual amount paid before recording."
-                         : "Cards without an approved sticker retain their saved market-based checkout suggestion.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    if saleReceivedEdited {
-                        Button(suggestion.usesApprovedPrices ? "Use Approved Sticker Total" : "Use Rounded Market Total") {
-                            saleReceivedEdited = false; saleReceived = showTransactionInput(suggested)
-                        }.accessibilityIdentifier("showTransaction.resetSaleTotal")
-                    }
-                }
-                if let cash = ShowBudgetMoney.parse(saleText) {
-                    ShowSaleBreakdownView(lines: selectedLines, receivedCents: cash,
-                        approvedAllocations: saleReceivedEdited ? nil : stickerSuggestion?.allocations)
-                }
-                if !tagApprovals.isLoaded {
-                    Text(tagApprovals.error ?? "Saved sticker prices are unavailable. Enter the actual cash explicitly.")
-                        .font(.caption).foregroundStyle(.orange)
-                }
-                Text("Enter the total the customer actually paid for all selected cards.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Button {
-                    guard !isRecording else { return }
-                    endEditing(); editingSaleFee = true
-                } label: {
-                    LabeledContent("Sale fee, optional", value: showTransactionMoney(saleFeeCents))
-                        .frame(minHeight: 44).contentShape(Rectangle())
-                }.accessibilityLabel("Edit sale fee")
-                    .accessibilityValue(showTransactionMoney(saleFeeCents))
-                    .accessibilityIdentifier("showTransaction.editSaleFee")
-            } else {
-                amountField(kind == .purchase ? "Actual cash paid" : "Agreed incoming card value",
-                            text: Binding(get: { incomingValue }, set: {
-                    incomingValue = $0; incomingValueEdited = true; makeEven = false
-                }), field: .incoming)
-                if let incomingDefault {
-                    LabeledContent(kind == .purchase ? "Calculated Cash Offer" : "Calculated Trade Offer",
-                                   value: showTransactionMoney(incomingDefault))
-                    if incomingValueEdited {
-                        Button(kind == .purchase ? "Use Calculated Cash Offer" : "Use Calculated Trade Offer") {
-                            incomingValueEdited = false
-                            incomingValue = showTransactionInput(incomingDefault)
-                            makeEven = false
+                ShowInlineCashAmount(title: "Actual cash received", value: saleReceived,
+                    identifier: "sale", editIdentifier: "showTransaction.editSaleAmount",
+                    controlsIdentifier: "cashEditor", isEditing: $editingCashAmount) { amount in
+                        saleReceived = ShowTransactionCashInput.input(amount)
+                        saleReceivedEdited = true
+                    }.disabled(isRecording)
+                if let suggestion = stickerSuggestion, suggestion.usesApprovedPrices,
+                   let amount = ShowTransactionCashInput.nearestWholeDollarCents(suggestion.totalCents) {
+                    Button {
+                        endEditing(); editingCashAmount = false
+                        saleReceived = ShowTransactionCashInput.input(amount)
+                        saleReceivedEdited = amount != suggestion.totalCents
+                    } label: {
+                        HStack {
+                            Text("Use approved sticker total")
+                            Spacer()
+                            Text(ShowTransactionCashInput.money(amount)).monospacedDigit()
                         }.frame(minHeight: 44)
+                    }.accessibilityIdentifier("showTransaction.resetSaleTotal")
+                }
+            } else if contextualList && offerContext != nil {
+                if needsOfferCash {
+                    ShowInlineCashAmount(title: kind == .tradeReceiveCash ? "Actual cash received" : "Actual cash paid",
+                        value: offerCash, identifier: "offerCash", editIdentifier: "showTransaction.editOfferCashAmount",
+                        controlsIdentifier: "offerCashEditor", isEditing: $editingCashAmount) { amount in
+                            offerCash = ShowTransactionCashInput.input(amount)
+                        }.disabled(isRecording)
+                    if let amount = offerContext?.cashSuggestionCents {
+                        calculatedOfferButton(amount: amount, cash: true) {
+                            offerCash = ShowTransactionCashInput.input(amount)
+                        }
                     }
                 } else {
-                    Text("A complete calculated offer is unavailable. Enter the agreed total explicitly.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    Label("No cash changes hands", systemImage: "equal.circle")
+                }
+            } else {
+                if kind == .purchase {
+                    ShowInlineCashAmount(title: "Actual cash paid", value: incomingValue,
+                        identifier: "incoming", editIdentifier: "showTransaction.editIncomingAmount",
+                        controlsIdentifier: "incomingCashEditor", isEditing: $editingCashAmount) { amount in
+                            incomingValue = ShowTransactionCashInput.input(amount)
+                            incomingValueEdited = true; makeEven = false
+                        }.disabled(isRecording)
+                } else {
+                    amountField("Agreed incoming card value", text: Binding(get: { incomingValue }, set: {
+                        incomingValue = $0; incomingValueEdited = true; makeEven = false
+                    }), field: .incoming)
+                }
+                if let incomingDefault,
+                   let amount = kind == .purchase ? (offerContext?.cashSuggestionCents ?? ShowTransactionCashInput.nearestWholeDollarCents(incomingDefault)) : incomingDefault {
+                    calculatedOfferButton(amount: amount, cash: kind == .purchase) {
+                        incomingValueEdited = true
+                        incomingValue = kind == .purchase ? ShowTransactionCashInput.input(amount) : showTransactionInput(amount)
+                        makeEven = false
+                    }
                 }
                 if isTrade {
                     amountField("Agreed outgoing card value", text: Binding(get: { outgoingText }, set: {
                         outgoingValue = $0; outgoingValueEdited = true; makeEven = false
                     }), field: .outgoing)
-                    if let outgoingReference {
-                        LabeledContent("Rounded outgoing market total", value: showTransactionMoney(outgoingReference))
-                        if outgoingValueEdited {
-                            Button("Use Rounded Market Total") {
-                                outgoingValueEdited = false
-                                outgoingValue = showTransactionInput(outgoingReference)
-                                makeEven = false
-                            }.frame(minHeight: 44)
-                        }
-                    } else {
-                        Text("Some outgoing cards have no market price. Enter their agreed total explicitly.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
                     if kind == .trade { evenTradeControl }
-                    Text("Agreed card values determine the cash difference. Market reference prices on the cards stay unchanged.")
-                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
-        } header: { Text(kind == .sale || kind == .purchase ? "Actual cash" : "Agreed card values") }
+        } header: { Text(kind == .sale || kind == .purchase || contextualTrade ? "Actual cash" : "Agreed card values") }
+    }
+
+    private func calculatedOfferButton(amount: Int64, cash: Bool, apply: @escaping () -> Void) -> some View {
+        Button {
+            endEditing(); editingCashAmount = false
+            apply()
+        } label: {
+            HStack {
+                Text(cash ? "Use calculated cash offer" : "Use calculated trade offer")
+                Spacer()
+                Text(ShowTransactionCashInput.money(amount)).monospacedDigit()
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+            }.frame(minHeight: 44)
+        }.accessibilityIdentifier("showTransaction.useCalculatedOffer")
+    }
+
+    private func outgoingCost(_ line: ShowTransactionCardLine, in stock: [UUID: ShowInventoryItem]) -> Int64? {
+        guard let item = stock[line.inventoryID] else { return nil }
+        return try? ShowCostBasisMath.consumedCost(totalCostCents: item.remainingCostCents,
+            quantity: item.quantity, consumedQuantity: line.quantity)
+    }
+
+    private var cashAmountWasEntered: Bool {
+        if kind == .sale { return !saleReceived.isEmpty }
+        if needsOfferCash { return !offerCash.isEmpty }
+        return !incomingValue.isEmpty
     }
 
     private func amountField(_ title: String, text: Binding<String>, field: MoneyField) -> some View {
@@ -574,42 +623,6 @@ import UIKit
         }
     }
 
-    private func previewSection(_ preview: ShowTransactionAmounts?, accounting: ShowTransactionAccounting?, message: String?) -> some View {
-        Section {
-            if let preview {
-                LabeledContent("Cash you pay", value: showTransactionMoney(preview.paidCents))
-                    .accessibilityIdentifier("showTransaction.preview.paid")
-                LabeledContent("Cash you receive", value: showTransactionMoney(preview.receivedCents))
-                    .accessibilityIdentifier("showTransaction.preview.received")
-                if let accounting {
-                    LabeledContent("Change to buying funds", value: showTransactionMoney(accounting.buyingFundsDeltaCents))
-                        .accessibilityIdentifier("showTransaction.preview.buyingFundsChange")
-                }
-                LabeledContent("Saved for you", value: showTransactionMoney(preview.savedCents))
-                if preview.concessionCents != 0 {
-                    LabeledContent(preview.concessionCents > 0 ? "Value conceded" : "Extra incoming value",
-                                   value: showTransactionMoney(abs(preview.concessionCents)))
-                }
-                if kind == .sale {
-                    let percent = selectedShow?.reinvestmentPercent ?? 65
-                    Text("This show's sale split: \(percent)% for buying and \(100 - percent)% saved for you.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    if let accounting, accounting.feeCents > 0 {
-                        Text("The sale fee is deducted from buying funds once. The gross sale split stays the same.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                } else if kind == .tradeReceiveCash {
-                    Text("All cash received from this trade goes to buying funds.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            if let accounting {
-                ShowTransactionAccountingSummary(accounting: accounting, kind: kind, identifier: "preview")
-            }
-            if let message { Text(message).font(.subheadline).foregroundStyle(.orange) }
-        } header: { Text("Transaction preview") }
-    }
-
     private func prepare() {
         guard !didPrepare else { return }
         didPrepare = true
@@ -622,6 +635,12 @@ import UIKit
             outgoingQuantities[initialInventoryID] = 1
         }
         if incomingListID != nil { loadIncoming() }
+        if let offerContext {
+            makeEven = offerContext.makeEven
+            if let amount = offerContext.incomingTradeValueCents, kind != .purchase {
+                incomingValue = showTransactionInput(amount)
+            }
+        }
         if let inventoryError { error = inventoryError }
     }
 
@@ -641,7 +660,7 @@ import UIKit
             capturedListID = snapshot.listID; capturedListName = snapshot.name
             incomingDefault = snapshot.defaultValueCents
             error = nil
-            if !incomingValueEdited { incomingValue = snapshot.defaultValueCents.map(showTransactionInput) ?? "" }
+            if !incomingValueEdited && kind != .purchase { incomingValue = snapshot.defaultValueCents.map(showTransactionInput) ?? "" }
         } catch { self.error = error.localizedDescription }
     }
 
@@ -658,7 +677,7 @@ import UIKit
             let changed = incoming != refreshed || incomingDefault != updated.defaultValueCents || capturedListName != updated.name
             incoming = refreshed; capturedListID = updated.listID; capturedListName = updated.name
             incomingDefault = updated.defaultValueCents
-            if !incomingValueEdited { incomingValue = updated.defaultValueCents.map(showTransactionInput) ?? "" }
+            if !incomingValueEdited && kind != .purchase { incomingValue = updated.defaultValueCents.map(showTransactionInput) ?? "" }
             if changed {
                 makeEven = false
                 incomingEditMessage = incomingValueEdited
@@ -689,7 +708,7 @@ import UIKit
             let snapshot = try ShowTransactionListService.incomingSnapshot(for: list, kind: kind, context: context)
             incoming = preservingIncomingCosts(snapshot.cards)
             incomingDefault = snapshot.defaultValueCents
-            if !incomingValueEdited { incomingValue = incomingDefault.map(showTransactionInput) ?? "" }
+            if !incomingValueEdited { incomingValue = kind == .purchase ? "" : incomingDefault.map(showTransactionInput) ?? "" }
         } catch {
             incomingDefault = nil
             if !incomingValueEdited { incomingValue = "" }
@@ -709,8 +728,41 @@ import UIKit
             if let list = incomingLists.first(where: { $0.id == incomingListID }), hasLegacyOutcome(list) {
                 throw ShowTransactionFailure.legacyListOutcomeExists
             }
-            guard let amount = ShowBudgetMoney.parse(incomingValue) else {
-                throw ShowTransactionInputFailure.invalidAmount(kind == .purchase ? "cash paid" : "incoming card value")
+            let amount: Int64
+            if contextualList && offerContext != nil && kind == .purchase {
+                guard let cash = ShowTransactionCashInput.parseWholeDollars(offerCash) else {
+                    throw ShowTransactionInputFailure.invalidCash("cash paid")
+                }
+                amount = cash
+            } else if contextualTrade, let offerContext {
+                guard let outgoing = offerContext.outgoingValueCents else {
+                    throw ShowTransactionInputFailure.invalidAmount("outgoing card value")
+                }
+                if kind == .trade {
+                    guard let incoming = offerContext.incomingTradeValueCents else {
+                        throw ShowTransactionInputFailure.invalidAmount("incoming card value")
+                    }
+                    amount = incoming
+                } else {
+                    guard let cash = ShowTransactionCashInput.parseWholeDollars(offerCash) else {
+                        throw ShowTransactionInputFailure.invalidCash(kind == .tradeReceiveCash ? "cash received" : "cash paid")
+                    }
+                    let agreed = kind == .tradeReceiveCash ? outgoing.subtractingReportingOverflow(cash) : outgoing.addingReportingOverflow(cash)
+                    guard !agreed.overflow, ShowBudgetMoney.isValid(agreed.partialValue) else {
+                        if kind == .tradeReceiveCash {
+                            throw ShowTransactionInputFailure.cashDirection("Cash received cannot exceed the agreed price of your outgoing cards.")
+                        }
+                        throw ShowTransactionInputFailure.invalidAmount("incoming card value")
+                    }
+                    amount = agreed.partialValue
+                    if cash == 0 { draft.kind = .trade; draft.makeEven = true }
+                }
+            } else {
+                guard let entered = kind == .purchase ? ShowTransactionCashInput.parseWholeDollars(incomingValue) : ShowBudgetMoney.parse(incomingValue) else {
+                    if kind == .purchase { throw ShowTransactionInputFailure.invalidCash("cash paid") }
+                    throw ShowTransactionInputFailure.invalidAmount("incoming card value")
+                }
+                amount = entered
             }
             draft.incomingListID = capturedListID; draft.incomingListName = capturedListName
             draft.incoming = incoming; draft.incomingValueCents = amount
@@ -726,11 +778,11 @@ import UIKit
             }
         }
         if kind == .sale {
-            guard let amount = ShowBudgetMoney.parse(saleText) else {
-                throw ShowTransactionInputFailure.invalidAmount("actual cash received")
+            guard let amount = ShowTransactionCashInput.parseWholeDollars(saleText) else {
+                throw ShowTransactionInputFailure.invalidCash("actual cash received")
             }
             draft.saleReceivedCents = amount
-            draft.feeCents = saleFeeCents
+            draft.feeCents = 0
             if !saleReceivedEdited, let suggestion = stickerSuggestion {
                 let allocations = Dictionary(uniqueKeysWithValues: suggestion.allocations.map { ($0.inventoryID, $0.receivedCents) })
                 for index in draft.outgoing.indices {
@@ -741,14 +793,15 @@ import UIKit
             guard let amount = ShowBudgetMoney.parse(outgoingText) else {
                 throw ShowTransactionInputFailure.invalidAmount("outgoing card value")
             }
-            draft.outgoingValueCents = amount; draft.makeEven = makeEven
-            if kind == .trade && !makeEven && draft.incomingValueCents != amount {
+            draft.outgoingValueCents = amount
+            draft.makeEven = needsOfferCash && draft.kind == .trade ? true : makeEven
+            if draft.kind == .trade && !draft.makeEven && draft.incomingValueCents != amount {
                 throw ShowTransactionInputFailure.confirmEvenTrade
             }
-            if kind == .tradePayCustomer && draft.incomingValueCents <= amount {
+            if draft.kind == .tradePayCustomer && draft.incomingValueCents <= amount {
                 throw ShowTransactionInputFailure.cashDirection("Pay Customer requires incoming value greater than outgoing value.")
             }
-            if kind == .tradeReceiveCash && amount <= draft.incomingValueCents {
+            if draft.kind == .tradeReceiveCash && amount <= draft.incomingValueCents {
                 throw ShowTransactionInputFailure.cashDirection("Receive Cash requires outgoing value greater than incoming value.")
             }
         }
@@ -773,90 +826,74 @@ import UIKit
     }
 }
 
-/// Cash editing owns only local text/focus. No stock validation, allocation
-/// sorting or checkout geometry changes run for its keyboard/typing updates.
-@MainActor private struct ShowSaleAmountEditor: View {
+/// Inline editing isolates keystrokes from the transaction calculation. Each
+/// edit starts blank; Cancel keeps the last agreed cash amount unchanged.
+@MainActor private struct ShowInlineCashAmount: View {
+    let title: String
+    let value: String
+    let identifier: String
+    let editIdentifier: String
+    let controlsIdentifier: String
+    @Binding var isEditing: Bool
     let onSave: (Int64) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var text: String
-    @State private var isApplying = false
-    @State private var startedAt = Date()
+    @State private var text = ""
     @FocusState private var amountFocused: Bool
 
-    init(initialText: String, onSave: @escaping (Int64) -> Void) {
-        _text = State(initialValue: initialText)
-        self.onSave = onSave
-    }
-
-    private var amount: Int64? { ShowBudgetMoney.parse(text) }
+    private var amount: Int64? { ShowTransactionCashInput.parseWholeDollars(text) }
 
     var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Total cash received").font(.headline)
-                HStack(spacing: 12) {
-                    Text("USD").foregroundStyle(.secondary)
-                    TextField("0.00", text: $text)
-                        .keyboardType(.decimalPad).focused($amountFocused)
-                        .font(.largeTitle).monospacedDigit()
-                        .accessibilityLabel("Actual cash received")
-                        .accessibilityIdentifier("showTransaction.amount.sale")
-                    Button {
-                        text = ""; amountFocused = true
-                    } label: { Image(systemName: "xmark.circle.fill").font(.title2) }
-                        .disabled(text.isEmpty || isApplying)
-                        .accessibilityLabel("Clear amount")
-                        .accessibilityIdentifier("showTransaction.cashEditor.clear")
-                }.frame(minHeight: 56)
-                Text("Enter a USD amount with up to two decimal places.")
-                    .font(.footnote).foregroundStyle(.secondary)
-                Text("This is the total the customer pays for the selected cards.")
-                    .font(.subheadline).foregroundStyle(.secondary)
-                Spacer()
-            }.padding(24)
-                .navigationTitle("Sale Amount").navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") {
-                            DiagnosticLog.shared.record("show_transaction.cash_edit", ["phase": "cancelled"])
-                            amountFocused = false; dismiss()
-                        }.disabled(isApplying).accessibilityIdentifier("showTransaction.cashEditor.cancel")
-                    }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done", action: apply).fontWeight(.semibold)
-                            .disabled(amount == nil || isApplying)
-                            .accessibilityIdentifier("showTransaction.cashEditor.done")
-                    }
-                }
+        VStack(alignment: .leading, spacing: 8) {
+            if isEditing {
+                Text(title).font(.subheadline)
+                HStack {
+                    Text("$").foregroundStyle(.secondary)
+                    TextField("Amount", text: $text).keyboardType(.numberPad).focused($amountFocused)
+                        .font(.title2).monospacedDigit().accessibilityLabel(title)
+                        .accessibilityIdentifier("showTransaction.amount." + identifier)
+                }.frame(minHeight: 44)
+                HStack {
+                    Button("Cancel") { finish() }
+                        .accessibilityIdentifier("showTransaction." + controlsIdentifier + ".cancel")
+                    Spacer()
+                    Button("Done") {
+                        guard let amount else { return }
+                        onSave(amount); finish()
+                    }.fontWeight(.semibold).disabled(amount == nil)
+                        .accessibilityIdentifier("showTransaction." + controlsIdentifier + ".done")
+                }.buttonStyle(.borderless).frame(minHeight: 44)
+            } else {
+                Button {
+                    text = ""; isEditing = true
+                } label: {
+                    HStack {
+                        Text(title).foregroundStyle(.primary)
+                        Spacer()
+                        Text(ShowTransactionCashInput.parseWholeDollars(value).map(ShowTransactionCashInput.money) ?? "Enter amount")
+                            .monospacedDigit()
+                        Image(systemName: "pencil")
+                    }.frame(minHeight: 44).contentShape(Rectangle())
+                }.buttonStyle(.borderless).accessibilityLabel("Edit " + title.lowercased())
+                    .accessibilityValue(value.isEmpty ? "Not entered" : value)
+                    .accessibilityIdentifier(editIdentifier)
+            }
         }
-        .interactiveDismissDisabled(isApplying)
-        .task {
-            DiagnosticLog.shared.record("show_transaction.cash_edit", ["phase": "presented"])
+        .task(id: isEditing) {
+            guard isEditing else { return }
             await Task.yield()
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, isEditing else { return }
             amountFocused = true
-        }
-        .onChange(of: amountFocused) { _, focused in
-            DiagnosticLog.shared.record("show_transaction.cash_edit", ["phase": focused ? "focused" : "unfocused"])
-        }
-        .onDisappear {
-            DiagnosticLog.shared.record("show_transaction.cash_edit", ["phase": "closed",
-                "elapsed_ms": String(Int(max(0, min(3_600_000, Date().timeIntervalSince(startedAt) * 1_000))))])
         }
     }
 
-    private func apply() {
-        guard !isApplying, let amount else { return }
-        isApplying = true
+    private func finish() {
         amountFocused = false
-        DiagnosticLog.shared.record("show_transaction.cash_edit", ["phase": "applied"])
-        onSave(amount)
-        dismiss()
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        isEditing = false
     }
 }
 
-/// Fee and acquisition edits keep typing and focus local, just as sale cash
-/// editing does, so a keystroke never rebuilds the transaction calculation.
+/// Optional acquisition edits keep typing and focus local, so a keystroke
+/// never rebuilds the transaction calculation.
 @MainActor private struct ShowTransactionCostEditor: View {
     let title: String
     let label: String
@@ -1156,7 +1193,7 @@ import UIKit
                 .accessibilityIdentifier("showTransaction.receipt.received")
             LabeledContent("Allocated for buying", value: showTransactionMoney(receipt.reinvestedCents))
             if let accounting = receipt.accounting {
-                LabeledContent("Change to buying funds", value: showTransactionMoney(accounting.buyingFundsDeltaCents))
+                LabeledContent("Change to buying funds", value: ShowTransactionCashInput.signedMoney(accounting.buyingFundsDeltaCents))
                     .accessibilityIdentifier("showTransaction.receipt.buyingFundsChange")
             }
             LabeledContent("Saved for you", value: showTransactionMoney(receipt.savedCents))
@@ -1256,12 +1293,13 @@ struct ShowTransactionCardRow: View {
 }
 
 private enum ShowTransactionInputFailure: LocalizedError {
-    case chooseIncoming, chooseOutgoing, invalidAmount(String), confirmEvenTrade, cashDirection(String)
+    case chooseIncoming, chooseOutgoing, invalidAmount(String), invalidCash(String), confirmEvenTrade, cashDirection(String)
     var errorDescription: String? {
         switch self {
         case .chooseIncoming: return "Choose a nonempty scanned list for the incoming cards."
         case .chooseOutgoing: return "Select cards and quantities from your local stock."
         case .invalidAmount(let label): return "Enter \(label) in USD with up to two decimal places."
+        case .invalidCash(let label): return "Enter \(label) in whole dollars."
         case .confirmEvenTrade: return "Choose a cash trade type or tap Make Even Trade to confirm no cash changes hands."
         case .cashDirection(let message): return message
         }

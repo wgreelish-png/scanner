@@ -36,6 +36,47 @@ enum ShowBudgetMoney {
     static func decimal(_ cents: Int64) -> Decimal { Decimal(cents) / 100 }
 }
 
+/// Whole-dollar cash entry is a checkout preference. Market references, cost
+/// allocations, accounting and historical receipts retain their exact cents.
+enum ShowTransactionCashInput {
+    static func parseWholeDollars(_ text: String) -> Int64? {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.range(of: #"^[0-9]{1,9}$"#, options: .regularExpression) != nil,
+              let dollars = Int64(value) else { return nil }
+        let amount = dollars * 100
+        return ShowBudgetMoney.isValid(amount) ? amount : nil
+    }
+
+    /// Round the complete cash offer once, with half-dollars rounding upward.
+    /// An offer too large to represent after rounding remains unavailable.
+    static func nearestWholeDollarCents(_ cents: Int64) -> Int64? {
+        guard ShowBudgetMoney.isValid(cents) else { return nil }
+        let dollars = cents / 100 + (cents % 100 >= 50 ? 1 : 0)
+        let rounded = dollars * 100
+        return ShowBudgetMoney.isValid(rounded) ? rounded : nil
+    }
+
+    static func input(_ cents: Int64) -> String {
+        guard ShowBudgetMoney.isValid(cents), cents % 100 == 0 else { return "" }
+        return String(cents / 100)
+    }
+
+    static func money(_ cents: Int64) -> String {
+        formatted(ShowBudgetMoney.decimal(cents), hasFraction: cents % 100 != 0)
+    }
+
+    static func signedMoney(_ cents: Int64) -> String {
+        let amount = ShowBudgetMoney.decimal(cents)
+        let sign = cents > 0 ? "+" : cents < 0 ? "-" : ""
+        return sign + formatted(cents < 0 ? -amount : amount, hasFraction: cents % 100 != 0)
+    }
+
+    private static func formatted(_ amount: Decimal, hasFraction: Bool) -> String {
+        NSDecimalNumber(decimal: amount).doubleValue.formatted(
+            .currency(code: "USD").precision(.fractionLength(hasFraction ? 2 : 0)))
+    }
+}
+
 enum ShowBudgetEntryKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case purchase, sale, trade
     var id: String { rawValue }

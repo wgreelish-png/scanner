@@ -17,7 +17,8 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     private(set) var isConnected = false
     private(set) var isScanning = false
     private(set) var isPrinting = false
-    private(set) var status = "Search for a NIIMBOT D110 to connect."
+    private(set) var status = "Search for a NIIMBOT D110 or D110-M to connect."
+    var modelName: String { identity?.modelName ?? "D110 / D110-M" }
     var error: String?
 
     @ObservationIgnored private var central: CBCentralManager?
@@ -40,7 +41,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     @ObservationIgnored private var identity: NiimbotD110Identity?
 
     private enum DiagnosticPhase: String {
-        case search, connect, cancel, complete, uncertain
+        case search, connect, identified, cancel, complete, uncertain
         case connectFailed = "connect_failed"
         case notSent = "not_sent"
     }
@@ -115,7 +116,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         }
         guard !isPrinting else { present(.printerBusy); return }
         guard peripheral == nil else {
-            status = isConnected ? "D110 connected." : "Connecting to D110…"
+            status = isConnected ? "\(modelName) connected." : "Connecting to printer…"
             return
         }
         error = nil
@@ -136,14 +137,14 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         guard let central, central.state == .poweredOn else { present(.bluetoothUnavailable); return }
         guard let selected = discovered[id] else { present(.notConnected); return }
         if selected === peripheral {
-            if isConnected { status = "D110 connected." }
+            if isConnected { status = "\(modelName) connected." }
             return
         }
         guard selected.state == .disconnected else { present(.printerNotReady); return }
         endConnection(issue: .cancelled)
         stopScanning()
         error = nil
-        status = "Connecting to D110…"
+        status = "Connecting to printer…"
         peripheral = selected
         selected.delegate = self
         let generation = connectionGeneration
@@ -194,7 +195,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         printCancellation = nil
         isPrinting = true
         error = nil
-        status = "Checking D110…"
+        status = "Checking \(modelName)…"
         defer {
             if printOperation == operation {
                 printOperation = nil
@@ -217,7 +218,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                 let wasDispatched = printWasDispatched
                 endConnection(issue: issue)
                 present(issue)
-                diagnostic(wasDispatched ? .uncertain : .notSent)
+                diagnostic(wasDispatched ? .uncertain : .notSent, issue: issue)
                 return wasDispatched ? .uncertain(issue) : .notSent(issue)
             }
         } onCancel: {
@@ -252,7 +253,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         devices = []
         discovered = [:]
         isScanning = true
-        status = "Searching for NIIMBOT D110…"
+        status = "Searching for NIIMBOT D110 / D110-M…"
         // D110 advertisements do not consistently include their service UUID.
         // Name filtering is followed by service and protocol identity checks.
         central.scanForPeripherals(withServices: nil,
@@ -261,7 +262,9 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             do { try await Task.sleep(for: .seconds(15)) } catch { return }
             guard let self else { return }
             self.stopScanning()
-            self.status = self.devices.isEmpty ? "No D110 found. Turn it on and search again." : "Select your D110."
+            self.status = self.devices.isEmpty
+                ? "No D110 or D110-M found. Disconnect it in other apps, turn it on and search again."
+                : "Select your printer."
         }
         diagnostic(.search)
     }
@@ -314,7 +317,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     private func connectionFailed(_ issue: LabelPrinterIssue) {
         endConnection(issue: issue)
         present(issue)
-        diagnostic(.connectFailed)
+        diagnostic(.connectFailed, issue: issue)
     }
 
     private func present(_ issue: LabelPrinterIssue) {
@@ -322,10 +325,17 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         status = issue.localizedDescription
     }
 
-    private func diagnostic(_ phase: DiagnosticPhase) {
-        // Fixed phases only. Never record advertised names, peripheral IDs,
+    private func diagnostic(_ phase: DiagnosticPhase, issue: LabelPrinterIssue? = nil) {
+        // Fixed phases, typed issues and negotiated model codes only.
+        // Never record advertised names, peripheral IDs,
         // notification payloads, raster bytes, or label text.
-        DiagnosticLog.shared.record("label.bluetooth", ["phase": phase.rawValue])
+        var fields = ["phase": phase.rawValue]
+        if let issue { fields["reason"] = issue.rawValue }
+        if phase == .identified, let identity {
+            fields["code"] = String(identity.modelID)
+            fields["stage"] = "protocol_" + String(identity.protocolVersion)
+        }
+        DiagnosticLog.shared.record("label.bluetooth", fields)
     }
 
     /// Exactly one request is in flight. NIIMBOT frames have no transaction ID;
@@ -427,7 +437,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     private func beginHandshake() {
         guard handshakeTask == nil else { return }
         let generation = connectionGeneration
-        status = "Identifying D110…"
+        status = "Identifying printer…"
         handshakeTask = Task { [weak self] in
             guard let self else { return }
             do {
@@ -442,7 +452,8 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                 self.connectionTimeout?.cancel()
                 self.connectionTimeout = nil
                 self.handshakeTask = nil
-                self.status = "D110 connected. Confirm the loaded label size before printing."
+                self.status = "\(identity.modelName) connected. Confirm the loaded label size before printing."
+                self.diagnostic(.identified)
             } catch {
                 guard self.connectionGeneration == generation else { return }
                 self.connectionFailed((error as? LabelPrinterIssue) ?? .unsupportedPrinter)
@@ -494,7 +505,7 @@ extension NiimbotPrinter: @preconcurrency CBCentralManagerDelegate {
             central.cancelPeripheralConnection(peripheral)
             return
         }
-        status = "Checking D110 services…"
+        status = "Checking printer services…"
         peripheral.discoverServices([CBUUID(string: NiimbotProtocol.serviceUUID)])
     }
 

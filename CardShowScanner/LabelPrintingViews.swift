@@ -18,7 +18,7 @@ import UIKit
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section {
-                Text("First-version support targets the Bluetooth NIIMBOT D110. Charge the printer, load matching labels, close its lid, then tap Search. Physical D110 printing still needs hardware verification; check a single test label before a batch.")
+                Text("Supports NIIMBOT D110 and D110-M. Charge the printer, load matching labels, close its lid, then tap Search. Check one test label before printing a batch.")
                     .font(.footnote).foregroundStyle(.secondary)
                     .accessibilityIdentifier("labelPrinter.hardwareNote")
                 DisclosureGroup("Printer protocol credits") {
@@ -40,7 +40,7 @@ import UIKit
 
     var body: some View {
         Section {
-            Label(printer.isConnected ? "D110 connected" : "D110 not connected",
+            Label(printer.isConnected ? "\(printer.modelName) connected" : "Printer not connected",
                   systemImage: printer.isConnected ? "checkmark.circle.fill" : "printer")
                 .foregroundStyle(printer.isConnected ? Color.green : Color.primary)
                 .accessibilityIdentifier("labelPrinter.connection")
@@ -56,7 +56,7 @@ import UIKit
             } else {
                 Button { printer.startSearch() } label: {
                     HStack {
-                        Text(printer.isScanning ? "Search Again" : "Search for D110")
+                        Text(printer.isScanning ? "Search Again" : "Search for D110 / D110-M")
                         Spacer()
                         if printer.isScanning { ProgressView() }
                     }
@@ -68,7 +68,7 @@ import UIKit
                 }
             }
         } header: { Text("Bluetooth printer") } footer: {
-            Text("Keep the app open while printing. Bluetooth access is requested only when you tap Search.")
+            Text("Disconnect the printer in other apps before searching. Allow Bluetooth access and keep this app open while connecting and printing.")
         }
     }
 }

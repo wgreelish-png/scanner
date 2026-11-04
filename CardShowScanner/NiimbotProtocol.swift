@@ -99,6 +99,8 @@ struct NiimbotD110Identity: Equatable, Sendable {
     let modelID: Int
     let protocolVersion: Int
     let firmwareBytes: Data
+
+    var modelName: String { modelID == 2320 ? "D110-M" : "D110" }
 }
 
 struct NiimbotPrintStatus: Equatable, Sendable {
@@ -109,8 +111,9 @@ struct NiimbotPrintStatus: Equatable, Sendable {
     var finishedOneLabel: Bool { completedPages == 1 }
 }
 
-/// Native Swift subset of niimbluelib's documented D110 workflow. D110-M and
-/// unknown protocol generations deliberately have no fallback print algorithm.
+/// Native Swift subset of niimbluelib's documented D110 and D110-M workflows.
+/// Model and negotiated protocol choose the task; unknown hardware has no
+/// fallback print algorithm.
 enum NiimbotProtocol {
     static let serviceUUID = "E7810A71-73AE-499D-8C15-FAA9AEF0C3F2"
     static let referenceURL = "https://github.com/MultiMote/niimbluelib"
@@ -146,11 +149,16 @@ enum NiimbotProtocol {
     static func isD110Advertisement(_ name: String) -> Bool {
         let value = name.uppercased()
         guard value.hasPrefix("D110") else { return false }
-        guard value.count > 4 else { return true }
-        // D110M is a different model with different print tasks. Advertising
-        // names only filter discovery; the protocol model ID is authoritative.
-        return ["_", "-", " "].contains(String(value.dropFirst(4).prefix(1)))
-            && !value.dropFirst(4).trimmingCharacters(in: CharacterSet(charactersIn: "_- ")).hasPrefix("M")
+        let suffix = value.dropFirst(4)
+        guard let first = suffix.first else { return true }
+        let separators: Set<Character> = ["_", "-", " "]
+        // Both naming families are discoverable. Advertising is only a filter;
+        // the model/head/protocol handshake remains authoritative.
+        if first == "M" {
+            let remainder = suffix.dropFirst()
+            return remainder.isEmpty || remainder.first.map { separators.contains($0) } == true
+        }
+        return separators.contains(first)
     }
 
     static func encode(command: UInt8, data: Data) throws -> Data {
@@ -195,11 +203,11 @@ enum NiimbotProtocol {
         }
     }
 
-    /// ID 2305 is shared with a 120-dot HI_D110 in the reference model table;
-    /// accepting it requires the printer itself to report a 96-dot 203-dpi head.
+    /// ID 2305 is shared with a 120-dot HI_D110 in the reference model table.
+    /// Both that ID and the M model require a reported 96-dot 203-dpi head.
     static func validateModel(_ model: Int, headInfo: NiimbotPacket? = nil) throws {
         if model == 2304 { return }
-        guard model == 2305, let headInfo,
+        guard [2305, 2320].contains(model), let headInfo,
               [UInt8(0xdf), 0xde].contains(headInfo.command), headInfo.data.count == 10 else {
             throw LabelPrinterIssue.unsupportedPrinter
         }
@@ -207,6 +215,24 @@ enum NiimbotProtocol {
         guard (Int(bytes[4]) << 8 | Int(bytes[5])) == 96, bytes[6] == 2 else {
             throw LabelPrinterIssue.unsupportedPrinter
         }
+        // D110-M reports its firmware in this documented head heartbeat rather
+        // than requiring the older standalone firmware-info request.
+        if model == 2320, bytes[2] == 0 && bytes[3] == 0 { throw LabelPrinterIssue.unsupportedPrinter }
+    }
+
+    private enum PrintTask { case d110, b1, d110MV4 }
+
+    private static func printTask(for identity: NiimbotD110Identity?) throws -> PrintTask {
+        guard let identity else { return .d110 }
+        guard [2304, 2305, 2320].contains(identity.modelID),
+              [0, 1, 3, 4, 5].contains(identity.protocolVersion),
+              identity.firmwareBytes.count == 2, identity.firmwareBytes.contains(where: { $0 != 0 }) else {
+            throw LabelPrinterIssue.unsupportedPrinter
+        }
+        guard identity.modelID == 2320 else { return .d110 }
+        // The pinned task table gives the version-4 match priority over the
+        // general D110_M → B1 mapping. Do not apply the v4 task to v5 by guess.
+        return identity.protocolVersion == 4 ? .d110MV4 : .b1
     }
 
     static func validateReadiness(_ packet: NiimbotPacket, identity: NiimbotD110Identity) throws {
@@ -258,18 +284,41 @@ enum NiimbotProtocol {
 
     /// Stock height is feed direction; LabelRaster is already in head direction,
     /// MSB first. No second rotation or image re-render is performed here.
-    static func printRequests(for raster: LabelRaster) throws -> [NiimbotRequest] {
+    static func printRequests(for raster: LabelRaster, identity: NiimbotD110Identity? = nil) throws -> [NiimbotRequest] {
         do { try raster.validate() } catch { throw LabelPrinterIssue.invalidLabel }
         guard [240, 320, 400].contains(raster.height) else { throw LabelPrinterIssue.invalidLabel }
-        var requests = [
-            NiimbotRequest(0x21, [2], response: 0x31),
-            NiimbotRequest(0x23, [1], response: 0x33),
-            NiimbotRequest(0x01, response: 0x02, beginsPrint: true),
-            NiimbotRequest(0x20, response: 0x30),
-            NiimbotRequest(0x03, response: 0x04, requiresTrue: true),
-            NiimbotRequest(0x13, u16(raster.height) + u16(raster.width), response: 0x14),
-            NiimbotRequest(0x15, [0, 1], response: 0x16)
-        ]
+        let task = try printTask(for: identity)
+        var requests: [NiimbotRequest]
+        switch task {
+        case .d110:
+            // Preserve the established standard-D110 bytes and ordering.
+            requests = [
+                NiimbotRequest(0x21, [2], response: 0x31),
+                NiimbotRequest(0x23, [1], response: 0x33),
+                NiimbotRequest(0x01, response: 0x02, beginsPrint: true),
+                NiimbotRequest(0x20, response: 0x30),
+                NiimbotRequest(0x03, response: 0x04, requiresTrue: true),
+                NiimbotRequest(0x13, u16(raster.height) + u16(raster.width), response: 0x14),
+                NiimbotRequest(0x15, [0, 1], response: 0x16)
+            ]
+        case .b1:
+            requests = [
+                NiimbotRequest(0x21, [3], response: 0x31),
+                NiimbotRequest(0x23, [1], response: 0x33),
+                NiimbotRequest(0x01, [0, 1, 0, 0, 0, 0, 0], response: 0x02, beginsPrint: true),
+                NiimbotRequest(0x03, response: 0x04, requiresTrue: true),
+                NiimbotRequest(0x13, u16(raster.height) + u16(raster.width) + [0, 1], response: 0x14)
+            ]
+        case .d110MV4:
+            requests = [
+                NiimbotRequest(0x23, [1], response: 0x33),
+                NiimbotRequest(0x21, [3], response: 0x31),
+                NiimbotRequest(0x01, [0, 1, 0, 0, 0, 0, 0, 1, 0], response: 0x02, beginsPrint: true),
+                // The v4 task deliberately does not wait for this status reply.
+                NiimbotRequest(0xa3),
+                NiimbotRequest(0x13, u16(raster.height) + u16(raster.width) + [0, 1, 0, 0, 0, 0, 0, 0, 0], response: 0x14)
+            ]
+        }
         let bytes = Array(raster.data)
         var row = 0
         while row < raster.height {
@@ -329,10 +378,14 @@ enum NiimbotProtocol {
         }
         let model = try NiimbotProtocol.modelID(modelPacket)
         var headInfo: NiimbotPacket?
-        if model == 2305 {
+        if model == 2305 || model == 2320 {
             headInfo = try await exchange(NiimbotRequest(0xdc, [3], response: 0xdf, responseAlternatives: [0xde]))
         }
         try NiimbotProtocol.validateModel(model, headInfo: headInfo)
+        if model == 2320, let headInfo {
+            return NiimbotD110Identity(modelID: model, protocolVersion: version,
+                firmwareBytes: Data(headInfo.data.dropFirst(2).prefix(2)))
+        }
         guard let firmware = try await exchange(NiimbotRequest(0x40, [9], response: 0x49)),
               firmware.command == 0x49, firmware.data.count == 2,
               firmware.data.contains(where: { $0 != 0 }) else { throw LabelPrinterIssue.unsupportedPrinter }
@@ -342,7 +395,7 @@ enum NiimbotProtocol {
     static func printLabel(_ raster: LabelRaster, identity: NiimbotD110Identity,
                            exchange: Exchange, pause: @MainActor () async throws -> Void) async throws {
         // Validate the entire raster before sending the first print command.
-        let requests = try NiimbotProtocol.printRequests(for: raster)
+        let requests = try NiimbotProtocol.printRequests(for: raster, identity: identity)
         let advanced = identity.protocolVersion >= 3
         let readiness = NiimbotRequest(0xdc, [advanced ? 4 : 1], response: advanced ? 0xd9 : 0xdd,
                                       responseAlternatives: [0xdd, 0xd9])
@@ -363,6 +416,11 @@ enum NiimbotProtocol {
             if try NiimbotProtocol.printStatus(packet).finishedOneLabel {
                 let end = NiimbotRequest(0xf3, response: 0xf4, requiresTrue: true)
                 try end.validateResponse(try await exchange(end))
+                if identity.modelID == 2320 && identity.protocolVersion == 4 {
+                    // The reference v4 task follows PrintEnd with a one-way
+                    // Advanced1 heartbeat; it does not start another print.
+                    _ = try await exchange(NiimbotRequest(0xdc, [1]))
+                }
                 return
             }
         }

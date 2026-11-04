@@ -326,15 +326,23 @@ struct ListDeletionConfirmationView: View {
     @State private var exportText = ""
     @State private var exporting = false
     @State private var shareURL: URL?
-    @State private var choosingOutcome = false
     @State private var savingOutcome = false
     @State private var outcomeError: String?
     @State private var outcomeBudgetMessage: String?
     @State private var pendingOutcomeBudget = false
     @State private var isVisible = false
-    @State private var transactionStore = ShowBudgetStore.shared
+    @State private var transactionStore: ShowBudgetStore
     @State private var newTransactionKind: ShowTransactionKind?
+    @State private var transactionOfferContext: ShowTransactionOfferContext?
     @State private var receiptRoute: ReceiptRoute?
+
+    init(list: CardList, session: ScanSession? = nil,
+         onContinueScanning: (() -> Void)? = nil, transactionEditing: Bool = false,
+         transactionStore: ShowBudgetStore = .shared) {
+        self.list = list; self.session = session
+        self.onContinueScanning = onContinueScanning; self.transactionEditing = transactionEditing
+        _transactionStore = State(initialValue: transactionStore)
+    }
     private var inventoryTransaction: ShowTransactionReceipt? { transactionStore.transaction(forListID: list.id) }
     private var reviewSession: ScanSession? { session ?? sessions.first { $0.listID == list.id } }
     var filtered: [InventoryCard] {
@@ -358,16 +366,10 @@ struct ListDeletionConfirmationView: View {
             .onChange(of: reviewSection) { _, _ in
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             }
-            .confirmationDialog("Record Transaction", isPresented: $choosingOutcome, titleVisibility: .visible) {
-                Button("Purchase") { newTransactionKind = .purchase }.accessibilityIdentifier("list.outcome.purchase")
-                Button("Trade") { newTransactionKind = .trade }.accessibilityIdentifier("list.outcome.trade")
-                Button("Trade + Cash to Customer") { newTransactionKind = .tradePayCustomer }.accessibilityIdentifier("list.outcome.tradeAndPurchase")
-                Button("Trade + Cash to Me") { newTransactionKind = .tradeReceiveCash }
-                Button("Cancel", role: .cancel) {}
-            }
             .onAppear {
                 isVisible = true; openingScanner = false
                 continueGame = reviewSession?.game ?? list.orderedCards.first?.snapshot.identity.game ?? "Pokémon"
+                restoreOfferInputs()
                 synchronizeBudgetOutcomes()
             }
             .onDisappear { isVisible = false }
@@ -449,7 +451,8 @@ struct ListDeletionConfirmationView: View {
                 if let session = reviewSession { SessionRatesView(session: session) }
             }
             .sheet(item: $newTransactionKind) { kind in
-                ShowTransactionForm(store: transactionStore, initialKind: kind, initialListID: list.id)
+                ShowTransactionForm(store: transactionStore, initialKind: kind, initialListID: list.id,
+                    offerContext: transactionOfferContext)
             }
             .sheet(item: $receiptRoute) { route in
                 NavigationStack {
@@ -615,7 +618,7 @@ struct ListDeletionConfirmationView: View {
     private var recordTransactionButton: some View {
         Button {
             if let receipt = inventoryTransaction { receiptRoute = ReceiptRoute(id: receipt.id) }
-            else { choosingOutcome = true }
+            else { openTransactionCheckout() }
         } label: {
             Label(inventoryTransaction == nil ? (recordedTransaction?.title ?? "Record Transaction") : "View Transaction",
                   systemImage: inventoryTransaction == nil && recordedTransaction == nil ? "checkmark.circle" : "checkmark.circle.fill")
@@ -624,6 +627,37 @@ struct ListDeletionConfirmationView: View {
             .disabled(savingOutcome || pendingOutcomeBudget)
             .accessibilityIdentifier("list.recordTransaction")
             .accessibilityHint("Review a purchase or trade using this scanned list.")
+    }
+
+    private func openTransactionCheckout() {
+        guard newTransactionKind == nil else { return }
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        do {
+            restoreOfferInputs()
+            let hasPrice = !offerCardPrice.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let price = CustomOfferAmount.parse(offerCardPrice)
+            if offerTransactionMode != .cashOnly && hasPrice && price == nil {
+                throw TradeTransactionFailure.invalidPrice
+            }
+            let input = TradeTransactionInput(mode: offerTransactionMode,
+                myCardPrice: offerTransactionMode == .cashOnly ? nil : price)
+            let checkout = try ShowTransactionOfferContext.make(totals: currentOfferTotals, input: input)
+            transactionOfferContext = checkout
+            newTransactionKind = checkout.kind
+        } catch { self.error = error.localizedDescription }
+    }
+
+    private func restoreOfferInputs() {
+        guard !restoredOfferInputs, let session = reviewSession else { return }
+        restoredOfferInputs = true
+        do {
+            if let transaction = try session.savedOffers().last?.tradeTransaction {
+                offerTransactionMode = transaction.mode
+                if transaction.mode != .cashOnly, let price = transaction.myCardPrice {
+                    offerCardPrice = CSVExportService.number(price)
+                }
+            }
+        } catch { self.error = error.localizedDescription }
     }
 
     private func requestContinueScanning() {

@@ -55,6 +55,53 @@ import XCTest
             desiredOutcomeData: try kind.map { try JSONEncoder().encode(ListOutcomeRecord(kind: $0, recordedAt: date)) })
     }
 
+    func testCheckoutCashInputRequiresAnExplicitWholeDollarAmount() {
+        XCTAssertEqual(ShowTransactionCashInput.parseWholeDollars("0"), 0)
+        XCTAssertEqual(ShowTransactionCashInput.parseWholeDollars(" 12\n"), 1_200)
+        XCTAssertEqual(ShowTransactionCashInput.parseWholeDollars("999999999"), 99_999_999_900)
+        for invalid in ["", " ", "12.00", "12.5", ".50", "12.", "-12", "+12", "$12", "1,200", "1e2", "1000000000"] {
+            XCTAssertNil(ShowTransactionCashInput.parseWholeDollars(invalid), invalid)
+        }
+        XCTAssertEqual(ShowTransactionCashInput.input(1_200), "12")
+        XCTAssertEqual(ShowTransactionCashInput.input(0), "0")
+        XCTAssertEqual(ShowTransactionCashInput.input(1_249), "", "Fractional references must not become a silently truncated cash payment")
+    }
+
+    func testCalculatedCashOfferRoundsTheCompleteTotalOnceAndGuardsTheLimit() {
+        let totals = OfferCalculator.calculate([.init(price: Decimal(string: "12.20"), quantity: 3)], rates: .init())
+        XCTAssertEqual(totals.cash, Decimal(string: "25.62"))
+        XCTAssertEqual(ShowTransactionCashInput.nearestWholeDollarCents(2_562), 2_600)
+        XCTAssertEqual(ShowTransactionCashInput.nearestWholeDollarCents(1_249), 1_200)
+        XCTAssertEqual(ShowTransactionCashInput.nearestWholeDollarCents(1_250), 1_300)
+        XCTAssertEqual(ShowTransactionCashInput.nearestWholeDollarCents(0), 0)
+        XCTAssertEqual(ShowTransactionCashInput.nearestWholeDollarCents(99_999_999_949), 99_999_999_900)
+        for invalid in [-1, ShowBudgetMoney.maximumCents, Int64.max] {
+            XCTAssertNil(ShowTransactionCashInput.nearestWholeDollarCents(invalid))
+        }
+        XCTAssertEqual(totals.cash, Decimal(string: "25.62"), "Presenting a cash suggestion does not change the precise offer snapshot")
+    }
+
+    func testCashDisplayOmitsWholeDollarCentsAndShowsBuyingFundsDirection() {
+        let separator = Locale.current.decimalSeparator ?? "."
+        XCTAssertFalse(ShowTransactionCashInput.money(1_200).contains(separator + "00"))
+        XCTAssertTrue(ShowTransactionCashInput.money(1_234).contains(separator + "34"), "Existing fractional cash remains visible")
+        XCTAssertTrue(ShowTransactionCashInput.signedMoney(1_200).hasPrefix("+"))
+        XCTAssertTrue(ShowTransactionCashInput.signedMoney(-1_200).hasPrefix("-"))
+        XCTAssertEqual(ShowTransactionCashInput.signedMoney(0), ShowTransactionCashInput.money(0))
+        XCTAssertTrue(ShowTransactionCashInput.signedMoney(-1_234).contains(separator + "34"))
+    }
+
+    func testWholeDollarCheckoutDoesNotRoundHistoricalReceiptOrCostAccounting() throws {
+        let value = try fixture()
+        let receipt = try value.store.recordTransaction(sale(stock: value.stockID, received: 1_249), showID: value.showID)
+        XCTAssertEqual(receipt.receivedCents, 1_249)
+        XCTAssertEqual(ShowBudgetMoney.parse("12.49"), 1_249)
+        XCTAssertEqual(store(value.disk).transactions.first?.receivedCents, 1_249)
+        XCTAssertEqual(receipt.reinvestedCents + receipt.savedCents, 1_249)
+        XCTAssertEqual(ShowTransactionCashInput.nearestWholeDollarCents(receipt.receivedCents), 1_200)
+        XCTAssertEqual(value.store.transactions.first?.receivedCents, 1_249)
+    }
+
     func testCashMathUsesAgreedValuesAndSeparatesSaleSavingsFromTradeCash() throws {
         let pay = try ShowTransactionMath.calculate(trade())
         XCTAssertEqual(pay, .init(paidCents: 3_000, receivedCents: 0, reinvestedCents: 0, savedCents: 0, concessionCents: 0))

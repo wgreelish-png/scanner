@@ -6,6 +6,85 @@ import SwiftData
     private let standard = OfferTotals(quantity: 1, market: 20, cash: 15, trade: 16, maximum: 15)
     private func amount(_ text: String) -> Decimal { Decimal(string: text)! }
 
+    func testOfferCheckoutKeepsProportionalCashPayoutSeparateFromCardValues() throws {
+        let input = TradeTransactionInput(mode: .tradeAndCash, myCardPrice: 10)
+        let estimate = try TradeTransactionCalculator.calculate(totals: standard, input: input)
+        let context = try ShowTransactionOfferContext.make(totals: standard, input: input)
+
+        XCTAssertEqual(estimate.finalAmount, amount("5.63"))
+        XCTAssertEqual(context.kind, .tradePayCustomer)
+        XCTAssertEqual(context.outgoingValueCents, 1_000)
+        XCTAssertEqual(context.incomingTradeValueCents, 1_600)
+        XCTAssertEqual(context.cashSuggestionCents, 600, "Round the proportional payout, not the $16 incoming credit")
+        XCTAssertFalse(context.makeEven)
+        XCTAssertEqual(estimate.finalAmount, amount("5.63"), "Routing to checkout cannot change the precise offer estimate")
+    }
+
+    func testOfferCheckoutDerivesCashDirectionFromTheExistingOffer() throws {
+        for mode in [TradeTransactionMode.tradeAndCash, .tradeCreditOnly] {
+            let context = try ShowTransactionOfferContext.make(totals: standard,
+                input: .init(mode: mode, myCardPrice: amount("20.50")))
+            XCTAssertEqual(context.kind, .tradeReceiveCash)
+            XCTAssertEqual(context.outgoingValueCents, 2_050)
+            XCTAssertEqual(context.incomingTradeValueCents, 1_600)
+            XCTAssertEqual(context.cashSuggestionCents, 500)
+            XCTAssertFalse(context.makeEven)
+        }
+        let cash = try ShowTransactionOfferContext.make(totals: standard, input: .init(mode: .cashOnly))
+        XCTAssertEqual(cash.kind, .purchase)
+        XCTAssertNil(cash.outgoingValueCents)
+        XCTAssertEqual(cash.cashSuggestionCents, 1_500)
+        XCTAssertFalse(cash.makeEven)
+
+        var noCredit = standard; noCredit.trade = 0
+        let impossibleRoundedReceipt = try ShowTransactionOfferContext.make(totals: noCredit,
+            input: .init(mode: .tradeAndCash, myCardPrice: amount("0.50")))
+        XCTAssertEqual(impossibleRoundedReceipt.kind, .tradeReceiveCash)
+        XCTAssertEqual(impossibleRoundedReceipt.outgoingValueCents, 50)
+        XCTAssertNil(impossibleRoundedReceipt.cashSuggestionCents,
+                     "Receiving a rounded $1 for a $0.50 outgoing card would require negative incoming value")
+        let roundedToNoCash = try ShowTransactionOfferContext.make(totals: noCredit,
+            input: .init(mode: .tradeAndCash, myCardPrice: amount("0.49")))
+        XCTAssertEqual(roundedToNoCash.cashSuggestionCents, 0, "A deliberately accepted zero cash offer can be recorded as an even trade")
+    }
+
+    func testExactAndUnusedTradeCreditRouteToNoCashWithoutPayingTheUnusedCredit() throws {
+        for mode in [TradeTransactionMode.tradeAndCash, .tradeCreditOnly] {
+            let even = try ShowTransactionOfferContext.make(totals: standard,
+                input: .init(mode: mode, myCardPrice: 16))
+            XCTAssertEqual(even.kind, .trade); XCTAssertTrue(even.makeEven)
+            XCTAssertEqual(even.cashSuggestionCents, 0)
+            XCTAssertEqual(even.outgoingValueCents, 1_600)
+        }
+        let unused = try ShowTransactionOfferContext.make(totals: standard,
+            input: .init(mode: .tradeCreditOnly, myCardPrice: 10))
+        XCTAssertEqual(unused.kind, .trade); XCTAssertTrue(unused.makeEven)
+        XCTAssertEqual(unused.incomingTradeValueCents, 1_600)
+        XCTAssertEqual(unused.outgoingValueCents, 1_000)
+        XCTAssertEqual(unused.cashSuggestionCents, 0, "Unused credit is not an actual cash offer")
+    }
+
+    func testOfferCheckoutRequiresSellingPriceForTradesAndNeverSuggestsPartialCash() throws {
+        for mode in [TradeTransactionMode.tradeAndCash, .tradeCreditOnly] {
+            XCTAssertThrowsError(try ShowTransactionOfferContext.make(totals: standard, input: .init(mode: mode))) {
+                XCTAssertEqual($0 as? TradeTransactionFailure, .missingPrice)
+            }
+        }
+        XCTAssertNoThrow(try TradeTransactionCalculator.calculate(totals: standard, input: .init(mode: .tradeCreditOnly)),
+                         "The estimate itself may still be viewed before selecting a selling price")
+        var partial = standard; partial.quantity = 2; partial.unpricedQuantity = 1
+        for input in [TradeTransactionInput(mode: .cashOnly), .init(mode: .tradeAndCash, myCardPrice: 10),
+                      .init(mode: .tradeCreditOnly, myCardPrice: 10)] {
+            XCTAssertNil(try ShowTransactionOfferContext.make(totals: partial, input: input).cashSuggestionCents)
+        }
+        var invalid = standard; invalid.trade = amount("16.001")
+        XCTAssertThrowsError(try ShowTransactionOfferContext.make(totals: invalid, input: .init()))
+        invalid = standard; invalid.trade = CustomOfferAmount.maximum + 1
+        XCTAssertThrowsError(try ShowTransactionOfferContext.make(totals: invalid, input: .init()))
+        XCTAssertThrowsError(try ShowTransactionOfferContext.make(totals: standard,
+            input: .init(mode: .tradeAndCash, myCardPrice: -1)))
+    }
+
     func testCustomerPaysTheUncoveredSellingPrice() async throws {
         let totals = OfferTotals(quantity: 1, market: amount("5.38"), cash: amount("4.03"), trade: amount("4.30"), maximum: 4)
         let result = try TradeTransactionCalculator.calculate(totals: totals,
