@@ -74,20 +74,54 @@ final class NiimbotProtocolTests: XCTestCase {
         }
     }
 
-    func testDiscoveryNamesExcludeD110MAndProtocolRejectsOtherHardware() throws {
-        XCTAssertTrue(NiimbotProtocol.isD110Advertisement("D110_BLE_1234"))
-        XCTAssertTrue(NiimbotProtocol.isD110Advertisement("D110"))
-        XCTAssertFalse(NiimbotProtocol.isD110Advertisement("D110M_BLE_1234"))
-        XCTAssertFalse(NiimbotProtocol.isD110Advertisement("D110_M"))
-        XCTAssertFalse(NiimbotProtocol.isD110Advertisement("B1_1234"))
+    func testDiscoveryRecognizesD110MNamesButProtocolStillRejectsUnverifiedHardware() throws {
+        for name in ["D110_BLE_1234", "D110", "D110M_BLE_1234", "D110_M", "D110-M",
+                     "D110_M-l000000000", "d110_m-L000000000", "D110-M_1234"] {
+            XCTAssertTrue(NiimbotProtocol.isD110Advertisement(name), name)
+        }
+        for name in ["B1_1234", "D11_1234", "D1100", "D110PRO", "D110MACHINE", "Other D110"] {
+            XCTAssertFalse(NiimbotProtocol.isD110Advertisement(name), name)
+        }
         XCTAssertEqual(try NiimbotProtocol.modelID(.init(command: 0x48, data: Data([9]))), 2304)
         XCTAssertEqual(try NiimbotProtocol.modelID(.init(command: 0x48, data: Data([9, 1]))), 2305)
+        XCTAssertEqual(try NiimbotProtocol.modelID(.init(command: 0x48, data: Data([9, 16]))), 2320)
         XCTAssertThrowsError(try NiimbotProtocol.validateModel(2320))
+        XCTAssertThrowsError(try NiimbotProtocol.validateModel(2321, headInfo: d110MHead()))
         XCTAssertThrowsError(try NiimbotProtocol.validateModel(2305))
         XCTAssertThrowsError(try NiimbotProtocol.validateModel(2305, headInfo: .init(
             command: 0xdf, data: Data([1, 0, 1, 0, 0, 120, 2, 0, 0, 0]))))
         XCTAssertNoThrow(try NiimbotProtocol.validateModel(2305, headInfo: .init(
             command: 0xde, data: Data([1, 0, 1, 0, 0, 96, 2, 0, 0, 0]))))
+        XCTAssertNoThrow(try NiimbotProtocol.validateModel(2320, headInfo: d110MHead()))
+        for head in [d110MHead(width: 120), d110MHead(resolution: 3), d110MHead(firmware: [0, 0]),
+                     NiimbotPacket(command: 0xdd, data: d110MHead().data),
+                     NiimbotPacket(command: 0xde, data: Data([4, 1, 4, 23]))] {
+            XCTAssertThrowsError(try NiimbotProtocol.validateModel(2320, headInfo: head))
+        }
+    }
+
+    // Head/status payloads from the pinned reference's D110M_V4_23 capture.
+    // Device serial/advertisement suffixes are not needed for identity tests.
+    private func d110MHead(width: UInt8 = 96, resolution: UInt8 = 2,
+                          firmware: [UInt8] = [4, 23]) -> NiimbotPacket {
+        .init(command: 0xde, data: Data([4, 1] + firmware + [0, width, resolution, 2, 1, 0]))
+    }
+
+    private var d110MProtocolStatus: NiimbotPacket {
+        .init(command: 0xb5,
+              data: Data([0x30, 0x30, 0x23, 0x28, 0, 0xc8, 0, 0, 0, 0x0a, 0, 3, 1, 0x12, 0xee, 0]))
+    }
+
+    private var d110MReadiness: NiimbotPacket {
+        .init(command: 0xd9, data: Data([0x0f, 0xd1, 4, 0x4d, 0, 0, 0, 0, 0, 0, 0]))
+    }
+
+    private func d110MIdentity(version: Int = 4) -> NiimbotD110Identity {
+        .init(modelID: 2320, protocolVersion: version, firmwareBytes: Data([4, 23]))
+    }
+
+    private var denseRaster: LabelRaster {
+        .init(width: 96, height: 240, data: Data(repeating: 0xff, count: 12 * 240))
     }
 
     func testProtocolNegotiationRequiresSupportedGenerationsAndReplyShapes() throws {
@@ -172,6 +206,201 @@ final class NiimbotProtocolTests: XCTestCase {
         XCTAssertEqual(identity.modelID, 2304)
         XCTAssertEqual(identity.protocolVersion, 1)
         XCTAssertEqual(requests.map(\.command), [0xc1, 0x40, 0x40])
+    }
+
+    @MainActor func testD110MHandshakeUsesCapturedHeadFirmwareAndProtocolWithoutLegacyFirmwareQuery() async throws {
+        var requests: [NiimbotRequest] = []
+        let identity = try await NiimbotD110Session.identify { request in
+            requests.append(request)
+            switch (request.command, Array(request.data)) {
+            case (0xc1, [1]): return .init(command: 0xc2, data: Data([3]))
+            case (0x40, [8]): return .init(command: 0x48, data: Data([9, 16]))
+            case (0xa5, [1]): return self.d110MProtocolStatus
+            case (0xdc, [3]): return self.d110MHead()
+            default: throw LabelPrinterIssue.unsupportedResponse
+            }
+        }
+        XCTAssertEqual(identity.modelID, 2320)
+        XCTAssertEqual(identity.protocolVersion, 4)
+        XCTAssertEqual(identity.firmwareBytes, Data([4, 23]))
+        XCTAssertEqual(identity.modelName, "D110-M")
+        XCTAssertEqual(requests.filter { $0.command == 0x40 }.map(\.data), [Data([8])],
+                       "D110-M firmware comes from the documented head heartbeat, not the older D110 query")
+        XCTAssertEqual(requests.filter { $0.command == 0xdc }.map(\.data), [Data([3])])
+        XCTAssertFalse(requests.contains(where: \.beginsPrint), "Discovery/identification cannot start printing")
+    }
+
+    @MainActor func testD110MHandshakeRejectsUnknownHeadOrProtocolBeforeAnyPrintCommand() async throws {
+        for failure in 0..<5 {
+            var requests: [NiimbotRequest] = []
+            do {
+                _ = try await NiimbotD110Session.identify { request in
+                    requests.append(request)
+                    switch (request.command, Array(request.data)) {
+                    case (0xc1, [1]): return .init(command: 0xc2, data: Data([3]))
+                    case (0x40, [8]): return .init(command: 0x48, data: Data([9, failure == 0 ? 17 : 16]))
+                    case (0xa5, [1]):
+                        if failure == 1 {
+                            var data = self.d110MProtocolStatus.data
+                            data[11] = 4
+                            return .init(command: 0xb5, data: data)
+                        }
+                        return self.d110MProtocolStatus
+                    case (0xdc, [3]):
+                        return failure == 2 ? self.d110MHead(width: 120)
+                            : failure == 3 ? self.d110MHead(resolution: 3)
+                            : self.d110MHead(firmware: [0, 0])
+                    default: throw LabelPrinterIssue.unsupportedResponse
+                    }
+                }
+                XCTFail("Unverified D110-M identity must not connect, case \(failure)")
+            } catch {
+                XCTAssertEqual(error as? LabelPrinterIssue, .unsupportedPrinter)
+            }
+            XCTAssertFalse(requests.contains(where: \.beginsPrint))
+            XCTAssertFalse(requests.contains { [UInt8(0x01), 0x13, 0x83, 0x84, 0x85, 0xe3].contains($0.command) })
+            XCTAssertFalse(requests.contains { $0.command == 0x40 && $0.data == Data([9]) })
+        }
+    }
+
+    func testD110MVersionFourUsesItsDocumentedNineByteStartAndThirteenBytePage() throws {
+        let requests = try NiimbotProtocol.printRequests(for: denseRaster, identity: d110MIdentity())
+        XCTAssertEqual(Array(requests.prefix(5)).map(\.command), [0x23, 0x21, 0x01, 0xa3, 0x13])
+        XCTAssertEqual(requests[0].data, Data([1]), "Use the loaded gap-label type")
+        XCTAssertEqual(requests[1].data, Data([3]), "Use the model's documented default density")
+        XCTAssertEqual(requests[2].data, Data([0, 1, 0, 0, 0, 0, 0, 1, 0]))
+        XCTAssertEqual(requests[3].data, Data([1]))
+        XCTAssertNil(requests[3].response, "The v4 task's pre-page status request is explicitly one-way")
+        XCTAssertEqual(requests[4].data, Data([0, 240, 0, 96, 0, 1, 0, 0, 0, 0, 0, 0, 0]))
+        XCTAssertFalse(requests.contains { [UInt8(0x20), 0x03, 0x15].contains($0.command) },
+                       "D110-M v4 does not use the older Clear/PageStart/PrintQuantity sequence")
+        XCTAssertEqual(requests.filter(\.beginsPrint).map(\.command), [0x01])
+        let rows = requests.filter { $0.command == 0x85 }
+        XCTAssertEqual(rows.map { Int($0.data[5]) }.reduce(0, +), 240)
+        XCTAssertTrue(rows.allSatisfy { $0.data.suffix(12) == Data(repeating: 0xff, count: 12) })
+        XCTAssertEqual(requests.last?.command, 0xe3)
+        XCTAssertEqual(requests.last?.response, 0xe4)
+        XCTAssertEqual(requests.last?.requiresTrue, true)
+    }
+
+    func testOtherSupportedD110MProtocolsUseB1TaskWithoutChangingStandardD110Packets() throws {
+        for version in [0, 1, 3, 5] {
+            let requests = try NiimbotProtocol.printRequests(for: denseRaster, identity: d110MIdentity(version: version))
+            XCTAssertEqual(Array(requests.prefix(5)).map(\.command), [0x21, 0x23, 0x01, 0x03, 0x13])
+            XCTAssertEqual(requests[0].data, Data([3]))
+            XCTAssertEqual(requests[1].data, Data([1]))
+            XCTAssertEqual(requests[2].data, Data([0, 1, 0, 0, 0, 0, 0]))
+            XCTAssertEqual(requests[4].data, Data([0, 240, 0, 96, 0, 1]))
+            XCTAssertFalse(requests.contains { [UInt8(0x20), 0x15, 0xa3].contains($0.command) })
+            XCTAssertEqual(requests.filter(\.beginsPrint).map(\.command), [0x01])
+        }
+        let standard = NiimbotD110Identity(modelID: 2304, protocolVersion: 1, firmwareBytes: Data([5, 34]))
+        XCTAssertEqual(try NiimbotProtocol.printRequests(for: denseRaster, identity: standard),
+                       try NiimbotProtocol.printRequests(for: denseRaster),
+                       "Adding M support cannot change the standard D110 job's wire packets")
+    }
+
+    @MainActor func testD110MVersionFourWaitsForPageCompletionThenEndsAndSendsItsOneWayHeartbeat() async throws {
+        var requests: [NiimbotRequest] = []
+        var polls = 0, pauses = 0
+        try await NiimbotD110Session.printLabel(denseRaster, identity: d110MIdentity()) { request in
+            requests.append(request)
+            if request.command == 0xdc {
+                if request.response == nil { return nil }
+                return self.d110MReadiness
+            }
+            if request.command == 0xa3 {
+                if request.response == nil { return nil }
+                polls += 1
+                return .init(command: 0xb3, data: Data([0, polls == 1 ? 0 : 1, 100, 100]))
+            }
+            if request.command == 0xf3 { XCTAssertEqual(polls, 2, "PageEnd acknowledgment alone cannot complete the saved queue entry") }
+            return request.response.map { .init(command: $0, data: Data([1])) }
+        } pause: { pauses += 1 }
+
+        XCTAssertEqual(polls, 2); XCTAssertEqual(pauses, 2)
+        XCTAssertEqual(Array(requests.suffix(5)).map(\.command), [0xe3, 0xa3, 0xa3, 0xf3, 0xdc])
+        XCTAssertEqual(requests.last?.data, Data([1]))
+        XCTAssertNil(requests.last?.response)
+        XCTAssertEqual(requests.filter(\.beginsPrint).map(\.command), [0x01])
+    }
+
+    @MainActor func testD110MOpenLidOrMissingPaperStopsBeforeDispatchingPrintStart() async throws {
+        XCTAssertNoThrow(try NiimbotProtocol.validateReadiness(d110MReadiness, identity: d110MIdentity()))
+        for statusIndex in [4, 5] {
+            var data = d110MReadiness.data
+            data[statusIndex] = 1
+            var requests: [NiimbotRequest] = []
+            do {
+                try await NiimbotD110Session.printLabel(denseRaster, identity: d110MIdentity()) { request in
+                    requests.append(request)
+                    return .init(command: 0xd9, data: data)
+                } pause: {}
+                XCTFail("Open lid or missing paper cannot start a label")
+            } catch { XCTAssertEqual(error as? LabelPrinterIssue, .printerNotReady) }
+            XCTAssertEqual(requests.map(\.command), [0xdc])
+            XCTAssertFalse(requests.contains(where: \.beginsPrint))
+        }
+    }
+
+    @MainActor func testD110MRejectedPageTimeoutAndCancellationNeverReplayThePrintJob() async throws {
+        for failure in 0..<3 {
+            var requests: [NiimbotRequest] = []
+            var polls = 0
+            do {
+                try await NiimbotD110Session.printLabel(denseRaster, identity: d110MIdentity()) { request in
+                    requests.append(request)
+                    if request.command == 0xdc { return self.d110MReadiness }
+                    if request.command == 0xa3 {
+                        if request.response == nil { return nil }
+                        polls += 1
+                        return .init(command: 0xb3, data: Data([0, 0, 100, 100]))
+                    }
+                    return request.response.map { .init(command: $0, data: Data([failure == 0 && request.command == 0xe3 ? 0 : 1])) }
+                } pause: {
+                    if failure == 2 { throw LabelPrinterIssue.cancelled }
+                }
+                XCTFail("The failed job must not be reported as completed")
+            } catch {
+                XCTAssertEqual(error as? LabelPrinterIssue,
+                               failure == 0 ? .printerNotReady : failure == 1 ? .responseTimeout : .cancelled)
+            }
+            XCTAssertEqual(requests.filter(\.beginsPrint).map(\.command), [0x01])
+            XCTAssertFalse(requests.contains { $0.command == 0xf3 })
+            XCTAssertEqual(polls, failure == 1 ? 100 : 0)
+        }
+    }
+
+    @MainActor func testInvalidD110MIdentityOrRasterIsRejectedBeforeAnyRadioExchange() async throws {
+        let invalidIdentities = [
+            NiimbotD110Identity(modelID: 9999, protocolVersion: 4, firmwareBytes: Data([4, 23])),
+            d110MIdentity(version: 2), d110MIdentity(version: 6),
+            NiimbotD110Identity(modelID: 2320, protocolVersion: 4, firmwareBytes: Data()),
+            NiimbotD110Identity(modelID: 2320, protocolVersion: 4, firmwareBytes: Data([0, 0]))
+        ]
+        for identity in invalidIdentities {
+            var exchanges = 0
+            do {
+                try await NiimbotD110Session.printLabel(denseRaster, identity: identity) { _ in
+                    exchanges += 1
+                    return nil
+                } pause: {}
+                XCTFail("Invalid identity must fail before sending bytes")
+            } catch { XCTAssertEqual(error as? LabelPrinterIssue, .unsupportedPrinter) }
+            XCTAssertEqual(exchanges, 0)
+        }
+        for raster in [LabelRaster(width: 96, height: 241, data: Data(repeating: 0xff, count: 12 * 241)),
+                       LabelRaster(width: 120, height: 240, data: Data(repeating: 0xff, count: 15 * 240))] {
+            var exchanges = 0
+            do {
+                try await NiimbotD110Session.printLabel(raster, identity: d110MIdentity()) { _ in
+                    exchanges += 1
+                    return nil
+                } pause: {}
+                XCTFail("Invalid raster must fail before sending bytes")
+            } catch { XCTAssertEqual(error as? LabelPrinterIssue, .invalidLabel) }
+            XCTAssertEqual(exchanges, 0)
+        }
     }
 
     @MainActor func testFullWorkflowPollsUntilCompletedAndOnlyThenEndsPrint() async throws {

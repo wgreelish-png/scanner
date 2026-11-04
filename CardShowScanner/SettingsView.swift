@@ -57,7 +57,7 @@ struct SettingsView: View {
             }
             Section("Manage") {
                 NavigationLink { LabelPrinterSettingsView() } label: {
-                    SettingsDestinationLabel("Label printer", subtitle: "Connect a D110 and review your queue", symbol: "printer", tint: .indigo)
+                    SettingsDestinationLabel("Label printer", subtitle: "Connect a D110 or D110-M and review your queue", symbol: "printer", tint: .indigo)
                 }.accessibilityIdentifier("settings.labelPrinter")
                 NavigationLink { OfferDefaultsSettingsView() } label: {
                     SettingsDestinationLabel("Offer defaults", subtitle: "Cash, trade and maximum buy rates", symbol: "percent", tint: .green)

@@ -153,7 +153,7 @@ enum LabelPrinterIssue: String, Error, Codable, LocalizedError, Equatable, Senda
         case .bluetoothUnavailable: return "Turn on Bluetooth to find your printer."
         case .permissionDenied: return "Allow Bluetooth access for this app in iPhone Settings."
         case .notActive: return "Keep the app open while printing. Review the queue before continuing."
-        case .unsupportedPrinter: return "This printer or firmware has not been identified as a supported D110."
+        case .unsupportedPrinter: return "This printer or firmware has not been identified as a supported D110 or D110-M."
         case .invalidLabel: return "Review this label and its paper size before printing."
         case .printerNotReady: return "Check that the printer is on, closed and loaded with labels."
         case .printerBusy: return "The printer is busy. Wait for its current job to finish."

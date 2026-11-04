@@ -1,5 +1,9 @@
 # Price labels — build 52
 
+Build 66 adds [D110-M discovery and its model-specific print workflows](D110MConnection.md).
+Both standard D110 and D110-M printers connect through the existing explicit
+Search action; their actual model, head and protocol are checked before printing.
+
 Create price labels from saved working inventory or enter a price for a standalone sticker, without an internet request. Build 43 adds [final sticker rules, profit protection and durable approvals](TagPricingRules.md). Inventory draft edits remain separate from financial records; explicit approval activates that inventory sticker as a checkout suggestion, while each sale still records its actual cash amount. Standalone stickers are independent of inventory and cost/profit checks.
 
 ## Prepare labels
@@ -21,9 +25,9 @@ The preview is decoded from the same packed bits sent to the printer. It does no
 
 ## Connect and print
 
-Open **Settings → Label printer**, or connect from **Print Queue**. Turn on the D110, load matching stock, close its lid and tap **Search for D110**. Bluetooth permission is requested only after Search. Merely opening inventory, labels, settings or a saved queue does not create a Bluetooth manager or request permission.
+Open **Settings → Label printer**, or connect from **Print Queue**. Turn on the D110 or D110-M, disconnect it in other apps, load matching stock, close its lid and tap **Search for D110 / D110-M**. Bluetooth permission is requested only after Search. Merely opening inventory, labels, settings or a saved queue does not create a Bluetooth manager or request permission.
 
-The native connection targets the standard 96-dot NIIMBOT D110 protocol. Some product names/model IDs cover different hardware, so unsupported or unverified hardware is rejected instead of receiving a guessed print sequence. This implementation still requires a physical iPhone/D110 acceptance test; protocol documentation and successful builds do not establish hardware compatibility or label quality.
+The native connection supports the 96-dot NIIMBOT D110 and D110-M using their distinct documented print workflows. Some product names/model IDs cover different hardware, so unsupported heads and protocol generations are rejected. Physical iPhone/printer acceptance is still required; protocol documentation and successful builds do not establish hardware compatibility or label quality.
 
 Tap **Print Queued Labels** to process pending labels serially. Each physical copy has its own progress entry. A completed entry requires a printer completion response; successful Bluetooth writes alone do not count as completed output. Pause/Stop, leaving the print screen or leaving the foreground stops the active job. The printer may finish a label it already received. An established idle connection can be reused while the app remains open; leaving the foreground disconnects it. The first explicit Search continues once after Bluetooth permission is granted and the app is active. There is no background mode or automatic reconnection/reprint.
 
