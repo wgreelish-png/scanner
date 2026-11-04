@@ -1,5 +1,9 @@
 # Show Price Tags — build 50
 
+Build 52 corrects Custom Price Tag to a standalone price/copies form, available
+without inventory or approvals. The inventory selector remains under Choose
+Inventory Cards. See [standalone stickers](StandalonePriceTags.md).
+
 The dedicated Show page has three entry points: Print All, Print Price Changed,
 and Custom Price Tags. All/changed batches bypass individual selection and use
 available stock quantities. Custom batches keep search and selection and add

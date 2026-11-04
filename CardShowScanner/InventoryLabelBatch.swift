@@ -8,7 +8,7 @@ enum InventoryLabelBatchMode: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .all: return "Print All"
         case .priceChanged: return "Price Changed"
-        case .custom: return "Custom"
+        case .custom: return "Choose Cards"
         }
     }
 }

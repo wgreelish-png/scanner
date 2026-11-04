@@ -11,7 +11,19 @@ import UIKit
     static func render(_ draft: InventoryLabelDraft) throws -> InventoryLabelBitmap {
         try draft.validate()
         guard let price = draft.priceText else { throw InventoryLabelFailure.invalidPrice }
-        let width = draft.paperSize.feedDots, height = draft.paperSize.headDots
+        return try render(price: price, name: draft.cardName, number: draft.cardNumber,
+            condition: draft.condition, style: draft.style, paper: draft.paperSize)
+    }
+
+    static func render(_ draft: CustomPriceTagDraft) throws -> InventoryLabelBitmap {
+        try draft.validate()
+        return try render(price: draft.priceText, name: "", number: "", condition: "",
+            style: .priceOnly, paper: draft.paperSize)
+    }
+
+    private static func render(price: String, name cardName: String, number cardNumber: String, condition conditionText: String,
+                               style: InventoryLabelStyle, paper: InventoryLabelSize) throws -> InventoryLabelBitmap {
+        let width = paper.feedDots, height = paper.headDots
         guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
             bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue),
               let storage = context.data else { throw InventoryLabelFailure.invalidRaster }
@@ -22,19 +34,19 @@ import UIKit
         UIGraphicsPushContext(context)
         defer { UIGraphicsPopContext() }
         let margin: CGFloat = 8, available = CGFloat(width) - margin * 2
-        switch draft.style {
+        switch style {
         case .priceOnly:
             let font = try priceFont(price, maximum: 64, minimum: 14, width: available)
             drawCentered(price, font: font, rect: CGRect(x: margin, y: 0, width: available, height: CGFloat(height)))
         case .cardDetails:
             let titleFont = UIFont.systemFont(ofSize: 17, weight: .semibold)
-            let number = InventoryLabelDraft.singleLine(draft.cardNumber, maximumCharacters: 100)
+            let number = InventoryLabelDraft.singleLine(cardNumber, maximumCharacters: 100)
                 .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
-            let line = fittedTitle(name: draft.cardName, number: number, font: titleFont, width: available)
+            let line = fittedTitle(name: cardName, number: number, font: titleFont, width: available)
             drawCentered(line, font: titleFont, rect: CGRect(x: margin, y: 4, width: available, height: 24))
             let conditionFont = UIFont.systemFont(ofSize: 15, weight: .semibold)
             let minimumPriceWidth = measured(price, font: .monospacedDigitSystemFont(ofSize: 14, weight: .bold))
-            let condition = truncated(draft.condition, font: conditionFont,
+            let condition = truncated(conditionText, font: conditionFont,
                 width: max(0, min(66, available / 3, available - minimumPriceWidth - 9)))
             let conditionWidth = measured(condition, font: conditionFont)
             let gap: CGFloat = condition.isEmpty ? 0 : 9

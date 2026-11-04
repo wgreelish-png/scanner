@@ -17,11 +17,17 @@ enum LabelQueueState: String, Codable, Equatable, Sendable {
     var isRetryable: Bool { self == .failed || self == .uncertain }
 }
 
+enum LabelQueueSource: String, Codable, Sendable {
+    case inventory, custom
+}
+
 /// An immutable snapshot of one physical label. Queue work cannot change the
 /// inventory lot, its asking price, or any financial record.
 struct LabelQueueEntry: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
-    let inventoryID: UUID
+    /// Missing source identifies a legacy inventory label, never a custom one.
+    let source: LabelQueueSource?
+    let inventoryID: UUID?
     let cardName: String
     let priceCents: Int64
     let copyNumber: Int
@@ -42,6 +48,7 @@ struct LabelQueueEntry: Codable, Equatable, Identifiable, Sendable {
             throw LabelPrintQueueFailure.invalidEntry
         }
         self.id = UUID()
+        self.source = .inventory
         self.inventoryID = draft.id
         self.cardName = draft.cardName
         self.priceCents = cents
@@ -55,6 +62,23 @@ struct LabelQueueEntry: Codable, Equatable, Identifiable, Sendable {
         try validate()
     }
 
+    init(customPriceCents: Int64, raster: LabelRaster, copyNumber: Int,
+         paperSize: InventoryLabelSize) throws {
+        self.id = UUID()
+        self.source = .custom
+        self.inventoryID = nil
+        self.cardName = "Custom price tag"
+        self.priceCents = customPriceCents
+        self.copyNumber = copyNumber
+        self.paperSize = paperSize
+        self.style = .priceOnly
+        self.raster = raster
+        self.pricingRevisionID = nil
+        self.state = .pending
+        self.lastIssue = nil
+        try validate()
+    }
+
     func validate() throws {
         guard !cardName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               cardName.count <= 500,
@@ -62,6 +86,16 @@ struct LabelQueueEntry: Codable, Equatable, Identifiable, Sendable {
               (1...100).contains(copyNumber),
               raster.width == paperSize.headDots,
               raster.height == paperSize.feedDots else { throw LabelPrintQueueFailure.invalidEntry }
+        if source == .custom {
+            guard inventoryID == nil, pricingRevisionID == nil,
+                  style == .priceOnly, priceCents % 100 == 0 else {
+                throw LabelPrintQueueFailure.invalidEntry
+            }
+        } else {
+            // Keep cents-priced legacy inventory snapshots readable. Their
+            // existing approval checks still apply before transport starts.
+            guard inventoryID != nil else { throw LabelPrintQueueFailure.invalidEntry }
+        }
         try raster.validate()
         switch state {
         case .pending, .sending, .completed:

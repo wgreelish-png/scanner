@@ -1,6 +1,6 @@
-# Inventory labels — build 50
+# Price labels — build 52
 
-Create price labels from saved working inventory without an internet request. Build 43 adds [final sticker rules, profit protection and durable approvals](TagPricingRules.md). Draft edits remain separate from financial records; explicit approval activates the sticker as a checkout suggestion, while each sale still records its actual cash amount.
+Create price labels from saved working inventory or enter a price for a standalone sticker, without an internet request. Build 43 adds [final sticker rules, profit protection and durable approvals](TagPricingRules.md). Inventory draft edits remain separate from financial records; explicit approval activates that inventory sticker as a checkout suggestion, while each sale still records its actual cash amount. Standalone stickers are independent of inventory and cost/profit checks.
 
 ## Prepare labels
 
@@ -8,7 +8,8 @@ Create price labels from saved working inventory without an internet request. Bu
 - A batch: **Show → Price Tags**. This dedicated page replaces the inventory toolbar's batch-print option. It also provides direct access to the saved queue and printer settings.
 - **Print All** selects every available inventory entry and requests one label per physical copy, including explicit reprints of unchanged stickers. It opens Label Details directly.
 - **Print Price Changed** selects new cards, approved tags still needing labels and cards crossing the existing market/competitiveness review thresholds. It proposes current suggested prices for nonmanual entries. Manual prices/categories stay intact until explicitly changed. Merely missing a quote does not flag an otherwise unchanged, labeled card.
-- **Custom Price Tags** keeps search and individual selection, with **Select All / Select All Results** and **Clear**. **Set Same Price for Selected Cards** applies one whole-dollar draft price to selected individual-tag entries; bulk cards stay in their category. **Use Suggested Prices** explicitly replaces selected manual draft prices with available suggestions.
+- **Custom Price Tag** opens a simple whole-dollar price, copy count and paper form, with a price-only bitmap preview. No inventory, market price, saved show or tag approval is needed. Prepare saves pending labels; printing remains a separate action. Custom stickers never change an inventory asking price or mark any card as labeled.
+- **Choose Inventory Cards** keeps search and individual selection, with **Select All / Select All Results** and **Clear**. **Set Same Price for Selected Cards** applies one whole-dollar draft price to selected individual-tag entries; bulk cards stay in their category. **Use Suggested Prices** explicitly replaces selected manual draft prices with available suggestions.
 - Choose **Price only** for a large asking price, or **Card details** for name/number, price and condition. Long names truncate; asking prices remain complete.
 - Select the paper loaded in the printer: **30 × 14 mm**, **40 × 12 mm**, or **50 × 14 mm**. The supported head prints a 12 mm strip at eight dots per millimetre; larger stock retains its physical margins.
 - New prices follow the final tiers: below $0.75 goes to the 2 for $1 bulk category, $0.75–$0.99 becomes $1, values below $100 round down to dollars, and $100+ rounds down to $5. Bulk cards receive no individual tags. Approved/manual prices stay selected until reviewed. Edit whole-dollar prices/copies in the isolated editor; cost/profit warnings require explicit review.

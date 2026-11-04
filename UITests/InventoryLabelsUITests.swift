@@ -190,6 +190,7 @@ import XCTest
         openPriceTags(app: app)
         XCTAssertTrue(app.buttons["priceTags.all"].exists)
         XCTAssertTrue(app.buttons["priceTags.changed"].exists)
+        XCTAssertTrue(app.buttons["priceTags.chooseCards"].exists)
         XCTAssertTrue(app.buttons["priceTags.custom"].exists)
         tap(app.buttons["priceTags.all"], app: app)
 
@@ -227,7 +228,7 @@ import XCTest
         assertNoBluetoothPrompt(app: app)
     }
 
-    func testCustomSelectAllAndSharedPriceRemainDraftsUntilApproval() {
+    func testChooseCardsSelectAllAndSharedPriceRemainDraftsUntilApproval() {
         continueAfterFailure = false
         let app = launch()
         defer { app.terminate() }
@@ -284,6 +285,55 @@ import XCTest
         assertNoBluetoothPrompt(app: app)
     }
 
+    func testStandaloneCustomPriceAndCopiesPrepareWithoutInventoryApprovalOrAutomaticPrinting() {
+        continueAfterFailure = false
+        let app = launch()
+        defer { app.terminate() }
+        assertBalances(app: app)
+        tap(app.buttons["show.priceTags"], app: app)
+        XCTAssertTrue(app.navigationBars["Price Tags"].waitForExistence(timeout: 5))
+        tap(app.buttons["priceTags.custom"], app: app)
+        XCTAssertTrue(app.navigationBars["Custom Price Tag"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.navigationBars["Select Label Cards"].exists)
+        XCTAssertEqual(app.textFields["customLabels.copies"].value as? String, "1")
+        XCTAssertTrue(app.descendants(matching: .any)["customLabels.paper"].exists)
+        enter("5", field: app.textFields["customLabels.price"], app: app)
+        enter("3", field: app.textFields["customLabels.copies"], app: app)
+        tap(app.buttons["customLabels.keyboardDone"], app: app)
+        let preview = app.images["customLabels.preview"].firstMatch
+        reveal(preview, app: app)
+        XCTAssertTrue((preview.label + " " + (preview.value as? String ?? "")).contains("$5"))
+        XCTAssertFalse(app.switches["labels.acknowledgePricingWarnings"].exists,
+                       "A standalone price tag does not claim profitability for an unrelated inventory card")
+        XCTAssertTrue(app.buttons["customLabels.prepare"].isEnabled)
+        assertNoBluetoothPrompt(app: app)
+        tap(app.buttons["customLabels.prepare"], app: app)
+        XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
+        assertContains("0/3 completed", element: app.staticTexts["labelQueue.progress"])
+        assertContains("3", element: app.descendants(matching: .any)["labelQueue.totalCount"])
+        XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled)
+        XCTAssertFalse(app.buttons["labelQueue.pause"].exists)
+        let status = app.staticTexts["labelPrinter.status"]
+        reveal(status, app: app)
+        assertContains("Search for a NIIMBOT D110", element: status)
+        assertNoBluetoothPrompt(app: app)
+
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        XCTAssertTrue(app.navigationBars["Custom Price Tag"].waitForExistence(timeout: 5))
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        XCTAssertTrue(app.navigationBars["Price Tags"].waitForExistence(timeout: 5))
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 5))
+        assertBalances(app: app)
+        tap(app.buttons["show.inventory"], app: app)
+        assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
+        assertContains("$35.00", element: inventory("Stock A", app: app))
+        assertContains("Qty 2", element: inventory("Stock A", app: app))
+        assertContains("$5.00", element: inventory("Stock B", app: app))
+        assertContains("Qty 1", element: inventory("Stock B", app: app))
+        assertNoBluetoothPrompt(app: app)
+    }
+
     private func launch() -> XCUIApplication {
         let app = XCUIApplication()
         if let path = ProcessInfo.processInfo.environment["DYLD_FALLBACK_LIBRARY_PATH"] {
@@ -297,7 +347,7 @@ import XCTest
 
     private func openBatch(app: XCUIApplication) {
         openPriceTags(app: app)
-        tap(app.buttons["priceTags.custom"], app: app)
+        tap(app.buttons["priceTags.chooseCards"], app: app)
     }
 
     private func openPriceTags(app: XCUIApplication) {

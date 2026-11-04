@@ -216,8 +216,16 @@ private struct TagApprovalFile: Codable {
     /// completes in its current price cycle. Legacy queues and older cycles
     /// cannot acknowledge a newer approval, even at the same numeric price.
     func observeCompletedQueue(_ entries: [LabelQueueEntry]) throws {
+        let inventoryEntries = entries.filter { $0.source != .custom }
+        // Standalone labels have no acquisition or sticker approval history.
+        // They must also work when the unrelated approval file is unavailable.
+        guard !inventoryEntries.isEmpty else { return }
         try requireWritable()
-        let grouped = Dictionary(grouping: entries, by: \.inventoryID)
+        var grouped: [UUID: [LabelQueueEntry]] = [:]
+        for entry in inventoryEntries {
+            guard let inventoryID = entry.inventoryID else { throw TagApprovalStoreFailure.invalidSelection }
+            grouped[inventoryID, default: []].append(entry)
+        }
         var next = records
         let timestamp = now()
         var changed = false
