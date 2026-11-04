@@ -86,7 +86,7 @@ struct OpenAPIMarketPricing: MarketPricing {
         return try Self.parseDetails(entry.data, for: card, candidates: candidates, fetchedAt: entry.fetchedAt, expectedSetID: set, isOffline: entry.isOffline, isCached: entry.isCached)
     }
     static func categoryID(_ game: String) -> Int? {
-        switch game { case "Pokémon": return 3; case "Magic: The Gathering": return 1; case "Yu-Gi-Oh!": return 2; default: return nil }
+        TCGGameRegistry.categoryID(for: game)
     }
     static func productID(_ reference: String) -> String? {
         guard reference.hasPrefix("p:") else { return nil }

@@ -58,7 +58,7 @@ function fixture(version = 1) {
     [BASE + `pokemon/meta-${version}.json.gz`, meta]
   ]);
 }
-async function page(store, files, { offline = false, native = null, nativeWritesFail = false, nativeReadsFail = false, nativeWritesDrop = false, beforeNativeRead, beforeNativeWrite } = {}) {
+async function page(store, files, { offline = false, native = null, nativeWritesFail = false, nativeReadsFail = false, nativeWritesDrop = false, beforeNativeRead, beforeNativeWrite, gameKey = game } = {}) {
   const calls = [], localCalls = [], progress = [];
   const token = '01234567-89ab-cdef-0123-456789abcdef';
   const context = vm.createContext({
@@ -107,9 +107,29 @@ async function page(store, files, { offline = false, native = null, nativeWrites
   });
   await module.evaluate();
   return { calls, localCalls, progress,
-    prepare: () => module.namespace.prepareCachedPackUpdate(game),
-    load: options => module.namespace.loadPack(game, (loaded, total, stats) => progress.push({ ...stats }), options) };
+    prepare: () => module.namespace.prepareCachedPackUpdate(gameKey),
+    load: options => module.namespace.loadPack(gameKey, (loaded, total, stats) => progress.push({ ...stats }), options) };
 }
+
+test('additional TCG packs keep their own cached marker and permit staged maintenance', async () => {
+  for (const gameKey of ['tcgp:68', 'tcgp:71', 'tcgp:85', 'tcgp:86', 'tcgp:89']) {
+    const files = fixture(), index = files.get(BASE + 'index.json');
+    index.games = { [gameKey]: index.games[game] };
+    const store = indexedDBStore(), native = new Map();
+    const loaded = await (await page(store, files, { native, gameKey })).load({ cacheFirst: true });
+    assert.equal(loaded.game, gameKey);
+    assert.ok(native.has('cur:' + gameKey));
+    assert.equal(native.has('cur:' + game), false);
+    const maintenance = await page(store, files, { native, gameKey });
+    const result = await maintenance.prepare();
+    assert.equal(result.status, 'upToDate');
+    assert.equal(result.downloadedBytes, 0);
+    const reopened = await page(store, files, { native, gameKey, offline: true });
+    const cached = await reopened.load({ cacheFirst: true });
+    assert.equal(cached.game, gameKey);
+    assert.equal(reopened.calls.length, 0);
+  }
+});
 
 test('a complete saved v2 pack reopens in a new page with zero network requests', async () => {
   const store = indexedDBStore(), files = fixture();

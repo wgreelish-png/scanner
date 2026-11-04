@@ -162,7 +162,7 @@ private struct ScanHomeView: View {
                 }
             }
             Picker("Game", selection: $game) {
-                ForEach(CatalogOptions.games, id: \.self) { Text($0) }
+                ForEach(CatalogOptions.games(including: game), id: \.self) { Text($0) }
             }.tint(.primary)
             Button(action: start) {
                 Label("Start New Scan", systemImage: "camera.fill")

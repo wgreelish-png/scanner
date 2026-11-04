@@ -83,7 +83,14 @@ struct StorageFailureView: View {
 }
 
 enum CatalogOptions {
-    static let games = ["Pokémon", "Magic: The Gathering", "Yu-Gi-Oh!"]
+    @MainActor static var games: [String] {
+        games(including: UserDefaults.standard.string(forKey: "defaultGame") ?? "Pokémon")
+    }
+    @MainActor static func games(including selected: String) -> [String] {
+        let games = ScannerGameCatalog.shared.games
+        guard TCGGameRegistry.scannerKey(for: selected) != nil, !games.contains(selected) else { return games }
+        return games + [selected]
+    }
     static let conditions = ["Near Mint", "Lightly Played", "Moderately Played", "Heavily Played", "Damaged"]
 }
 

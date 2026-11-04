@@ -19,7 +19,7 @@ struct ResearchHubView: View {
         self.openSettings = openSettings
         let savedGame = UserDefaults.standard.string(forKey: "defaultGame") ?? "Pokémon"
         _search = State(initialValue: ManualCardSearchModel(
-            game: CatalogOptions.games.contains(savedGame) ? savedGame : "Pokémon"))
+            game: TCGGameRegistry.scannerKey(for: savedGame) != nil ? savedGame : "Pokémon"))
     }
 
     var body: some View {
@@ -47,7 +47,7 @@ struct ResearchHubView: View {
         }
         .onAppear {
             isVisible = true
-            if !CatalogOptions.games.contains(game) { game = search.game }
+            if TCGGameRegistry.scannerKey(for: game) == nil { game = search.game }
             if search.game != game { search.changeGame(game) }
             else if !search.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { search.load() }
         }
@@ -84,7 +84,7 @@ struct ResearchHubView: View {
                 .accessibilityIdentifier("researchHub.scan")
             }
             Picker("Game", selection: $game) {
-                ForEach(CatalogOptions.games, id: \.self) { Text($0).tag($0) }
+                ForEach(CatalogOptions.games(including: game), id: \.self) { Text($0).tag($0) }
             }.pickerStyle(.menu).accessibilityIdentifier("researchHub.game")
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)

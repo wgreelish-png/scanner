@@ -33,13 +33,7 @@ actor CachedCardCatalog: CardCatalogSearching {
     init(cache: ScannerDatabaseCache = .shared) { self.cache = cache }
 
     func search(_ query: String, game: String, limit: Int = 5) async throws -> [CardCandidate] {
-        let key: String
-        switch game {
-        case "Pokémon": key = "tcgp:3"
-        case "Magic: The Gathering": key = "tcgp:1"
-        case "Yu-Gi-Oh!": key = "tcgp:2"
-        default: throw CardCatalogFailure.unsupportedGame
-        }
+        guard let key = TCGGameRegistry.scannerKey(for: game) else { throw CardCatalogFailure.unsupportedGame }
         let source = try await source(for: key)
         let entries: [Entry]
         if let index = indexes[key], index.signature == source.signature { entries = index.entries }
@@ -158,7 +152,8 @@ actor CachedCardCatalog: CardCatalogSearching {
                     old.card.printings = Array(Set(old.card.printings + printings)).sorted()
                     cards[ref] = old
                 } else {
-                    let card = CardCandidate(identity: CardIdentity(game: game, productID: ref, printing: printing),
+                    let card = CardCandidate(identity: CardIdentity(game: game, productID: ref, printing: printing,
+                        language: TCGGameRegistry.defaultLanguage(for: game)),
                         name: name, set: set, number: number, marketPrice: nil, imageURL: image, confidence: 0, printings: printings)
                     cards[ref] = Entry(card: card, name: normalize(name), number: canonicalNumber(number),
                         text: normalize(name + " " + set + " " + abbreviation + " " + number))

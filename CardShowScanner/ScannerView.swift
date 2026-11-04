@@ -147,7 +147,7 @@ struct ScannerView: View {
                     Image(systemName: model.paused ? "play.fill" : "pause.fill").frame(width: 44, height: 44)
                 }.accessibilityLabel(model.paused ? "Resume camera" : "Pause camera")
                 Menu {
-                    Picker("Game", selection: $game) { ForEach(CatalogOptions.games, id: \.self) { Text($0) } }
+                    Picker("Game", selection: $game) { ForEach(CatalogOptions.games(including: game), id: \.self) { Text($0) } }
                     Button("Retry Live Scanner") {
                         model.stop(); model.paused = false
                         startIfReady()

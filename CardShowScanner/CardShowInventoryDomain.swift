@@ -345,6 +345,7 @@ enum CardShowInventoryDecoder {
         value.split(whereSeparator: \.isWhitespace).joined(separator: " ").lowercased()
     }
     private static func normalizedGame(_ value: String) -> String {
+        if let id = TCGGameRegistry.categoryID(for: value), let name = TCGGameRegistry.name(for: id) { return name }
         switch normalized(value) {
         case "pokemon", "pokémon": return "Pokémon"
         case "magic", "magic the gathering", "magic: the gathering": return "Magic: The Gathering"

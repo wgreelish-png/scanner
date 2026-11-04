@@ -77,7 +77,7 @@ enum ScannerUndoFailure: LocalizedError, Equatable {
     }
     static func start(game: String, context: ModelContext, defaults: UserDefaults = .standard, now: Date = .now) throws -> ScanSession {
         guard try active(context: context) == nil else { throw BatchFailure.activeSessionExists }
-        guard CatalogOptions.games.contains(game) else { throw BatchFailure.wrongGame }
+        guard TCGGameRegistry.scannerKey(for: game) != nil else { throw BatchFailure.wrongGame }
         let formatter = DateFormatter(); formatter.dateFormat = "MMM d, yyyy - h:mm a"
         let list = CardList(name: formatter.string(from: now) + " - " + game); list.createdAt = now
         let session = ScanSession(listName: list.name)
@@ -103,7 +103,7 @@ enum ScannerUndoFailure: LocalizedError, Equatable {
     /// Both operations commit together: a failed replacement keeps the old active batch.
     static func replace(_ current: ScanSession, game: String, context: ModelContext, defaults: UserDefaults = .standard) throws -> ScanSession {
         guard current.isActive else { throw BatchFailure.unavailable }
-        guard CatalogOptions.games.contains(game) else { throw BatchFailure.wrongGame }
+        guard TCGGameRegistry.scannerKey(for: game) != nil else { throw BatchFailure.wrongGame }
         let previousStatus = current.statusRaw, previousCompletion = current.completedAt
         current.statusRaw = "completed"; current.completedAt = .now
         do { return try start(game: game, context: context, defaults: defaults) }
@@ -115,7 +115,7 @@ enum ScannerUndoFailure: LocalizedError, Equatable {
     }
     static func continueList(_ list: CardList, game: String, context: ModelContext, finishingOtherSession: Bool = false) throws -> ScanSession {
         guard !list.isCardShowInventory else { throw CardShowInventoryFailure.readOnlyList }
-        guard CatalogOptions.games.contains(game), list.cards.allSatisfy({ $0.snapshot.identity.game == game }) else { throw BatchFailure.wrongGame }
+        guard TCGGameRegistry.scannerKey(for: game) != nil, list.cards.allSatisfy({ $0.snapshot.identity.game == game }) else { throw BatchFailure.wrongGame }
         let sessions = try context.fetch(FetchDescriptor<ScanSession>())
         if let existing = sessions.first(where: { $0.listID == list.id }) {
             try resume(existing, context: context, finishingOtherSession: finishingOtherSession); return existing
@@ -132,7 +132,7 @@ enum ScannerUndoFailure: LocalizedError, Equatable {
     }
     static func resume(_ session: ScanSession, context: ModelContext, finishingOtherSession: Bool = false) throws {
         guard let list = try list(for: session, context: context), let game = session.game,
-              CatalogOptions.games.contains(game), list.cards.allSatisfy({ $0.snapshot.identity.game == game }) else {
+              TCGGameRegistry.scannerKey(for: game) != nil, list.cards.allSatisfy({ $0.snapshot.identity.game == game }) else {
             throw BatchFailure.unavailable
         }
         guard !list.isCardShowInventory else { throw CardShowInventoryFailure.readOnlyList }

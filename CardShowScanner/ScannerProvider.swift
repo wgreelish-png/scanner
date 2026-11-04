@@ -23,7 +23,8 @@ import WebKit
         switch game {
         case "Magic: The Gathering": names = ["Lightning Bolt", "Counterspell", "Sol Ring", "Opt", "Island"]
         case "Yu-Gi-Oh!": names = ["Dark Magician", "Blue-Eyes White Dragon", "Kuriboh", "Celtic Guardian", "Summoned Skull"]
-        default: names = ["Glass Trumpet", "Pikachu", "Charizard", "Eevee", "Squirtle"]
+        case "Pokémon": names = ["Glass Trumpet", "Pikachu", "Charizard", "Eevee", "Squirtle"]
+        default: names = ["Sample Card 1", "Sample Card 2", "Sample Card 3", "Sample Card 4", "Sample Card 5"]
         }
         return (0..<5).map { offset in
             let n = (index + offset) % names.count

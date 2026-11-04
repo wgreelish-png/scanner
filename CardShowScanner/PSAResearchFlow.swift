@@ -30,7 +30,7 @@ struct PSAResearchFlow: View {
             certificateSection
             Section("Find the catalog card") {
                 Picker("Game", selection: Binding(get: { search.game }, set: { search.changeGame($0) })) {
-                    ForEach(CatalogOptions.games, id: \.self) { Text($0) }
+                    ForEach(CatalogOptions.games(including: search.game), id: \.self) { Text($0) }
                 }
                 TextField("Name, number or set", text: Binding(get: { search.query }, set: {
                     hasEditedSearch = true; search.updateQuery($0)

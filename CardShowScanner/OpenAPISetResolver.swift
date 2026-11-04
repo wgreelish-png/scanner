@@ -155,11 +155,6 @@ actor NativeOpenAPISetResolver: OpenAPISetResolving {
             .split(separator: " ").joined(separator: " ")
     }
     private static func gameKey(_ game: String) -> String? {
-        switch game {
-        case "Pokémon": return "tcgp:3"
-        case "Magic: The Gathering": return "tcgp:1"
-        case "Yu-Gi-Oh!": return "tcgp:2"
-        default: return nil
-        }
+        TCGGameRegistry.scannerKey(for: game)
     }
 }

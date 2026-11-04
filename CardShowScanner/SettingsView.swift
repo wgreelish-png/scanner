@@ -13,7 +13,7 @@ struct SettingsView: View {
         Form {
             Section("Scan preferences") {
                 Picker("Default game", selection: $game) {
-                    ForEach(CatalogOptions.games, id: \.self) { Text($0) }
+                    ForEach(CatalogOptions.games(including: game), id: \.self) { Text($0) }
                 }.accessibilityIdentifier("settings.defaultGame")
                 Toggle("Sound effects", isOn: $sound).accessibilityIdentifier("settings.sound")
                 Toggle("Haptic feedback", isOn: $haptics).accessibilityIdentifier("settings.haptics")
@@ -120,6 +120,7 @@ private struct OfferDefaultsSettingsView: View {
 private struct ScannerDatabaseSettingsView: View {
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var databaseUpdater = ScannerDatabaseUpdater.shared
+    @State private var gameCatalog = ScannerGameCatalog.shared
     @AppStorage("defaultGame") private var game = "Pokémon"
     @AppStorage("autoDatabaseUpdates") private var autoDatabaseUpdates = true
     @State private var isVisible = false
@@ -130,12 +131,24 @@ private struct ScannerDatabaseSettingsView: View {
     var body: some View {
         Form {
             Section {
-                LabeledContent("Game", value: game)
+                Picker("Game", selection: $game) {
+                    ForEach(CatalogOptions.games(including: game), id: \.self) { Text($0).tag($0) }
+                }.pickerStyle(.menu).accessibilityIdentifier("settings.databaseGame")
+                Button(gameCatalog.isLoading ? "Checking Available Games…" : "Refresh Available Games") {
+                    Task {
+                        guard isVisible, scenePhase == .active else { return }
+                        await gameCatalog.refresh()
+                    }
+                }.disabled(gameCatalog.isLoading).accessibilityIdentifier("settings.refreshDatabaseGames")
+                if let status = gameCatalog.status {
+                    Text(status).font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("settings.databaseGamesStatus")
+                }
                 Toggle("Automatic Database Updates", isOn: $autoDatabaseUpdates)
                     .accessibilityIdentifier("settings.autoDatabaseUpdates")
                     .onChange(of: autoDatabaseUpdates) { _, enabled in databaseUpdater.setEnabled(enabled) }
             } footer: {
-                Text("Your saved recognition database is checked at most once every seven days. The first download happens when you begin scanning.")
+                Text("Choose a game for future scans. Existing sessions keep their game. Recognition databases are checked at most once every seven days; the first download happens when you begin scanning.")
             }
             Section("Database status") {
                 Text(databaseUpdater.status).font(.subheadline).foregroundStyle(.secondary)
@@ -174,6 +187,10 @@ private struct ScannerDatabaseSettingsView: View {
             }
         }
         .navigationTitle("Scanner Database").navigationBarTitleDisplayMode(.inline)
+        .task {
+            guard scenePhase == .active else { return }
+            await gameCatalog.refreshIfNeeded()
+        }
         .onAppear {
             isVisible = true
             databaseUpdater.setForeground(scenePhase == .active)
@@ -181,12 +198,22 @@ private struct ScannerDatabaseSettingsView: View {
         }
         .onDisappear {
             isVisible = false
+            gameCatalog.cancel()
             databaseUpdater.setSettingsVisible(false, game: game)
         }
         .onChange(of: game) { _, game in
             if isVisible { databaseUpdater.setSettingsVisible(true, game: game) }
         }
-        .onChange(of: scenePhase) { _, phase in databaseUpdater.setForeground(phase == .active) }
+        .onChange(of: scenePhase) { _, phase in
+            databaseUpdater.setForeground(phase == .active)
+            if phase != .active { gameCatalog.cancel() }
+            else if isVisible {
+                Task {
+                    guard isVisible, scenePhase == .active else { return }
+                    await gameCatalog.refreshIfNeeded()
+                }
+            }
+        }
         .failureAlert($error)
         .alert("Scanner cache cleared", isPresented: $cacheMessage) {
             Button("OK", role: .cancel) {}

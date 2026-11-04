@@ -3,7 +3,7 @@
   let running = false;
   const empty = status => ({ status, downloadedBytes: 0, cachedShards: 0 });
   async function run(config) {
-    if (running || !config || !['tcgp:1', 'tcgp:2', 'tcgp:3'].includes(config.game) ||
+    if (running || !config || typeof config.game !== 'string' || !/^tcgp:[1-9][0-9]{0,5}$/.test(config.game) ||
         typeof config.cacheToken !== 'string' || config.cacheToken.length < 32 || config.cacheToken.length > 256 ||
         globalThis.location?.origin !== 'http://127.0.0.1:18764') return empty('failed');
     running = true;

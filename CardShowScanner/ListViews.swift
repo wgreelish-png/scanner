@@ -531,7 +531,7 @@ struct ListDeletionConfirmationView: View {
                 if !transactionEditing { listOutcomeActions(totals: currentOfferTotals, transaction: nil) }
                 if !list.isCardShowInventory {
                     Picker("Game for continued scanning", selection: $continueGame) {
-                        ForEach(CatalogOptions.games, id: \.self) { Text($0) }
+                        ForEach(CatalogOptions.games(including: continueGame), id: \.self) { Text($0) }
                     }
                 }
             }
@@ -1043,14 +1043,14 @@ private struct CardMatchCorrectionSheet: View {
     @State private var search: ManualCardSearchModel
     init(game: String, onSelect: @escaping (CardCandidate) -> Void) {
         self.onSelect = onSelect
-        _search = State(initialValue: ManualCardSearchModel(game: CatalogOptions.games.contains(game) ? game : "Pokémon"))
+        _search = State(initialValue: ManualCardSearchModel(game: TCGGameRegistry.scannerKey(for: game) != nil ? game : "Pokémon"))
     }
     var body: some View {
         NavigationStack {
             List {
                 Section {
                     Picker("Game", selection: Binding(get: { search.game }, set: { search.changeGame($0) })) {
-                        ForEach(CatalogOptions.games, id: \.self) { Text($0) }
+                        ForEach(CatalogOptions.games(including: search.game), id: \.self) { Text($0) }
                     }.accessibilityIdentifier("cardCorrection.game")
                     TextField("Name, card number or set", text: Binding(get: { search.query }, set: { search.updateQuery($0) }))
                         .textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("cardCorrection.query")
