@@ -4,14 +4,19 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '../../CardShowScanner/Resources/TCGTrackingBridge.js'), 'utf8');
-function harness({ denyCamera = false, cacheState = 'ok' } = {}) {
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+function harness({ denyCamera = false, cacheState = 'ok', beforePackReady, playVideo } = {}) {
   const messages = [], elements = [], events = new Map(), windowEvents = new Map(), trackEvents = new Map(), draws = [];
   let overlayDestroyed = 0;
   const packOptions = [];
   let captureOptions, scannerOptions, scannerStarts = 0, stopped = 0, disposed = 0, now = 0;
   const element = tag => {
     const e = { tag, style: {}, children: [], append(...items) { this.children.push(...items); }, setAttribute() {},
-      remove() { this.removed = true; }, async play() {} };
+      remove() { this.removed = true; }, async play() { await playVideo?.(); } };
     elements.push(e); return e;
   };
   const body = element('body');
@@ -23,6 +28,7 @@ function harness({ denyCamera = false, cacheState = 'ok' } = {}) {
       packOptions.push(options);
       if (game !== 'tcgp:3') throw new Error('No downloadable pack is available for this game.');
       progress(1, 1, { downloaded: 0, total: 0, cache: cacheState, cachedHashShards: 1, cachedMetaShards: 1, storage: { persisted: false } });
+      await beforePackReady?.();
       return { game };
     } },
     'app/scan-backends.js': { createBackend: async () => backend },
@@ -105,6 +111,72 @@ test('camera bootstrap uses module interfaces and delivers scan/hide with nonce'
   h.bridge.stop(); assert.ok(h.stopped >= 2); assert.equal(h.disposed, 1);
   const count = h.messages.length; h.scannerOptions.onShow({ ref: tuple() }); assert.equal(h.messages.length, count);
 });
+test('automatic startup keeps page controls hidden while loading and waiting for playback', { timeout: 5000 }, async () => {
+  const packEntered = deferred(), releasePack = deferred(), playEntered = deferred(), releasePlay = deferred();
+  const h = harness({
+    beforePackReady() { packEntered.resolve(); return releasePack.promise; },
+    playVideo() { playEntered.resolve(); return releasePlay.promise; }
+  });
+  const startup = h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  await packEntered.promise;
+  const button = h.elements.find(e => e.tag === 'button');
+  const root = h.elements.find(e => e.tag === 'section'), hint = root.children.at(-1);
+  assert.equal(button.hidden, true, 'native progress is the only startup control');
+  assert.equal(hint.hidden, true, 'page status must not cover native camera UI');
+  assert.equal(h.captureOptions, undefined, 'database loading remains before camera capture');
+  releasePack.resolve();
+  await playEntered.promise;
+  assert.equal(button.hidden, true);
+  assert.equal(hint.hidden, true);
+  assert.equal(h.scannerStarts, 0, 'recognition waits for playback to finish');
+  assert.equal(h.messages.some(m => m.event === 'scanner_ready'), false);
+  releasePlay.resolve();
+  await startup;
+  assert.equal(h.scannerStarts, 1);
+  assert.equal(h.messages.filter(m => m.event === 'scanner_ready').length, 1);
+  assert.equal(button.hidden, true);
+  assert.equal(hint.hidden, true);
+  h.bridge.stop();
+});
+test('automatic startup failure exposes an enabled retry button', { timeout: 5000 }, async () => {
+  const packEntered = deferred(), releasePack = deferred();
+  const h = harness({ beforePackReady() { packEntered.resolve(); return releasePack.promise; } });
+  const startup = h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+  await packEntered.promise;
+  const button = h.elements.find(e => e.tag === 'button');
+  assert.equal(button.hidden, true);
+  releasePack.reject(new Error('Saved database could not be opened'));
+  await startup;
+  assert.equal(button.hidden, false);
+  assert.equal(button.disabled, false);
+  assert.equal(button.textContent, 'Retry Scanner');
+  assert.equal(h.scannerStarts, 0);
+  assert.equal(h.messages.some(m => m.event === 'scanner_ready'), false);
+  assert.match(h.messages.at(-1).message, /Saved database could not be opened/);
+  h.bridge.stop();
+});
+for (const action of ['stop', 'background']) {
+  test(`${action} during pending playback releases capture without starting recognition`, { timeout: 5000 }, async () => {
+    const playEntered = deferred(), releasePlay = deferred();
+    const h = harness({ playVideo() { playEntered.resolve(); return releasePlay.promise; } });
+    const startup = h.bridge.install({ nonce: 'n', game: 'tcgp:3', autoStart: true });
+    await playEntered.promise;
+    const video = h.elements.find(e => e.tag === 'video');
+    assert.ok(video.srcObject, 'capture was acquired before playback completed');
+    if (action === 'stop') h.bridge.stop();
+    else { h.document.hidden = true; h.events.get('visibilitychange')(); }
+    assert.equal(video.srcObject, null);
+    assert.equal(h.stopped, 1, 'the acquired track stops before playback resolves');
+    releasePlay.resolve();
+    await startup;
+    assert.equal(h.scannerStarts, 0);
+    assert.equal(h.messages.some(m => m.event === 'video_playing' || m.event === 'scanner_ready'), false);
+    assert.equal(h.messages.some(m => m.kind === 'scan'), false);
+    assert.equal(video.srcObject, null);
+    assert.equal(h.stopped, 1, 'late playback cannot reopen capture');
+    if (action === 'background') h.bridge.stop();
+  });
+}
 test('backgrounding releases camera and invalidates displayed recognition', async () => {
   const h = harness(); await h.bridge.install({ nonce: 'n', game: 'tcgp:3' });
   await h.elements.find(e => e.tag === 'button').onclick();
