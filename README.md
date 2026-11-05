@@ -26,6 +26,12 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 70 removes duplicate card codes from printed label titles, adds direct
+approval/preparation from Label Details with optional full review, and puts
+Clear Print Queue in the price-tag toolbars. See [label approval and queue
+controls](docs/LabelApprovalAndQueueControls.md). Existing saved rasters keep
+their original artwork; clear and prepare them again to apply title cleanup.
+
 Build 69 adds [continuous D110-M print batches](docs/ContinuousLabelPrinting.md),
 automatic foreground search/reconnection when opening Price Tags and a shared,
 remembered physical label size. Each copy still requires a saved physical

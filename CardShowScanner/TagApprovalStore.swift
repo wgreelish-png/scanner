@@ -169,23 +169,34 @@ private struct TagApprovalFile: Codable {
     }
 
     /// Every approval resets the baseline to the current quote, including a
-    /// retained tag or manual override. Only changed tag values are returned.
+    /// retained tag or manual override. Explicit physical-sticker confirmations
+    /// can be saved in the same atomic update. Only changed tag values are returned.
     @discardableResult
-    func approve(_ requests: [TagApprovalRequest]) throws -> [UUID] {
+    func approve(_ requests: [TagApprovalRequest], keepingExistingStickerIDs: Set<UUID> = []) throws -> [UUID] {
         try requireWritable()
-        guard Set(requests.map(\.id)).count == requests.count else {
+        let requestIDs = Set(requests.map(\.id))
+        guard requestIDs.count == requests.count else {
             throw TagApprovalStoreFailure.duplicateIdentity
+        }
+        guard keepingExistingStickerIDs.isSubset(of: requestIDs) else {
+            throw TagApprovalStoreFailure.invalidSelection
         }
         for request in requests {
             try Self.validate(tag: request.approvedTag)
             try Self.validate(market: request.currentMarket)
+            guard !keepingExistingStickerIDs.contains(request.id) || request.approvedTag.integerPriceCents != nil else {
+                throw TagApprovalStoreFailure.invalidSelection
+            }
         }
         guard !requests.isEmpty else { return [] }
         let timestamp = now()
         var next = records
+        let indicesByID = Dictionary(uniqueKeysWithValues: next.enumerated().map { ($0.element.id, $0.offset) })
         var changed: [UUID] = []
         for request in requests {
-            if let index = next.firstIndex(where: { $0.id == request.id }) {
+            let index: Int
+            if let existing = indicesByID[request.id] {
+                index = existing
                 if next[index].approvedTag != request.approvedTag {
                     changed.append(request.id)
                     next[index].priceRevisionID = UUID()
@@ -195,10 +206,15 @@ private struct TagApprovalFile: Codable {
                 next[index].isManualOverride = request.isManualOverride
                 next[index].approvedAt = timestamp
             } else {
+                index = next.count
                 changed.append(request.id)
                 next.append(TagApprovalRecord(id: request.id, approvedTag: request.approvedTag, priceRevisionID: UUID(),
                     marketAtLastApproval: request.currentMarket, isManualOverride: request.isManualOverride,
                     approvedAt: timestamp, lastPrintedTag: nil, lastPrintedAt: nil))
+            }
+            if keepingExistingStickerIDs.contains(request.id), next[index].needsLabels {
+                next[index].lastPrintedTag = next[index].approvedTag
+                next[index].lastPrintedAt = timestamp
             }
         }
         try commit(next, preferences: preferences)

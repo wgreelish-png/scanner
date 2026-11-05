@@ -202,6 +202,132 @@ import XCTest
         XCTAssertEqual(store.record(for: id), printed)
     }
 
+    func testBatchApprovalAndExistingStickerConfirmationUseOneAtomicSave() throws {
+        let storage = TagApprovalTestStorage(), clock = TagApprovalTestClock(), store = store(storage, clock: clock)
+        let changed = UUID(), retained = UUID(), untouched = UUID(), added = UUID(), bulk = UUID()
+        try store.approve([request(changed), request(retained), request(untouched)])
+        try store.markLabeled(ids: [retained])
+        let oldChanged = try XCTUnwrap(store.record(for: changed))
+        let oldRetained = try XCTUnwrap(store.record(for: retained))
+        let oldUntouched = try XCTUnwrap(store.record(for: untouched))
+        let writes = storage.writes
+        clock.date.addTimeInterval(60)
+
+        XCTAssertEqual(try store.approve([
+            request(added, cents: 0, market: 0), request(changed, cents: 1_100, market: nil, manual: true),
+            request(retained, market: 11), .init(id: bulk, approvedTag: .twoForOne, currentMarket: 0.5)
+        ], keepingExistingStickerIDs: [added, changed, retained]), [added, changed, bulk])
+
+        XCTAssertEqual(storage.writes, writes + 1)
+        XCTAssertEqual(store.records.map(\.id), [changed, retained, untouched, added, bulk],
+                       "Updating a batch retains saved record order and appends new records in request order")
+        let confirmed = try XCTUnwrap(store.record(for: changed))
+        XCTAssertEqual(confirmed.approvedTag, .individual(1_100))
+        XCTAssertNotEqual(confirmed.priceRevisionID, oldChanged.priceRevisionID)
+        XCTAssertNil(confirmed.marketAtLastApproval, "An explicitly unavailable current quote resets the baseline")
+        XCTAssertTrue(confirmed.isManualOverride)
+        XCTAssertEqual(confirmed.approvedAt, clock.date)
+        XCTAssertEqual(confirmed.lastPrintedTag, .individual(1_100))
+        XCTAssertEqual(confirmed.lastPrintedAt, clock.date)
+        XCTAssertFalse(confirmed.needsLabels)
+        XCTAssertEqual(store.record(for: retained)?.priceRevisionID, oldRetained.priceRevisionID)
+        XCTAssertEqual(store.record(for: retained)?.lastPrintedAt, oldRetained.lastPrintedAt,
+                       "Keeping an already confirmed sticker does not rewrite its physical-label history")
+        XCTAssertEqual(store.record(for: retained)?.marketAtLastApproval, 11)
+        XCTAssertEqual(store.record(for: untouched), oldUntouched)
+        XCTAssertEqual(store.record(for: added)?.lastPrintedTag, .individual(0))
+        XCTAssertFalse(try XCTUnwrap(store.record(for: added)).needsLabels)
+        XCTAssertFalse(try XCTUnwrap(store.record(for: bulk)).needsLabels)
+        XCTAssertNil(store.record(for: bulk)?.lastPrintedTag)
+        XCTAssertEqual(self.store(storage).records, store.records)
+    }
+
+    func testCombinedApprovalRejectsUnknownOrUnselectedStickerIDsWithoutPartialApproval() throws {
+        let storage = TagApprovalTestStorage(), store = store(storage)
+        let selected = UUID(), unselected = UUID(), added = UUID()
+        try store.approve([request(selected), request(unselected)])
+        let before = storage.bytes, records = store.records, writes = storage.writes
+        let selections: [Set<UUID>] = [[UUID()], [unselected], [selected, UUID()]]
+        for ids in selections {
+            XCTAssertThrowsError(try store.approve([
+                request(selected, cents: 1_100, market: 11), request(added)
+            ], keepingExistingStickerIDs: ids)) {
+                XCTAssertEqual($0 as? TagApprovalStoreFailure, .invalidSelection)
+            }
+            XCTAssertEqual(store.records, records)
+            XCTAssertEqual(storage.bytes, before)
+            XCTAssertEqual(storage.writes, writes)
+            XCTAssertTrue(store.isLoaded)
+            XCTAssertNil(store.record(for: added))
+        }
+    }
+
+    func testCombinedApprovalCannotConfirmBulkCategoryAsAnIndividualSticker() throws {
+        let storage = TagApprovalTestStorage(), store = store(storage), id = UUID(), bulk = UUID()
+        try store.approve([request(id)])
+        let before = storage.bytes, records = store.records, writes = storage.writes
+        XCTAssertThrowsError(try store.approve([
+            request(id, cents: 1_100), .init(id: bulk, approvedTag: .twoForOne, currentMarket: 0.5)
+        ], keepingExistingStickerIDs: [id, bulk])) {
+            XCTAssertEqual($0 as? TagApprovalStoreFailure, .invalidSelection)
+        }
+        XCTAssertEqual(store.records, records)
+        XCTAssertEqual(storage.bytes, before)
+        XCTAssertEqual(storage.writes, writes)
+        XCTAssertTrue(store.isLoaded)
+    }
+
+    func testCombinedApprovalSaveFailurePublishesNeitherApprovalNorStickerHistoryUntilReload() throws {
+        for failAfterPersist in [false, true] {
+            let storage = TagApprovalTestStorage(), store = store(storage), id = UUID(), added = UUID()
+            try store.approve([request(id)])
+            let before = storage.bytes, records = store.records, writes = storage.writes
+            storage.failWrite = true
+            storage.failAfterPersist = failAfterPersist
+            XCTAssertThrowsError(try store.approve([
+                request(id, cents: 1_100, market: 11, manual: true), request(added)
+            ], keepingExistingStickerIDs: [id])) {
+                XCTAssertEqual($0 as? TagApprovalStoreFailure, .saveFailed)
+            }
+            XCTAssertEqual(store.records, records)
+            XCTAssertFalse(store.isLoaded)
+            XCTAssertEqual(storage.writes, writes + 1)
+            if !failAfterPersist { XCTAssertEqual(storage.bytes, before) }
+            XCTAssertThrowsError(try store.approve([request(id)], keepingExistingStickerIDs: [id])) {
+                XCTAssertEqual($0 as? TagApprovalStoreFailure, .notLoaded)
+            }
+            storage.failWrite = false
+            store.reload()
+            XCTAssertTrue(store.isLoaded)
+            if failAfterPersist {
+                let restored = try XCTUnwrap(store.record(for: id))
+                XCTAssertEqual(restored.approvedTag, .individual(1_100))
+                XCTAssertEqual(restored.lastPrintedTag, .individual(1_100))
+                XCTAssertFalse(restored.needsLabels)
+                XCTAssertTrue(restored.isManualOverride)
+                XCTAssertNotNil(store.record(for: added))
+                XCTAssertTrue(try XCTUnwrap(store.record(for: added)).needsLabels)
+            } else {
+                XCTAssertEqual(store.records, records)
+                XCTAssertNil(store.record(for: added))
+            }
+        }
+    }
+
+    func testEmptyCombinedApprovalDoesNotWriteAndCannotConfirmUnselectedSticker() throws {
+        let storage = TagApprovalTestStorage(), store = store(storage), id = UUID()
+        XCTAssertEqual(try store.approve([], keepingExistingStickerIDs: []), [])
+        XCTAssertEqual(storage.writes, 0)
+        try store.approve([request(id)])
+        let records = store.records, bytes = storage.bytes, writes = storage.writes
+        XCTAssertThrowsError(try store.approve([], keepingExistingStickerIDs: [id])) {
+            XCTAssertEqual($0 as? TagApprovalStoreFailure, .invalidSelection)
+        }
+        XCTAssertEqual(store.records, records)
+        XCTAssertEqual(storage.bytes, bytes)
+        XCTAssertEqual(storage.writes, writes)
+    }
+
     func testInvalidApprovalRejectsWholeBatchWithoutReplacingStoredBaseline() throws {
         let storage = TagApprovalTestStorage(), store = store(storage), existing = UUID()
         try store.approve([request(existing)])

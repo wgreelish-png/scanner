@@ -139,6 +139,88 @@ import UIKit
         XCTAssertEqual(InventoryLabelDraft.singleLine("abcdef", maximumCharacters: 3), "abc")
     }
 
+    func testBattleCageLabelRemovesTheExactPhotographedDuplicateWithoutChangingSavedMetadata() throws {
+        let item = stock(name: "Battle Cage - 116/094", number: "116/094")
+        let original = item
+        var draft = InventoryLabelDraft(item: item)
+        var expected = InventoryLabelDraft(item: stock(name: "Battle Cage", number: "116/094"))
+        let title = InventoryLabelRenderer.titleComponents(name: draft.cardName, number: draft.cardNumber)
+        XCTAssertEqual(title.name, "Battle Cage")
+        XCTAssertEqual(title.number, "116/094")
+        for paper in InventoryLabelSize.allCases {
+            draft.paperSize = paper
+            expected.paperSize = paper
+            XCTAssertEqual(try InventoryLabelRenderer.renderRaster(draft),
+                           try InventoryLabelRenderer.renderRaster(expected),
+                           "The printed title must be Battle Cage · #116/094 with the code only once")
+        }
+        XCTAssertEqual(item, original)
+        XCTAssertEqual(draft.cardName, "Battle Cage - 116/094")
+        XCTAssertEqual(draft.cardNumber, "116/094")
+        let unchanged = InventoryLabelRenderer.titleComponents(name: "Amaura", number: "27/131")
+        XCTAssertEqual(unchanged.name, "Amaura")
+        XCTAssertEqual(unchanged.number, "27/131")
+    }
+
+    func testLabelTitleDeduplicatesExactCodeTokensCaseVariantsWrappersAndHashSeparators() {
+        for (name, number, expectedName, expectedNumber) in [
+            ("Battle Cage - 116/094", "116/094", "Battle Cage", "116/094"),
+            ("Battle Cage (116/094)", "116/094", "Battle Cage", "116/094"),
+            ("Battle Cage (# 116/094)", "#116/094", "Battle Cage", "116/094"),
+            ("Battle Cage [116/094]", "116/094", "Battle Cage", "116/094"),
+            ("Battle Cage #116/094", " # 116/094 ", "Battle Cage", "116/094"),
+            ("Battle Cage - ab12-en003", "AB12-EN003", "Battle Cage", "AB12-EN003"),
+            ("AB12-EN003 · Battle Cage", "AB12-EN003", "Battle Cage", "AB12-EN003"),
+            ("Battle AB12-EN003 Cage", "AB12-EN003", "Battle Cage", "AB12-EN003"),
+            ("Battle Cage (ab12-en003) - #AB12-EN003", "AB12-EN003", "Battle Cage", "AB12-EN003"),
+            ("Battle Cage (Normal 116/094)", "116/094", "Battle Cage (Normal)", "116/094"),
+            ("Battle Cage - 116/094 - Normal", "116/094", "Battle Cage - Normal", "116/094"),
+            ("Charmander (#044)", "044", "Charmander", "044"),
+            ("Charmander - 044", "044", "Charmander", "044"),
+            ("AB12-EN003", "AB12-EN003", "", "AB12-EN003")
+        ] {
+            let title = InventoryLabelRenderer.titleComponents(name: name, number: number)
+            XCTAssertEqual(title.name, expectedName, name)
+            XCTAssertEqual(title.number, expectedNumber, number)
+        }
+    }
+
+    func testLabelTitleKeepsIncidentalSubstringsDifferentCodesAndMeaningfulNameNumbers() {
+        for (name, number) in [
+            ("Battle Cage - 116/0940", "116/094"),
+            ("Battle Cage - 1116/094", "116/094"),
+            ("Battle Cage - X116/094", "116/094"),
+            ("Battle Cage - 116/094-JP", "116/094"),
+            ("Battle Cage - 116/094.5", "116/094"),
+            ("Battle Cage - 116/094_1", "116/094"),
+            ("Battle Cage - 116/095", "116/094"),
+            ("Battle Cage (116/0940)", "116/094"),
+            ("Porygon2", "2"),
+            ("Number 39: Utopia", "39"),
+            ("Number 39", "39"),
+            ("The 2025 Champion", "2025"),
+            ("Promo Dragon", "Promo"),
+            ("Battle Cage - 116/094", "")
+        ] {
+            let title = InventoryLabelRenderer.titleComponents(name: name, number: number)
+            XCTAssertEqual(title.name, name, "Only an exact, separately identified code may be removed: " + name)
+            XCTAssertEqual(title.number, number)
+        }
+    }
+
+    func testPriceOnlyRasterIsIndependentOfDuplicateTitleMetadata() throws {
+        var duplicated = InventoryLabelDraft(item: stock(name: "Battle Cage - 116/094", number: "116/094"))
+        var other = InventoryLabelDraft(item: stock(name: "Amaura", number: "27/131"))
+        duplicated.style = .priceOnly
+        other.style = .priceOnly
+        for paper in InventoryLabelSize.allCases {
+            duplicated.paperSize = paper
+            other.paperSize = paper
+            XCTAssertEqual(try InventoryLabelRenderer.renderRaster(duplicated),
+                           try InventoryLabelRenderer.renderRaster(other))
+        }
+    }
+
     func testBothLayoutsEveryPaperSizeProduceExactNonblankPrinterRastersAndActualPreviews() throws {
         for style in InventoryLabelStyle.allCases {
             for size in InventoryLabelSize.allCases {
@@ -148,6 +230,8 @@ import UIKit
                 XCTAssertEqual(bitmap.raster.width, 96)
                 XCTAssertEqual(bitmap.raster.height, size.feedDots)
                 XCTAssertEqual(bitmap.raster.data.count, size.feedDots * 12)
+                XCTAssertEqual(try InventoryLabelRenderer.renderRaster(draft), bitmap.raster,
+                               "Queue preparation must preserve the exact same bits without decoding a preview")
                 XCTAssertTrue(bitmap.raster.data.contains { $0 != 0 })
                 XCTAssertEqual(bitmap.previewImage.size.width, CGFloat(size.feedDots))
                 XCTAssertEqual(bitmap.previewImage.size.height, 96)

@@ -135,6 +135,7 @@ struct TagRepricingSummary: View {
             .navigationTitle("Pricing Settings").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) { ClearLabelPrintQueueButton(identifier: "labels.settings.clearQueue") }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Save") {
                         guard let preferences else { return }

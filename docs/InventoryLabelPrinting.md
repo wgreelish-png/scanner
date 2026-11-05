@@ -1,4 +1,7 @@
-# Price labels — build 69
+# Price labels — build 70
+
+Build 70 adds [direct approval, label-title cleanup and queue-clearing
+toolbars](LabelApprovalAndQueueControls.md). Full Review Details is optional.
 
 Build 69 adds [continuous D110-M batches, foreground printer discovery from
 Price Tags and remembered physical label sizes](ContinuousLabelPrinting.md).

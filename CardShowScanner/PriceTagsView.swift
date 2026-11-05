@@ -91,6 +91,11 @@ import SwiftData
         }
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle("Price Tags").navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                ClearLabelPrintQueueButton(identifier: "priceTags.clearQueue")
+            }
+        }
         .sheet(item: $batch) { mode in
             InventoryLabelFlowView(inventory: store.inventory, marketQuotes: marketQuotes, mode: mode,
                                    paperPreferences: paperPreferences)
@@ -173,5 +178,58 @@ import SwiftData
 
     private func refreshQuotes() {
         marketQuotes = TagPricingContext.currentQuotes(inventory: store.inventory, context: context)
+    }
+}
+
+/// The same foreground action is available throughout label preparation.
+/// It removes saved print work without changing inventory or approved prices.
+@MainActor struct ClearLabelPrintQueueButton: View {
+    let identifier: String
+    @State private var queue = LabelPrintQueue.shared
+    @State private var printer = NiimbotPrinter.shared
+    @State private var confirming = false
+    @State private var failure: String?
+
+    init(identifier: String = "labels.clearQueue") { self.identifier = identifier }
+
+    private var busy: Bool { queue.isPrinting || printer.isPrinting || printer.isConfiguringPaper }
+    private var empty: Bool { queue.isLoaded && queue.entries.isEmpty }
+
+    var body: some View {
+        Button { confirming = true } label: {
+            Label("Clear Print Queue", systemImage: "trash")
+        }
+        .disabled(busy || empty)
+        .accessibilityIdentifier(identifier)
+        .confirmationDialog("Clear the print queue?", isPresented: $confirming, titleVisibility: .visible) {
+            Button("Clear Print Queue", role: .destructive) { clearQueue() }
+                .accessibilityIdentifier(identifier + ".confirm")
+            Button("Cancel", role: .cancel) {}
+                .accessibilityIdentifier(identifier + ".cancel")
+        } message: {
+            Text(confirmationMessage)
+        }
+        .alert("Unable to Clear Print Queue", isPresented: Binding(get: { failure != nil }, set: {
+            if !$0 { failure = nil }
+        })) {
+            Button("OK", role: .cancel) { failure = nil }
+        } message: { Text(failure ?? "") }
+    }
+
+    private var confirmationMessage: String {
+        let message = queue.isLoaded
+            ? "This removes all \(queue.entries.count.formatted()) saved labels and their print progress. Inventory and approved prices stay unchanged."
+            : "This discards the unreadable saved print queue. Inventory and approved prices stay unchanged."
+        return queue.uncertainCount > 0 || !queue.isLoaded
+            ? message + " Check any uncertain physical labels before preparing another batch."
+            : message
+    }
+
+    private func clearQueue() {
+        do {
+            guard !busy else { throw LabelPrinterIssue.printerBusy }
+            if queue.isLoaded { try queue.clear() }
+            else { try queue.discardSavedQueue() }
+        } catch { failure = error.localizedDescription }
     }
 }

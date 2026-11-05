@@ -91,6 +91,9 @@ import SwiftUI
             }.padding(16).background(.bar)
         }
         .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                ClearLabelPrintQueueButton(identifier: "customLabels.clearQueue")
+            }
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
                 Button("Done") { focused = nil }.fixedSize().frame(minWidth: 64, minHeight: 44)
