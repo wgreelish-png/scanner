@@ -224,3 +224,13 @@ enum LabelSendOutcome: Equatable, Sendable {
         afterPage: @escaping @MainActor (Int) async throws -> Void
     ) async -> LabelSendOutcome
 }
+
+/// A printer may buffer several physical copies. Each group is journaled
+/// before dispatch; cumulative completion proofs are saved atomically.
+@MainActor protocol LabelContinuousPrinterSending: LabelPrinterSending {
+    func printContinuously(
+        _ rasters: [LabelRaster],
+        beforePages: @escaping @MainActor ([Int]) async throws -> Void,
+        afterPages: @escaping @MainActor ([Int]) async throws -> Void
+    ) async -> LabelSendOutcome
+}

@@ -141,9 +141,9 @@ private struct LabelQueueFile: Codable {
     var entries: [LabelQueueEntry] = []
 }
 
-/// The durable queue never starts by itself. Each copy is saved as `sending`
-/// before transport can emit bytes; an interrupted copy therefore requires a
-/// physical-label check and an explicit retry after restart.
+/// The durable queue never starts by itself. Each copy or bounded firmware copy
+/// group is saved as `sending` before transport can emit bytes; interrupted
+/// copies require a physical-label check and an explicit retry after restart.
 @MainActor @Observable final class LabelPrintQueue {
     typealias Reader = @MainActor (URL) throws -> Data?
     typealias Writer = @MainActor (Data, URL) throws -> Void
@@ -154,6 +154,8 @@ private struct LabelQueueFile: Codable {
     }, approvalIssue: { TagPricingContext.printingIssue(for: $0) })
     static let maximumLabels = 250
     static let maximumBytes = 8 * 1_024 * 1_024
+    private static let maximumContinuousGroup = 8
+    private static let maximumInFlightLabels = 16
 
     private(set) var entries: [LabelQueueEntry] = []
     private(set) var isPrinting = false
@@ -250,6 +252,10 @@ private struct LabelQueueFile: Codable {
             stopRequested = false
         }
 
+        if let continuousPrinter = printer as? any LabelContinuousPrinterSending {
+            await sendContinuously(using: continuousPrinter, sessionID: sessionID)
+            return
+        }
         if let batchPrinter = printer as? any LabelBatchPrinterSending {
             await sendBatch(using: batchPrinter, sessionID: sessionID)
             return
@@ -313,7 +319,121 @@ private struct LabelQueueFile: Codable {
         }
     }
 
-    /// A continuous printer task still has only one unconfirmed copy at a time.
+    /// A capable printer may buffer two firmware groups. The complete group is
+    /// journaled before transmission, and physical counters confirm only an
+    /// ordered prefix of that bounded window.
+    private func sendContinuously(using printer: any LabelContinuousPrinterSending, sessionID: UUID) async {
+        let pendingIndices = entries.indices.filter { entries[$0].state == .pending }
+        let pending = pendingIndices.map { entries[$0] }
+        var nextPage = 0
+        var confirmedPages = 0
+        let outcome = await withTaskCancellationHandler {
+            await printer.printContinuously(pending.map(\.raster), beforePages: { [weak self] pages in
+                guard let self, self.isPrinting, self.activeSessionID == sessionID else {
+                    throw LabelPrinterIssue.cancelled
+                }
+                guard self.isLoaded else { throw LabelPrintQueueFailure.notLoaded }
+                guard !self.stopRequested, !Task.isCancelled else { throw LabelPrinterIssue.cancelled }
+                guard !pages.isEmpty, pages.count <= Self.maximumContinuousGroup,
+                      pages.count <= pending.count - nextPage,
+                      nextPage - confirmedPages + pages.count <= Self.maximumInFlightLabels,
+                      pages == Array(nextPage..<(nextPage + pages.count)),
+                      pages.allSatisfy({ self.entries[pendingIndices[$0]].id == pending[$0].id
+                          && self.entries[pendingIndices[$0]].state == .pending }) else {
+                    throw LabelPrinterIssue.unsupportedResponse
+                }
+                // Check every approval before journaling any member of this
+                // group. A rejected group must not partly reach the printer.
+                let rejected = pages.compactMap { page -> (index: Int, issue: String)? in
+                    let index = pendingIndices[page]
+                    return self.approvalIssue(self.entries[index]).map { (index, $0) }
+                }
+                if !rejected.isEmpty {
+                    var failed = self.entries
+                    for rejection in rejected {
+                        failed[rejection.index].state = .failed
+                        failed[rejection.index].lastIssue = .invalidLabel
+                    }
+                    try self.commit(failed)
+                    self.error = rejected.first?.issue
+                    throw LabelPrinterIssue.invalidLabel
+                }
+                var sending = self.entries
+                for page in pages {
+                    sending[pendingIndices[page]].state = .sending
+                    sending[pendingIndices[page]].lastIssue = nil
+                }
+                try self.commit(sending)
+                nextPage += pages.count
+                guard !self.stopRequested, !Task.isCancelled else { throw LabelPrinterIssue.cancelled }
+            }, afterPages: { [weak self] pages in
+                guard let self, self.isPrinting, self.activeSessionID == sessionID else {
+                    throw LabelPrinterIssue.cancelled
+                }
+                guard self.isLoaded else { throw LabelPrintQueueFailure.notLoaded }
+                guard !pages.isEmpty, pages.count <= nextPage - confirmedPages,
+                      pages == Array(confirmedPages..<(confirmedPages + pages.count)),
+                      pages.allSatisfy({ self.entries[pendingIndices[$0]].id == pending[$0].id
+                          && self.entries[pendingIndices[$0]].state == .sending }) else {
+                    throw LabelPrinterIssue.unsupportedResponse
+                }
+                // Persist all physical proof in this callback, even after Stop
+                // or cancellation. A cumulative counter can confirm several
+                // pages from either buffered group in one atomic receipt.
+                var completed = self.entries
+                for page in pages {
+                    completed[pendingIndices[page]].state = .completed
+                    completed[pendingIndices[page]].lastIssue = nil
+                }
+                do { try self.commit(completed) }
+                catch {
+                    self.entries = completed
+                    throw error
+                }
+                confirmedPages += pages.count
+            })
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.requestStop(sessionID: sessionID) }
+        }
+
+        guard isPrinting, activeSessionID == sessionID, isLoaded else { return }
+        let inFlight = pendingIndices.filter { entries[$0].state == .sending }
+        if !inFlight.isEmpty {
+            let issue: LabelPrinterIssue
+            let state: LabelQueueState
+            switch outcome {
+            case .completed:
+                issue = .unsupportedResponse
+                state = .uncertain
+            case .notSent(let failure):
+                issue = failure
+                state = .failed
+            case .uncertain(let failure):
+                issue = failure
+                state = .uncertain
+            }
+            let callbackError = error
+            var finished = entries
+            for index in inFlight {
+                finished[index].state = state
+                finished[index].lastIssue = issue
+            }
+            do { try commit(finished) }
+            catch { entries = finished; return }
+            error = callbackError ?? issue.localizedDescription
+            return
+        }
+        switch outcome {
+        case .completed:
+            if confirmedPages != pending.count, error == nil {
+                error = LabelPrinterIssue.unsupportedResponse.localizedDescription
+            }
+        case .notSent(let issue), .uncertain(let issue):
+            if error == nil { error = issue.localizedDescription }
+        }
+    }
+
+    /// A batch printer task still has only one unconfirmed copy at a time.
     /// The printer must await both callbacks before advancing to another page.
     private func sendBatch(using printer: any LabelBatchPrinterSending, sessionID: UUID) async {
         let pending = entries.filter { $0.state == .pending }
@@ -494,7 +614,9 @@ private struct LabelQueueFile: Codable {
     private static func validate(_ entries: [LabelQueueEntry]) throws {
         guard entries.count <= maximumLabels else { throw LabelPrintQueueFailure.tooManyLabels }
         guard Set(entries.map(\.id)).count == entries.count else { throw LabelPrintQueueFailure.duplicateIdentity }
-        guard entries.filter({ $0.state == .sending }).count <= 1 else { throw LabelPrintQueueFailure.invalidEntry }
+        guard entries.filter({ $0.state == .sending }).count <= maximumInFlightLabels else {
+            throw LabelPrintQueueFailure.invalidEntry
+        }
         for entry in entries { try entry.validate() }
     }
 

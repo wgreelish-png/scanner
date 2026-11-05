@@ -1,4 +1,8 @@
-# Price labels — build 72
+# Price labels — build 73
+
+Build 73 adds [buffered continuous output and printer-side copy
+counts](BufferedLabelPrinting.md). It supersedes waiting for each D110-M label
+to finish before sending the next.
 
 Build 72 restores [the verified print transfer path and explicit selected-card
 reprints](PrintTransferRecovery.md), with connected-print command diagnostics.
@@ -49,7 +53,7 @@ Tap **Print Queued Labels** to process pending labels in one declared-count task
 
 ## Interrupted jobs
 
-The queue is a separate versioned file in Application Support: `CardShowScanner/label-print-queue.json`, bounded to 250 copies and 8 MiB. Each copy is marked **Printing** and saved before bytes can be sent. Confirmed completion is saved before the next copy starts.
+The queue is a separate versioned file in Application Support: `CardShowScanner/label-print-queue.json`, bounded to 250 copies and 8 MiB. Copies in a buffered group are marked **Printing** and saved together before bytes can be sent. Cumulative physical completion is saved before refilling the bounded printer buffer.
 
 An interrupted or uncertain in-flight copy becomes **Check label** after relaunch. Other copies retain their status; reopening never starts printing. Select only failed/uncertain copies to retry. Uncertain copies require explicit confirmation that the physical output was checked and another copy is needed. Completed copies cannot be accidentally included in Retry Selected. A separate Start action is still required.
 

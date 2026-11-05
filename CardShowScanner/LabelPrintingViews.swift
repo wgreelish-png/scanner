@@ -79,7 +79,13 @@ import UIKit
                 }
             }
         } header: { Text("Bluetooth printer") } footer: {
-            Text("Disconnect the printer in other apps before searching. Allow Bluetooth access and keep this app open while connecting and printing.")
+            VStack(alignment: .leading, spacing: 6) {
+                if printer.isConnected {
+                    Text(printer.supportsContinuousPrinting ? "Continuous batch ready" : "Verified per-label printing")
+                        .accessibilityIdentifier("labelPrinter.printingMethod")
+                }
+                Text("Disconnect the printer in other apps before searching. Allow Bluetooth access and keep this app open while connecting and printing.")
+            }
         }
         Section {
             LabeledContent("Last used label size", value: paperPreferences.size.title)
@@ -1038,7 +1044,7 @@ private struct LabelActionBar<Content: View>: View {
                     }
                     if hasRetryable {
                         Section {
-                            Text("Select only labels that need another copy. Check label means the printer may already have printed it. Completed copies cannot be retried.")
+                            Text("Select only labels that need another copy. The printer may finish labels already buffered after pausing. Check every uncertain label before retrying. Completed copies cannot be retried.")
                                 .font(.footnote).foregroundStyle(.secondary)
                             Button("Retry Selected (\(selected.count))") {
                                 if selectedUncertain { acknowledged = false; showingRetry = true }
@@ -1094,7 +1100,7 @@ private struct LabelActionBar<Content: View>: View {
             }
             Button("Keep Queue", role: .cancel) {}
         } message: {
-            Text("This removes saved labels and completion receipts. Check uncertain physical labels first. Inventory and financial records are unaffected.")
+            Text("This removes saved labels and completion receipts. After stopping, the printer may finish labels already buffered. Check uncertain physical labels first. Inventory and financial records are unaffected.")
         }
         .alert("Label queue", isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
             Button("OK", role: .cancel) { actionError = nil }
@@ -1166,39 +1172,60 @@ private struct LabelActionBar<Content: View>: View {
 
     private var printControls: some View {
         LabelActionBar {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("\(queue.completedCount)/\(queue.entries.count) completed").font(.caption).monospacedDigit()
-                    .accessibilityIdentifier("labelQueue.progress")
-                Text("Paper type: \(printer.paperMode.title)").font(.caption).foregroundStyle(.secondary)
-                    .accessibilityIdentifier("labelQueue.paperMode")
-                if queue.isPrinting {
-                    ProgressView(value: Double(queue.completedCount), total: Double(max(1, queue.entries.count)))
-                        .accessibilityLabel("Print progress")
-                }
-            }.frame(maxWidth: .infinity, alignment: .leading)
-            if queue.isPrinting {
-                Button("Pause Printing", role: .destructive) { queue.stop(using: printer) }
-                    .buttonStyle(.borderedProminent).accessibilityIdentifier("labelQueue.pause")
-            } else {
-                Button("Print Queued Labels") {
-                    guard !printer.isConfiguringPaper else { return }
-                    let sender = printer.senderForCurrentPaperMode()
-                    Task {
-                        guard !printer.isConfiguringPaper else { return }
-                        await queue.start(using: sender)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(queue.completedCount)/\(queue.entries.count) completed").font(.caption).monospacedDigit()
+                            .accessibilityIdentifier("labelQueue.progress")
+                        Text("Paper type: \(printer.paperMode.title)").font(.caption).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("labelQueue.paperMode")
+                        if queue.isPrinting {
+                            ProgressView(value: Double(queue.completedCount), total: Double(max(1, queue.entries.count)))
+                                .accessibilityLabel("Print progress")
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                    if queue.isPrinting {
+                        Button("Pause Printing", role: .destructive) { queue.stop(using: printer) }
+                            .buttonStyle(.borderedProminent).accessibilityIdentifier("labelQueue.pause")
+                    } else {
+                        Button("Print Queued Labels") {
+                            guard !printer.isConfiguringPaper else { return }
+                            let sender = printer.senderForCurrentPaperMode()
+                            Task {
+                                guard !printer.isConfiguringPaper else { return }
+                                await queue.start(using: sender)
+                            }
+                        }.buttonStyle(.borderedProminent)
+                            .disabled(!queue.canStart || !printer.isConnected || printer.isConfiguringPaper || scenePhase != .active)
+                            .accessibilityIdentifier("labelQueue.print")
                     }
-                }.buttonStyle(.borderedProminent)
-                    .disabled(!queue.canStart || !printer.isConnected || printer.isConfiguringPaper || scenePhase != .active)
-                    .accessibilityIdentifier("labelQueue.print")
+                }
+                if !queue.entries.isEmpty {
+                    Text(printHelp).font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("labelQueue.printHelp")
+                }
             }
         }
+    }
+
+    private var printHelp: String {
+        if queue.isPrinting {
+            return "Pausing stops new labels. The printer may finish labels already buffered. Check uncertain labels before retrying."
+        }
+        if printer.supportsContinuousPrinting {
+            return "D110-M batches keep the printer supplied; identical consecutive labels use the printer’s copy count."
+        }
+        return printer.isConnected
+            ? "Each label is confirmed before the next one prints."
+            : "Connect your printer to print the saved queue."
     }
 
     private var retryConfirmation: some View {
         NavigationStack {
             Form {
                 Section {
-                    Text("Some selected labels may already have printed. Inspect the printer and every selected Check label copy. Retry only copies you still need.")
+                    Text("Some selected labels may already have printed. The printer may also finish labels already buffered after stopping. Inspect the output and every selected Check label copy. Retry only copies you still need.")
                     Toggle("I checked the printed labels", isOn: $acknowledged)
                         .accessibilityIdentifier("labelQueue.acknowledgeUncertain")
                 }

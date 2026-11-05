@@ -849,4 +849,316 @@ final class NiimbotProtocolTests: XCTestCase {
         XCTAssertEqual(will, [0]); XCTAssertEqual(completed, [0])
         XCTAssertEqual(sentPages, 1)
     }
+
+    private func variantRaster(_ byte: UInt8) -> LabelRaster {
+        .init(width: 96, height: 240, data: Data(repeating: byte, count: 12 * 240))
+    }
+
+    func testContinuousPlanUsesBoundedAdjacentNativeCopiesAndNeverChangesRasterRows() throws {
+        let other = variantRaster(0x7f)
+        let rasters = Array(repeating: denseRaster, count: 10) + [other, denseRaster]
+        for version in [0, 1, 3, 4, 5] {
+            let identity = d110MIdentity(version: version)
+            let plan = try NiimbotProtocol.continuousRequests(for: rasters, identity: identity, paperMode: .transparent)
+            XCTAssertTrue(plan.usesCumulativePageCounter)
+            XCTAssertEqual(plan.groups.map(\.indices), [0..<8, 8..<10, 10..<11, 11..<12])
+            XCTAssertEqual(plan.initialization.first { $0.command == 0x01 }?.data.prefix(2), Data([0, 12]))
+            XCTAssertEqual(plan.initialization.first { $0.command == 0x23 }?.data, Data([5]))
+            for group in plan.groups {
+                let size = try XCTUnwrap(group.requests.first { $0.command == 0x13 })
+                XCTAssertEqual(size.data.count, version == 4 ? 13 : 6)
+                XCTAssertEqual(size.data.subdata(in: 4..<6), Data([0, UInt8(group.indices.count)]))
+                XCTAssertLessThanOrEqual(group.indices.count, 8)
+                XCTAssertEqual(group.requests.filter(\.beginsPrint).map(\.command), version == 4 ? [0x13] : [0x03])
+                let single = try NiimbotProtocol.printRequests(for: rasters[group.indices.lowerBound], identity: identity)
+                let imageCommands: Set<UInt8> = [0x83, 0x84, 0x85]
+                XCTAssertEqual(group.requests.filter { imageCommands.contains($0.command) },
+                               single.filter { imageCommands.contains($0.command) },
+                               "Each native-copy group uploads its exact image once, irrespective of quantity")
+            }
+        }
+    }
+
+    @MainActor func testContinuousWindowUploadsTwoGroupsBeforePollingAndDurablyForwardsPartialAndCombinedReceipts() async throws {
+        for version in [3, 4] {
+            let rasters = Array(repeating: denseRaster, count: 3) + Array(repeating: variantRaster(0x7f), count: 2) + [variantRaster(0x3f)]
+            var requests: [NiimbotRequest] = []
+            var will: [[Int]] = [], receipts: [[Int]] = []
+            var submitted = 0, quantity = 0, groups = 0, polls = 0, pauses = 0
+            let counters = [2, 3, 6]
+            try await NiimbotD110Session.printContinuously(rasters, identity: d110MIdentity(version: version), exchange: { request in
+                requests.append(request)
+                if request.command == 0xdc { return request.response == nil ? nil : self.d110MReadiness }
+                if request.command == 0x01 { XCTAssertEqual(will, [[0, 1, 2]]) }
+                if request.command == 0x13 { quantity = Int(request.data[4]) << 8 | Int(request.data[5]) }
+                if request.command == 0xe3 { submitted += quantity; groups += 1 }
+                if request.command == 0xa3 {
+                    guard request.response != nil else { return nil }
+                    if polls == 0 { XCTAssertEqual(groups, 2); XCTAssertEqual(submitted, 5) }
+                    if polls == 2 { XCTAssertEqual(groups, 3); XCTAssertEqual(submitted, 6) }
+                    let count = counters[min(polls, counters.count - 1)]
+                    polls += 1
+                    return .init(command: 0xb3, data: Data([0, UInt8(count), 75, 0]))
+                }
+                if request.command == 0xf3 { XCTAssertEqual(receipts.flatMap { $0 }, Array(0..<6)) }
+                return request.response.map { .init(command: $0, data: Data([1])) }
+            }, pause: { pauses += 1 }, onPagesWillSend: { indices in
+                if indices == [5] {
+                    XCTAssertEqual(receipts, [[0, 1], [2]])
+                    XCTAssertEqual(pauses, 2, "A freed window must refill before another polling pause")
+                }
+                will.append(indices)
+            }, onPagesCompleted: { receipts.append($0) })
+            XCTAssertEqual(will, [[0, 1, 2], [3, 4], [5]])
+            XCTAssertEqual(receipts, [[0, 1], [2], [3, 4, 5]])
+            XCTAssertEqual(polls, 3); XCTAssertEqual(pauses, 3)
+            XCTAssertEqual(requests.filter { $0.command == 0x01 }.count, 1)
+            XCTAssertEqual(requests.filter { $0.command == 0xf3 }.count, 1)
+            XCTAssertEqual(requests.filter { $0.command == 0xe3 }.count, 3)
+            XCTAssertEqual(requests.last?.command, version == 4 ? 0xdc : 0xf3)
+        }
+    }
+
+    @MainActor func testContinuousIdenticalCopiesUploadOncePerEightCopyGroupAndBoundTheWindowToSixteen() async throws {
+        var requests: [NiimbotRequest] = []
+        var will: [[Int]] = [], receipts: [[Int]] = []
+        var submitted = 0, quantity = 0, polls = 0
+        try await NiimbotD110Session.printContinuously(Array(repeating: denseRaster, count: 17), identity: d110MIdentity(), exchange: { request in
+            requests.append(request)
+            if request.command == 0xdc { return request.response == nil ? nil : self.d110MReadiness }
+            if request.command == 0x13 { quantity = Int(request.data[4]) << 8 | Int(request.data[5]) }
+            if request.command == 0xe3 { submitted += quantity }
+            if request.command == 0xa3 {
+                guard request.response != nil else { return nil }
+                XCTAssertEqual(submitted, polls == 0 ? 16 : 17)
+                polls += 1
+                return .init(command: 0xb3, data: Data([0, polls == 1 ? 8 : 17, 100, 100]))
+            }
+            return request.response.map { .init(command: $0, data: Data([1])) }
+        }, pause: {}, onPagesWillSend: { will.append($0) }, onPagesCompleted: { receipts.append($0) })
+        XCTAssertEqual(will, [Array(0..<8), Array(8..<16), [16]])
+        XCTAssertEqual(receipts, [Array(0..<8), Array(8..<17)])
+        XCTAssertEqual(requests.filter { $0.command == 0x13 }.map { $0.data.subdata(in: 4..<6) },
+                       [Data([0, 8]), Data([0, 8]), Data([0, 1])])
+        let singleRows = try NiimbotProtocol.printRequests(for: denseRaster, identity: d110MIdentity()).filter { $0.command == 0x85 }
+        XCTAssertEqual(requests.filter { $0.command == 0x85 }.count, singleRows.count * 3)
+        XCTAssertEqual(polls, 2)
+    }
+
+    @MainActor func testContinuousStorageFailuresHaltBeforeAnyFurtherGroupAndNeverReplay() async throws {
+        let rasters = [denseRaster, variantRaster(0x7f), variantRaster(0x3f), variantRaster(0x1f)]
+        for failure in 0..<4 {
+            var requests: [NiimbotRequest] = []
+            var will: [[Int]] = [], receipts: [[Int]] = []
+            var submitted = 0
+            do {
+                try await NiimbotD110Session.printContinuously(rasters, identity: d110MIdentity(), exchange: { request in
+                    requests.append(request)
+                    if request.command == 0xdc { return self.d110MReadiness }
+                    if request.command == 0xe3 { submitted += 1 }
+                    if request.command == 0xa3 {
+                        return request.response == nil ? nil : .init(command: 0xb3, data: Data([0, 1, 100, 100]))
+                    }
+                    return request.response.map { .init(command: $0, data: Data([1])) }
+                }, pause: {}, onPagesWillSend: { indices in
+                    will.append(indices)
+                    if failure < 3 && indices == [failure] { throw LabelPrinterIssue.writeFailed }
+                }, onPagesCompleted: { indices in
+                    receipts.append(indices)
+                    if failure == 3 { throw LabelPrinterIssue.writeFailed }
+                })
+                XCTFail("A failed durable callback cannot permit another upload")
+            } catch { XCTAssertEqual(error as? LabelPrinterIssue, .writeFailed) }
+            XCTAssertEqual(submitted, failure == 0 ? 0 : failure == 1 ? 1 : 2)
+            XCTAssertEqual(will, failure == 0 ? [[0]] : failure == 2 ? [[0], [1], [2]] : [[0], [1]])
+            XCTAssertEqual(receipts, failure < 2 ? [] : [[0]])
+            XCTAssertEqual(requests.filter { $0.command == 0x01 }.count, failure == 0 ? 0 : 1)
+            XCTAssertFalse(requests.contains { $0.command == 0xf3 })
+        }
+    }
+
+    @MainActor func testContinuousPartialCopyReceiptSaveFailurePreservesProofAndLeavesLaterGroupsUnsent() async throws {
+        var will: [[Int]] = [], receipts: [[Int]] = []
+        var submitted = 0, quantity = 0
+        do {
+            try await NiimbotD110Session.printContinuously(Array(repeating: denseRaster, count: 24), identity: d110MIdentity(), exchange: { request in
+                if request.command == 0xdc { return self.d110MReadiness }
+                if request.command == 0x13 { quantity = Int(request.data[5]) }
+                if request.command == 0xe3 { submitted += quantity }
+                if request.command == 0xa3 {
+                    return request.response == nil ? nil : .init(command: 0xb3, data: Data([0, 3, 100, 100]))
+                }
+                return request.response.map { .init(command: $0, data: Data([1])) }
+            }, pause: {}, onPagesWillSend: { will.append($0) }, onPagesCompleted: {
+                receipts.append($0)
+                throw LabelPrinterIssue.writeFailed
+            })
+            XCTFail("Known physical copies must be forwarded without dispatching another group after a failed save")
+        } catch { XCTAssertEqual(error as? LabelPrinterIssue, .writeFailed) }
+        XCTAssertEqual(submitted, 16)
+        XCTAssertEqual(will, [Array(0..<8), Array(8..<16)])
+        XCTAssertEqual(receipts, [[0, 1, 2]])
+    }
+
+    @MainActor func testContinuousCounterMustStayMonotonicAndWithinPhysicallySubmittedCopies() async throws {
+        let rasters = [denseRaster, variantRaster(0x7f), variantRaster(0x3f), variantRaster(0x1f)]
+        for counters in [[3], [5], [1, 0]] {
+            var will: [[Int]] = [], receipts: [[Int]] = []
+            var requests: [NiimbotRequest] = []
+            var polls = 0
+            do {
+                try await NiimbotD110Session.printContinuously(rasters, identity: d110MIdentity(), exchange: { request in
+                    requests.append(request)
+                    if request.command == 0xdc { return self.d110MReadiness }
+                    if request.command == 0xa3 {
+                        guard request.response != nil else { return nil }
+                        let count = counters[min(polls, counters.count - 1)]
+                        polls += 1
+                        return .init(command: 0xb3, data: Data([0, UInt8(count), 100, 100]))
+                    }
+                    return request.response.map { .init(command: $0, data: Data([1])) }
+                }, pause: {}, onPagesWillSend: { will.append($0) }, onPagesCompleted: { receipts.append($0) })
+                XCTFail("A regressed counter or proof for an unsent copy must be rejected")
+            } catch { XCTAssertEqual(error as? LabelPrinterIssue, .unsupportedResponse) }
+            XCTAssertEqual(will, counters.count == 1 ? [[0], [1]] : [[0], [1], [2]])
+            XCTAssertEqual(receipts, counters.count == 1 ? [] : [[0]])
+            XCTAssertEqual(requests.filter { $0.command == 0x01 }.count, 1)
+            XCTAssertFalse(requests.contains { $0.command == 0xf3 })
+        }
+    }
+
+    @MainActor func testContinuousDisconnectDuringSecondGroupCannotDispatchFutureCopiesOrReplay() async throws {
+        var will: [[Int]] = [], receipts: [[Int]] = []
+        var requests: [NiimbotRequest] = []
+        var groupSizes = 0, pageEnds = 0
+        do {
+            try await NiimbotD110Session.printContinuously(Array(repeating: denseRaster, count: 24), identity: d110MIdentity(), exchange: { request in
+                requests.append(request)
+                if request.command == 0xdc { return self.d110MReadiness }
+                if request.command == 0x13 { groupSizes += 1 }
+                if request.command == 0x85 && groupSizes == 2 { throw LabelPrinterIssue.connectionLost }
+                if request.command == 0xe3 { pageEnds += 1 }
+                return request.response.map { .init(command: $0, data: Data([1])) }
+            }, pause: {}, onPagesWillSend: { will.append($0) }, onPagesCompleted: { receipts.append($0) })
+            XCTFail("A failed upload must leave future groups untouched")
+        } catch { XCTAssertEqual(error as? LabelPrinterIssue, .connectionLost) }
+        XCTAssertEqual(will, [Array(0..<8), Array(8..<16)])
+        XCTAssertTrue(receipts.isEmpty)
+        XCTAssertEqual(pageEnds, 1)
+        XCTAssertEqual(requests.filter { $0.command == 0x01 }.count, 1)
+        XCTAssertFalse(requests.contains { $0.command == 0xf3 })
+    }
+
+    @MainActor func testContinuousCancellationAfterCounterStillForwardsEveryProvenCopyBeforeStoppingRefill() async {
+        let rasters = [denseRaster, variantRaster(0x7f), variantRaster(0x3f)]
+        var will: [[Int]] = [], receipts: [[Int]] = []
+        var pageEnds = 0
+        let operation = Task { @MainActor in
+            try await NiimbotD110Session.printContinuously(rasters, identity: d110MIdentity(), exchange: { request in
+                if request.command == 0xdc { return self.d110MReadiness }
+                if request.command == 0xe3 { pageEnds += 1 }
+                if request.command == 0xa3 {
+                    guard request.response != nil else { return nil }
+                    withUnsafeCurrentTask { $0?.cancel() }
+                    return .init(command: 0xb3, data: Data([0, 1, 100, 100]))
+                }
+                return request.response.map { .init(command: $0, data: Data([1])) }
+            }, pause: {}, onPagesWillSend: { will.append($0) }, onPagesCompleted: { receipts.append($0) })
+        }
+        do {
+            try await operation.value
+            XCTFail("A cancelled task must not refill the third group")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(will, [[0], [1]])
+        XCTAssertEqual(receipts, [[0]])
+        XCTAssertEqual(pageEnds, 2)
+    }
+
+    @MainActor func testContinuousPollingTimesOutOnlyAfterOneHundredPollsWithoutPhysicalProgress() async throws {
+        let rasters = [denseRaster, variantRaster(0x7f), variantRaster(0x3f)]
+        for makesProgress in [false, true] {
+            var polls = 0
+            var receipts: [[Int]] = []
+            do {
+                try await NiimbotD110Session.printContinuously(rasters, identity: d110MIdentity(), exchange: { request in
+                    if request.command == 0xdc { return self.d110MReadiness }
+                    if request.command == 0xa3 {
+                        guard request.response != nil else { return nil }
+                        polls += 1
+                        let count = !makesProgress || polls < 100 ? 0 : polls < 200 ? 1 : 3
+                        return .init(command: 0xb3, data: Data([0, UInt8(count), 100, 100]))
+                    }
+                    return request.response.map { .init(command: $0, data: Data([1])) }
+                }, pause: {}, onPagesWillSend: { _ in }, onPagesCompleted: { receipts.append($0) })
+                XCTAssertTrue(makesProgress)
+            } catch { XCTAssertEqual(error as? LabelPrinterIssue, .responseTimeout); XCTAssertFalse(makesProgress) }
+            XCTAssertEqual(polls, makesProgress ? 200 : 100)
+            XCTAssertEqual(receipts, makesProgress ? [[0], [1, 2]] : [])
+        }
+    }
+
+    @MainActor func testContinuousLegacyFallbackRemainsSerialAndPreflightRejectsInvalidLaterPages() async throws {
+        let identity = NiimbotD110Identity(modelID: 2304, protocolVersion: 1, firmwareBytes: Data([5, 34]))
+        var will: [[Int]] = [], receipts: [[Int]] = []
+        var starts = 0, ends = 0
+        try await NiimbotD110Session.printContinuously([denseRaster, denseRaster], identity: identity, exchange: { request in
+            if request.command == 0xdc { return .init(command: 0xdd, data: Data([0, 0, 0, 0, 0, 0, 0, 0, 1, 4])) }
+            if request.command == 0x01 { starts += 1; XCTAssertEqual(receipts.count, starts - 1) }
+            if request.command == 0xf3 { ends += 1 }
+            if request.command == 0xa3 { return .init(command: 0xb3, data: Data([0, 1, 100, 100])) }
+            return request.response.map { .init(command: $0, data: Data([1])) }
+        }, pause: {}, onPagesWillSend: { will.append($0) }, onPagesCompleted: { receipts.append($0) })
+        XCTAssertEqual(will, [[0], [1]]); XCTAssertEqual(receipts, [[0], [1]])
+        XCTAssertEqual(starts, 2); XCTAssertEqual(ends, 2)
+
+        let invalid = LabelRaster(width: 96, height: 241, data: Data(repeating: 0xff, count: 12 * 241))
+        for rasters in [[], [denseRaster, invalid], Array(repeating: denseRaster, count: 251)] {
+            var exchanges = 0, callbacks = 0
+            do {
+                try await NiimbotD110Session.printContinuously(rasters, identity: d110MIdentity(),
+                    exchange: { _ in exchanges += 1; return nil }, pause: {},
+                    onPagesWillSend: { _ in callbacks += 1 }, onPagesCompleted: { _ in callbacks += 1 })
+                XCTFail("The whole batch must validate before radio or write-ahead activity")
+            } catch { XCTAssertEqual(error as? LabelPrinterIssue, .invalidLabel) }
+            XCTAssertEqual(exchanges, 0); XCTAssertEqual(callbacks, 0)
+        }
+    }
+
+    @MainActor func testSingleLabelContinuousTraceExactlyMatchesTheEstablishedSerialWorkflow() async throws {
+        let legacy = NiimbotD110Identity(modelID: 2304, protocolVersion: 1, firmwareBytes: Data([5, 34]))
+        for identity in [legacy, d110MIdentity(version: 1), d110MIdentity()] {
+            var traces: [[NiimbotRequest]] = []
+            for continuous in [false, true] {
+                var requests: [NiimbotRequest] = []
+                var will: [[Int]] = [], receipts: [[Int]] = []
+                let exchange: NiimbotD110Session.Exchange = { request in
+                    requests.append(request)
+                    if request.command == 0xdc {
+                        guard request.response != nil else { return nil }
+                        return identity.modelID == 2320 ? self.d110MReadiness
+                            : .init(command: 0xdd, data: Data([0, 0, 0, 0, 0, 0, 0, 0, 1, 4]))
+                    }
+                    if request.command == 0xa3 {
+                        return request.response == nil ? nil : .init(command: 0xb3, data: Data([0, 1, 100, 100]))
+                    }
+                    return request.response.map { .init(command: $0, data: Data([1])) }
+                }
+                if continuous {
+                    try await NiimbotD110Session.printContinuously([denseRaster], identity: identity,
+                        exchange: exchange, pause: {}, onPagesWillSend: { will.append($0) },
+                        onPagesCompleted: { receipts.append($0) })
+                } else {
+                    try await NiimbotD110Session.printBatch([denseRaster], identity: identity,
+                        exchange: exchange, pause: {}, onPageWillSend: { will.append([$0]) },
+                        onPageCompleted: { receipts.append([$0]) })
+                }
+                XCTAssertEqual(will, [[0]]); XCTAssertEqual(receipts, [[0]])
+                traces.append(requests)
+            }
+            XCTAssertEqual(traces[0], traces[1], "One-label jobs retain every command, ordering and dispatch marker")
+            XCTAssertEqual(try traces[0].map { try NiimbotProtocol.encode(command: $0.command, data: $0.data) },
+                           try traces[1].map { try NiimbotProtocol.encode(command: $0.command, data: $0.data) },
+                           "Continuous buffering cannot change the proven single-label wire bytes or checksums")
+        }
+    }
 }
