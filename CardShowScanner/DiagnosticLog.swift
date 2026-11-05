@@ -45,6 +45,37 @@ enum DiagnosticPrinterFields {
     }
 }
 
+/// Health diagnostics contain bounded aggregate measurements and fixed states,
+/// never raw OS reports, device identifiers, temperatures or user content.
+enum DiagnosticHealthFields {
+    static let keys: Set<String> = ["thermal_level", "low_power_mode", "process_scope", "native_memory_mb",
+        "native_cpu_ms", "sample_window_ms", "battery_state", "battery_percent", "ui_lag_count",
+        "ui_lag_max_ms", "memory_warning_count", "health_report_kind", "health_report_count", "health_report_window_s"]
+
+    static func accepts(_ key: String, _ value: String) -> Bool {
+        switch key {
+        case "thermal_level": return ["nominal", "fair", "serious", "critical", "unknown"].contains(value)
+        case "low_power_mode": return value == "true" || value == "false"
+        case "process_scope": return value == "native_app"
+        case "battery_state": return ["unknown", "unplugged", "charging", "full"].contains(value)
+        case "health_report_kind": return ["crash", "hang", "cpu_exception", "disk_write_exception"].contains(value)
+        case "native_memory_mb": return integer(value, maximum: 65_536)
+        case "native_cpu_ms", "sample_window_ms": return integer(value, maximum: 3_600_000)
+        case "battery_percent": return integer(value, maximum: 100)
+        case "ui_lag_count", "memory_warning_count": return integer(value, maximum: 10_000)
+        case "ui_lag_max_ms": return integer(value, maximum: 60_000)
+        case "health_report_count": return integer(value, maximum: 1_000)
+        case "health_report_window_s": return integer(value, maximum: 604_800)
+        default: return true
+        }
+    }
+
+    private static func integer(_ text: String, maximum: UInt64) -> Bool {
+        guard let value = UInt64(text), value <= maximum else { return false }
+        return String(value) == text
+    }
+}
+
 /// Only fixed classifications and numeric status/timing values leave a service
 /// client. Never copy response messages, request URLs or credential values here.
 enum ServiceDiagnosticFields {
@@ -205,9 +236,11 @@ enum ServiceDiagnosticFields {
         if sampleEvery > 0 { lastSamples[event] = now }
         // Unknown fields and free-form values are dropped at the storage boundary.
         let safe = fields.filter { key, value in
-            keys.contains(key) && value.count <= 80 &&
+            (keys.contains(key) || DiagnosticHealthFields.keys.contains(key)) &&
+                (!event.hasPrefix("health.") || DiagnosticHealthFields.keys.contains(key)) && value.count <= 80 &&
                 value.range(of: #"^[A-Za-z0-9_.-]{1,80}$"#, options: .regularExpression) != nil &&
-                DiagnosticScanFields.accepts(key, value) && DiagnosticPrinterFields.accepts(key, value)
+                DiagnosticScanFields.accepts(key, value) && DiagnosticPrinterFields.accepts(key, value) &&
+                DiagnosticHealthFields.accepts(key, value)
         }
         let entry: [String: Any] = ["schema": 1, "time": ISO8601DateFormatter().string(from: now),
             "run": run, "event": event, "fields": safe]
@@ -273,7 +306,7 @@ enum ServiceDiagnosticFields {
             "build": bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
             "revision": bundle.object(forInfoDictionaryKey: "ScannerWorkflowRevision") as? String ?? "unknown",
             "os": ProcessInfo.processInfo.operatingSystemVersionString,
-            "note": "Local app events only; no system console, card/list contents, credentials, images, or raw web responses."]
+            "note": "Local app events and aggregate device health only; no system console, raw OS reports, card/list contents, credentials, images, or raw web responses. Native process samples exclude WebKit processes."]
         var data = try JSONSerialization.data(withJSONObject: header, options: [.sortedKeys]); data.append(10)
         for url in [previous, current] where FileManager.default.fileExists(atPath: url.path) {
             data.append(try Data(contentsOf: url))

@@ -124,6 +124,7 @@ import UIKit
     private var authorization: Task<Void, Never>?
     private var requestID = UUID()
     private var requestedActive = false
+    private var thermalObserver: NSObjectProtocol?
 
     init() {
         engine = PSABarcodeCaptureEngine()
@@ -136,12 +137,27 @@ import UIKit
             self.message = failure.message; self.pause()
             DiagnosticLog.shared.record("psa.camera_failed", ["reason": failure.rawValue])
         })
+        thermalObserver = NotificationCenter.default.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification,
+            object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.requestedActive,
+                          ScannerResourceMode.policy(for: .current()) == .cooling else { return }
+                    self.pause(); self.message = PSACameraFailure.cooling.message
+                    DiagnosticLog.shared.record("psa.camera_paused", ["reason": "thermal_pressure"])
+                }
+            }
     }
 
-    deinit { engine.shutdown() }
+    deinit {
+        if let thermalObserver { NotificationCenter.default.removeObserver(thermalObserver) }
+        engine.shutdown()
+    }
 
     func start() {
         guard !requestedActive, candidate == nil else { return }
+        guard ScannerResourceMode.policy(for: .current()) != .cooling else {
+            message = PSACameraFailure.cooling.message; return
+        }
         #if targetEnvironment(simulator)
         message = PSACameraFailure.unavailable.message
         return
@@ -157,6 +173,9 @@ import UIKit
                 self.requestedActive = false
                 self.message = "Camera access is unavailable. Enter the certification number, or allow camera access in iPhone Settings."
                 return
+            }
+            guard ScannerResourceMode.policy(for: .current()) != .cooling else {
+                self.pause(); self.message = PSACameraFailure.cooling.message; return
             }
             self.engine.setActive(true, requestID: id)
         }
@@ -175,13 +194,14 @@ import UIKit
 }
 
 private enum PSACameraFailure: String, Sendable {
-    case unavailable, configuration, interrupted, runtime
+    case unavailable, configuration, interrupted, runtime, cooling
     var message: String {
         switch self {
         case .unavailable: return "No usable back camera is available. Enter the certification number instead."
         case .configuration: return "Barcode capture could not start. Retry the camera or enter the certification number."
         case .interrupted: return "Camera capture was interrupted. Retry when the camera is available, or enter the certification number."
         case .runtime: return "Camera capture stopped. Retry the camera or enter the certification number."
+        case .cooling: return "Camera paused while your iPhone cools. Retry when it is ready, or enter the certification number."
         }
     }
 }
@@ -225,8 +245,10 @@ private final class PSABarcodeCaptureEngine: NSObject, AVCaptureMetadataOutputOb
             if !active { self.held = false; self.stopSession(); return }
             if let requestID { self.requestID = requestID }
             if self.held { self.stopSession(); return }
+            guard ScannerResourceMode.policy(for: .current()) != .cooling else { self.fail(.cooling); return }
             do {
                 if !self.configured { try self.configure() }
+                guard ScannerResourceMode.policy(for: .current()) != .cooling else { self.fail(.cooling); return }
                 if !self.session.isRunning { self.session.startRunning() }
             } catch let failure as PSACameraConfigurationError { self.fail(failure.failure) }
             catch { self.fail(.configuration) }

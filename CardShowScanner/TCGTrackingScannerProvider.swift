@@ -305,6 +305,18 @@ struct ScannerReviewReleaseQueue {
     mutating func discardPending() { pending = nil }
 }
 
+enum ScannerResourceMode: String, Equatable {
+    case normal, reduced, cooling
+
+    static func policy(for state: DeviceResourceState) -> Self {
+        switch state.thermal {
+        case .serious, .critical: return .cooling
+        case .fair: return .reduced
+        case .nominal, .unknown: return state.lowPowerMode ? .reduced : .normal
+        }
+    }
+}
+
 @MainActor final class TCGTrackingScannerProvider: NSObject, ObservableObject, ScannerProvider, WKNavigationDelegate, WKUIDelegate {
     let label = "LIVE CAMERA • On-device recognition"
     private(set) var results: AsyncStream<ScanResult>
@@ -316,6 +328,11 @@ struct ScannerReviewReleaseQueue {
     private var manualSearchSuspended = false
     private var documentFailed = false
     private var bridgeInstalled = false
+    private var resourceMode = ScannerResourceMode.normal
+    private var resourceForeground = true
+    private var resourceObservers: [NSObjectProtocol] = []
+    private var resourceRequestID = UUID()
+    private var resourcePauseDeadline: Task<Void, Never>?
     private var game = "Pokémon"
     private var nonce = UUID().uuidString
     private var normalizer = TCGBridgeNormalizer()
@@ -327,6 +344,7 @@ struct ScannerReviewReleaseQueue {
     static let pageURL = LocalScannerServer.pageURL
     private var messageProxy: WeakScanMessageHandler?
     private static let deniedCameraStatus = "Camera access is off. Enable Camera in iPhone Settings → Card Show Scanner, then tap Retry Live Scanner."
+    private static let coolingStatus = "Cooling down… Scanning resumes when your iPhone is ready."
 
     override init() {
         let stream = AsyncStream<ScanResult>.makeStream(bufferingPolicy: .bufferingNewest(1))
@@ -355,6 +373,10 @@ struct ScannerReviewReleaseQueue {
         webView.scrollView.showsHorizontalScrollIndicator = false
         webView.scrollView.isScrollEnabled = false
     }
+    deinit {
+        resourcePauseDeadline?.cancel()
+        for observer in resourceObservers { NotificationCenter.default.removeObserver(observer) }
+    }
     func start(game: String) {
         stop()
         guard TCGGameRegistry.scannerKey(for: game) != nil else {
@@ -373,8 +395,9 @@ struct ScannerReviewReleaseQueue {
         }
         DiagnosticLog.shared.record("web.load_started", ["game": diagnosticGame])
         self.game = game; active = true; manualSearchSuspended = false; documentFailed = false; nonce = UUID().uuidString; normalizer = TCGBridgeNormalizer()
+        observeResources()
         recoveryAttempts = 0
-        status = "Starting bundled scanner…"
+        status = resourceMode == .cooling ? Self.coolingStatus : "Starting bundled scanner…"
         loadBundledPage(restartingServer: false)
     }
     private func loadBundledPage(restartingServer: Bool) {
@@ -401,6 +424,9 @@ struct ScannerReviewReleaseQueue {
     func stop() {
         if active { DiagnosticLog.shared.record("web.stopped") }
         active = false; manualSearchSuspended = false; bridgeInstalled = false; nonce = UUID().uuidString; manualSearchSuggested = false
+        for observer in resourceObservers { NotificationCenter.default.removeObserver(observer) }
+        resourceObservers.removeAll()
+        resourceRequestID = UUID(); resourcePauseDeadline?.cancel(); resourcePauseDeadline = nil
         reviewRelease.restart()
         pageTask?.cancel(); pageTask = nil; pageNavigation = nil
         continuation.finish()
@@ -411,6 +437,58 @@ struct ScannerReviewReleaseQueue {
             ScannerDatabaseUpdater.shared.endScannerUse(databaseLease)
             self.databaseLease = nil
         }
+    }
+    private func observeResources() {
+        resourceMode = ScannerResourceMode.policy(for: .current())
+        resourceForeground = UIApplication.shared.applicationState == .active
+        let requestNonce = nonce
+        for name in [ProcessInfo.thermalStateDidChangeNotification, Notification.Name.NSProcessInfoPowerStateDidChange,
+                     UIApplication.willResignActiveNotification, UIApplication.didBecomeActiveNotification] {
+            resourceObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.active, self.nonce == requestNonce else { return }
+                    let mode = ScannerResourceMode.policy(for: .current())
+                    let foreground = name == UIApplication.willResignActiveNotification ? false
+                        : name == UIApplication.didBecomeActiveNotification ? true : self.resourceForeground
+                    guard mode != self.resourceMode || foreground != self.resourceForeground else { return }
+                    self.resourceMode = mode; self.resourceForeground = foreground
+                    if mode == .cooling {
+                        self.reviewRelease.loading()
+                        self.status = Self.coolingStatus
+                    }
+                    self.dispatchResourceMode()
+                }
+            })
+        }
+    }
+    private func dispatchResourceMode() {
+        guard active, !documentFailed else { return }
+        let requestNonce = nonce
+        let requestID = UUID(); resourceRequestID = requestID
+        if (resourceMode == .cooling || !resourceForeground), resourcePauseDeadline == nil {
+            resourcePauseDeadline = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                guard let self, self.active, self.nonce == requestNonce, !Task.isCancelled else { return }
+                self.retireFailedResourceUpdate()
+            }
+        }
+        guard bridgeInstalled else { return }
+        webView.callAsyncJavaScript("return window.CardShowBridge?.setResourceMode(mode, expectedNonce, foreground);",
+            arguments: ["mode": resourceMode.rawValue, "expectedNonce": requestNonce, "foreground": resourceForeground], in: nil, in: .page) { [weak self] result in
+                guard let self, self.active, self.nonce == requestNonce, self.resourceRequestID == requestID else { return }
+                guard case .success(let accepted) = result, accepted as? Bool == true else {
+                    self.retireFailedResourceUpdate()
+                    return
+                }
+                self.resourcePauseDeadline?.cancel(); self.resourcePauseDeadline = nil
+            }
+    }
+    private func retireFailedResourceUpdate() {
+        // A failed or hung JS update must not leave capture working at its old
+        // rate. This public WebKit control stops capture independently of JS.
+        webView.setCameraCaptureState(.none, completionHandler: nil)
+        stop(); documentFailed = true
+        status = "Scanner paused. Tap Retry Live Scanner."
     }
     func clearCache() async throws {
         stop()
@@ -534,7 +612,7 @@ struct ScannerReviewReleaseQueue {
               let gameKey = TCGGameRegistry.scannerKey(for: game),
               let data = try? JSONSerialization.data(withJSONObject: ["nonce": nonce, "game": gameKey, "autoStart": true, "cacheToken": LocalScannerServer.shared.cacheToken,
                   "steadyCardBorder": UserDefaults.standard.object(forKey: "steadyCardBorder") as? Bool ?? true,
-                  "manualSearchSuspended": manualSearchSuspended]),
+                  "manualSearchSuspended": manualSearchSuspended, "resourceMode": resourceMode.rawValue, "foreground": resourceForeground]),
               let config = String(data: data, encoding: .utf8) else {
             documentFailed = true
             DiagnosticLog.shared.record("web.resource_missing")
@@ -547,6 +625,7 @@ struct ScannerReviewReleaseQueue {
                 self.status = "Could not initialize bundled scanner modules. Retry Live Scanner."
             } else {
                 self.bridgeInstalled = true
+                self.dispatchResourceMode()
                 // Pause/dismissal may have arrived after config was captured
                 // but before this document installed its bridge callbacks.
                 if self.manualSearchSuspended || installedSuspended {
@@ -592,6 +671,7 @@ struct ScannerReviewReleaseQueue {
     func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
                  initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType,
                  decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+        guard resourceMode != .cooling, !documentFailed else { decisionHandler(.deny); return }
         let scheme = origin.protocol, host = origin.host, port = origin.port
         let mainFrame = frame.isMainFrame, cameraOnly = type == .camera
         let context = ScannerCameraRequestContext(active: active, scheme: scheme, host: host, port: port,
@@ -621,6 +701,7 @@ struct ScannerReviewReleaseQueue {
                 guard self.nonce == requestNonce, webView === self.webView, current.isTrusted else {
                     decisionHandler(.deny); return
                 }
+                guard self.resourceMode != .cooling, !self.documentFailed else { decisionHandler(.deny); return }
                 if !granted { self.status = Self.deniedCameraStatus }
                 DiagnosticLog.shared.record("camera.permission_result", ["reason": granted ? "native_authorized" : "native_denied"])
                 decisionHandler(granted ? .grant : .deny)
@@ -639,6 +720,7 @@ struct ScannerReviewReleaseQueue {
             let envelope = try JSONDecoder().decode(TCGBridgeEnvelope.self, from: data)
             guard envelope.nonce == nonce else { return }
             if envelope.kind == "diagnostic" { logDiagnostic(envelope); return }
+            if resourceMode == .cooling && envelope.kind != "status" { return }
             if manualSearchSuspended && envelope.kind != "status" { return }
             if envelope.kind == "manualSearchSuggested" {
                 guard !manualSearchSuggested else { return }
@@ -649,7 +731,7 @@ struct ScannerReviewReleaseQueue {
             if envelope.kind == "status" {
                 let cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
                 status = cameraStatus == .denied || cameraStatus == .restricted
-                    ? Self.deniedCameraStatus : String((envelope.message ?? "").prefix(1000))
+                    ? Self.deniedCameraStatus : resourceMode == .cooling ? Self.coolingStatus : String((envelope.message ?? "").prefix(1000))
                 return
             }
             // The popup owns this unresolved attempt. A late recognition/hide

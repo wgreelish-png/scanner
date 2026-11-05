@@ -26,6 +26,11 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 76 adds [device health diagnostics and camera heat protection](docs/DeviceHealthMonitoring.md):
+foreground-only health summaries, memory/thermal warnings, available iOS crash
+and hang report counts, and reduced scanner work in Low Power Mode or elevated
+heat. Serious/critical heat pauses capture without changing saved inventory.
+
 Build 75 adds [warm manual-search return and recent scan review](docs/WarmScannerReview.md):
 Search Manually is available in Choose the Card, scan-origin catalog entry opens
 the keyboard, and returning reuses the loaded camera/database. The expandable

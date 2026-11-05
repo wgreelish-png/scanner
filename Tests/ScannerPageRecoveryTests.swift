@@ -3,6 +3,18 @@ import SwiftData
 @testable import CardShowScanner
 
 final class ScannerPageRecoveryTests: XCTestCase {
+    func testPublicThermalAndPowerSignalsChooseConservativeScannerWorkWithoutInventedThresholds() {
+        for thermal in [DeviceThermalLevel.nominal, .fair, .serious, .critical, .unknown] {
+            for lowPower in [false, true] {
+                let mode = ScannerResourceMode.policy(for: DeviceResourceState(thermal: thermal, lowPowerMode: lowPower))
+                switch thermal {
+                case .serious, .critical: XCTAssertEqual(mode, .cooling)
+                case .fair: XCTAssertEqual(mode, .reduced)
+                case .nominal, .unknown: XCTAssertEqual(mode, lowPower ? .reduced : .normal)
+                }
+            }
+        }
+    }
     func testConnectionFailureGetsOneRetry() {
         for code: URLError.Code in [.cannotConnectToHost, .networkConnectionLost, .timedOut] {
             XCTAssertTrue(ScannerPageRecoveryPolicy.allowsRetry(error: URLError(code), attempts: 0))

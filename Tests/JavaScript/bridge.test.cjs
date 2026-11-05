@@ -9,10 +9,11 @@ function deferred() {
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
-function harness({ denyCamera = false, cacheState = 'ok', beforePackReady, playVideo } = {}) {
+function harness({ denyCamera = false, cacheState = 'ok', beforePackReady, acquireCamera, playVideo } = {}) {
   const messages = [], elements = [], events = new Map(), windowEvents = new Map(), trackEvents = new Map(), draws = [];
   let overlayDestroyed = 0;
   const packOptions = [];
+  const timers = new Map(), frames = new Map(); let scheduleID = 0;
   let captureOptions, scannerOptions, scannerStarts = 0, cameraRequests = 0, stopped = 0, disposed = 0, now = 0;
   const element = tag => {
     const e = { tag, style: {}, children: [], append(...items) { this.children.push(...items); }, setAttribute() {},
@@ -37,7 +38,9 @@ function harness({ denyCamera = false, cacheState = 'ok', beforePackReady, playV
     'app/shared.js': { useScope(scope) { assert.equal(scope, 'price'); }, catalogDetail() {} }
   };
   const sandbox = { URL, console, document, performance: { now: () => now },
-    navigator: { mediaDevices: { async getUserMedia(options) { cameraRequests++; if (denyCamera) throw new Error("Camera permission denied"); captureOptions = options; return { getTracks: () => [{ stop() { stopped++; }, addEventListener(name, fn) { trackEvents.set(name, fn); } }] }; } } },
+    setTimeout(fn, delay) { const id = ++scheduleID; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); },
+    requestAnimationFrame(fn) { const id = ++scheduleID; frames.set(id, fn); return id; }, cancelAnimationFrame(id) { frames.delete(id); },
+    navigator: { mediaDevices: { async getUserMedia(options) { cameraRequests++; if (denyCamera) throw new Error("Camera permission denied"); captureOptions = options; await acquireCamera?.(); return { getTracks: () => [{ stop() { stopped++; }, addEventListener(name, fn) { trackEvents.set(name, fn); } }] }; } } },
     window: { addEventListener(name, fn) { windowEvents.set(name, fn); }, removeEventListener(name) { windowEvents.delete(name); }, webkit: { messageHandlers: { scanResult: { postMessage: m => messages.push(JSON.parse(JSON.stringify(m))) } } } }
   };
   const context = vm.createContext(sandbox);
@@ -48,7 +51,10 @@ function harness({ denyCamera = false, cacheState = 'ok', beforePackReady, playV
     await mod.link(() => {}); await mod.evaluate(); return mod;
   } });
   script.runInContext(context);
-  return { bridge: sandbox.CardShowBridge, messages, elements, events, windowEvents, trackEvents, draws, document, get overlayDestroyed() { return overlayDestroyed; }, advance(ms) { now += ms; },
+  return { bridge: sandbox.CardShowBridge, messages, elements, events, windowEvents, trackEvents, draws, document, timers, frames,
+    flushTimers() { const pending = [...timers.values()]; timers.clear(); for (const timer of pending) timer.fn(); },
+    flushFrames() { const pending = [...frames.values()]; frames.clear(); for (const frame of pending) frame(); },
+    get overlayDestroyed() { return overlayDestroyed; }, advance(ms) { now += ms; },
     packOptions, get scannerOptions() { return scannerOptions; }, get scannerStarts() { return scannerStarts; }, get cameraRequests() { return cameraRequests; }, get captureOptions() { return captureOptions; }, get stopped() { return stopped; }, get disposed() { return disposed; } };
 }
 const tuple = (id = 123, variants = [{ id: 10, label: 'Normal', nm: 1.25, primary: true }, { id: 11, label: 'Holofoil', nm: 2.5 }]) =>
@@ -771,4 +777,123 @@ test('old document transitions and failed startup cannot silently restart a repl
   assert.equal(failed.cameraRequests, 1);
   assert.equal(failed.elements.find(e => e.tag === 'button').textContent, 'Retry Scanner');
   failed.bridge.stop();
+});
+
+async function waitForScannerStarts(h, count) {
+  for (let i = 0; i < 100 && h.scannerStarts < count; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.scannerStarts, count);
+}
+
+test('normal resource mode preserves the default scheduler; reduced mode bounds all frame work with cancellation', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'resources', game: 'tcgp:3', autoStart: true });
+  assert.equal(Object.hasOwn(h.scannerOptions, 'frame'), false);
+  assert.equal(h.bridge.setResourceMode('reduced', 'resources'), true);
+  assert.equal(h.cameraRequests, 1); assert.equal(h.packOptions.length, 1);
+  const schedule = h.scannerOptions.frame; let ticks = 0;
+  const cancel = schedule({}, () => ticks++);
+  assert.deepEqual([...h.timers.values()].map(timer => timer.delay), [100]);
+  assert.equal(ticks, 0); h.flushTimers(); assert.equal(ticks, 0);
+  h.flushFrames(); assert.equal(ticks, 1); cancel();
+  const cancelBeforeTimer = schedule({}, () => ticks++); cancelBeforeTimer(); h.flushTimers(); h.flushFrames();
+  const cancelBeforeFrame = schedule({}, () => ticks++); h.flushTimers(); cancelBeforeFrame(); h.flushFrames();
+  assert.equal(ticks, 1);
+  h.bridge.setResourceMode('normal', 'resources');
+  assert.equal(Object.hasOwn(h.scannerOptions, 'frame'), false);
+  assert.equal(h.cameraRequests, 1); h.bridge.stop();
+});
+
+test('initial cooling defers database/backend/camera startup and only foreground cooling recovery can start it', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'initial-heat', game: 'tcgp:3', autoStart: true, resourceMode: 'cooling' });
+  assert.equal(h.cameraRequests, 0); assert.equal(h.packOptions.length, 0); assert.equal(h.scannerStarts, 0);
+  assert.match(h.messages.at(-1).message, /Cooling down/);
+  h.bridge.setResourceMode('normal', 'initial-heat', false);
+  assert.equal(h.cameraRequests, 0); assert.equal(h.packOptions.length, 0);
+  h.bridge.setResourceMode('normal', 'initial-heat', true);
+  await waitForScannerStarts(h, 1);
+  assert.equal(h.cameraRequests, 1); assert.equal(h.packOptions.length, 1); h.bridge.stop();
+});
+
+test('cooling releases capture but retains the frozen review and saved-card identity across warm recovery', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'held-heat', game: 'tcgp:3', autoStart: true });
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
+  const scans = () => h.messages.filter(message => message.kind === 'scan').length;
+  const oldLoop = h.scannerOptions, stopped = h.stopped;
+  h.bridge.setResourceMode('cooling', 'held-heat');
+  assert.ok(h.stopped > stopped); assert.equal(h.disposed, 0); assert.equal(scans(), 1);
+  oldLoop.onShow({ ref: tuple(124), accepted: true, confidence: 96 }); oldLoop.onHide();
+  assert.equal(scans(), 1);
+  h.bridge.setResourceMode('reduced', 'held-heat'); await waitForScannerStarts(h, 2);
+  assert.equal(h.packOptions.length, 1); assert.equal(h.disposed, 0);
+  settle(h, { ref: tuple(124), accepted: true, confidence: 96 });
+  assert.equal(scans(), 1, 'A frozen review still owns recognition after cooling');
+  h.bridge.releaseReview();
+  settle(h, { ref: tuple(124), accepted: true, confidence: 96 });
+  assert.equal(scans(), 2, 'Saving releases the original held identity, allowing a different physical card');
+  h.bridge.stop();
+});
+
+test('late camera acquisition while cooling stops its tracks before playback without discarding the loaded database', async () => {
+  for (const rejected of [false, true]) {
+    const camera = deferred(), entered = deferred(); let requests = 0;
+    const h = harness({ acquireCamera: () => { if (++requests === 1) { entered.resolve(); return camera.promise; } } });
+    const startup = h.bridge.install({ nonce: 'acquiring-heat', game: 'tcgp:3', autoStart: true });
+    await entered.promise; h.bridge.setResourceMode('cooling', 'acquiring-heat');
+    if (rejected) camera.reject(Object.assign(new Error('Native permission deferred by cooling'), { name: 'NotAllowedError' }));
+    else camera.resolve();
+    await startup;
+    assert.equal(h.stopped, rejected ? 0 : 1); assert.equal(h.scannerStarts, 0); assert.equal(h.disposed, 0);
+    assert.equal(h.messages.filter(message => message.event === 'startup_failed').length, 0);
+    h.bridge.setResourceMode('normal', 'acquiring-heat'); await waitForScannerStarts(h, 1);
+    assert.equal(h.packOptions.length, 1); assert.equal(h.cameraRequests, 2); h.bridge.stop();
+  }
+});
+
+test('cooling during pending playback treats its known AbortError as a pause and resumes once', async () => {
+  const playback = deferred(), entered = deferred(); let plays = 0;
+  const h = harness({ playVideo: () => { if (++plays === 1) { entered.resolve(); return playback.promise; } } });
+  const startup = h.bridge.install({ nonce: 'playing-heat', game: 'tcgp:3', autoStart: true });
+  await entered.promise; h.bridge.setResourceMode('cooling', 'playing-heat');
+  playback.reject(Object.assign(new Error('Retired thermal playback'), { name: 'AbortError' })); await startup;
+  assert.equal(h.disposed, 0); assert.equal(h.scannerStarts, 0);
+  assert.equal(h.messages.filter(message => message.event === 'startup_failed').length, 0);
+  h.bridge.setResourceMode('normal', 'playing-heat'); await waitForScannerStarts(h, 1);
+  assert.equal(h.packOptions.length, 1); h.bridge.stop();
+});
+
+test('manual, reset, refresh, visibility and terminal stop cannot bypass cooling or explicit suspension', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'intent-heat', game: 'tcgp:3', autoStart: true });
+  h.bridge.suspendForManualSearch('intent-heat'); h.bridge.setResourceMode('cooling', 'intent-heat');
+  h.bridge.resetRecognition(); h.bridge.refreshDatabase(); h.bridge.setSteadyCardBorder(true);
+  h.bridge.resumeAfterManualSearchPrompt();
+  assert.equal(h.cameraRequests, 1); assert.equal(h.packOptions.length, 1);
+  h.bridge.setResourceMode('normal', 'intent-heat'); assert.equal(h.scannerStarts, 1);
+  await h.bridge.resumeAfterManualSearch('intent-heat'); await waitForScannerStarts(h, 2);
+  h.bridge.setResourceMode('cooling', 'intent-heat');
+  await h.bridge.resumeAfterManualSearch('intent-heat'); assert.equal(h.cameraRequests, 2);
+  h.document.hidden = true; h.events.get('visibilitychange')();
+  h.bridge.setResourceMode('normal', 'intent-heat'); assert.equal(h.cameraRequests, 2);
+  const visible = h.events.get('visibilitychange'); h.bridge.stop(); h.document.hidden = false; visible();
+  assert.equal(h.bridge.setResourceMode('normal', 'intent-heat'), false);
+  assert.equal(h.cameraRequests, 2);
+});
+
+test('resource updates validate their fixed mode and document nonce before changing capture', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'validated-heat', game: 'tcgp:3', autoStart: true });
+  const stopped = h.stopped;
+  assert.equal(h.bridge.setResourceMode('cooling', 'old'), false);
+  assert.equal(h.bridge.setResourceMode('untrusted', 'validated-heat'), false);
+  assert.equal(h.bridge.setResourceMode('cooling', 'validated-heat', 'false'), false);
+  assert.equal(h.stopped, stopped); assert.equal(h.scannerStarts, 1); h.bridge.stop();
+});
+
+test('cooling recovery preserves an unresolved manual-search prompt until its existing decision is made', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'prompt-heat', game: 'tcgp:3', autoStart: true });
+  await waitOnCard(h); assert.equal(manualSuggestions(h).length, 1);
+  h.bridge.setResourceMode('cooling', 'prompt-heat');
+  h.bridge.setResourceMode('normal', 'prompt-heat'); await waitForScannerStarts(h, 2);
+  settle(h, { ref: tuple(124), accepted: true, confidence: 96 });
+  assert.equal(h.messages.filter(message => message.kind === 'scan').length, 0);
+  h.bridge.resumeAfterManualSearchPrompt();
+  settle(h, { ref: tuple(124), accepted: true, confidence: 96 });
+  assert.equal(h.messages.filter(message => message.kind === 'scan').length, 1); h.bridge.stop();
 });
