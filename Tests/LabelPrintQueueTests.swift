@@ -438,6 +438,296 @@ import XCTest
         XCTAssertEqual(queue.entries.map(\.state), [.completed])
     }
 
+    func testBufferedContinuousPrintingJournalsTwoGroupsAndSavesPartialCumulativeProofAtomically() async throws {
+        let storage = LabelQueueTestStorage(), printer = LabelQueueTestContinuousPrinter()
+        let queue = queue(storage), entries = try labels(copies: 6)
+        try queue.replace(with: entries)
+        printer.steps = [.send([0, 1]), .send([2, 3]), .confirm([0, 1, 2]),
+                         .send([4, 5]), .confirm([3, 4, 5])]
+        printer.onSend = { pages in
+            let expected: [LabelQueueState]
+            switch pages {
+            case [0, 1]: expected = [.sending, .sending, .pending, .pending, .pending, .pending]
+            case [2, 3]: expected = [.sending, .sending, .sending, .sending, .pending, .pending]
+            default: expected = [.completed, .completed, .completed, .sending, .sending, .sending]
+            }
+            XCTAssertEqual(try? storage.entries().map(\.state), expected)
+            XCTAssertTrue(queue.isPrinting)
+        }
+        printer.onConfirm = { pages in
+            XCTAssertEqual(try? storage.entries().map(\.state), pages == [0, 1, 2]
+                ? [.completed, .completed, .completed, .sending, .pending, .pending]
+                : Array(repeating: .completed, count: 6))
+        }
+        await queue.start(using: printer)
+        XCTAssertEqual(printer.jobs, [entries.map(\.raster)])
+        XCTAssertEqual(printer.batchCalls, 0, "The continuous capability takes precedence over the older batch path")
+        XCTAssertEqual(printer.singleLabelCalls, 0)
+        XCTAssertEqual(printer.dispatched, [[0, 1], [2, 3], [4, 5]])
+        XCTAssertEqual(queue.completedCount, 6)
+        XCTAssertEqual(storage.writeAttempts, 6, "Each group marker and each cumulative receipt is saved once")
+        XCTAssertNil(queue.error)
+        let restored = self.queue(storage)
+        await restored.start(using: printer)
+        XCTAssertEqual(printer.jobs.count, 1, "Confirmed copies never replay after reopening")
+    }
+
+    func testBufferedContinuousSnapshotMapsOnlyPendingCopiesAndPreservesPreviousOutcomes() async throws {
+        var entries = try labels(copies: 5)
+        entries[0].state = .completed
+        entries[2].state = .failed
+        entries[2].lastIssue = .printerNotReady
+        let storage = LabelQueueTestStorage(entries: entries), queue = queue(storage)
+        let printer = LabelQueueTestContinuousPrinter()
+        printer.steps = [.send([0, 1]), .confirm([0]), .finish(.uncertain(.connectionLost))]
+        await queue.start(using: printer)
+        XCTAssertEqual(printer.jobs, [[entries[1].raster, entries[3].raster, entries[4].raster]])
+        XCTAssertEqual(queue.entries.map(\.id), entries.map(\.id))
+        XCTAssertEqual(queue.entries.map(\.state), [.completed, .completed, .failed, .uncertain, .pending])
+        XCTAssertEqual(queue.entries[2].lastIssue, .printerNotReady)
+        XCTAssertEqual(queue.entries[3].lastIssue, .connectionLost)
+        XCTAssertEqual(try storage.entries(), queue.entries)
+    }
+
+    func testBufferedFailurePreservesPhysicalProofAndMarksEveryRemainingInFlightCopyUncertain() async throws {
+        let storage = LabelQueueTestStorage(), printer = LabelQueueTestContinuousPrinter()
+        let queue = queue(storage), entries = try labels(copies: 18)
+        try queue.replace(with: entries)
+        printer.steps = [.send(Array(0..<8)), .send(Array(8..<16)), .confirm(Array(0..<5)),
+                         .finish(.uncertain(.responseTimeout))]
+        await queue.start(using: printer)
+        XCTAssertEqual(queue.entries.map(\.state), Array(repeating: .completed, count: 5)
+            + Array(repeating: .uncertain, count: 11) + [.pending, .pending])
+        XCTAssertTrue(queue.entries[5..<16].allSatisfy { $0.lastIssue == .responseTimeout })
+        XCTAssertTrue(queue.entries[16...].allSatisfy { $0.lastIssue == nil })
+        XCTAssertEqual(try storage.entries(), queue.entries)
+        let restored = self.queue(storage)
+        XCTAssertEqual(restored.entries, queue.entries)
+        XCTAssertEqual(printer.jobs.count, 1)
+        XCTAssertThrowsError(try restored.retry(ids: Set(entries[5..<16].map(\.id)))) {
+            XCTAssertEqual($0 as? LabelPrintQueueFailure, .acknowledgeUncertain)
+        }
+        try restored.retry(ids: [entries[5].id], acknowledgeUncertain: true)
+        XCTAssertEqual(printer.jobs.count, 1, "Acknowledging a retry never starts it")
+        XCTAssertEqual(restored.entries[5].state, .pending)
+        XCTAssertEqual(restored.entries[6].state, .uncertain)
+    }
+
+    func testBufferedJournalWithNoDispatchedPhysicalCommandCanBeReportedNotSent() async throws {
+        let storage = LabelQueueTestStorage(), printer = LabelQueueTestContinuousPrinter()
+        let queue = queue(storage)
+        try queue.replace(with: labels(copies: 5))
+        printer.steps = [.prepare([0, 1, 2]), .finish(.notSent(.notConnected))]
+        await queue.start(using: printer)
+        XCTAssertTrue(printer.dispatched.isEmpty)
+        XCTAssertEqual(queue.entries.map(\.state), [.failed, .failed, .failed, .pending, .pending])
+        XCTAssertTrue(queue.entries.prefix(3).allSatisfy { $0.lastIssue == .notConnected })
+        XCTAssertEqual(try storage.entries(), queue.entries)
+    }
+
+    func testRestartRecoversEveryBufferedSendingMarkerWithoutPrintingOrChangingReceipts() async throws {
+        var entries = try labels(copies: 8)
+        entries[0].state = .completed
+        for index in 1...6 { entries[index].state = .sending }
+        let storage = LabelQueueTestStorage(entries: entries), printer = LabelQueueTestContinuousPrinter()
+        let queue = queue(storage)
+        XCTAssertTrue(queue.isLoaded)
+        XCTAssertEqual(queue.entries.map(\.state), [.completed] + Array(repeating: .uncertain, count: 6) + [.pending])
+        XCTAssertTrue(queue.entries[1...6].allSatisfy { $0.lastIssue == .connectionLost })
+        XCTAssertEqual(try storage.entries(), queue.entries)
+        XCTAssertEqual(storage.writeAttempts, 1, "Recovery saves every interrupted copy in one update")
+        XCTAssertTrue(printer.jobs.isEmpty)
+        XCTAssertThrowsError(try queue.retry(ids: Set(entries[1...6].map(\.id)))) {
+            XCTAssertEqual($0 as? LabelPrintQueueFailure, .acknowledgeUncertain)
+        }
+    }
+
+    func testBufferedSendingSaveFailurePreventsNextGroupBytesAndLeavesRecoveryMarkersIntact() async throws {
+        for failAfterPersist in [false, true] {
+            let storage = LabelQueueTestStorage(), printer = LabelQueueTestContinuousPrinter()
+            let queue = queue(storage)
+            try queue.replace(with: labels(copies: 6))
+            storage.failOnWrite = 3 // Second group's atomic sending marker.
+            storage.failAfterPersist = failAfterPersist
+            printer.steps = [.send([0, 1]), .send([2, 3]), .send([4, 5])]
+            await queue.start(using: printer)
+            XCTAssertEqual(printer.dispatched, [[0, 1]])
+            XCTAssertFalse(queue.isLoaded)
+            XCTAssertFalse(queue.canStart)
+            XCTAssertEqual(queue.entries.map(\.state), [.sending, .sending, .pending, .pending, .pending, .pending])
+            XCTAssertEqual(storage.writeAttempts, 3, "No status write follows a failed durable marker")
+            storage.failOnWrite = nil
+            queue.reload()
+            XCTAssertEqual(queue.entries.map(\.state), failAfterPersist
+                ? [.uncertain, .uncertain, .uncertain, .uncertain, .pending, .pending]
+                : [.uncertain, .uncertain, .pending, .pending, .pending, .pending])
+            XCTAssertEqual(printer.jobs.count, 1)
+        }
+    }
+
+    func testBufferedCumulativeCompletionSaveFailureRetainsAllObservedProofAndStopsFutureWrites() async throws {
+        for failAfterPersist in [false, true] {
+            let storage = LabelQueueTestStorage(), printer = LabelQueueTestContinuousPrinter()
+            let queue = queue(storage)
+            try queue.replace(with: labels(copies: 6))
+            storage.failOnWrite = 4 // One receipt proves three copies together.
+            storage.failAfterPersist = failAfterPersist
+            printer.steps = [.send([0, 1]), .send([2, 3]), .confirm([0, 1, 2]), .send([4, 5])]
+            await queue.start(using: printer)
+            XCTAssertEqual(printer.dispatched, [[0, 1], [2, 3]])
+            XCTAssertEqual(queue.entries.map(\.state), [.completed, .completed, .completed, .sending, .pending, .pending])
+            XCTAssertFalse(queue.isLoaded)
+            XCTAssertFalse(queue.canStart)
+            XCTAssertEqual(storage.writeAttempts, 4)
+            await queue.start(using: printer)
+            XCTAssertEqual(printer.jobs.count, 1)
+            storage.failOnWrite = nil
+            queue.reload()
+            XCTAssertEqual(queue.entries.map(\.state), failAfterPersist
+                ? [.completed, .completed, .completed, .uncertain, .pending, .pending]
+                : [.uncertain, .uncertain, .uncertain, .uncertain, .pending, .pending])
+            XCTAssertEqual(printer.dispatched.count, 2)
+        }
+    }
+
+    func testBufferedStopOrCancellationStillPersistsLateCumulativeProofBeforeResolvingRemainder() async throws {
+        for cancelTask in [false, true] {
+            let storage = LabelQueueTestStorage(), printer = LabelQueueTestContinuousPrinter()
+            let stalePrinter = LabelQueueTestPrinter(), queue = queue(storage)
+            try queue.replace(with: labels(copies: 5))
+            printer.steps = [.send([0, 1]), .send([2, 3]), .hold, .confirm([0, 1, 2]), .send([4])]
+            printer.releaseOnCancel = cancelTask
+            let job = Task { await queue.start(using: printer) }
+            try await printer.waitUntilHeld()
+            await queue.start(using: stalePrinter)
+            XCTAssertTrue(stalePrinter.rasters.isEmpty)
+            if cancelTask { job.cancel() }
+            else {
+                queue.stop(using: stalePrinter)
+                queue.stop(using: stalePrinter)
+                printer.release()
+            }
+            await job.value
+            XCTAssertEqual(printer.cancellations, 1)
+            XCTAssertEqual(stalePrinter.cancellations, 0)
+            XCTAssertEqual(printer.dispatched, [[0, 1], [2, 3]])
+            XCTAssertEqual(queue.entries.map(\.state), [.completed, .completed, .completed, .uncertain, .pending])
+            XCTAssertEqual(queue.entries[3].lastIssue, .cancelled)
+            XCTAssertEqual(try storage.entries(), queue.entries)
+            XCTAssertFalse(queue.isPrinting)
+        }
+    }
+
+    func testBufferedApprovalChecksWholeGroupBeforeAnyMemberCanBeSent() async throws {
+        let storage = LabelQueueTestStorage(), printer = LabelQueueTestContinuousPrinter()
+        let entries = try labels(copies: 4)
+        var checked: [UUID] = []
+        let queue = LabelPrintQueue(url: location(), read: { _ in try storage.read() },
+            write: { data, _ in try storage.write(data) }, approvalIssue: { entry in
+                checked.append(entry.id)
+                return [entries[1].id, entries[2].id].contains(entry.id) ? "Approve this updated tag first." : nil
+            })
+        try queue.replace(with: entries)
+        printer.steps = [.send([0, 1, 2])]
+        await queue.start(using: printer)
+        XCTAssertEqual(checked, entries.prefix(3).map(\.id))
+        XCTAssertTrue(printer.dispatched.isEmpty)
+        XCTAssertEqual(queue.entries.map(\.state), [.pending, .failed, .failed, .pending])
+        XCTAssertEqual(queue.error, "Approve this updated tag first.")
+        XCTAssertEqual(storage.writeAttempts, 2)
+        XCTAssertEqual(try storage.entries(), queue.entries)
+    }
+
+    func testBufferedLaterApprovalRejectionPreservesItsMessageAndLeavesUnsentMembersPending() async throws {
+        let storage = LabelQueueTestStorage(), printer = LabelQueueTestContinuousPrinter()
+        let entries = try labels(copies: 5)
+        let queue = LabelPrintQueue(url: location(), read: { _ in try storage.read() },
+            write: { data, _ in try storage.write(data) }, approvalIssue: {
+                $0.id == entries[3].id ? "The fourth tag needs a new approval." : nil
+            })
+        try queue.replace(with: entries)
+        printer.steps = [.send([0, 1]), .send([2, 3])]
+        await queue.start(using: printer)
+        XCTAssertEqual(printer.dispatched, [[0, 1]])
+        XCTAssertEqual(queue.entries.map(\.state), [.uncertain, .uncertain, .pending, .failed, .pending])
+        XCTAssertEqual(queue.error, "The fourth tag needs a new approval.")
+        XCTAssertEqual(queue.entries[3].lastIssue, .invalidLabel)
+        XCTAssertEqual(try storage.entries(), queue.entries)
+    }
+
+    func testBufferedGroupsRejectEmptyDuplicateSkippedAndOversizedIndicesBeforeDispatch() async throws {
+        for pages in [[], [0, 0], [1], [Int.max], Array(0..<9)] {
+            let storage = LabelQueueTestStorage(), printer = LabelQueueTestContinuousPrinter()
+            let queue = queue(storage), entries = try labels(copies: 10)
+            try queue.replace(with: entries)
+            printer.steps = [.send(pages)]
+            await queue.start(using: printer)
+            XCTAssertTrue(printer.dispatched.isEmpty)
+            XCTAssertEqual(queue.entries, entries)
+            XCTAssertEqual(storage.writeAttempts, 1)
+            XCTAssertNotNil(queue.error)
+        }
+    }
+
+    func testBufferedWindowRejectsMoreThanSixteenUnconfirmedCopiesWithoutSendingFutureGroup() async throws {
+        let storage = LabelQueueTestStorage(), printer = LabelQueueTestContinuousPrinter()
+        let queue = queue(storage)
+        try queue.replace(with: labels(copies: 18))
+        printer.steps = [.send(Array(0..<8)), .send(Array(8..<16)), .send([16, 17])]
+        await queue.start(using: printer)
+        XCTAssertEqual(printer.dispatched.count, 2)
+        XCTAssertEqual(queue.entries.map(\.state), Array(repeating: .uncertain, count: 16) + [.pending, .pending])
+        XCTAssertEqual(try storage.entries(), queue.entries)
+    }
+
+    func testBufferedCompletionRequiresAContiguousUnconfirmedPrefix() async throws {
+        for proof in [[], [1], [0, 0], [0, 1, 2, 3, 4]] {
+            let storage = LabelQueueTestStorage(), printer = LabelQueueTestContinuousPrinter()
+            let queue = queue(storage)
+            try queue.replace(with: labels(copies: 5))
+            printer.steps = [.send([0, 1]), .send([2, 3]), .confirm(proof)]
+            await queue.start(using: printer)
+            XCTAssertEqual(queue.entries.map(\.state), [.uncertain, .uncertain, .uncertain, .uncertain, .pending])
+            XCTAssertEqual(queue.completedCount, 0)
+            XCTAssertEqual(try storage.entries(), queue.entries)
+        }
+    }
+
+    func testBufferedTaskSuccessCannotSubstituteForPhysicalCompletionCallbacks() async throws {
+        let storage = LabelQueueTestStorage(), printer = LabelQueueTestContinuousPrinter()
+        let queue = queue(storage)
+        try queue.replace(with: labels(copies: 3))
+        printer.steps = [.send([0, 1])]
+        await queue.start(using: printer)
+        XCTAssertEqual(queue.entries.map(\.state), [.uncertain, .uncertain, .pending])
+        XCTAssertTrue(queue.entries.prefix(2).allSatisfy { $0.lastIssue == .unsupportedResponse })
+        XCTAssertEqual(try storage.entries(), queue.entries)
+    }
+
+    func testBufferedLateCallbacksCannotMutateANewerPrintingSession() async throws {
+        let storage = LabelQueueTestStorage(), printer = LabelQueueTestContinuousPrinter()
+        let queue = queue(storage)
+        try queue.replace(with: labels(copies: 2))
+        printer.steps = [.send([0, 1]), .confirm([0, 1])]
+        await queue.start(using: printer)
+        let oldBefore = try XCTUnwrap(printer.savedBeforePages)
+        let oldAfter = try XCTUnwrap(printer.savedAfterPages)
+        try queue.replace(with: labels(copies: 2))
+        printer.steps = [.send([0, 1]), .hold, .confirm([0, 1])]
+        let job = Task { await queue.start(using: printer) }
+        try await printer.waitUntilHeld()
+        let bytes = storage.bytes
+        do { try await oldBefore([0, 1]); XCTFail("A stale group marker must fail") }
+        catch { XCTAssertEqual(error as? LabelPrinterIssue, .cancelled) }
+        do { try await oldAfter([0, 1]); XCTFail("A stale completion must fail") }
+        catch { XCTAssertEqual(error as? LabelPrinterIssue, .cancelled) }
+        XCTAssertEqual(storage.bytes, bytes)
+        XCTAssertEqual(queue.entries.map(\.state), [.sending, .sending])
+        printer.release()
+        await job.value
+        XCTAssertEqual(queue.entries.map(\.state), [.completed, .completed])
+    }
+
     func testInterruptedCopyRestoresUncertainAndRequiresAcknowledgementAndSeparateStart() async throws {
         var entries = try labels()
         entries[0].state = .completed
@@ -977,6 +1267,108 @@ private struct LabelQueueTestDocument: Codable {
             await Task.yield()
         }
         XCTFail("The queue did not dispatch the expected batch page")
+        throw CocoaError(.coderReadCorrupt)
+    }
+}
+
+/// A scripted driver separates durable group preparation, physical dispatch and
+/// cumulative proof so the queue's crash and cancellation boundaries stay visible.
+@MainActor private final class LabelQueueTestContinuousPrinter: LabelContinuousPrinterSending, LabelBatchPrinterSending {
+    typealias PagesCallback = @MainActor ([Int]) async throws -> Void
+    enum Step {
+        case prepare([Int])
+        case send([Int])
+        case confirm([Int])
+        case hold
+        case finish(LabelSendOutcome)
+    }
+
+    var steps: [Step] = []
+    var releaseOnCancel = false
+    var onSend: (([Int]) -> Void)?
+    var onConfirm: (([Int]) -> Void)?
+    private(set) var jobs: [[LabelRaster]] = []
+    private(set) var dispatched: [[Int]] = []
+    private(set) var batchCalls = 0
+    private(set) var singleLabelCalls = 0
+    private(set) var cancellations = 0
+    private(set) var savedBeforePages: PagesCallback?
+    private(set) var savedAfterPages: PagesCallback?
+    private var hold: CheckedContinuation<Void, Never>?
+
+    func printLabel(_ raster: LabelRaster) async -> LabelSendOutcome {
+        singleLabelCalls += 1
+        return .notSent(.unsupportedPrinter)
+    }
+
+    func printBatch(_ rasters: [LabelRaster], beforePage: @escaping @MainActor (Int) async throws -> Void,
+                    afterPage: @escaping @MainActor (Int) async throws -> Void) async -> LabelSendOutcome {
+        batchCalls += 1
+        return .notSent(.unsupportedPrinter)
+    }
+
+    func printContinuously(_ rasters: [LabelRaster], beforePages: @escaping PagesCallback,
+                           afterPages: @escaping PagesCallback) async -> LabelSendOutcome {
+        jobs.append(rasters)
+        savedBeforePages = beforePages
+        savedAfterPages = afterPages
+        var unconfirmed: Set<Int> = []
+        let script = steps
+        for step in script {
+            switch step {
+            case .prepare(let pages):
+                do { try await beforePages(pages) }
+                catch {
+                    let issue = error as? LabelPrinterIssue ?? .writeFailed
+                    return unconfirmed.isEmpty ? .notSent(issue) : .uncertain(issue)
+                }
+            case .send(let pages):
+                do { try await beforePages(pages) }
+                catch {
+                    let issue = error as? LabelPrinterIssue ?? .writeFailed
+                    return unconfirmed.isEmpty ? .notSent(issue) : .uncertain(issue)
+                }
+                unconfirmed.formUnion(pages)
+                dispatched.append(pages)
+                onSend?(pages)
+            case .confirm(let pages):
+                // A real cumulative counter proves only a dispatched prefix.
+                // Keep malformed test proofs unconfirmed while the queue rejects them.
+                if !pages.isEmpty, Array(unconfirmed.sorted().prefix(pages.count)) == pages {
+                    unconfirmed.subtract(pages)
+                }
+                do { try await afterPages(pages) }
+                catch {
+                    let issue = error as? LabelPrinterIssue ?? .writeFailed
+                    return unconfirmed.isEmpty ? .notSent(issue) : .uncertain(issue)
+                }
+                onConfirm?(pages)
+            case .hold:
+                await withCheckedContinuation { hold = $0 }
+            case .finish(let outcome):
+                return outcome
+            }
+        }
+        return .completed
+    }
+
+    func cancelPrinting() {
+        cancellations += 1
+        if releaseOnCancel { release() }
+    }
+
+    func release() {
+        let continuation = hold
+        hold = nil
+        continuation?.resume()
+    }
+
+    func waitUntilHeld() async throws {
+        for _ in 0..<1_000 {
+            if hold != nil { return }
+            await Task.yield()
+        }
+        XCTFail("The continuous driver did not reach its held window")
         throw CocoaError(.coderReadCorrupt)
     }
 }

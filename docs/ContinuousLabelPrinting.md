@@ -1,5 +1,9 @@
 # Continuous label printing — build 69
 
+Build 73 supersedes the per-label physical-completion gate described below:
+[buffered label printing](BufferedLabelPrinting.md) keeps the next group ready
+and uses native copy counts for identical consecutive labels.
+
 Build 72 supersedes the unacknowledged-row transfer optimization described
 below: [print transfer recovery](PrintTransferRecovery.md) restores the verified
 acknowledged D110-M write path while keeping continuous print tasks.

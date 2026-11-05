@@ -34,7 +34,7 @@ import SwiftData
         XCTAssertEqual(store.record(for: item.id)?.marketAtLastApproval, 10.49, "Loading and editing never approve")
     }
 
-    func testExplicitUnavailableQuoteDoesNotReuseOldMarketAndKnownZeroBecomesBulk() throws {
+    func testUnavailableOrZeroMarketRetainsTheExistingStickerWithoutRepricing() throws {
         let item = item(), store = approvals()
         try store.approve([.init(id: item.id, approvedTag: .individual(1_000), currentMarket: 10.49)])
         let unknown = TagPricingContext.draft(for: item, marketQuotes: [item.id: .init(market: nil)], store: store)
@@ -43,10 +43,11 @@ import SwiftData
         XCTAssertTrue(TagPricingContext.review(for: unknown, store: store).reasons.contains(.marketUnavailable))
         let zero = TagPricingContext.draft(for: item, marketQuotes: [item.id: .init(market: 0)], store: store)
         XCTAssertEqual(zero.marketValue, 0)
-        XCTAssertTrue(zero.isBulk)
-        XCTAssertNil(zero.priceCents)
-        XCTAssertEqual(zero.tag, .twoForOne)
-        XCTAssertThrowsError(try InventoryLabelRenderer.render(zero))
+        XCTAssertFalse(zero.isBulk)
+        XCTAssertEqual(zero.priceCents, 1_000)
+        XCTAssertEqual(zero.tag, .individual(1_000))
+        XCTAssertEqual(zero.pricing.tag, .twoForOne, "Market analysis remains separate from the saved printable price")
+        XCTAssertNoThrow(try InventoryLabelRenderer.render(zero))
     }
 
     func testOlderImportCannotReplaceANewerSavedQuoteButNewerUnavailableQuoteIsRespected() {

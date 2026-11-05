@@ -502,6 +502,218 @@ import XCTest
             XCTAssertTrue(store.isLoaded)
         }
     }
+
+    func testPrintPreparationReusesUnchangedRecordsExactlyWithoutWritingOrResettingReviewMetadata() throws {
+        let storage = TagApprovalTestStorage(), clock = TagApprovalTestClock(), store = store(storage, clock: clock)
+        let pending = UUID(), printed = UUID(), bulk = UUID()
+        try store.approve([request(pending, manual: true), request(printed, market: nil, manual: true),
+                           .init(id: bulk, approvedTag: .twoForOne, currentMarket: 0.5, isManualOverride: true)])
+        try store.markLabeled(ids: [printed])
+        let records = store.records, bytes = storage.bytes, writes = storage.writes
+        clock.date.addTimeInterval(120)
+        storage.failWrite = true
+
+        try store.prepareForPrinting([request(pending, market: 99), request(printed, market: 42),
+            .init(id: bulk, approvedTag: .twoForOne, currentMarket: 2)])
+        try store.prepareForPrinting([])
+
+        XCTAssertEqual(store.records, records, "A print request cannot change any unchanged price-cycle field")
+        XCTAssertEqual(storage.bytes, bytes)
+        XCTAssertEqual(storage.writes, writes, "Unchanged printing must succeed without attempting a new save")
+        XCTAssertTrue(store.isLoaded)
+        XCTAssertNil(store.error)
+        XCTAssertTrue(try XCTUnwrap(store.record(for: pending)).needsLabels)
+        XCTAssertFalse(try XCTUnwrap(store.record(for: printed)).needsLabels)
+    }
+
+    func testPrintPreparationAtomicallyBindsNewOrChangedPricesAndRetainsUnchangedRecordsAndPhysicalHistory() throws {
+        let storage = TagApprovalTestStorage(), clock = TagApprovalTestClock(), store = store(storage, clock: clock)
+        let changed = UUID(), unchanged = UUID(), untouched = UUID(), added = UUID(), bulk = UUID()
+        try store.approve([request(changed), request(unchanged, manual: true), request(untouched)])
+        try store.markLabeled(ids: [changed])
+        let oldChanged = try XCTUnwrap(store.record(for: changed))
+        let oldUnchanged = try XCTUnwrap(store.record(for: unchanged))
+        let oldUntouched = try XCTUnwrap(store.record(for: untouched))
+        let writes = storage.writes
+        clock.date.addTimeInterval(60)
+
+        try store.prepareForPrinting([request(added, cents: 0, market: 0),
+            request(changed, cents: 1_200, market: nil, manual: true), request(unchanged, market: 500),
+            .init(id: bulk, approvedTag: .twoForOne, currentMarket: 0.5)])
+
+        XCTAssertEqual(storage.writes, writes + 1)
+        XCTAssertEqual(store.records.map(\.id), [changed, unchanged, untouched, added, bulk])
+        XCTAssertEqual(store.record(for: unchanged), oldUnchanged)
+        XCTAssertEqual(store.record(for: untouched), oldUntouched)
+        let bound = try XCTUnwrap(store.record(for: changed))
+        XCTAssertEqual(bound.approvedTag, .individual(1_200))
+        XCTAssertNotEqual(bound.priceRevisionID, oldChanged.priceRevisionID)
+        XCTAssertNil(bound.marketAtLastApproval)
+        XCTAssertTrue(bound.isManualOverride)
+        XCTAssertEqual(bound.approvedAt, clock.date)
+        XCTAssertEqual(bound.lastPrintedTag, oldChanged.lastPrintedTag)
+        XCTAssertEqual(bound.lastPrintedAt, oldChanged.lastPrintedAt)
+        XCTAssertTrue(bound.needsLabels, "Preparing new artwork alone cannot confirm that it was printed")
+        let new = try XCTUnwrap(store.record(for: added))
+        XCTAssertEqual(new.approvedTag, .individual(0))
+        XCTAssertEqual(new.marketAtLastApproval, 0)
+        XCTAssertEqual(new.approvedAt, clock.date)
+        XCTAssertNil(new.lastPrintedTag)
+        XCTAssertTrue(new.needsLabels)
+        XCTAssertEqual(store.record(for: bulk)?.approvedTag, .twoForOne)
+        XCTAssertEqual(self.store(storage).records, store.records)
+    }
+
+    func testPrintPreparationKeepsImmutableRevisionGuardsAcrossReprintsAndLaterPriceCycles() throws {
+        let storage = TagApprovalTestStorage(), store = store(storage), id = UUID()
+        try store.prepareForPrinting([request(id)])
+        let first = try XCTUnwrap(store.record(for: id))
+        let originalQueue = try labels(for: id, pricingRevisionID: first.priceRevisionID)
+        XCTAssertNil(TagPricingContext.printingIssue(for: originalQueue[0], store: store))
+
+        try store.prepareForPrinting([request(id, market: 99, manual: true)])
+        XCTAssertEqual(store.record(for: id), first)
+        XCTAssertNil(TagPricingContext.printingIssue(for: originalQueue[0], store: store))
+
+        try store.prepareForPrinting([request(id, cents: 1_200, market: 12)])
+        let second = try XCTUnwrap(store.record(for: id))
+        XCTAssertNotEqual(second.priceRevisionID, first.priceRevisionID)
+        XCTAssertNotNil(TagPricingContext.printingIssue(for: originalQueue[0], store: store))
+        let changedQueue = try labels(for: id, cents: 1_200, pricingRevisionID: second.priceRevisionID)
+        XCTAssertNil(TagPricingContext.printingIssue(for: changedQueue[0], store: store))
+
+        try store.prepareForPrinting([request(id)])
+        let current = try XCTUnwrap(store.record(for: id))
+        XCTAssertNotEqual(current.priceRevisionID, first.priceRevisionID)
+        XCTAssertNotEqual(current.priceRevisionID, second.priceRevisionID)
+        XCTAssertNotNil(TagPricingContext.printingIssue(for: originalQueue[0], store: store),
+                        "A return to the same numeric price must retain a distinct queue cycle")
+        XCTAssertNotNil(TagPricingContext.printingIssue(for: changedQueue[0], store: store))
+        let currentQueue = try labels(for: id, pricingRevisionID: current.priceRevisionID)
+        XCTAssertNil(TagPricingContext.printingIssue(for: currentQueue[0], store: store))
+        XCTAssertNil(current.lastPrintedTag)
+    }
+
+    func testPrintPreparationSavesExplicitExistingStickerConfirmationsInTheSameAtomicBinding() throws {
+        let storage = TagApprovalTestStorage(), clock = TagApprovalTestClock(), store = store(storage, clock: clock)
+        let unchanged = UUID(), changed = UUID(), alreadyPrinted = UUID(), added = UUID()
+        try store.approve([request(unchanged, manual: true), request(changed), request(alreadyPrinted)])
+        try store.markLabeled(ids: [alreadyPrinted])
+        let oldUnchanged = try XCTUnwrap(store.record(for: unchanged))
+        let oldPrinted = try XCTUnwrap(store.record(for: alreadyPrinted))
+        let writes = storage.writes
+        clock.date.addTimeInterval(90)
+
+        try store.prepareForPrinting([request(unchanged, market: 100), request(changed, cents: 1_100, market: 11),
+                                      request(alreadyPrinted, market: nil, manual: true), request(added, cents: 0, market: 0)],
+                                     keepingExistingStickerIDs: [unchanged, changed, alreadyPrinted, added])
+
+        XCTAssertEqual(storage.writes, writes + 1)
+        var expected = oldUnchanged
+        expected.lastPrintedTag = expected.approvedTag
+        expected.lastPrintedAt = clock.date
+        XCTAssertEqual(store.record(for: unchanged), expected,
+                       "Explicit confirmation may update only printed history when the price is unchanged")
+        XCTAssertEqual(store.record(for: alreadyPrinted), oldPrinted)
+        XCTAssertEqual(store.record(for: changed)?.lastPrintedTag, .individual(1_100))
+        XCTAssertEqual(store.record(for: changed)?.lastPrintedAt, clock.date)
+        XCTAssertEqual(store.record(for: added)?.lastPrintedTag, .individual(0))
+        XCTAssertTrue(store.records.allSatisfy { !$0.needsLabels })
+        let records = store.records, bytes = storage.bytes, writesAfter = storage.writes
+        clock.date.addTimeInterval(60)
+        try store.prepareForPrinting([request(unchanged, market: nil)], keepingExistingStickerIDs: [unchanged])
+        XCTAssertEqual(store.records, records)
+        XCTAssertEqual(storage.bytes, bytes)
+        XCTAssertEqual(storage.writes, writesAfter, "Confirming an already matching physical sticker is also a no-op")
+    }
+
+    func testPrintPreparationSaveFailurePublishesNoPartialBindingsOrStickerHistoryAndRequiresReload() throws {
+        for failAfterPersist in [false, true] {
+            let storage = TagApprovalTestStorage(), store = store(storage), existing = UUID(), added = UUID()
+            try store.approve([request(existing)])
+            let records = store.records, bytes = storage.bytes, writes = storage.writes
+            storage.failWrite = true
+            storage.failAfterPersist = failAfterPersist
+
+            XCTAssertThrowsError(try store.prepareForPrinting([request(existing, cents: 1_200, market: 12, manual: true), request(added)],
+                                                             keepingExistingStickerIDs: [existing])) {
+                XCTAssertEqual($0 as? TagApprovalStoreFailure, .saveFailed)
+            }
+            XCTAssertEqual(store.records, records)
+            XCTAssertNil(store.record(for: added))
+            XCTAssertFalse(store.isLoaded)
+            XCTAssertEqual(storage.writes, writes + 1)
+            if !failAfterPersist { XCTAssertEqual(storage.bytes, bytes) }
+            XCTAssertThrowsError(try store.prepareForPrinting([request(existing)])) {
+                XCTAssertEqual($0 as? TagApprovalStoreFailure, .notLoaded)
+            }
+            storage.failWrite = false
+            store.reload()
+            XCTAssertTrue(store.isLoaded)
+            if failAfterPersist {
+                XCTAssertEqual(store.record(for: existing)?.approvedTag, .individual(1_200))
+                XCTAssertEqual(store.record(for: existing)?.lastPrintedTag, .individual(1_200))
+                XCTAssertEqual(store.record(for: existing)?.isManualOverride, true)
+                XCTAssertNotNil(store.record(for: added))
+            } else {
+                XCTAssertEqual(store.records, records)
+                XCTAssertNil(store.record(for: added))
+            }
+        }
+    }
+
+    func testPrintPreparationValidatesEntireSelectionIncludingIgnoredQuotesBeforeChangingAnything() throws {
+        let storage = TagApprovalTestStorage(), store = store(storage), existing = UUID(), unselected = UUID()
+        try store.approve([request(existing), request(unselected)])
+        let records = store.records, bytes = storage.bytes, writes = storage.writes
+        let invalid = [request(UUID(), cents: -100), request(UUID(), cents: 101),
+            request(UUID(), cents: ShowBudgetMoney.maximumCents + 1), request(UUID(), market: -1),
+            request(UUID(), market: Decimal.nan), request(UUID(), market: ShowBudgetMoney.decimal(ShowBudgetMoney.maximumCents) + 1),
+            request(existing, market: Decimal.nan)]
+        for bad in invalid {
+            let first = bad.id == existing ? request(UUID()) : request(existing, cents: 1_200)
+            XCTAssertThrowsError(try store.prepareForPrinting([first, bad])) {
+                XCTAssertEqual($0 as? TagApprovalStoreFailure, .invalidApproval)
+            }
+            XCTAssertEqual(store.records, records)
+            XCTAssertEqual(storage.bytes, bytes)
+            XCTAssertEqual(storage.writes, writes)
+        }
+        XCTAssertThrowsError(try store.prepareForPrinting([request(existing), request(existing, cents: 1_100)])) {
+            XCTAssertEqual($0 as? TagApprovalStoreFailure, .duplicateIdentity)
+        }
+        for keep in [Set([UUID()]), Set([unselected]), Set([existing, UUID()])] {
+            XCTAssertThrowsError(try store.prepareForPrinting([request(existing, cents: 1_200)], keepingExistingStickerIDs: keep)) {
+                XCTAssertEqual($0 as? TagApprovalStoreFailure, .invalidSelection)
+            }
+        }
+        let bulk = UUID()
+        XCTAssertThrowsError(try store.prepareForPrinting([request(existing, cents: 1_200),
+            .init(id: bulk, approvedTag: .twoForOne, currentMarket: 0.5)], keepingExistingStickerIDs: [existing, bulk])) {
+            XCTAssertEqual($0 as? TagApprovalStoreFailure, .invalidSelection)
+        }
+        XCTAssertThrowsError(try store.prepareForPrinting([], keepingExistingStickerIDs: [existing])) {
+            XCTAssertEqual($0 as? TagApprovalStoreFailure, .invalidSelection)
+        }
+        XCTAssertEqual(store.records, records)
+        XCTAssertEqual(storage.bytes, bytes)
+        XCTAssertEqual(storage.writes, writes)
+        XCTAssertTrue(store.isLoaded)
+    }
+
+    func testPrintPreparationCannotBindOrSilentlyRepairAnUnavailableStore() throws {
+        let storage = TagApprovalTestStorage(bytes: Data("broken".utf8)), store = store(storage)
+        let bytes = storage.bytes
+        XCTAssertFalse(store.isLoaded)
+        for requests in [[], [request(UUID())]] {
+            XCTAssertThrowsError(try store.prepareForPrinting(requests)) {
+                XCTAssertEqual($0 as? TagApprovalStoreFailure, .notLoaded)
+            }
+        }
+        XCTAssertEqual(storage.bytes, bytes)
+        XCTAssertEqual(storage.writes, 0)
+        XCTAssertTrue(store.records.isEmpty)
+    }
 }
 
 @MainActor private final class TagApprovalTestClock {

@@ -134,11 +134,24 @@ struct NiimbotPrintBatchRequests: Sendable {
     let usesCumulativePageCounter: Bool
 }
 
+struct NiimbotPrintGroupRequests: Sendable {
+    let indices: Range<Int>
+    let requests: [NiimbotRequest]
+}
+
+struct NiimbotContinuousPrintRequests: Sendable {
+    let initialization: [NiimbotRequest]
+    let groups: [NiimbotPrintGroupRequests]
+    let usesCumulativePageCounter: Bool
+}
+
 /// Native Swift subset of niimbluelib's documented D110 and D110-M workflows.
 /// Model and negotiated protocol choose the task; unknown hardware has no
 /// fallback print algorithm.
 enum NiimbotProtocol {
     static let maximumBatchPages = 250
+    static let maximumContinuousGroupCopies = 8
+    static let maximumContinuousGroupsInFlight = 2
     static let serviceUUID = "E7810A71-73AE-499D-8C15-FAA9AEF0C3F2"
     static let referenceURL = "https://github.com/MultiMote/niimbluelib"
     static let referenceCommit = "f451be49d8e30046dee0a8f9d14747fe38f303c2"
@@ -339,6 +352,32 @@ enum NiimbotProtocol {
         }
     }
 
+    /// A bounded native-copy group uploads an identical image only once. Only
+    /// adjacent equal snapshots are grouped, so physical output keeps queue
+    /// order and never changes the prepared artwork or selected label count.
+    static func continuousRequests(for rasters: [LabelRaster], identity: NiimbotD110Identity,
+                                   paperMode: NiimbotPaperMode = .gap) throws -> NiimbotContinuousPrintRequests {
+        guard (1...maximumBatchPages).contains(rasters.count) else { throw LabelPrinterIssue.invalidLabel }
+        let task = try printTask(for: identity)
+        try rasters.forEach { try validateRaster($0) }
+        if case .d110 = task {
+            return NiimbotContinuousPrintRequests(initialization: [], groups: [], usesCumulativePageCounter: false)
+        }
+        var groups: [NiimbotPrintGroupRequests] = []
+        var start = 0
+        while start < rasters.count {
+            var end = start + 1
+            while end < rasters.count, end - start < maximumContinuousGroupCopies,
+                  rasters[end] == rasters[start] { end += 1 }
+            groups.append(NiimbotPrintGroupRequests(indices: start..<end,
+                requests: pageRequests(for: rasters[start], task: task, beginsPrint: true, quantity: end - start)))
+            start = end
+        }
+        return NiimbotContinuousPrintRequests(
+            initialization: initializationRequests(task: task, totalPages: rasters.count, paperMode: paperMode),
+            groups: groups, usesCumulativePageCounter: true)
+    }
+
     private static func validateRaster(_ raster: LabelRaster) throws {
         do { try raster.validate() } catch { throw LabelPrinterIssue.invalidLabel }
         guard [240, 320, 400].contains(raster.height) else { throw LabelPrinterIssue.invalidLabel }
@@ -370,7 +409,7 @@ enum NiimbotProtocol {
     }
 
     private static func pageRequests(for raster: LabelRaster, task: PrintTask,
-                                     beginsPrint: Bool) -> [NiimbotRequest] {
+                                     beginsPrint: Bool, quantity: Int = 1) -> [NiimbotRequest] {
         var requests: [NiimbotRequest]
         switch task {
         case .d110:
@@ -383,13 +422,13 @@ enum NiimbotProtocol {
         case .b1:
             requests = [
                 NiimbotRequest(0x03, response: 0x04, beginsPrint: beginsPrint, requiresTrue: true),
-                NiimbotRequest(0x13, u16(raster.height) + u16(raster.width) + [0, 1], response: 0x14)
+                NiimbotRequest(0x13, u16(raster.height) + u16(raster.width) + u16(quantity), response: 0x14)
             ]
         case .d110MV4:
             requests = [
                 // The v4 task deliberately does not wait for this status reply.
                 NiimbotRequest(0xa3),
-                NiimbotRequest(0x13, u16(raster.height) + u16(raster.width) + [0, 1, 0, 0, 0, 0, 0, 0, 0],
+                NiimbotRequest(0x13, u16(raster.height) + u16(raster.width) + u16(quantity) + [0, 0, 0, 0, 0, 0, 0],
                                response: 0x14, beginsPrint: beginsPrint)
             ]
         }
@@ -625,5 +664,91 @@ enum NiimbotProtocol {
             // Same one-way cleanup heartbeat as the pinned M-v4 task.
             _ = try await exchange(NiimbotRequest(0xdc, [1]))
         }
+    }
+
+    /// Keep two native-copy groups supplied to supported M printers instead of
+    /// pausing for each physical label. Every submitted copy is journaled first;
+    /// a stop can leave at most two groups of eight copies awaiting inspection.
+    /// Physical counter receipts may cover part of a group or several groups,
+    /// and must persist successfully before another group can enter the window.
+    static func printContinuously(_ rasters: [LabelRaster], identity: NiimbotD110Identity,
+                                  paperMode: NiimbotPaperMode = .gap,
+                                  exchange: Exchange, pause: @MainActor () async throws -> Void,
+                                  onPagesWillSend: @MainActor ([Int]) async throws -> Void,
+                                  onPagesCompleted: @MainActor ([Int]) async throws -> Void) async throws {
+        let plan = try NiimbotProtocol.continuousRequests(for: rasters, identity: identity, paperMode: paperMode)
+        try Task.checkCancellation()
+        guard plan.usesCumulativePageCounter else {
+            // No new legacy-D110 commands or buffering assumptions are added.
+            try await printBatch(rasters, identity: identity, paperMode: paperMode, exchange: exchange, pause: pause,
+                onPageWillSend: { try await onPagesWillSend([$0]) },
+                onPageCompleted: { try await onPagesCompleted([$0]) })
+            return
+        }
+
+        let advanced = identity.protocolVersion >= 3
+        let readiness = NiimbotRequest(0xdc, [advanced ? 4 : 1], response: advanced ? 0xd9 : 0xdd,
+                                      responseAlternatives: [0xdd, 0xd9])
+        guard let reply = try await exchange(readiness) else { throw LabelPrinterIssue.unsupportedResponse }
+        try NiimbotProtocol.validateReadiness(reply, identity: identity)
+
+        var initialized = false
+        var nextGroup = 0
+        var inFlight: [Range<Int>] = []
+        var submittedPages = 0
+        var confirmedPages = 0
+        var pollsWithoutProgress = 0
+        while confirmedPages < rasters.count {
+            while nextGroup < plan.groups.count,
+                  inFlight.count < NiimbotProtocol.maximumContinuousGroupsInFlight {
+                try Task.checkCancellation()
+                let group = plan.groups[nextGroup]
+                // The first group's complete copy set precedes PrintStart;
+                // later groups precede even the v4 one-way status preamble.
+                try await onPagesWillSend(Array(group.indices))
+                if !initialized {
+                    for request in plan.initialization {
+                        try Task.checkCancellation()
+                        try request.validateResponse(try await exchange(request))
+                    }
+                    initialized = true
+                }
+                for request in group.requests {
+                    try Task.checkCancellation()
+                    try request.validateResponse(try await exchange(request))
+                }
+                submittedPages = group.indices.upperBound
+                inFlight.append(group.indices)
+                nextGroup += 1
+            }
+
+            try Task.checkCancellation()
+            try await pause()
+            try Task.checkCancellation()
+            guard let packet = try await exchange(NiimbotRequest(0xa3, response: 0xb3)) else {
+                throw LabelPrinterIssue.unsupportedResponse
+            }
+            let status = try NiimbotProtocol.printStatus(packet, maximumPages: rasters.count)
+            guard (confirmedPages...submittedPages).contains(status.completedPages) else {
+                throw LabelPrinterIssue.unsupportedResponse
+            }
+            if status.completedPages > confirmedPages {
+                // Do not check cancellation between receiving physical proof
+                // and forwarding all newly confirmed copies to durable storage.
+                try await onPagesCompleted(Array(confirmedPages..<status.completedPages))
+                confirmedPages = status.completedPages
+                pollsWithoutProgress = 0
+                inFlight.removeAll { $0.upperBound <= confirmedPages }
+                // Refill the freed window immediately, before another pause.
+            } else {
+                pollsWithoutProgress += 1
+                guard pollsWithoutProgress < 100 else { throw LabelPrinterIssue.responseTimeout }
+            }
+        }
+
+        try Task.checkCancellation()
+        let end = NiimbotRequest(0xf3, response: 0xf4, requiresTrue: true)
+        try end.validateResponse(try await exchange(end))
+        if identity.protocolVersion == 4 { _ = try await exchange(NiimbotRequest(0xdc, [1])) }
     }
 }

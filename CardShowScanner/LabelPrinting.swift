@@ -85,13 +85,12 @@ struct InventoryLabelDraft: Codable, Equatable, Identifiable, Sendable {
         condition = Self.shortCondition(item.card.identity.condition)
         marketValue = item.card.marketPrice
         profitInputs = preferences.profitInputs(for: item)
-        let suggestion = TagPricing.evaluate(market: marketValue, inputs: profitInputs).tag
-        // Existing approved prices are retained until an explicit review. New
-        // sub-$0.75 quotes always propose the bulk category, never a cents tag.
-        isBulk = suggestion == .twoForOne || (marketValue == nil && approval?.approvedTag == .twoForOne)
+        // Printing uses the stored final tag and category, including an
+        // individual $0 price. Market rounding is only a fallback for new lots.
+        let tag = approval?.approvedTag ?? TagPricing.evaluate(market: marketValue, inputs: profitInputs).tag
+        isBulk = tag == .twoForOne
         isManualOverride = approval?.isManualOverride ?? false
-        let cents = isBulk ? nil : (approval?.approvedTag.integerPriceCents ?? suggestion?.integerPriceCents)
-        askingPriceText = cents.map(Self.inputText) ?? ""
+        askingPriceText = tag?.integerPriceCents.map(Self.inputText) ?? ""
     }
 
     var priceCents: Int64? { isBulk ? nil : ShowBudgetMoney.parse(askingPriceText) }
@@ -222,5 +221,15 @@ enum LabelSendOutcome: Equatable, Sendable {
         _ rasters: [LabelRaster],
         beforePage: @escaping @MainActor (Int) async throws -> Void,
         afterPage: @escaping @MainActor (Int) async throws -> Void
+    ) async -> LabelSendOutcome
+}
+
+/// A printer may buffer several physical copies. Each group is journaled
+/// before dispatch; cumulative completion proofs are saved atomically.
+@MainActor protocol LabelContinuousPrinterSending: LabelPrinterSending {
+    func printContinuously(
+        _ rasters: [LabelRaster],
+        beforePages: @escaping @MainActor ([Int]) async throws -> Void,
+        afterPages: @escaping @MainActor ([Int]) async throws -> Void
     ) async -> LabelSendOutcome
 }

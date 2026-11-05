@@ -22,6 +22,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     private(set) var paperModeStatus: String?
     private(set) var status = "Search for a NIIMBOT D110 or D110-M to connect."
     var modelName: String { identity?.modelName ?? "D110 / D110-M" }
+    var supportsContinuousPrinting: Bool { isConnected && identity?.modelID == 2320 }
     var error: String?
 
     @ObservationIgnored private var central: CBCentralManager?
@@ -41,6 +42,8 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     @ObservationIgnored private var handshakeTask: Task<Void, Never>?
     @ObservationIgnored private var printOperation: UUID?
     @ObservationIgnored private var printWasDispatched = false
+    @ObservationIgnored private var sendingPages: [Int] = []
+    @ObservationIgnored private var dispatchedPages: Set<Int> = []
     @ObservationIgnored private var printCancellation: LabelPrinterIssue?
     @ObservationIgnored private var identity: NiimbotD110Identity?
     @ObservationIgnored private var paperTask: Task<Void, Never>?
@@ -246,7 +249,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         PaperModeSender(printer: self, paperMode: paperMode)
     }
 
-    @MainActor private final class PaperModeSender: LabelBatchPrinterSending {
+    @MainActor private final class PaperModeSender: LabelContinuousPrinterSending, LabelBatchPrinterSending {
         let printer: NiimbotPrinter
         let paperMode: NiimbotPaperMode
 
@@ -261,6 +264,12 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                         afterPage: @escaping @MainActor (Int) async throws -> Void) async -> LabelSendOutcome {
             await printer.printBatch(rasters, paperMode: paperMode, beforePage: beforePage, afterPage: afterPage)
         }
+        func printContinuously(_ rasters: [LabelRaster],
+                               beforePages: @escaping @MainActor ([Int]) async throws -> Void,
+                               afterPages: @escaping @MainActor ([Int]) async throws -> Void) async -> LabelSendOutcome {
+            await printer.performPrintJob(rasters, paperMode: paperMode, continuous: true,
+                                          beforePages: beforePages, afterPages: afterPages)
+        }
         func cancelPrinting() { printer.cancelPrinting() }
     }
 
@@ -271,6 +280,14 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     private func printBatch(_ rasters: [LabelRaster], paperMode: NiimbotPaperMode,
                             beforePage: @escaping @MainActor (Int) async throws -> Void,
                             afterPage: @escaping @MainActor (Int) async throws -> Void) async -> LabelSendOutcome {
+        await performPrintJob(rasters, paperMode: paperMode, continuous: false,
+            beforePages: { pages in for page in pages { try await beforePage(page) } },
+            afterPages: { pages in for page in pages { try await afterPage(page) } })
+    }
+
+    private func performPrintJob(_ rasters: [LabelRaster], paperMode: NiimbotPaperMode, continuous: Bool,
+                                 beforePages: @escaping @MainActor ([Int]) async throws -> Void,
+                                 afterPages: @escaping @MainActor ([Int]) async throws -> Void) async -> LabelSendOutcome {
         guard UIApplication.shared.applicationState == .active else { return .notSent(.notActive) }
         guard isConnected else { return .notSent(.notConnected) }
         guard !isPrinting, !isConfiguringPaper, pending == nil else { return .notSent(.printerBusy) }
@@ -280,6 +297,8 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         let operation = UUID()
         printOperation = operation
         printWasDispatched = false
+        sendingPages = []
+        dispatchedPages = []
         printCancellation = nil
         isPrinting = true
         error = nil
@@ -289,14 +308,16 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                 printOperation = nil
                 isPrinting = false
                 printCancellation = nil
+                sendingPages = []
+                dispatchedPages = []
             }
         }
 
         return await withTaskCancellationHandler {
             do {
                 try checkPrintOperation(operation)
-                try await sendBatch(rasters, operation: operation, paperMode: paperMode,
-                                    beforePage: beforePage, afterPage: afterPage)
+                try await sendBatch(rasters, operation: operation, paperMode: paperMode, continuous: continuous,
+                                    beforePages: beforePages, afterPages: afterPages)
                 try checkPrintOperation(operation)
                 status = rasters.count == 1 ? "Label printed." : "\(rasters.count) labels printed."
                 diagnostic(.complete)
@@ -601,7 +622,10 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             let end = min(transaction.offset + chunkLength, transaction.bytes.count)
             let chunk = transaction.bytes.subdata(in: transaction.offset..<end)
             transaction.offset = end
-            if transaction.beginsPrint { printWasDispatched = true }
+            if transaction.beginsPrint {
+                dispatchedPages.formUnion(sendingPages)
+                printWasDispatched = !dispatchedPages.isEmpty
+            }
             if writeType == .withResponse { transaction.awaitingWriteResponse = true }
             peripheral.writeValue(chunk, for: writeCharacteristic, type: writeType)
             if writeType == .withResponse { return }
@@ -691,54 +715,83 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         }
     }
 
-    private func exchange(_ request: NiimbotRequest) async throws -> NiimbotPacket? {
+    private func exchange(_ request: NiimbotRequest, timeout: Duration = .seconds(5)) async throws -> NiimbotPacket? {
         // The reference's BLE transport spaces complete packets by 10ms. Radio
         // backpressure alone does not bound the UART module's consumer speed.
         try await Task.sleep(for: .milliseconds(10))
         return try await transfer(command: request.command, data: request.data, response: request.response,
-                                  responseAlternatives: request.responseAlternatives, beginsPrint: request.beginsPrint)
+                                  responseAlternatives: request.responseAlternatives, beginsPrint: request.beginsPrint,
+                                  timeout: timeout)
     }
 
-    private func sendBatch(_ rasters: [LabelRaster], operation: UUID, paperMode: NiimbotPaperMode,
-                           beforePage: @escaping @MainActor (Int) async throws -> Void,
-                           afterPage: @escaping @MainActor (Int) async throws -> Void) async throws {
+    private func sendBatch(_ rasters: [LabelRaster], operation: UUID, paperMode: NiimbotPaperMode, continuous: Bool,
+                           beforePages: @escaping @MainActor ([Int]) async throws -> Void,
+                           afterPages: @escaping @MainActor ([Int]) async throws -> Void) async throws {
         guard let identity else { throw LabelPrinterIssue.unsupportedPrinter }
         let clock = ContinuousClock()
-        // Bound each page, not the entire batch: a long, healthy job must not
-        // inherit the former single-label 60-second task deadline.
+        // Refresh on submission and physical progress so a healthy buffered
+        // job is not limited by the former single-label task deadline.
         var deadline = clock.now.advanced(by: .seconds(60))
-        var pageStarted = Date()
-        recordPrintProgress(.batchStarted, page: 0, total: rasters.count, started: pageStarted)
-        try await NiimbotD110Session.printBatch(rasters, identity: identity, paperMode: paperMode) { [weak self] request in
+        var pageStarts: [Int: Date] = [:]
+        recordPrintProgress(.batchStarted, page: 0, total: rasters.count, started: Date(), quantity: rasters.count)
+        let exchange: NiimbotD110Session.Exchange = { [weak self] request in
             guard let self else { throw LabelPrinterIssue.connectionLost }
             try self.checkPrintOperation(operation)
             guard clock.now < deadline else { throw LabelPrinterIssue.responseTimeout }
-            return try await self.exchange(request)
-        } pause: {
+            // The reference gives buffered page setup/end acknowledgements
+            // ten seconds, allowing the printer to make room for another page.
+            let bufferedPage = continuous && rasters.count > 1 && identity.modelID == 2320
+                && [UInt8(0x03), 0x13, 0xe3].contains(request.command)
+            return try await self.exchange(request, timeout: bufferedPage ? .seconds(10) : .seconds(5))
+        }
+        let pause: @MainActor () async throws -> Void = {
             try await Task.sleep(for: .milliseconds(300))
-        } onPageWillSend: { [weak self] page in
+        }
+        let willSend: @MainActor ([Int]) async throws -> Void = { [weak self] pages in
             guard let self else { throw LabelPrinterIssue.connectionLost }
+            guard let first = pages.first, let last = pages.last,
+                  pages.allSatisfy({ rasters.indices.contains($0) }) else { throw LabelPrinterIssue.unsupportedResponse }
             try self.checkPrintOperation(operation)
-            try await beforePage(page)
+            try await beforePages(pages)
             try self.checkPrintOperation(operation)
+            self.sendingPages = pages
             deadline = clock.now.advanced(by: .seconds(60))
-            pageStarted = Date()
-            self.status = "Printing label \(page + 1) of \(rasters.count)…"
-            self.recordPrintProgress(.pageStarted, page: page + 1, total: rasters.count, started: pageStarted)
-        } onPageCompleted: { [weak self] page in
+            let started = Date()
+            for page in pages { pageStarts[page] = started }
+            let range = first == last ? "\(first + 1)" : "\(first + 1)–\(last + 1)"
+            self.status = "Sending labels \(range) of \(rasters.count)…"
+            self.recordPrintProgress(.pageStarted, page: first + 1, total: rasters.count,
+                                     started: started, quantity: pages.count)
+        }
+        let didComplete: @MainActor ([Int]) async throws -> Void = { [weak self] pages in
             guard let self, self.printOperation == operation else { throw LabelPrinterIssue.cancelled }
-            // Physical proof must reach durable storage even if Stop arrived
-            // with the reply. The next page still passes the foreground gate.
-            self.printWasDispatched = false
-            try await afterPage(page)
-            self.recordPrintProgress(.pageCompleted, page: page + 1, total: rasters.count, started: pageStarted)
+            guard let first = pages.first, let last = pages.last else { throw LabelPrinterIssue.unsupportedResponse }
+            // Persist the whole physical counter proof, including when Stop
+            // arrived with it. Later buffered pages remain unconfirmed.
+            self.dispatchedPages.subtract(pages)
+            self.printWasDispatched = !self.dispatchedPages.isEmpty
+            let started = pageStarts[first] ?? Date()
+            try await afterPages(pages)
+            deadline = clock.now.advanced(by: .seconds(60))
+            for page in pages { pageStarts[page] = nil }
+            self.status = "Printed \(last + 1) of \(rasters.count) labels."
+            self.recordPrintProgress(.pageCompleted, page: last + 1, total: rasters.count,
+                                     started: started, quantity: pages.count)
+        }
+        if continuous {
+            try await NiimbotD110Session.printContinuously(rasters, identity: identity, paperMode: paperMode,
+                exchange: exchange, pause: pause, onPagesWillSend: willSend, onPagesCompleted: didComplete)
+        } else {
+            try await NiimbotD110Session.printBatch(rasters, identity: identity, paperMode: paperMode,
+                exchange: exchange, pause: pause, onPageWillSend: { try await willSend([$0]) },
+                onPageCompleted: { try await didComplete([$0]) })
         }
     }
 
-    private func recordPrintProgress(_ phase: PrintPhase, page: Int, total: Int, started: Date) {
+    private func recordPrintProgress(_ phase: PrintPhase, page: Int, total: Int, started: Date, quantity: Int = 1) {
         let elapsed = Int(max(0, min(3_600_000, Date().timeIntervalSince(started) * 1_000)))
         DiagnosticLog.shared.record("label.print", ["phase": phase.rawValue, "page": String(page),
-            "total": String(total), "elapsed_ms": String(elapsed)])
+            "total": String(total), "quantity": String(quantity), "elapsed_ms": String(elapsed)])
     }
 
     /// CoreBluetooth callbacks need not reuse the discovery wrapper object.

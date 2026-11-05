@@ -79,7 +79,13 @@ import UIKit
                 }
             }
         } header: { Text("Bluetooth printer") } footer: {
-            Text("Disconnect the printer in other apps before searching. Allow Bluetooth access and keep this app open while connecting and printing.")
+            VStack(alignment: .leading, spacing: 6) {
+                if printer.isConnected {
+                    Text(printer.supportsContinuousPrinting ? "Continuous batch ready" : "Verified per-label printing")
+                        .accessibilityIdentifier("labelPrinter.printingMethod")
+                }
+                Text("Disconnect the printer in other apps before searching. Allow Bluetooth access and keep this app open while connecting and printing.")
+            }
         }
         Section {
             LabeledContent("Last used label size", value: paperPreferences.size.title)
@@ -137,9 +143,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     @State private var printer = NiimbotPrinter.shared
     @State private var approvals = TagApprovalStore.shared
     @State private var error: String?
-    @State private var approvedNotice: String?
-    @State private var showingPricingSettings = false
-    @State private var acknowledgedPricingWarnings = false
+    @State private var preparationNotice: String?
     @State private var keepExistingStickerIDs: Set<UUID> = []
     @State private var showingDiscard = false
     @State private var preparing = false
@@ -181,12 +185,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         }
     }
     private var orderedDrafts: [InventoryLabelDraft] {
-        drafts.sorted {
-            let first = TagPricingContext.review(for: $0, store: approvals).priority
-            let second = TagPricingContext.review(for: $1, store: approvals).priority
-            if first != second { return first < second }
-            return $0.cardName.localizedStandardCompare($1.cardName) == .orderedAscending
-        }
+        drafts.sorted { $0.cardName.localizedStandardCompare($1.cardName) == .orderedAscending }
     }
     private var printableDrafts: [InventoryLabelDraft] {
         drafts.filter { draft in
@@ -199,10 +198,9 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     }
     private var labelCount: Int { printableDrafts.reduce(0) { $0 + $1.copies } }
     private var bulkCount: Int { drafts.filter(\.isBulk).reduce(0) { $0 + $1.copies } }
-    private var requiresManualReview: Bool { drafts.contains { !$0.pricingWarnings.isEmpty } }
     private var validation: String? {
         guard !drafts.isEmpty else { return "Select at least one card." }
-        guard approvals.isLoaded else { return approvals.error ?? "Reload saved tag approvals before continuing." }
+        guard approvals.isLoaded else { return approvals.error ?? "Reload saved label data before continuing." }
         if let draft = drafts.first(where: { !$0.isBulk && $0.tag == nil }) {
             return "Enter a whole-dollar asking price for \(draft.cardName). A known $0 price is valid; cents are not allowed."
         }
@@ -234,12 +232,9 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 if let index = drafts.firstIndex(where: { $0.id == updated.id }) {
                     drafts[index] = updated
                     keepExistingStickerIDs.remove(updated.id)
-                    resetApprovalReview()
+                    resetPreparationNotice()
                 }
             }
-        }
-        .sheet(isPresented: $showingPricingSettings) {
-            TagPricingSettingsView(store: approvals) { updateProfitInputs() }
         }
         .sheet(isPresented: $showingBatchPriceEditor) {
             LabelBatchPriceEditor(cardCount: drafts.filter { !$0.isBulk }.count) { cents in
@@ -248,7 +243,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                     drafts[index].isManualOverride = true
                 }
                 keepExistingStickerIDs.removeAll()
-                resetApprovalReview()
+                resetPreparationNotice()
             }
         }
         .alert("Label preparation", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
@@ -304,12 +299,9 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                             Text("\(InventoryLabelDraft.shortCondition(item.card.identity.condition)) · \(item.quantity.formatted()) available")
                                 .font(.caption).foregroundStyle(.secondary)
                             if let saved = approvals.record(for: item.id) {
-                                Text("Approved \(saved.approvedTag.displayText)\(saved.needsLabels ? " · Needs Labels" : "")")
+                                Text("Last tag \(saved.approvedTag.displayText)\(saved.needsLabels ? " · Needs Labels" : "")")
                                     .font(.caption).foregroundStyle(saved.needsLabels ? Color.orange : Color.secondary)
                             }
-                            TagRepricingSummary(evaluation: TagPricingContext.review(
-                                for: TagPricingContext.draft(for: item, marketQuotes: marketQuotes, store: approvals),
-                                store: approvals))
                         }.frame(maxWidth: .infinity, alignment: .leading)
                         Image(systemName: selectedIDs.contains(item.id) ? "checkmark.circle.fill" : "circle")
                             .font(.title2).foregroundStyle(selectedIDs.contains(item.id) ? Color.indigo : Color.secondary)
@@ -359,9 +351,8 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     private var configuration: some View {
         List {
             savedQueueSection
-            pricingSettingsSection
-            approvalNoticeSection
-            pricingWarningsSection
+            labelDataSection
+            preparationNoticeSection
             if drafts.contains(where: { $0.tag == nil }) {
                 Section("Missing prices") {
                     Text("\(drafts.filter { $0.tag == nil }.count.formatted()) cards need a price. Edit them individually, or leave them out of this batch.")
@@ -371,7 +362,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                         drafts.removeAll { missing.contains($0.id) }
                         selectedIDs.subtract(missing)
                         keepExistingStickerIDs.subtract(missing)
-                        resetApprovalReview()
+                        resetPreparationNotice()
                     }.accessibilityIdentifier("labels.skipUnpriced")
                 }
             }
@@ -403,28 +394,21 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                     .accessibilityIdentifier("labels.matchQuantities")
                 Button("Use One Label per Card") {
                     for index in drafts.indices { drafts[index].copies = 1 }
-                    resetApprovalReview()
+                    resetPreparationNotice()
                 }.accessibilityIdentifier("labels.oneEach")
             } header: { Text("Copies") } footer: {
                 Text(mode == .custom
                      ? "Custom batches start with one copy per entry. Match Stock Quantities makes one label per physical card. Maximum 100 per entry and 250 labels per batch. Bulk cards do not print individual tags."
                      : "One label per available physical copy is selected automatically. Use One Label per Card to make one per inventory entry. Maximum 100 per entry and 250 labels per batch. Bulk cards do not print individual tags.")
             }
-            Section("Bulk price changes") {
-                Button("Use Suggested Prices") {
-                    for index in drafts.indices where drafts[index].pricing.tag != nil {
-                        drafts[index].useSuggestedPrice()
-                    }
-                    keepExistingStickerIDs.removeAll()
-                    resetApprovalReview()
-                }.accessibilityIdentifier("labels.useSuggestedPrices")
-                if mode == .custom {
+            if mode == .custom {
+                Section("Optional price edit") {
                     Button("Set Same Price for Selected Cards") { showingBatchPriceEditor = true }
                         .disabled(drafts.allSatisfy(\.isBulk))
                         .accessibilityIdentifier("labels.setBatchPrice")
+                    Text("Edits apply to these labels. Inventory prices stay unchanged.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                Text("These changes stay in the draft until approval. Use Suggested Prices replaces selected manual prices; cost and profit warnings still require review.")
-                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Asking prices & copies") {
                 if drafts.count > 1 {
@@ -447,7 +431,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                     .accessibilityIdentifier("labels.validation")
             }
             Section {
-                Text("Market below $0.75: 2 for $1 category. $0.75 to under $1: $1. $1 to under $100: round down to $1. $100 and above: round down to $5. Individual tags always use whole dollars. Saved manual prices stay until you choose Use Suggested Price. Approval saves pricing history without changing inventory, costs or budgets.")
+                Text("Labels use the selected prices. Individual tags use whole dollars. Preparing and printing labels do not change inventory prices, quantities, costs or budgets.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
@@ -465,7 +449,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                             .font(.subheadline).disabled(validation != nil || preparing)
                             .accessibilityIdentifier("labels.continueReview")
                     }
-                    approvalButton
+                    prepareButton
                 }
             }
         }
@@ -477,45 +461,32 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         for index in drafts.indices { drafts[index].paperSize = size }
     }
 
-    @ViewBuilder private var approvalNoticeSection: some View {
-        if let approvedNotice {
+    @ViewBuilder private var preparationNoticeSection: some View {
+        if let preparationNotice {
             Section {
-                Text(approvedNotice).font(.footnote).foregroundStyle(.green)
-                    .accessibilityIdentifier("labels.approvedNotice")
+                Text(preparationNotice).font(.footnote).foregroundStyle(.green)
+                    .accessibilityIdentifier("labels.preparationNotice")
             }
         }
     }
 
-    @ViewBuilder private var pricingWarningsSection: some View {
-        if requiresManualReview {
-            Section("Price warnings") {
-                ForEach(Array(Set(drafts.flatMap(\.pricingWarnings))).sorted(), id: \.self) { warning in
-                    Label(warning, systemImage: "exclamationmark.triangle")
-                        .font(.footnote).foregroundStyle(.orange)
-                }
-                Toggle("I reviewed the warnings and approve a manual override", isOn: $acknowledgedPricingWarnings)
-                    .accessibilityIdentifier("labels.acknowledgePricingWarnings")
-            }
-        }
-    }
-
-    private var approvalButton: some View {
+    private var prepareButton: some View {
         Button { prepareQueue() } label: {
             Group {
                 if preparing { ProgressView() }
-                else { Text(canPrepareNewQueue && labelCount > 0 ? "Approve & Prepare Labels" : "Approve Prices") }
+                else { Text(labelCount > 0 ? "Prepare Labels" : "Save Label Choices") }
             }.frame(maxWidth: .infinity)
         }
         .buttonStyle(.borderedProminent).controlSize(.large)
-        .disabled(preparing || validation != nil || (requiresManualReview && !acknowledgedPricingWarnings) || queue.isPrinting)
+        .disabled(preparing || validation != nil || !canPrepareNewQueue)
         .accessibilityIdentifier("labels.prepare")
     }
 
     private var review: some View {
         List {
             savedQueueSection
-            pricingSettingsSection
-            approvalNoticeSection
+            labelDataSection
+            preparationNoticeSection
             Section("Review before preparing") {
                 LabeledContent("Total labels", value: labelCount.formatted())
                     .accessibilityIdentifier("labels.reviewCount")
@@ -526,11 +497,10 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 LabeledContent("Paper", value: paper.title)
                 LabeledContent("Style", value: style.title)
                 Text(mode == .priceChanged
-                     ? "Preparing approves selected prices and saves the market review baseline. Unchanged, already-labeled stickers are skipped. Printing needs a separate Print action."
-                     : "Prepare the requested labels, including replacements for cards labeled before. Preparing approves the selected prices; printing still needs a separate Print action.")
+                     ? "Prepare labels for changed prices. Unchanged, already-labeled stickers are skipped. Printing starts when you tap Print Queued Labels."
+                     : "Prepare the requested labels, including replacements for cards labeled before. Printing starts when you tap Print Queued Labels.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
-            pricingWarningsSection
             ForEach(orderedDrafts) { draft in
                 if drafts.count > 1 {
                     DisclosureGroup(isExpanded: Binding(get: { expandedReviewIDs.contains(draft.id) }, set: {
@@ -543,8 +513,6 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                     Section { reviewDetails(draft) } header: { Text(draft.cardName) }
                 }
             }
-            TagBundleReviewSection(lines: TagPricingContext.bundleLines(drafts: drafts,
-                inventory: inventory, preferences: approvals.preferences), preferences: approvals.preferences)
             if let validation {
                 Section { Text(validation).font(.footnote).foregroundStyle(.orange) }
             }
@@ -554,7 +522,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             LabelActionBar {
                 Text("\(labelCount.formatted()) labels · \(paper.title)").font(.caption)
-                approvalButton
+                prepareButton
             }
         }
         .accessibilityIdentifier("labels.review")
@@ -568,13 +536,6 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                         Text(draft.cardName).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
                         Text("\(draft.condition) · \(draft.copies.formatted()) \(draft.isBulk ? "bulk copies" : "copies")")
                             .font(.caption).foregroundStyle(.secondary)
-                        TagRepricingSummary(evaluation: TagPricingContext.review(for: draft, store: approvals))
-                        if draft.isManualOverride {
-                            Text("Manual price retained").font(.caption).foregroundStyle(.secondary)
-                        }
-                        if let warning = draft.pricingWarnings.first {
-                            Text(warning).font(.caption).foregroundStyle(.orange)
-                        }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                     Text(draft.priceText ?? "Enter price")
                         .font(.subheadline.weight(.semibold))
@@ -599,12 +560,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 Text("·")
                 Text("\(draft.copies.formatted()) \(draft.isBulk ? "bulk copies" : "copies")")
                     .accessibilityIdentifier("labels.review.copies." + draft.id.uuidString)
-                Spacer(minLength: 4)
-                if !draft.pricingWarnings.isEmpty {
-                    Label("Review", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
-                }
             }.font(.caption).foregroundStyle(.secondary)
-            if draft.isManualOverride { Text("Manual price retained").font(.caption).foregroundStyle(.secondary) }
         }.padding(.vertical, 4)
     }
 
@@ -621,16 +577,6 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
             LabeledContent("Copies", value: draft.copies.formatted())
                 .accessibilityIdentifier("labels.review.copies." + draft.id.uuidString)
         }
-        TagRepricingSummary(evaluation: TagPricingContext.review(for: draft, store: approvals))
-        if draft.isManualOverride {
-            Text("Manual price retained. Use Suggested Price in the editor to replace it.")
-                .font(.caption).foregroundStyle(.secondary)
-        }
-        ForEach(draft.pricingWarnings, id: \.self) { warning in
-            Label(warning, systemImage: "exclamationmark.triangle")
-                .font(.footnote).foregroundStyle(.orange)
-        }
-        TagPricingDisclosure(draft: draft)
         if !draft.isBulk {
             if mode == .all {
                 Label("Print All includes this tag, even if already labeled.", systemImage: "printer")
@@ -653,20 +599,12 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
             .accessibilityIdentifier("labels.reviewEdit." + draft.id.uuidString)
     }
 
-    private var pricingSettingsSection: some View {
-        Section {
-            DisclosureGroup("Pricing settings") {
-                LabeledContent("Minimum desired profit", value: approvals.preferences.minimumDesiredProfitCents
-                    .map { ShowBudgetMoney.decimal($0).money } ?? "Not configured")
-                Text("Unknown acquisition cost or an unset profit target requires a manual review override.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Button("Edit Pricing Settings") { showingPricingSettings = true }
-                    .disabled(!approvals.isLoaded).accessibilityIdentifier("labels.pricingSettings")
-            }
-            if !approvals.isLoaded {
-                Text(approvals.error ?? "Saved tag approvals are unavailable.")
+    @ViewBuilder private var labelDataSection: some View {
+        if !approvals.isLoaded {
+            Section("Saved label data unavailable") {
+                Text(approvals.error ?? "Saved label data is unavailable.")
                     .font(.footnote).foregroundStyle(.orange)
-                Button("Reload Tag Approvals") { approvals.reload(); updateProfitInputs() }
+                Button("Reload Saved Label Data") { approvals.reload() }
                     .accessibilityIdentifier("labels.reloadApprovals")
             }
         }
@@ -700,25 +638,14 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
             return draft
         }
         keepExistingStickerIDs.formIntersection(selectedIDs)
-        resetApprovalReview()
+        resetPreparationNotice()
     }
     private func matchQuantities() {
         let quantities = Dictionary(uniqueKeysWithValues: available.map { ($0.id, $0.quantity) })
         for index in drafts.indices { drafts[index].copies = quantities[drafts[index].id] ?? 1 }
-        resetApprovalReview()
+        resetPreparationNotice()
     }
-    private func updateProfitInputs() {
-        let items = Dictionary(uniqueKeysWithValues: inventory.map { ($0.id, $0) })
-        for index in drafts.indices {
-            guard let item = items[drafts[index].id] else { continue }
-            drafts[index].profitInputs = approvals.preferences.profitInputs(for: item)
-        }
-        resetApprovalReview()
-    }
-    private func resetApprovalReview() {
-        acknowledgedPricingWarnings = false
-        approvedNotice = nil
-    }
+    private func resetPreparationNotice() { preparationNotice = nil }
     private func canKeepExistingSticker(for draft: InventoryLabelDraft) -> Bool {
         guard let tag = draft.tag, !draft.isBulk else { return false }
         return approvals.record(for: draft.id).map { $0.approvedTag == tag } ?? true
@@ -727,12 +654,11 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         Binding(get: { keepExistingStickerIDs.contains(id) }, set: { keep in
             if keep { keepExistingStickerIDs.insert(id) }
             else { keepExistingStickerIDs.remove(id) }
-            resetApprovalReview()
+            resetPreparationNotice()
         })
     }
     private func prepareQueue() {
-        guard validation == nil, (!requiresManualReview || acknowledgedPricingWarnings),
-              approvals.isLoaded, !queue.isPrinting, !preparing else { return }
+        guard validation == nil, approvals.isLoaded, canPrepareNewQueue, !preparing else { return }
         preparing = true
         defer { preparing = false }
         var pricesSaved = false
@@ -740,17 +666,13 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
             let requests = try drafts.map { draft -> TagApprovalRequest in
                 guard let tag = draft.tag else { throw InventoryLabelFailure.invalidPrice }
                 return TagApprovalRequest(id: draft.id, approvedTag: tag, currentMarket: draft.marketValue,
-                    isManualOverride: draft.isManualOverride || !draft.pricingWarnings.isEmpty)
+                    isManualOverride: draft.isManualOverride)
             }
-            try approvals.approve(requests, keepingExistingStickerIDs: keepExistingStickerIDs)
+            try approvals.prepareForPrinting(requests, keepingExistingStickerIDs: keepExistingStickerIDs)
             pricesSaved = true
             let draftsToPrint = printableDrafts
             guard !draftsToPrint.isEmpty else {
-                approvedNotice = "Approved prices saved. No individual labels need printing."
-                return
-            }
-            guard canPrepareNewQueue else {
-                approvedNotice = "Approved prices saved. \(draftsToPrint.reduce(0) { $0 + $1.copies }.formatted()) labels still need printing. Clear the saved print queue to prepare replacements."
+                preparationNotice = "Label choices saved. No individual labels need printing."
                 return
             }
             var entries: [LabelQueueEntry] = []
@@ -776,7 +698,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
             path.append(.queue)
         } catch {
             self.error = pricesSaved
-                ? "Approved prices were saved. Labels still needed remain marked Needs Labels. Review the issue and retry preparation. \(error.localizedDescription)"
+                ? "Label choices were saved, but the labels could not be prepared. Review the issue and try again. \(error.localizedDescription)"
                 : error.localizedDescription
         }
     }
@@ -793,7 +715,6 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     @Environment(\.dismiss) private var dismiss
     @State private var price: String
     @State private var copies: String
-    @State private var baseDraft: InventoryLabelDraft
     @State private var bitmap: InventoryLabelBitmap?
     @State private var previewError: String?
     @State private var previewPrice: String?
@@ -804,13 +725,12 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         self.draft = draft; self.onSave = onSave
         _price = State(initialValue: draft.priceCents.map { String($0 / 100) } ?? draft.askingPriceText)
         _copies = State(initialValue: String(draft.copies))
-        _baseDraft = State(initialValue: draft)
     }
     private var edited: InventoryLabelDraft {
-        var value = baseDraft
+        var value = draft
         value.askingPriceText = price
         value.copies = Int(copies) ?? 0
-        if !value.isBulk, ShowBudgetMoney.parse(price) != baseDraft.priceCents {
+        if !value.isBulk, ShowBudgetMoney.parse(price) != draft.priceCents {
             value.isManualOverride = true
         }
         return value
@@ -833,10 +753,10 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                         .font(.subheadline).foregroundStyle(.secondary)
                     LabeledContent("Paper", value: draft.paperSize.title)
                 }
-                Section("Asking price") {
+                Section("Label price") {
                     if edited.isBulk {
                         Label("2 for $1 category", systemImage: "tray.2")
-                        Text("Market below $0.75 belongs in the bulk category. These cards do not have individual price tags.")
+                        Text("These cards use 2 for $1 bulk bin tags instead of individual price tags.")
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
                         HStack {
@@ -844,23 +764,11 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                             TextField("Required", text: $price).keyboardType(.decimalPad)
                                 .focused($focus, equals: .price).accessibilityIdentifier("labels.editor.price")
                         }
-                        Text("Use whole dollars. Manual prices stay until you choose Use Suggested Price.")
+                        Text("Use whole dollars. Inventory prices stay unchanged.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    Button("Use Suggested Price") {
-                        baseDraft.useSuggestedPrice()
-                        price = baseDraft.priceCents.map { String($0 / 100) } ?? baseDraft.askingPriceText
-                        focus = nil
-                        updatePreview()
-                    }.disabled(baseDraft.pricing.tag == nil)
-                        .accessibilityIdentifier("labels.editor.useSuggestedPrice")
-                    ForEach(edited.pricingWarnings, id: \.self) { warning in
-                        Label(warning, systemImage: "exclamationmark.triangle")
-                            .font(.footnote).foregroundStyle(.orange)
-                    }
-                    TagPricingDisclosure(draft: edited)
                 }
-                Section(edited.isBulk ? "Bulk copies for bundle review" : "Copies") {
+                Section(edited.isBulk ? "Bulk copies" : "Copies") {
                     TextField("1–100", text: $copies).keyboardType(.numberPad)
                         .focused($focus, equals: .copies).accessibilityIdentifier("labels.editor.copies")
                 }
@@ -1038,7 +946,7 @@ private struct LabelActionBar<Content: View>: View {
                     }
                     if hasRetryable {
                         Section {
-                            Text("Select only labels that need another copy. Check label means the printer may already have printed it. Completed copies cannot be retried.")
+                            Text("Select only labels that need another copy. The printer may finish labels already buffered after pausing. Check every uncertain label before retrying. Completed copies cannot be retried.")
                                 .font(.footnote).foregroundStyle(.secondary)
                             Button("Retry Selected (\(selected.count))") {
                                 if selectedUncertain { acknowledged = false; showingRetry = true }
@@ -1094,7 +1002,7 @@ private struct LabelActionBar<Content: View>: View {
             }
             Button("Keep Queue", role: .cancel) {}
         } message: {
-            Text("This removes saved labels and completion receipts. Check uncertain physical labels first. Inventory and financial records are unaffected.")
+            Text("This removes saved labels and completion receipts. After stopping, the printer may finish labels already buffered. Check uncertain physical labels first. Inventory and financial records are unaffected.")
         }
         .alert("Label queue", isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
             Button("OK", role: .cancel) { actionError = nil }
@@ -1166,39 +1074,60 @@ private struct LabelActionBar<Content: View>: View {
 
     private var printControls: some View {
         LabelActionBar {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("\(queue.completedCount)/\(queue.entries.count) completed").font(.caption).monospacedDigit()
-                    .accessibilityIdentifier("labelQueue.progress")
-                Text("Paper type: \(printer.paperMode.title)").font(.caption).foregroundStyle(.secondary)
-                    .accessibilityIdentifier("labelQueue.paperMode")
-                if queue.isPrinting {
-                    ProgressView(value: Double(queue.completedCount), total: Double(max(1, queue.entries.count)))
-                        .accessibilityLabel("Print progress")
-                }
-            }.frame(maxWidth: .infinity, alignment: .leading)
-            if queue.isPrinting {
-                Button("Pause Printing", role: .destructive) { queue.stop(using: printer) }
-                    .buttonStyle(.borderedProminent).accessibilityIdentifier("labelQueue.pause")
-            } else {
-                Button("Print Queued Labels") {
-                    guard !printer.isConfiguringPaper else { return }
-                    let sender = printer.senderForCurrentPaperMode()
-                    Task {
-                        guard !printer.isConfiguringPaper else { return }
-                        await queue.start(using: sender)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(queue.completedCount)/\(queue.entries.count) completed").font(.caption).monospacedDigit()
+                            .accessibilityIdentifier("labelQueue.progress")
+                        Text("Paper type: \(printer.paperMode.title)").font(.caption).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("labelQueue.paperMode")
+                        if queue.isPrinting {
+                            ProgressView(value: Double(queue.completedCount), total: Double(max(1, queue.entries.count)))
+                                .accessibilityLabel("Print progress")
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                    if queue.isPrinting {
+                        Button("Pause Printing", role: .destructive) { queue.stop(using: printer) }
+                            .buttonStyle(.borderedProminent).accessibilityIdentifier("labelQueue.pause")
+                    } else {
+                        Button("Print Queued Labels") {
+                            guard !printer.isConfiguringPaper else { return }
+                            let sender = printer.senderForCurrentPaperMode()
+                            Task {
+                                guard !printer.isConfiguringPaper else { return }
+                                await queue.start(using: sender)
+                            }
+                        }.buttonStyle(.borderedProminent)
+                            .disabled(!queue.canStart || !printer.isConnected || printer.isConfiguringPaper || scenePhase != .active)
+                            .accessibilityIdentifier("labelQueue.print")
                     }
-                }.buttonStyle(.borderedProminent)
-                    .disabled(!queue.canStart || !printer.isConnected || printer.isConfiguringPaper || scenePhase != .active)
-                    .accessibilityIdentifier("labelQueue.print")
+                }
+                if !queue.entries.isEmpty {
+                    Text(printHelp).font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("labelQueue.printHelp")
+                }
             }
         }
+    }
+
+    private var printHelp: String {
+        if queue.isPrinting {
+            return "Pausing stops new labels. The printer may finish labels already buffered. Check uncertain labels before retrying."
+        }
+        if printer.supportsContinuousPrinting {
+            return "D110-M batches keep the printer supplied; identical consecutive labels use the printer’s copy count."
+        }
+        return printer.isConnected
+            ? "Each label is confirmed before the next one prints."
+            : "Connect your printer to print the saved queue."
     }
 
     private var retryConfirmation: some View {
         NavigationStack {
             Form {
                 Section {
-                    Text("Some selected labels may already have printed. Inspect the printer and every selected Check label copy. Retry only copies you still need.")
+                    Text("Some selected labels may already have printed. The printer may also finish labels already buffered after stopping. Inspect the output and every selected Check label copy. Retry only copies you still need.")
                     Toggle("I checked the printed labels", isOn: $acknowledged)
                         .accessibilityIdentifier("labelQueue.acknowledgeUncertain")
                 }

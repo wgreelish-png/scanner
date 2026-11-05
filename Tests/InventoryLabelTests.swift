@@ -47,6 +47,13 @@ import UIKit
         return ShowInventoryItem(card: card, quantity: quantity, remainingCostCents: 700)
     }
 
+    private func savedTag(_ tag: StickerPrice, for item: ShowInventoryItem,
+                          manual: Bool = false) -> TagApprovalRecord {
+        TagApprovalRecord(id: item.id, approvedTag: tag, priceRevisionID: UUID(), marketAtLastApproval: 10,
+            isManualOverride: manual, approvedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            lastPrintedTag: nil, lastPrintedAt: nil)
+    }
+
     func testDefaultsUseOneCopyAndWholeDollarSavedMarketWithoutMutatingStockOrActualCost() throws {
         let item = stock(), original = item
         var draft = InventoryLabelDraft(item: item)
@@ -92,12 +99,51 @@ import UIKit
 
     func testIndividualDefaultsUseOneDollarBelowOneAndFloorWholeDollarsAboveIt() throws {
         for (price, cents) in [(Decimal(string: "0.75")!, Int64(100)), (Decimal(string: "0.99")!, 100),
-                               (Decimal(string: "10.50")!, 1_000)] {
+                               (Decimal(string: "10.50")!, 1_000), (Decimal(string: "99.99")!, 9_900),
+                               (Decimal(100), 10_000), (Decimal(string: "104.99")!, 10_000), (Decimal(105), 10_500)] {
             let draft = InventoryLabelDraft(item: stock(price: price))
             XCTAssertFalse(draft.isBulk)
             XCTAssertEqual(draft.priceCents, cents)
             XCTAssertEqual(draft.tag, .individual(cents))
             XCTAssertNoThrow(try draft.validate())
+        }
+    }
+
+    func testStoredIndividualTagsIncludingZeroSurviveMarketMovementOrUnavailableQuotes() throws {
+        let markets: [Decimal?] = [0, Decimal(string: "0.50"), 11, 145, nil, -1]
+        for market in markets {
+            for cents in [Int64(0), 700, 1_100] {
+                let item = stock(price: market), original = item
+                let saved = savedTag(.individual(cents), for: item)
+                let draft = InventoryLabelDraft(item: item, approval: saved)
+                XCTAssertEqual(draft.tag, .individual(cents))
+                XCTAssertEqual(draft.priceCents, cents)
+                XCTAssertFalse(draft.isBulk)
+                XCTAssertFalse(draft.isManualOverride, "Stored final prices do not need a manual-override flag to survive")
+                XCTAssertNoThrow(try draft.validate())
+                XCTAssertEqual(item, original)
+                XCTAssertEqual(draft.marketValue, market)
+            }
+        }
+    }
+
+    func testStoredBulkCategorySurvivesHigherMarketValuesWithoutBecomingAnIndividualTag() throws {
+        let markets: [Decimal?] = [Decimal(string: "0.50"), 10, 150, nil]
+        for market in markets {
+            for manual in [false, true] {
+                let item = stock(price: market), original = item
+                let saved = savedTag(.twoForOne, for: item, manual: manual)
+                let draft = InventoryLabelDraft(item: item, approval: saved)
+                XCTAssertTrue(draft.isBulk)
+                XCTAssertEqual(draft.tag, .twoForOne)
+                XCTAssertNil(draft.priceCents)
+                XCTAssertEqual(draft.priceText, StickerPrice.twoForOne.displayText)
+                XCTAssertEqual(draft.isManualOverride, manual)
+                XCTAssertThrowsError(try draft.validate()) {
+                    XCTAssertEqual($0 as? InventoryLabelFailure, .bulkCategory)
+                }
+                XCTAssertEqual(item, original)
+            }
         }
     }
 
