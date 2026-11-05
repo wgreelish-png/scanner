@@ -46,17 +46,21 @@ import SwiftUI
                         .accessibilityIdentifier("customLabels.copies")
                 }
                 Picker("Physical paper", selection: Binding(get: { model.paperSize }, set: { size in
-                    model.paperSize = size
                     paperPreferences.select(size)
+                    model.paperSize = paperPreferences.size
                 })) {
-                    ForEach(InventoryLabelSize.allCases) { paper in Text(paper.title).tag(paper) }
-                }.accessibilityIdentifier("customLabels.paper")
+                    ForEach(paperPreferences.availableSizes) { paper in Text(paper.title).tag(paper) }
+                }.disabled(paperPreferences.detectedProduct != nil)
+                    .accessibilityIdentifier("customLabels.paper")
                 LabelPricePositionPicker(selection: Binding(get: { model.pricePosition }, set: { position in
                     model.pricePosition = position
                     paperPreferences.selectPricePosition(position)
                 }), identifier: "customLabels.pricePosition")
-                Text("1–100 copies. Label size and price position are remembered. Check the size matches the loaded roll.")
+                Text(paperPreferences.detectedProduct == nil
+                     ? "1–100 copies. Label size and price position are remembered. Check the size matches the loaded roll."
+                     : "Detected from roll. The design uses these measurements within the printer's 12 mm head. Your price-side preference is remembered.")
                     .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("customLabels.paperSource")
             }
             Section("Preview") {
                 if let bitmap, let previewDraft, previewDraft == model.draft {
@@ -99,6 +103,8 @@ import SwiftUI
                 Spacer(minLength: 12)
                 Button(model.hasPreparedQueue ? "View Queue" : "Prepare Labels") {
                     focused = nil
+                    model.paperSize = paperPreferences.size
+                    model.pricePosition = paperPreferences.pricePosition
                     if model.prepare() { showingQueue = true }
                 }
                 .buttonStyle(.borderedProminent)

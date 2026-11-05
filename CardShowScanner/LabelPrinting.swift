@@ -13,31 +13,86 @@ enum LabelPricePosition: String, Codable, CaseIterable, Identifiable, Sendable {
     var title: String { self == .left ? "Price Left" : "Price Right" }
 }
 
-/// The printable head is 12 mm wide. Larger stock leaves its factory margins;
-/// the long dimension runs along the paper feed, at eight dots per millimetre.
-enum InventoryLabelSize: String, Codable, CaseIterable, Identifiable, Sendable {
-    case small30x14, medium40x12, small30x15, large50x14
+/// Manual presets retain their original JSON strings. Detected stock carries
+/// its own immutable measurements so saved queues never depend on a later
+/// catalog lookup or the currently connected roll.
+struct InventoryLabelSize: Codable, CaseIterable, Hashable, Identifiable, Sendable {
+    private let preset: String?
+    let product: NiimbotLabelProduct?
+    static let small30x14 = Self(preset: "small30x14")
+    static let medium40x12 = Self(preset: "medium40x12")
+    static let small30x15 = Self(preset: "small30x15")
+    static let large50x14 = Self(preset: "large50x14")
+    static let allCases: [Self] = [.small30x14, .medium40x12, .small30x15, .large50x14]
+
+    private init(preset: String) { self.preset = preset; product = nil }
+    init(product: NiimbotLabelProduct) throws {
+        guard (1...800).contains(product.geometry.feedDots), product.geometry.headDots == 96 else {
+            throw NiimbotLabelCatalogFailure.invalidProduct
+        }
+        preset = nil; self.product = product
+    }
+    init?(rawValue: String) {
+        guard let value = Self.allCases.first(where: { $0.preset == rawValue }) else { return nil }
+        self = value
+    }
+
     var id: Self { self }
+    var rawValue: String {
+        if let preset { return preset }
+        guard let product else { return "" }
+        // Existing preparation caches use this identity. Include the complete
+        // profile, not just its barcode, so changed geometry cannot reuse art.
+        let values = [product.width, product.height, Double(product.rotation), Double(product.paperType), Double(product.flags)]
+            + product.inputAreas.flatMap { [$0.x, $0.y, $0.width, $0.height] }
+        return "stock:" + product.code + ":" + values.map { String($0) }.joined(separator: ":")
+    }
+    var geometry: LabelPrintGeometry? { product?.geometry }
     var title: String {
-        switch self {
-        case .small30x14: return "30 × 14 mm"
-        case .medium40x12: return "40 × 12 mm"
-        case .small30x15: return "30 × 15 mm"
-        case .large50x14: return "50 × 14 mm"
+        if let product {
+            func value(_ number: Double) -> String {
+                number.rounded() == number ? String(Int(number)) : String(number)
+            }
+            return "\(value(product.width)) × \(value(product.height)) mm"
+        }
+        switch preset {
+        case "medium40x12": return "40 × 12 mm"
+        case "small30x15": return "30 × 15 mm"
+        case "large50x14": return "50 × 14 mm"
+        default: return "30 × 14 mm"
         }
     }
     var feedDots: Int {
-        switch self {
-        case .small30x14, .small30x15: return 240
-        case .medium40x12: return 320
-        case .large50x14: return 400
+        if let geometry { return geometry.feedDots }
+        switch preset {
+        case "medium40x12": return 320
+        case "large50x14": return 400
+        default: return 240
         }
     }
     var headDots: Int { 96 }
+
+    private enum CodingKeys: String, CodingKey { case product }
+    init(from decoder: Decoder) throws {
+        if let value = try? decoder.singleValueContainer().decode(String.self) {
+            guard let preset = Self(rawValue: value) else { throw NiimbotLabelCatalogFailure.invalidProduct }
+            self = preset
+        } else {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            try self.init(product: values.decode(NiimbotLabelProduct.self, forKey: .product))
+        }
+    }
+    func encode(to encoder: Encoder) throws {
+        if let preset {
+            var value = encoder.singleValueContainer(); try value.encode(preset)
+        } else {
+            var value = encoder.container(keyedBy: CodingKeys.self); try value.encode(product, forKey: .product)
+        }
+    }
 }
 
-/// Physical roll dimensions are an explicit, remembered choice. The printable
-/// head width and Gap/Transparent setting do not identify the loaded roll.
+/// RFID detection applies to this connection only. It never overwrites the
+/// remembered manual paper choice or the independently saved price position.
 @MainActor @Observable final class LabelPaperPreferences {
     static let shared: LabelPaperPreferences = {
         let fixture = ProcessInfo.processInfo.arguments.first(where: {
@@ -48,7 +103,8 @@ enum InventoryLabelSize: String, Codable, CaseIterable, Identifiable, Sendable {
         return LabelPaperPreferences(defaults: .standard, key: key, pricePositionKey: positionKey)
     }()
 
-    private(set) var size: InventoryLabelSize
+    private(set) var manualSize: InventoryLabelSize
+    private(set) var detectedProduct: NiimbotLabelProduct?
     private(set) var pricePosition: LabelPricePosition
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let key: String
@@ -62,14 +118,31 @@ enum InventoryLabelSize: String, Codable, CaseIterable, Identifiable, Sendable {
         self.defaults = defaults
         self.key = key
         self.pricePositionKey = pricePositionKey
-        size = defaults.string(forKey: key).flatMap(InventoryLabelSize.init(rawValue:)) ?? .small30x14
+        manualSize = defaults.string(forKey: key).flatMap(InventoryLabelSize.init(rawValue:)) ?? .small30x14
         pricePosition = defaults.string(forKey: pricePositionKey).flatMap(LabelPricePosition.init(rawValue:)) ?? .right
     }
 
+    var size: InventoryLabelSize {
+        if let detectedProduct, let size = try? InventoryLabelSize(product: detectedProduct) { return size }
+        return manualSize
+    }
+
+    var availableSizes: [InventoryLabelSize] {
+        if size.product != nil { return InventoryLabelSize.allCases + [size] }
+        return InventoryLabelSize.allCases
+    }
+
+    func updateDetectedProduct(_ product: NiimbotLabelProduct?) {
+        detectedProduct = product
+    }
+
     func select(_ size: InventoryLabelSize) {
-        self.size = size
+        guard detectedProduct == nil, Self.isManual(size) else { return }
+        manualSize = size
         defaults.set(size.rawValue, forKey: key)
     }
+
+    private static func isManual(_ size: InventoryLabelSize) -> Bool { InventoryLabelSize.allCases.contains(size) }
 
     func selectPricePosition(_ position: LabelPricePosition) {
         pricePosition = position

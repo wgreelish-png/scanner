@@ -170,6 +170,77 @@ final class NiimbotProtocolTests: XCTestCase {
         XCTAssertEqual(attempts, 1)
     }
 
+    func testRFIDIdentityRemainsUsableWhenItsOptionalCountersAreInvalid() throws {
+        for (total, used) in [(0, 0), (0, 1), (84, 85)] {
+            let info = try XCTUnwrap(NiimbotProtocol.rollInfo(.init(command: 0x1b,
+                data: syntheticRFIDPayload(product: "120425109", total: total, used: used))))
+            XCTAssertEqual(info.productCode, "120425109")
+            XCTAssertEqual(info.labelType, 1)
+            XCTAssertNil(info.estimate, "Invalid counters cannot fabricate an empty roll")
+            let product = try XCTUnwrap(info.matchedProduct(in: .shared))
+            XCTAssertEqual(product.width, 40)
+            XCTAssertEqual(product.height, 12)
+            XCTAssertThrowsError(try NiimbotProtocol.rollEstimate(.init(command: 0x1b,
+                data: syntheticRFIDPayload(product: "120425109", total: total, used: used))))
+        }
+    }
+
+    func testRFIDCatalogMatchPreservesLeadingZerosAndRequiresTheSameMediaType() throws {
+        let info = try XCTUnwrap(NiimbotProtocol.rollInfo(.init(command: 0x1b,
+            data: syntheticRFIDPayload(product: "02242207"))))
+        XCTAssertEqual(info.matchedProduct(in: .shared)?.code, "02242207")
+        let mismatched = NiimbotRollInfo(productCode: "02242207", totalLabels: 84, usedLabels: 9, labelType: 5)
+        XCTAssertNil(mismatched.matchedProduct(in: .shared), "A known code cannot overrule contradictory chip media")
+        let unknown = NiimbotRollInfo(productCode: "UNKNOWNTEST123", totalLabels: 84, usedLabels: 9, labelType: 1)
+        XCTAssertNil(unknown.matchedProduct(in: .shared))
+        XCTAssertEqual(unknown.estimate?.remainingLabels, 75, "A catalog miss does not erase a valid counter")
+        let unsupported = NiimbotRollInfo(productCode: "02242207", totalLabels: 84, usedLabels: 9, labelType: 2)
+        XCTAssertNil(unsupported.matchedProduct(in: .shared)); XCTAssertNil(unsupported.estimate)
+    }
+
+    func testRFIDIdentitySnapshotStillDiscardsUniqueTagAndRollSerial() throws {
+        let first = try NiimbotProtocol.rollInfo(.init(command: 0x1b,
+            data: syntheticRFIDPayload(product: "02242207", total: 0, used: 0)))
+        let second = try NiimbotProtocol.rollInfo(.init(command: 0x1b,
+            data: syntheticRFIDPayload(product: "02242207", serial: "TEST000000000002", total: 0, used: 0,
+                                       uid: Array(repeating: 0xee, count: 8))))
+        XCTAssertEqual(first, second)
+    }
+
+    @MainActor func testRFIDMetadataReadUsesOneRequestWithoutASecondCounterLookup() async throws {
+        var requests: [NiimbotRequest] = []
+        let info = try await NiimbotD110Session.readRollInfo { request in
+            requests.append(request)
+            return .init(command: 0x1b, data: self.syntheticRFIDPayload(product: "120425109", total: 0, used: 0))
+        }
+        XCTAssertEqual(requests, [NiimbotRequest(0x1a, [1], response: 0x1b)])
+        XCTAssertEqual(info?.productCode, "120425109")
+        XCTAssertNil(info?.estimate)
+        var absentRequests = 0
+        let absent = try await NiimbotD110Session.readRollInfo { _ in
+            absentRequests += 1
+            return .init(command: 0x1b, data: Data([0]))
+        }
+        XCTAssertNil(absent); XCTAssertEqual(absentRequests, 1)
+    }
+
+    func testDynamicCatalogFeedLengthsRetainTheBoundedNinetySixDotHead() throws {
+        for height in [176, 200, 224, 241, 352, 432, 600, 800] {
+            let raster = LabelRaster(width: 96, height: height, data: Data(repeating: 0xff, count: height * 12))
+            for identity in [NiimbotD110Identity(modelID: 2304, protocolVersion: 1, firmwareBytes: Data([5, 34])),
+                             NiimbotD110Identity(modelID: 2320, protocolVersion: 4, firmwareBytes: Data([4, 23]))] {
+                let requests = try NiimbotProtocol.printRequests(for: raster, identity: identity, paperMode: .transparent)
+                let size = try XCTUnwrap(requests.first { $0.command == 0x13 })
+                XCTAssertEqual(Array(size.data.prefix(4)), [UInt8(height >> 8), UInt8(height & 0xff), 0, 96])
+                XCTAssertEqual(requests.first { $0.command == 0x23 }?.data, Data([5]))
+            }
+        }
+        for height in [0, 801] {
+            XCTAssertThrowsError(try NiimbotProtocol.printRequests(for: .init(width: 96, height: height,
+                data: Data(repeating: 0xff, count: max(0, height) * 12))))
+        }
+    }
+
     func testFirstPermissionSearchSurvivesPromptAndResumesOnlyOnce() {
         var intent = NiimbotPermissionSearchIntent()
         XCTAssertFalse(intent.preserveOnInactive(permissionUndetermined: true))
@@ -339,8 +410,8 @@ final class NiimbotProtocolTests: XCTestCase {
             XCTAssertTrue(rows.allSatisfy { $0.response == nil })
             XCTAssertEqual(rows.first?.data[5], 200)
         }
-        XCTAssertThrowsError(try NiimbotProtocol.printRequests(for: .init(width: 96, height: 241,
-            data: Data(repeating: 0xff, count: 241 * 12))))
+        XCTAssertThrowsError(try NiimbotProtocol.printRequests(for: .init(width: 96, height: 801,
+            data: Data(repeating: 0xff, count: 801 * 12))))
         XCTAssertThrowsError(try NiimbotProtocol.printRequests(for: .init(width: 120, height: 240,
             data: Data(repeating: 0xff, count: 15 * 240))))
     }
@@ -611,7 +682,7 @@ final class NiimbotProtocolTests: XCTestCase {
             } catch { XCTAssertEqual(error as? LabelPrinterIssue, .unsupportedPrinter) }
             XCTAssertEqual(exchanges, 0)
         }
-        for raster in [LabelRaster(width: 96, height: 241, data: Data(repeating: 0xff, count: 12 * 241)),
+        for raster in [LabelRaster(width: 96, height: 801, data: Data(repeating: 0xff, count: 12 * 801)),
                        LabelRaster(width: 120, height: 240, data: Data(repeating: 0xff, count: 15 * 240))] {
             var exchanges = 0
             do {
@@ -887,7 +958,7 @@ final class NiimbotProtocolTests: XCTestCase {
     }
 
     @MainActor func testBatchValidatesAllPagesAndCountBeforeAnyRadioOrJournalCallback() async throws {
-        let invalid = LabelRaster(width: 96, height: 241, data: Data(repeating: 0xff, count: 12 * 241))
+        let invalid = LabelRaster(width: 96, height: 801, data: Data(repeating: 0xff, count: 12 * 801))
         for rasters in [[], [denseRaster, invalid], Array(repeating: denseRaster, count: 251)] {
             var exchanges = 0, callbacks = 0
             do {
@@ -1278,7 +1349,7 @@ final class NiimbotProtocolTests: XCTestCase {
         XCTAssertEqual(will, [[0], [1]]); XCTAssertEqual(receipts, [[0], [1]])
         XCTAssertEqual(starts, 2); XCTAssertEqual(ends, 2)
 
-        let invalid = LabelRaster(width: 96, height: 241, data: Data(repeating: 0xff, count: 12 * 241))
+        let invalid = LabelRaster(width: 96, height: 801, data: Data(repeating: 0xff, count: 12 * 801))
         for rasters in [[], [denseRaster, invalid], Array(repeating: denseRaster, count: 251)] {
             var exchanges = 0, callbacks = 0
             do {

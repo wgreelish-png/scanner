@@ -18,8 +18,15 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     private(set) var isScanning = false
     private(set) var isPrinting = false
     private(set) var isConfiguringPaper = false
-    private(set) var paperMode: NiimbotPaperMode
+    private var manualPaperMode: NiimbotPaperMode
+    var paperMode: NiimbotPaperMode {
+        if let type = LabelPaperPreferences.shared.detectedProduct?.paperType {
+            return type == NiimbotPaperMode.transparent.commandValue ? .transparent : .gap
+        }
+        return manualPaperMode
+    }
     private(set) var paperModeStatus: String?
+    private(set) var rollProductStatus: String?
     var rollEstimate: NiimbotRollEstimate? { rollReader.estimate }
     var rollEstimateIsFresh: Bool { rollReader.freshness == .fresh }
     var rollEstimateFreshness: NiimbotRollEstimateFreshness { rollReader.freshness }
@@ -57,6 +64,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     @ObservationIgnored private var connectionTimeout: Task<Void, Never>?
     @ObservationIgnored private var handshakeTask: Task<Void, Never>?
     @ObservationIgnored private var printOperation: UUID?
+    @ObservationIgnored private var activePrintStock: PreparedStockValidation?
     @ObservationIgnored private var printWasDispatched = false
     @ObservationIgnored private var sendingPages: [Int] = []
     @ObservationIgnored private var dispatchedPages: Set<Int> = []
@@ -126,7 +134,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     }
 
     private override init() {
-        paperMode = UserDefaults.standard.string(forKey: NiimbotPrinter.paperModeDefaultsKey)
+        manualPaperMode = UserDefaults.standard.string(forKey: NiimbotPrinter.paperModeDefaultsKey)
             .flatMap(NiimbotPaperMode.init(rawValue:)) ?? .gap
         super.init()
         NotificationCenter.default.addObserver(self, selector: #selector(applicationWillResignActive),
@@ -267,30 +275,52 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
 
     /// A queue captures the physical roll setting once, before its first copy.
     /// Saved artwork and completion receipts do not need to be rewritten.
-    func senderForCurrentPaperMode() -> any LabelPrinterSending {
-        PaperModeSender(printer: self, paperMode: paperMode)
+    func senderForCurrentPaperMode(expectedPaper: InventoryLabelSize? = nil) -> any LabelPrinterSending {
+        PaperModeSender(printer: self, paperMode: paperMode, expectedPapers: expectedPaper.map { [$0] } ?? [])
     }
 
-    @MainActor private final class PaperModeSender: LabelContinuousPrinterSending, LabelBatchPrinterSending {
-        let printer: NiimbotPrinter
-        let paperMode: NiimbotPaperMode
+    private typealias PreparedStockValidation = NiimbotPrintStockSnapshot
 
-        init(printer: NiimbotPrinter, paperMode: NiimbotPaperMode) {
-            self.printer = printer; self.paperMode = paperMode
+    @MainActor private final class PaperModeSender: LabelContinuousPrinterSending, LabelBatchPrinterSending, LabelStockValidating {
+        let printer: NiimbotPrinter
+        var paperMode: NiimbotPaperMode
+        var expectedPapers: [InventoryLabelSize]
+        private var stockValidation: PreparedStockValidation?
+
+        init(printer: NiimbotPrinter, paperMode: NiimbotPaperMode, expectedPapers: [InventoryLabelSize]) {
+            self.printer = printer; self.paperMode = paperMode; self.expectedPapers = expectedPapers
+        }
+        func queuedPaperIssue(_ papers: [InventoryLabelSize]) async -> String? {
+            let connection = printer.connectionGeneration
+            await printer.rollReader.waitUntilIdle()
+            guard !Task.isCancelled, printer.isConnected, printer.connectionGeneration == connection else {
+                return "Reconnect the printer before printing these labels."
+            }
+            let product = LabelPaperPreferences.shared.detectedProduct
+            if let issue = LabelStockCompatibility.issue(for: papers, detected: product) { return issue }
+            expectedPapers = papers
+            paperMode = printer.paperMode
+            stockValidation = PreparedStockValidation(connection: connection, product: product, paperMode: paperMode)
+            return nil
         }
         func printLabel(_ raster: LabelRaster) async -> LabelSendOutcome {
-            await printer.printLabel(raster, paperMode: paperMode)
+            await printer.performPrintJob([raster], paperMode: paperMode, continuous: false,
+                beforePages: { _ in }, afterPages: { _ in }, expectedPapers: expectedPapers, stockValidation: stockValidation)
         }
         func printBatch(_ rasters: [LabelRaster],
                         beforePage: @escaping @MainActor (Int) async throws -> Void,
                         afterPage: @escaping @MainActor (Int) async throws -> Void) async -> LabelSendOutcome {
-            await printer.printBatch(rasters, paperMode: paperMode, beforePage: beforePage, afterPage: afterPage)
+            await printer.performPrintJob(rasters, paperMode: paperMode, continuous: false,
+                beforePages: { pages in for page in pages { try await beforePage(page) } },
+                afterPages: { pages in for page in pages { try await afterPage(page) } },
+                expectedPapers: expectedPapers, stockValidation: stockValidation)
         }
         func printContinuously(_ rasters: [LabelRaster],
                                beforePages: @escaping @MainActor ([Int]) async throws -> Void,
                                afterPages: @escaping @MainActor ([Int]) async throws -> Void) async -> LabelSendOutcome {
             await printer.performPrintJob(rasters, paperMode: paperMode, continuous: true,
-                                          beforePages: beforePages, afterPages: afterPages)
+                                          beforePages: beforePages, afterPages: afterPages,
+                                          expectedPapers: expectedPapers, stockValidation: stockValidation)
         }
         func cancelPrinting() { printer.cancelPrinting() }
     }
@@ -309,7 +339,9 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
 
     private func performPrintJob(_ rasters: [LabelRaster], paperMode: NiimbotPaperMode, continuous: Bool,
                                  beforePages: @escaping @MainActor ([Int]) async throws -> Void,
-                                 afterPages: @escaping @MainActor ([Int]) async throws -> Void) async -> LabelSendOutcome {
+                                 afterPages: @escaping @MainActor ([Int]) async throws -> Void,
+                                 expectedPapers: [InventoryLabelSize] = [],
+                                 stockValidation: PreparedStockValidation? = nil) async -> LabelSendOutcome {
         guard UIApplication.shared.applicationState == .active else { return .notSent(.notActive) }
         guard isConnected else { return .notSent(.notConnected) }
         guard !isPrinting, !isConfiguringPaper, pending == nil || pending?.optionalRollRead == true else { return .notSent(.printerBusy) }
@@ -323,12 +355,12 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         dispatchedPages = []
         printCancellation = nil
         isPrinting = true
-        rollReader.markStale()
         error = nil
         status = "Checking \(modelName)…"
         defer {
             if printOperation == operation {
                 printOperation = nil
+                activePrintStock = nil
                 isPrinting = false
                 printCancellation = nil
                 sendingPages = []
@@ -341,7 +373,21 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             do {
                 await rollReader.waitUntilIdle()
                 try checkPrintOperation(operation)
-                try await sendBatch(rasters, operation: operation, paperMode: paperMode, continuous: continuous,
+                let detected = LabelPaperPreferences.shared.detectedProduct
+                if let stockValidation {
+                    guard stockValidation.matches(connection: connectionGeneration, product: detected,
+                                                   paperMode: self.paperMode) else { throw LabelPrinterIssue.paperMismatch }
+                }
+                if !expectedPapers.isEmpty,
+                   LabelStockCompatibility.issue(for: expectedPapers, detected: detected) != nil {
+                    throw LabelPrinterIssue.paperMismatch
+                }
+                // The latest RFID read owns both geometry and media mode. A
+                // count becoming stale during printing does not erase the roll.
+                let mode = detected == nil ? paperMode : self.paperMode
+                activePrintStock = PreparedStockValidation(connection: connectionGeneration, product: detected, paperMode: mode)
+                rollReader.markStale()
+                try await sendBatch(rasters, operation: operation, paperMode: mode, continuous: continuous,
                                     beforePages: beforePages, afterPages: afterPages)
                 try checkPrintOperation(operation)
                 status = rasters.count == 1 ? "Label printed." : "\(rasters.count) labels printed."
@@ -365,7 +411,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     }
 
     func selectPaperMode(_ mode: NiimbotPaperMode) {
-        guard !isPrinting, !isConfiguringPaper else { return }
+        guard !isPrinting, !isConfiguringPaper, LabelPaperPreferences.shared.detectedProduct == nil else { return }
         savePaperMode(mode)
         paperModeStatus = nil
     }
@@ -377,20 +423,44 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     func refreshRollEstimate() {
         guard canRefreshRollEstimate else { return }
         let generation = connectionGeneration
-        rollReader.refresh { [weak self] in
+        rollReader.refreshInfo(load: { [weak self] in
             guard let self, self.connectionGeneration == generation,
-                  self.isConnected, !self.isPrinting, !self.isConfiguringPaper,
-                  !self.rollReplyGuard.isQuarantined else { throw LabelPrinterIssue.printerBusy }
-            return try await NiimbotD110Session.readRollEstimate { [weak self] request in
+                  self.isConnected, !self.rollReplyGuard.isQuarantined else { throw LabelPrinterIssue.printerBusy }
+            // This task was authorized while idle. Print/settings may claim
+            // their flags meanwhile, but must drain this read before writing.
+            return try await NiimbotD110Session.readRollInfo { [weak self] request in
                 guard let self, self.connectionGeneration == generation else { throw LabelPrinterIssue.connectionLost }
                 return try await self.exchange(request, timeout: .milliseconds(750), optionalRollRead: true)
             }
+        }, onUpdate: { [weak self] info in
+            guard let self, self.connectionGeneration == generation else { return }
+            self.updateDetectedRoll(info)
+        })
+    }
+
+    private func updateDetectedRoll(_ info: NiimbotRollInfo?) {
+        guard let info else {
+            LabelPaperPreferences.shared.updateDetectedProduct(nil)
+            rollProductStatus = "Roll could not be identified. Choose the paper size manually."
+            return
         }
+        guard let product = info.matchedProduct(in: .shared) else {
+            LabelPaperPreferences.shared.updateDetectedProduct(nil)
+            rollProductStatus = "Roll could not be matched to the offline catalog. Choose paper settings manually."
+            return
+        }
+        LabelPaperPreferences.shared.updateDetectedProduct(product)
+        rollProductStatus = "Label dimensions detected from the roll."
+    }
+
+    private func clearDetectedRoll() {
+        LabelPaperPreferences.shared.updateDetectedProduct(nil)
+        rollProductStatus = nil
     }
 
     private func savePaperMode(_ mode: NiimbotPaperMode) {
-        if paperMode != mode { rollReader.markStale() }
-        paperMode = mode
+        if manualPaperMode != mode { rollReader.markStale() }
+        manualPaperMode = mode
         UserDefaults.standard.set(mode.rawValue, forKey: Self.paperModeDefaultsKey)
     }
 
@@ -398,9 +468,9 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         guard UIApplication.shared.applicationState == .active else { present(.notActive); return }
         guard isConnected, identity != nil else { present(.notConnected); return }
         guard !isPrinting, !isConfiguringPaper, pending == nil || pending?.optionalRollRead == true else { present(.printerBusy); return }
-        let generation = connectionGeneration, selected = paperMode
+        let generation = connectionGeneration
         isConfiguringPaper = true
-        paperModeStatus = reading ? "Reading printer setting…" : "Applying \(selected.title)…"
+        paperModeStatus = reading ? "Reading printer setting…" : "Applying paper type…"
         error = nil
         paperTask = Task { [weak self] in
             guard let self else { return }
@@ -415,6 +485,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                 await self.rollReader.waitUntilIdle()
                 try Task.checkCancellation()
                 guard self.connectionGeneration == generation else { return }
+                let selected = self.paperMode
                 let exchange: NiimbotD110Session.Exchange = { [weak self] request in
                     guard let self, self.connectionGeneration == generation,
                           self.isConfiguringPaper else { throw LabelPrinterIssue.connectionLost }
@@ -424,7 +495,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                     let mode = try await NiimbotD110Session.readPaperMode(exchange: exchange)
                     try Task.checkCancellation()
                     guard self.connectionGeneration == generation else { return }
-                    self.savePaperMode(mode)
+                    if LabelPaperPreferences.shared.detectedProduct == nil { self.savePaperMode(mode) }
                     self.paperModeStatus = "Printer setting: \(mode.title)"
                     self.diagnostic(.paperRead)
                 } else {
@@ -446,12 +517,19 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         }
     }
 
+    private var activePrintStockMatches: Bool {
+        guard let stock = activePrintStock else { return true }
+        return stock.matches(connection: connectionGeneration, product: LabelPaperPreferences.shared.detectedProduct,
+                             paperMode: paperMode)
+    }
+
     private func checkPrintOperation(_ operation: UUID) throws {
         if let printCancellation { throw printCancellation }
         try Task.checkCancellation()
         guard printOperation == operation else { throw LabelPrinterIssue.cancelled }
         guard UIApplication.shared.applicationState == .active else { throw LabelPrinterIssue.notActive }
         guard isConnected, peripheral?.state == .connected else { throw LabelPrinterIssue.connectionLost }
+        guard activePrintStockMatches else { throw LabelPrinterIssue.paperMismatch }
     }
 
     private func stopScanning() {
@@ -515,7 +593,9 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     private func endConnection(issue: LabelPrinterIssue) {
         if isPrinting, printCancellation == nil { printCancellation = issue }
         connectionGeneration = UUID()
+        activePrintStock = nil
         rollReader.reset(); rollReplyGuard = NiimbotOptionalRollReplyGuard()
+        clearDetectedRoll()
         connectionStage = nil
         identificationStep = nil
         connectionTimeout?.cancel()
@@ -617,6 +697,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         guard UIApplication.shared.applicationState == .active else { throw LabelPrinterIssue.notActive }
         guard peripheral?.state == .connected, writeCharacteristic != nil else { throw LabelPrinterIssue.notConnected }
         guard pending == nil else { throw LabelPrinterIssue.printerBusy }
+        if isPrinting && !optionalRollRead, !activePrintStockMatches { throw LabelPrinterIssue.paperMismatch }
         if optionalRollRead {
             guard command == 0x1a, response == 0x1b, responseAlternatives.isEmpty, !beginsPrint,
                   writeCharacteristic?.properties.contains(.writeWithoutResponse) == true else {
@@ -659,6 +740,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     private func driveWrite() {
         guard let transaction = pending, !transaction.awaitingWriteResponse else { return }
         guard UIApplication.shared.applicationState == .active else { connectionFailed(.notActive); return }
+        if isPrinting && !transaction.optionalRollRead, !activePrintStockMatches { connectionFailed(.paperMismatch); return }
         guard let peripheral, peripheral.state == .connected, let writeCharacteristic else {
             connectionFailed(.connectionLost)
             return
@@ -748,11 +830,20 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             }
             if packet.command == 0x1b && pending?.optionalRollRead != true {
                 rollReader.markStale()
+                let known = LabelPaperPreferences.shared.detectedProduct
+                let reported = (try? NiimbotProtocol.rollInfo(packet))?.matchedProduct(in: .shared)
+                if known == nil || reported != known {
+                    clearDetectedRoll()
+                    if isPrinting { connectionFailed(.paperMismatch); return }
+                }
                 continue
             }
             if let identity, [UInt8(0xdd), 0xd9].contains(packet.command) {
                 do { try NiimbotProtocol.validateReadiness(packet, identity: identity) }
-                catch { rollReader.markStale() }
+                catch {
+                    rollReader.markStale(); clearDetectedRoll()
+                    if isPrinting { connectionFailed((error as? LabelPrinterIssue) ?? .paperMismatch); return }
+                }
             }
             guard let transaction = pending,
                   transaction.offset == transaction.bytes.count,

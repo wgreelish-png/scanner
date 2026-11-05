@@ -139,7 +139,9 @@ import SwiftUI
                         .accessibilityIdentifier("priceTags.printerSearch")
                 }
             }
-            Text("Last used: \(paperPreferences.size.title) · Check the loaded roll")
+            Text(paperPreferences.detectedProduct == nil
+                 ? "Last used: \(paperPreferences.size.title) · Check the loaded roll"
+                 : "Detected from roll: \(paperPreferences.size.title) · \(paperPreferences.detectedProduct?.paperType == 5 ? "Transparent" : "Gap")")
                 .font(.caption).foregroundStyle(.secondary)
                 .accessibilityIdentifier("priceTags.paperSize")
             Text("New labels: \(paperPreferences.pricePosition.title)")

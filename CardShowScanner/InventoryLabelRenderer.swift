@@ -10,7 +10,7 @@ import UIKit
 @MainActor enum InventoryLabelRenderer {
     static func render(_ draft: InventoryLabelDraft) throws -> InventoryLabelBitmap {
         let raster = try renderRaster(draft)
-        return InventoryLabelBitmap(raster: raster, previewImage: try image(raster: raster))
+        return InventoryLabelBitmap(raster: raster, previewImage: try image(raster: raster, paper: draft.paperSize))
     }
 
     /// Queue preparation needs only the exact printer bits. Preview decoding is
@@ -24,7 +24,7 @@ import UIKit
 
     static func render(_ draft: CustomPriceTagDraft) throws -> InventoryLabelBitmap {
         let raster = try renderRaster(draft)
-        return InventoryLabelBitmap(raster: raster, previewImage: try image(raster: raster))
+        return InventoryLabelBitmap(raster: raster, previewImage: try image(raster: raster, paper: draft.paperSize))
     }
 
     static func renderRaster(_ draft: CustomPriceTagDraft) throws -> LabelRaster {
@@ -36,6 +36,10 @@ import UIKit
     private static func raster(price: String, name cardName: String, number cardNumber: String, condition conditionText: String,
                                style: InventoryLabelStyle, paper: InventoryLabelSize, isBulk: Bool = false,
                                pricePosition: LabelPricePosition) throws -> LabelRaster {
+        if let geometry = paper.geometry {
+            return try adaptiveRaster(price: price, name: cardName, number: cardNumber, condition: conditionText,
+                                      style: style, isBulk: isBulk, pricePosition: pricePosition, geometry: geometry)
+        }
         let width = paper.feedDots, height = paper.headDots
         // Draw the branded vectors at four samples per printer dot, then use
         // area coverage for the final bit decision. Card details retain their
@@ -78,6 +82,141 @@ import UIKit
         let grayscale = Array(UnsafeBufferPointer(start: storage.assumingMemoryBound(to: UInt8.self), count: sampleWidth * sampleHeight))
         return try Self.raster(grayscale: grayscale, landscapeWidth: width, landscapeHeight: height,
                                samplesPerDot: samplesPerDot)
+    }
+
+    /// A detected roll supplies physical geometry, never finished artwork.
+    /// Draw into one usable region so a queue copy still produces one design.
+    private static func adaptiveRaster(price: String, name: String, number: String, condition: String,
+                                       style: InventoryLabelStyle, isBulk: Bool,
+                                       pricePosition: LabelPricePosition, geometry: LabelPrintGeometry) throws -> LabelRaster {
+        let width = geometry.feedDots, height = geometry.headDots, samples = 4
+        let area = geometry.printableArea
+        guard (1...800).contains(width), height == 96,
+              [area.x, area.y, area.width, area.height].allSatisfy({ $0.isFinite }) else {
+            throw InventoryLabelFailure.invalidRaster
+        }
+        // Whole-dot containment prevents a partially covered printer dot from
+        // crossing the supplied region or the physical print-head boundary.
+        let left = ceil(max(0, area.x)), top = ceil(max(0, area.y))
+        let right = floor(min(Double(width), area.x + area.width))
+        let bottom = floor(min(Double(height), area.y + area.height))
+        let bounds = CGRect(x: CGFloat(left), y: CGFloat(top), width: CGFloat(right - left), height: CGFloat(bottom - top))
+        guard bounds.width >= 24, bounds.height >= 16,
+              let context = CGContext(data: nil, width: width * samples, height: height * samples,
+                bitsPerComponent: 8, bytesPerRow: width * samples, space: CGColorSpaceCreateDeviceGray(),
+                bitmapInfo: CGImageAlphaInfo.none.rawValue), let storage = context.data else {
+            throw InventoryLabelFailure.invalidRaster
+        }
+        context.setFillColor(gray: 1, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: CGFloat(width * samples), height: CGFloat(height * samples)))
+        context.scaleBy(x: CGFloat(samples), y: CGFloat(samples))
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: 1, y: -1)
+        UIGraphicsPushContext(context)
+        defer { UIGraphicsPopContext() }
+        context.clip(to: bounds)
+        context.translateBy(x: bounds.minX, y: bounds.minY)
+        if geometry.contentRotation == 180 {
+            context.translateBy(x: bounds.width, y: bounds.height)
+            context.scaleBy(x: -1, y: -1)
+        }
+        switch style {
+        case .priceOnly:
+            try drawAdaptivePrice(price, isBulk: isBulk, size: bounds.size,
+                                  pricePosition: pricePosition, context: context)
+        case .cardDetails:
+            try drawAdaptiveDetails(price: price, name: name, number: number, condition: condition, size: bounds.size)
+        }
+        let count = width * height * samples * samples
+        let grayscale = Array(UnsafeBufferPointer(start: storage.assumingMemoryBound(to: UInt8.self), count: count))
+        return try Self.raster(grayscale: grayscale, landscapeWidth: width, landscapeHeight: height, samplesPerDot: samples)
+    }
+
+    static func adaptiveBrandedPriceLayout(width: CGFloat, height: CGFloat, price: String,
+                                           pricePosition: LabelPricePosition) -> BrandedPriceLayout {
+        let padding = max(2, min(6, height * 0.07))
+        // Long prices may borrow room from the logo, keeping the entire amount
+        // intact rather than cutting off digits on shorter decorative labels.
+        let minimumPriceWidth = measured(price, font: .monospacedDigitSystemFont(ofSize: 6, weight: .bold))
+        let priceWidth = max(width * 0.44, min(width * 0.66, minimumPriceWidth + padding * 3))
+        let divider = floor(width - priceWidth)
+        let logo = CGRect(x: padding * 1.5, y: padding * 2,
+                          width: divider - padding * 3, height: height - padding * 4)
+        let amount = CGRect(x: divider + padding, y: padding,
+                            width: width - divider - padding * 2, height: height - padding * 2)
+        guard pricePosition == .left else {
+            return BrandedPriceLayout(dividerX: divider, logoArea: logo, priceArea: amount)
+        }
+        return BrandedPriceLayout(dividerX: width - divider,
+            logoArea: CGRect(x: width - logo.maxX, y: logo.minY, width: logo.width, height: logo.height),
+            priceArea: CGRect(x: width - amount.maxX, y: amount.minY, width: amount.width, height: amount.height))
+    }
+
+    private static func drawAdaptivePrice(_ price: String, isBulk: Bool, size: CGSize,
+                                          pricePosition: LabelPricePosition, context: CGContext) throws {
+        guard let page = labelBrandDocument?.page(at: 1) else { throw InventoryLabelFailure.invalidRaster }
+        let pageBounds = page.getBoxRect(.mediaBox)
+        let text = isBulk && size.width < 270 ? "2/$1" : price
+        let layout = adaptiveBrandedPriceLayout(width: size.width, height: size.height, price: text, pricePosition: pricePosition)
+        guard pageBounds.width > 0, pageBounds.height > 0,
+              layout.logoArea.width > 0, layout.logoArea.height > 0 else { throw InventoryLabelFailure.invalidRaster }
+        let padding = max(2, min(6, size.height * 0.07))
+        context.saveGState()
+        context.setStrokeColor(UIColor.black.cgColor)
+        context.setLineWidth(max(1, min(2, size.height / 48)))
+        let border = UIBezierPath(roundedRect: CGRect(origin: .zero, size: size).insetBy(dx: padding / 2, dy: padding / 2),
+                                  cornerRadius: min(10, size.height / 8))
+        context.addPath(border.cgPath)
+        context.strokePath()
+        context.move(to: CGPoint(x: layout.dividerX, y: padding * 2))
+        context.addLine(to: CGPoint(x: layout.dividerX, y: size.height - padding * 2))
+        context.strokePath()
+        let scale = min(layout.logoArea.width / pageBounds.width, layout.logoArea.height / pageBounds.height)
+        let logoSize = CGSize(width: pageBounds.width * scale, height: pageBounds.height * scale)
+        context.translateBy(x: layout.logoArea.midX - logoSize.width / 2, y: layout.logoArea.midY + logoSize.height / 2)
+        context.scaleBy(x: scale, y: -scale)
+        context.translateBy(x: -pageBounds.minX, y: -pageBounds.minY)
+        context.drawPDFPage(page)
+        context.restoreGState()
+        let maximum: CGFloat = isBulk ? min(44, size.height * 0.6) : min(64, size.height * 0.75)
+        let font = try fittedPriceFont(text, maximum: maximum, rect: layout.priceArea)
+        drawCentered(text, font: font, rect: layout.priceArea)
+    }
+
+    private static func drawAdaptiveDetails(price: String, name: String, number: String,
+                                            condition: String, size: CGSize) throws {
+        let padding = max(2, min(6, size.height * 0.07)), available = size.width - padding * 2
+        let titleRect = CGRect(x: padding, y: padding, width: available, height: size.height * 0.28)
+        var titleSize = min(17, titleRect.height * 0.75)
+        while UIFont.systemFont(ofSize: titleSize, weight: .semibold).lineHeight > titleRect.height && titleSize > 4 {
+            titleSize -= 0.5
+        }
+        let titleFont = UIFont.systemFont(ofSize: titleSize, weight: .semibold)
+        let title = titleComponents(name: name, number: number)
+        drawCentered(fittedTitle(name: title.name, number: title.number, font: titleFont, width: available),
+                     font: titleFont, rect: titleRect)
+        let row = CGRect(x: padding, y: size.height * 0.36, width: available, height: size.height * 0.56)
+        let conditionFont = UIFont.systemFont(ofSize: min(15, size.height * 0.18), weight: .semibold)
+        let minimumPriceWidth = measured(price, font: .monospacedDigitSystemFont(ofSize: 5, weight: .bold))
+        let conditionText = truncated(condition, font: conditionFont,
+            width: max(0, min(available * 0.3, available - minimumPriceWidth - padding)))
+        let conditionWidth = measured(conditionText, font: conditionFont)
+        let gap = conditionText.isEmpty ? 0 : padding
+        let priceArea = CGRect(x: row.minX, y: row.minY, width: row.width - conditionWidth - gap, height: row.height)
+        let font = try fittedPriceFont(price, maximum: min(42, size.height * 0.54), rect: priceArea, minimum: 5)
+        drawCentered(price, font: font, rect: priceArea)
+        drawCentered(conditionText, font: conditionFont,
+            rect: CGRect(x: priceArea.maxX + gap, y: row.minY, width: conditionWidth, height: row.height))
+    }
+
+    private static func fittedPriceFont(_ text: String, maximum: CGFloat, rect: CGRect, minimum: CGFloat = 6) throws -> UIFont {
+        var size = floor(maximum * 2) / 2
+        while size >= minimum {
+            let font = UIFont.monospacedDigitSystemFont(ofSize: size, weight: .bold)
+            if measured(text, font: font) <= rect.width && font.lineHeight <= rect.height { return font }
+            size -= 0.5
+        }
+        throw InventoryLabelFailure.invalidPrice
     }
 
     struct BrandedPriceLayout {
@@ -166,7 +305,7 @@ import UIKit
 
     private static func raster(grayscale: [UInt8], landscapeWidth: Int, landscapeHeight: Int,
                                samplesPerDot: Int = 1) throws -> LabelRaster {
-        guard landscapeHeight == 96, [240, 320, 400].contains(landscapeWidth),
+        guard landscapeHeight == 96, (1...800).contains(landscapeWidth),
               [1, 4].contains(samplesPerDot),
               grayscale.count == landscapeWidth * landscapeHeight * samplesPerDot * samplesPerDot else {
             throw InventoryLabelFailure.invalidRaster
@@ -234,7 +373,7 @@ import UIKit
         return (InventoryLabelDraft.singleLine(cleaned, maximumCharacters: 500), number)
     }
 
-    static func image(raster: LabelRaster) throws -> UIImage {
+    static func image(raster: LabelRaster, paper: InventoryLabelSize? = nil) throws -> UIImage {
         try raster.validate()
         let landscapeWidth = raster.height, landscapeHeight = raster.width
         let packed = Array(raster.data)
@@ -245,6 +384,9 @@ import UIKit
                 preview[(landscapeHeight - 1 - head) * landscapeWidth + row] = 0
             }
         }
+        // The 270-degree stock uses the opposite feed orientation. The saved
+        // printer bits stay untouched; only its decoded preview turns upright.
+        if paper?.geometry?.contentRotation == 180 { preview.reverse() }
         guard let provider = CGDataProvider(data: Data(preview) as CFData),
               let image = CGImage(width: landscapeWidth, height: landscapeHeight, bitsPerComponent: 8,
                 bitsPerPixel: 8, bytesPerRow: landscapeWidth, space: CGColorSpaceCreateDeviceGray(),
