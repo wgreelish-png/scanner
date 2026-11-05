@@ -37,60 +37,85 @@ import XCTest
         XCTAssertTrue(InventoryLabelBatch.drafts(mode: .custom, inventory: source, store: store).isEmpty)
     }
 
-    func testPriceChangedIncludesNewUnprintedAndExactExistingThresholds() throws {
+    func testPriceChangedIncludesNewUnprintedAndSavedStickerChangesWithoutMarketRepricing() throws {
         let store = store(), unchanged = item(1), new = item(2), unprinted = item(3)
         let below = item(4, market: Decimal(string: "10.99")), increase = item(5, market: 11, quantity: 3)
-        let decrease = item(6, market: Decimal(string: "9.50"))
+        let decrease = item(6, market: Decimal(string: "9.50")), changed = item(7, market: 9, quantity: 3)
         try approve(unchanged, in: store)
         try approve(unprinted, in: store, labeled: false)
-        for card in [below, increase, decrease] { try approve(card, in: store) }
+        for card in [below, increase, decrease, changed] { try approve(card, in: store) }
+        try store.approve([.init(id: changed.id, approvedTag: .individual(1_200), currentMarket: 12)])
         let records = store.records
-        let source = [unchanged, new, unprinted, below, increase, decrease]
+        let source = [unchanged, new, unprinted, below, increase, decrease, changed], original = source
         XCTAssertEqual(InventoryLabelBatch.selectedIDs(mode: .priceChanged, inventory: source, store: store),
-                       Set([new.id, unprinted.id, increase.id, decrease.id]))
+                       Set([new.id, unprinted.id, changed.id]))
         let drafts = InventoryLabelBatch.drafts(mode: .priceChanged, inventory: source, store: store)
-        XCTAssertEqual(drafts.first { $0.id == increase.id }?.priceCents, 1_100)
-        XCTAssertEqual(drafts.first { $0.id == increase.id }?.copies, 3)
-        XCTAssertEqual(drafts.first { $0.id == decrease.id }?.priceCents, 900)
-        XCTAssertEqual(store.records, records, "Selection and suggestions cannot approve a new baseline")
+        XCTAssertEqual(drafts.first { $0.id == changed.id }?.priceCents, 1_200)
+        XCTAssertEqual(drafts.first { $0.id == changed.id }?.copies, 3)
+        XCTAssertEqual(drafts.first { $0.id == new.id }?.priceCents, 1_000)
+        XCTAssertEqual(store.records, records, "Preparing labels cannot update pricing or its baseline")
+        XCTAssertEqual(source, original)
     }
 
-    func testOverpricedStickerTriggersReviewBeforeMarketMovementThreshold() throws {
+    func testHigherStoredStickerDoesNotCreatePrintWorkFromMarketDifference() throws {
         let store = store(), card = item(1, market: 10)
         try approve(card, in: store, tag: .individual(1_100), baseline: 10)
+        let records = store.records
         let drafts = InventoryLabelBatch.drafts(mode: .priceChanged, inventory: [card], store: store)
-        XCTAssertEqual(drafts.count, 1)
-        XCTAssertEqual(drafts.first?.priceCents, 1_000)
+        XCTAssertTrue(drafts.isEmpty)
+        for mode in InventoryLabelBatchMode.allCases {
+            XCTAssertEqual(InventoryLabelBatch.draft(for: card, mode: mode, store: store).priceCents, 1_100)
+        }
+        XCTAssertEqual(store.records, records)
     }
 
-    func testQuoteSnapshotDrivesThresholdAndMissingMarketAloneDoesNotTriggerChangedBatch() throws {
+    func testExternalQuotesDoNotChangePrintSelectionOrFallbackFromSavedInventory() throws {
         let store = store(), current = item(1, market: 10), unavailable = item(2, market: nil)
         let unknownNew = item(3, market: nil), knownZero = item(4, market: 0)
+        let unapproved = item(5, market: Decimal(string: "10.99"))
         try approve(current, in: store)
         try approve(unavailable, in: store)
-        let quotes: [UUID: TagMarketQuote] = [current.id: .init(market: 11)]
+        let records = store.records
+        let source = [current, unavailable, unknownNew, knownZero, unapproved], original = source
+        let quotes: [UUID: TagMarketQuote] = [current.id: .init(market: 11), unknownNew.id: .init(market: 99),
+            knownZero.id: .init(market: 100), unapproved.id: .init(market: Decimal(string: "0.50"))]
         let drafts = InventoryLabelBatch.drafts(mode: .priceChanged,
-            inventory: [current, unavailable, unknownNew, knownZero], marketQuotes: quotes, store: store)
-        XCTAssertEqual(Set(drafts.map(\.id)), Set([current.id, unknownNew.id, knownZero.id]))
-        XCTAssertEqual(drafts.first { $0.id == current.id }?.priceCents, 1_100)
+            inventory: source, marketQuotes: quotes, store: store)
+        XCTAssertEqual(Set(drafts.map(\.id)), Set([unknownNew.id, knownZero.id, unapproved.id]))
         let missing = try XCTUnwrap(drafts.first { $0.id == unknownNew.id })
         XCTAssertNil(missing.tag)
+        XCTAssertNil(missing.marketValue)
         XCTAssertTrue(missing.pricing.reasons.contains(.missingMarket))
         XCTAssertFalse(InventoryLabelBatch.shouldPrint(missing, approval: nil, reprintAll: true))
         let zero = try XCTUnwrap(drafts.first { $0.id == knownZero.id })
         XCTAssertEqual(zero.tag, .twoForOne)
         XCTAssertFalse(InventoryLabelBatch.shouldPrint(zero, approval: nil, reprintAll: true))
+        let fallback = try XCTUnwrap(drafts.first { $0.id == unapproved.id })
+        XCTAssertEqual(fallback.marketValue, Decimal(string: "10.99"))
+        XCTAssertEqual(fallback.priceCents, 1_000)
+        XCTAssertEqual(store.records, records)
+        XCTAssertEqual(source, original)
     }
 
-    func testManualIndividualAndBulkApprovalsSurviveCrossingTheBulkBoundary() throws {
-        let store = store(), individual = item(1, market: Decimal(string: "0.50")), bulk = item(2, market: 10)
-        try approve(individual, in: store, tag: .individual(700), baseline: 1, manual: true)
-        try approve(bulk, in: store, tag: .twoForOne, baseline: Decimal(string: "0.50"), manual: true)
-        for mode in [InventoryLabelBatchMode.all, .priceChanged] {
-            let drafts = InventoryLabelBatch.drafts(mode: mode, inventory: [individual, bulk], store: store)
-            XCTAssertEqual(drafts.first { $0.id == individual.id }?.tag, .individual(700))
-            XCTAssertEqual(drafts.first { $0.id == bulk.id }?.tag, .twoForOne)
-            XCTAssertTrue(drafts.allSatisfy(\.isManualOverride))
+    func testEverySavedTagSurvivesBulkBoundaryAndFreshQuotesInEveryPrintMode() throws {
+        for manual in [false, true] {
+            let store = store(), individual = item(1, market: Decimal(string: "0.50"), quantity: 2)
+            let bulk = item(2, market: 10, quantity: 3), zero = item(3, market: 0, quantity: 4)
+            try approve(individual, in: store, tag: .individual(700), baseline: 1, manual: manual)
+            try approve(bulk, in: store, tag: .twoForOne, baseline: Decimal(string: "0.50"), manual: manual)
+            try approve(zero, in: store, tag: .individual(0), baseline: 0, manual: manual)
+            let records = store.records, source = [individual, bulk, zero], original = source
+            let quotes: [UUID: TagMarketQuote] = [individual.id: .init(market: 100),
+                bulk.id: .init(market: 0), zero.id: .init(market: 150)]
+            for mode in InventoryLabelBatchMode.allCases {
+                let drafts = source.map { InventoryLabelBatch.draft(for: $0, mode: mode, marketQuotes: quotes, store: store) }
+                XCTAssertEqual(drafts.map(\.tag), [.individual(700), .twoForOne, .individual(0)])
+                XCTAssertEqual(drafts.map(\.marketValue), source.map { $0.card.marketPrice })
+                XCTAssertEqual(drafts.map(\.copies), mode == .custom ? [1, 1, 1] : [2, 3, 4])
+                XCTAssertTrue(drafts.allSatisfy { $0.isManualOverride == manual })
+            }
+            XCTAssertEqual(store.records, records)
+            XCTAssertEqual(source, original)
         }
     }
 
@@ -183,7 +208,7 @@ import XCTest
         }
     }
 
-    func testUnprofitableSuggestionKeepsExistingWarningsForExplicitManualReview() throws {
+    func testStoredPriceRemainsPrintableWhenCostPolicyWouldSuggestADifferentAmount() throws {
         let store = store()
         var preferences = store.preferences
         preferences.minimumDesiredProfitCents = 100
@@ -191,10 +216,13 @@ import XCTest
         var card = item(1, market: 9)
         card.remainingCostCents = 1_000
         try approve(card, in: store)
-        let draft = try XCTUnwrap(InventoryLabelBatch.drafts(mode: .priceChanged, inventory: [card], store: store).first)
-        XCTAssertEqual(draft.priceCents, 900)
-        XCTAssertTrue(draft.pricingWarnings.contains(TagPricingReason.belowBreakEven.message))
+        let records = store.records
+        let draft = InventoryLabelBatch.draft(for: card, mode: .all, store: store)
+        XCTAssertEqual(draft.priceCents, 1_000)
+        XCTAssertEqual(draft.pricing.tag, .individual(900))
         XCTAssertTrue(draft.pricingWarnings.contains(TagPricingReason.belowPreferredProfit.message))
+        XCTAssertNoThrow(try draft.validate())
         XCTAssertEqual(store.record(for: card.id)?.approvedTag, .individual(1_000))
+        XCTAssertEqual(store.records, records)
     }
 }

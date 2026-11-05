@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// One explicit draft edit; each card still keeps its own cost/profit evaluation.
+/// One explicit edit of the selected label drafts.
 @MainActor struct LabelBatchPriceEditor: View {
     let cardCount: Int
     let onSave: (Int64) -> Void
@@ -26,7 +26,7 @@ import SwiftUI
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section {
-                    Text("Each card's acquisition cost and minimum profit are still checked before approval. Applying this price does not save or print labels.")
+                    Text("Applying this price changes the selected label drafts. Prepare Labels saves them to the queue; printing is a separate action.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }

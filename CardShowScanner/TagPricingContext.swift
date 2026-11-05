@@ -76,16 +76,16 @@ struct TagSaleSuggestion: Equatable {
             catch { return "This custom label is invalid. Review its price, paper and copies before preparing it again." }
             return nil
         }
-        guard store.isLoaded else { return "Reload saved tag approvals before printing this queue." }
+        guard store.isLoaded else { return "Reload saved label prices before printing this queue." }
         guard let inventoryID = entry.inventoryID else {
             return "This inventory label has no card reference. Prepare a new label from inventory."
         }
         guard let record = store.record(for: inventoryID) else {
-            return entry.pricingRevisionID == nil ? nil : "This label's approval is unavailable. Review its price before preparing a new label."
+            return entry.pricingRevisionID == nil ? nil : "This label's saved price is unavailable. Prepare a new label from inventory."
         }
         guard record.approvedTag.integerPriceCents == entry.priceCents,
               entry.pricingRevisionID == nil || entry.pricingRevisionID == record.priceRevisionID else {
-            return "The approved sticker changed after this label was queued. Discard the outdated label and prepare the approved price."
+            return "The sticker price changed after this label was queued. Clear the outdated label and prepare a new one."
         }
         return nil
     }

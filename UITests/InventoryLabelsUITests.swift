@@ -32,6 +32,7 @@ import XCTest
 
         let edit = app.buttons["labels.edit." + inventoryID]
         tap(edit, app: app)
+        assertNoPrintingPricePrompts(app: app)
         XCTAssertEqual(app.textFields["labels.editor.price"].value as? String, "35")
         XCTAssertEqual(app.textFields["labels.editor.copies"].value as? String, "1")
         enter("12", field: app.textFields["labels.editor.price"], app: app)
@@ -126,8 +127,8 @@ import XCTest
             assertContains(price, element: amount)
             assertContains("1", element: app.descendants(matching: .any)["labels.review.copies." + id])
         }
-        XCTAssertFalse(app.buttons["labels.prepare"].isEnabled, "Unknown costs require explicit manual review")
-        tap(app.switches["labels.acknowledgePricingWarnings"], app: app)
+        assertNoPrintingPricePrompts(app: app)
+        XCTAssertTrue(app.buttons["labels.prepare"].isEnabled, "Known label prices do not require cost or profit approval")
         XCTAssertTrue(app.buttons["labels.prepare"].isHittable, "The final action stays available after reviewing every label")
         tap(app.buttons["labels.prepare"], app: app)
         assertUnstartedQueue(app: app)
@@ -145,6 +146,7 @@ import XCTest
         openBatch(app: app)
         tap(app.buttons["labels.select." + stockAID], app: app)
         tap(app.buttons["labels.continueSelection"], app: app)
+        XCTAssertFalse(app.buttons["labels.prepare"].isEnabled, "An unfinished saved queue must be cleared before preparing another batch")
         tap(app.buttons["labels.reviewSavedQueue"], app: app)
         assertUnstartedQueue(app: app)
         let queued = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "labelQueue.entry.")).firstMatch
@@ -166,10 +168,9 @@ import XCTest
         assertContains("1 labels", element: app.staticTexts["labels.totalCount"])
         tap(app.buttons["labels.continueReview"], app: app)
         tap(app.switches["labels.keepExistingSticker." + stockAID], app: app)
-        tap(app.switches["labels.acknowledgePricingWarnings"], app: app)
         tap(app.buttons["labels.prepare"], app: app)
-        assertContains("Approved prices saved. No individual labels need printing.",
-            element: app.staticTexts["labels.approvedNotice"])
+        assertContains("Label choices saved. No individual labels need printing.",
+            element: app.staticTexts["labels.preparationNotice"])
         XCTAssertTrue(app.navigationBars["Review Labels"].exists)
         XCTAssertFalse(app.navigationBars["Label Print Queue"].exists)
         closeBatchToInventory(app: app)
@@ -187,7 +188,8 @@ import XCTest
         reveal(preview, app: app)
         XCTAssertTrue((preview.value as? String ?? "").contains("$35"),
                       "Explicitly selecting an already-labeled card prepares its unchanged price for a replacement tag")
-        tap(app.switches["labels.acknowledgePricingWarnings"], app: app)
+        assertNoPrintingPricePrompts(app: app)
+        XCTAssertTrue(app.buttons["labels.prepare"].isEnabled)
         tap(app.buttons["labels.prepare"], app: app)
         XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
         assertContains("0/1 completed", element: app.staticTexts["labelQueue.progress"])
@@ -244,7 +246,8 @@ import XCTest
             assertContains(price, element: amount)
             assertContains(copies, element: app.descendants(matching: .any)["labels.review.copies." + id])
         }
-        XCTAssertFalse(app.buttons["labels.prepare"].isEnabled, "Unknown costs still require explicit manual review")
+        assertNoPrintingPricePrompts(app: app)
+        XCTAssertTrue(app.buttons["labels.prepare"].isEnabled, "Existing prices can be prepared without another approval")
         XCTAssertFalse(app.navigationBars["Label Print Queue"].exists)
         assertNoBluetoothPrompt(app: app)
         closeBatchToInventory(app: app)
@@ -259,7 +262,7 @@ import XCTest
         assertNoBluetoothPrompt(app: app)
     }
 
-    func testChooseCardsSelectAllAndSharedPriceRemainDraftsUntilApproval() {
+    func testChooseCardsSelectAllAndSharedPriceRemainDraftsUntilPrepared() {
         continueAfterFailure = false
         let app = launch()
         defer { app.terminate() }
@@ -300,8 +303,7 @@ import XCTest
                           "Each card must have the exact $7 shared asking price")
             assertContains("1", element: app.descendants(matching: .any)["labels.review.copies." + id])
         }
-        XCTAssertFalse(app.buttons["labels.prepare"].isEnabled, "Batch edits do not bypass unknown-cost warnings")
-        tap(app.switches["labels.acknowledgePricingWarnings"], app: app)
+        assertNoPrintingPricePrompts(app: app)
         XCTAssertTrue(app.buttons["labels.prepare"].isEnabled)
         XCTAssertFalse(app.navigationBars["Label Print Queue"].exists)
         assertNoBluetoothPrompt(app: app)
@@ -432,7 +434,7 @@ import XCTest
         assertNoBluetoothPrompt(app: app)
     }
 
-    func testInventoryBatchApprovesDirectlyFromConfigurationWithoutAnotherReviewPage() {
+    func testInventoryBatchPreparesKnownPricesWithoutApprovalsOrAnotherReviewPage() {
         continueAfterFailure = false
         let app = launch()
         defer { app.terminate() }
@@ -442,9 +444,9 @@ import XCTest
         XCTAssertTrue(app.navigationBars["Label Details"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.navigationBars["Review Labels"].exists)
         assertContains("3 labels", element: app.staticTexts["labels.totalCount"])
-        XCTAssertFalse(app.buttons["labels.prepare"].isEnabled, "Direct approval still requires checking unknown-cost warnings")
-        tap(app.switches["labels.acknowledgePricingWarnings"], app: app)
-        XCTAssertTrue(app.buttons["labels.prepare"].isEnabled)
+        assertNoPrintingPricePrompts(app: app)
+        XCTAssertTrue(app.buttons["labels.prepare"].isEnabled, "Known prices prepare directly even when acquisition costs are unknown")
+        assertContains("Prepare Labels", element: app.buttons["labels.prepare"])
         tap(app.buttons["labels.prepare"], app: app)
         XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.navigationBars["Review Labels"].exists, "The primary action prepares the queue without an extra review screen")
@@ -708,6 +710,14 @@ import XCTest
     private func clearQueue(_ identifier: String, app: XCUIApplication) {
         tap(app.buttons[identifier], app: app)
         tap(app.buttons[identifier + ".confirm"], app: app)
+    }
+
+    private func assertNoPrintingPricePrompts(app: XCUIApplication,
+                                             file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertFalse(app.switches["labels.acknowledgePricingWarnings"].exists, file: file, line: line)
+        XCTAssertFalse(app.buttons["labels.useSuggestedPrices"].exists, file: file, line: line)
+        XCTAssertFalse(app.buttons["labels.editor.useSuggestedPrice"].exists, file: file, line: line)
+        XCTAssertFalse(app.buttons["labels.pricingSettings"].exists, file: file, line: line)
     }
 
     private func openBatch(app: XCUIApplication) {

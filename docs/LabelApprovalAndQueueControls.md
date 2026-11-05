@@ -1,5 +1,9 @@
 # Label approval and queue controls — build 70
 
+Build 74 supersedes the pricing approval and warning steps below:
+[direct inventory labels](DirectInventoryLabels.md) removes them and keeps
+saved sticker prices unchanged while printing. Queue-clearing controls remain.
+
 **Label Details → Approve & Prepare Labels** now saves the approved batch and
 opens the queue directly. The previous full review screen is available through
 **Review Details**; it is no longer a required stop. Price, cost and profit

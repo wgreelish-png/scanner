@@ -26,6 +26,11 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 74 simplifies [inventory label preparation](docs/DirectInventoryLabels.md):
+selected price, copies, paper and preview, followed by Prepare Labels. Printing
+no longer offers suggested-price actions or requires cost/profit warning
+approval. Price edits remain optional and printing remains explicit.
+
 Build 73 adds [buffered continuous label printing](docs/BufferedLabelPrinting.md).
 D110-M batches send the next labels before waiting for each physical copy, and
 identical consecutive labels use the printer's native copy count. Verified

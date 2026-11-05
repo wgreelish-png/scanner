@@ -1,4 +1,8 @@
-# Price labels — build 73
+# Price labels — build 74
+
+Build 74 uses [direct inventory label preparation](DirectInventoryLabels.md):
+saved sticker prices, optional edits and Prepare Labels, without suggested-price
+actions or warning approvals.
 
 Build 73 adds [buffered continuous output and printer-side copy
 counts](BufferedLabelPrinting.md). It supersedes waiting for each D110-M label
@@ -24,22 +28,22 @@ Build 66 adds [D110-M discovery and its model-specific print workflows](D110MCon
 Both standard D110 and D110-M have their actual model, head and protocol checked
 before printing. Search remains available in settings and the saved queue.
 
-Create price labels from saved working inventory or enter a price for a standalone sticker, without an internet request. Build 43 adds [final sticker rules, profit protection and durable approvals](TagPricingRules.md). Inventory draft edits remain separate from financial records; explicit approval activates that inventory sticker as a checkout suggestion, while each sale still records its actual cash amount. Standalone stickers are independent of inventory and cost/profit checks.
+Create price labels from saved working inventory or enter a price for a standalone sticker, without an internet request. Existing saved sticker prices are retained; new prices use the established [sticker rules](TagPricingRules.md). Label drafts remain separate from financial records. A saved sticker can be used as a checkout suggestion, while each sale still records its actual cash amount. Standalone stickers are independent of inventory.
 
 ## Prepare labels
 
 - One card: **Show → Inventory → card → ••• → Print Price Tag**. That lot starts selected, with one label.
 - A batch: **Show → Price Tags**. This dedicated page replaces the inventory toolbar's batch-print option. It also provides direct access to the saved queue and printer settings.
 - **Print All** selects every available inventory entry and requests one label per physical copy, including explicit reprints of unchanged stickers. It opens Label Details directly.
-- **Print Price Changed** selects new cards, approved tags still needing labels and cards crossing the existing market/competitiveness review thresholds. It proposes current suggested prices for nonmanual entries. Manual prices/categories stay intact until explicitly changed. Merely missing a quote does not flag an otherwise unchanged, labeled card.
+- **Print Price Changed** selects new cards and saved sticker prices that still need labels. Market-only changes do not reprice or select an existing sticker while printing.
 - **Custom Price Tag** opens a simple whole-dollar price, copy count and paper form, with a price-only bitmap preview. No inventory, market price, saved show or tag approval is needed. Prepare saves pending labels; printing remains a separate action. Custom stickers never change an inventory asking price or mark any card as labeled.
-- **Choose Inventory Cards** keeps search and individual selection, with **Select All / Select All Results** and **Clear**. **Set Same Price for Selected Cards** applies one whole-dollar draft price to selected individual-tag entries; bulk cards stay in their category. **Use Suggested Prices** explicitly replaces selected manual draft prices with available suggestions.
-- Choose **Price only** for a large asking price, or **Card details** for name/number, price and condition. Long names truncate; asking prices remain complete.
+- **Choose Inventory Cards** keeps search and individual selection, with **Select All / Select All Results** and **Clear**. **Set Same Price for Selected Cards** applies one whole-dollar draft price to selected individual-tag entries; bulk cards stay in their category. Suggested-price actions are not part of printing.
+- Choose **PokéDen price** for the logo and a large asking price, or **Card details** for name/number, price and condition. Long names truncate; asking prices remain complete.
 - Select the paper loaded in the printer: **30 × 14 mm**, **40 × 12 mm**, **30 × 15 mm**, or **50 × 14 mm**. New inventory and custom labels remember the last selected size across relaunches. Saved queues keep their original size and artwork. The supported head prints a 12 mm strip at eight dots per millimetre; larger stock retains its physical margins.
-- New prices follow the final tiers: below $0.75 goes to the 2 for $1 bulk category, $0.75–$0.99 becomes $1, values below $100 round down to dollars, and $100+ rounds down to $5. Bulk cards receive no individual tags. Approved/manual prices stay selected until reviewed. Edit whole-dollar prices/copies in the isolated editor; cost/profit warnings require explicit review.
+- New prices follow the final tiers: below $0.75 goes to the 2 for $1 bulk category, $0.75–$0.99 becomes $1, values below $100 round down to dollars, and $100+ rounds down to $5. Existing saved prices/categories take precedence. Bulk cards receive no individual tags. Whole-dollar price/copy edits remain optional; there is no cost/profit warning gate.
 - All/changed batches start with stock quantities; custom/single-card drafts start at one copy per entry. **Match Stock Quantities** requests one label per available copy; **Use One Label per Card** restores one per lot. The app reports quantities exceeding 100 labels per lot or 250 total instead of silently reducing them. Missing prices can be edited or explicitly skipped as a group.
-- Review the actual monochrome bitmap, price, copies, profit information and paper before approving and preparing changed labels. An unchanged existing sticker can be retained without reprinting. Preparing never starts the printer.
-- Batch reviews use compact rows with expandable previews, price/copy editors are collapsed together, and Approve stays pinned to the bottom. Cost and profit warnings still require explicit review. Price Changed skips unchanged, already-labeled stickers; Print All and explicit card selections prepare requested replacement labels. A completed previous queue can be replaced by explicit preparation, while unfinished work still requires review.
+- Check the monochrome preview, price, copies and paper, then tap **Prepare Labels**. Full Review Details is optional. Preparing never starts the printer.
+- Batch details use compact rows and a fixed Prepare action. Price Changed skips unchanged, already-labeled stickers; Print All and explicit card selections prepare requested replacement labels. A completed previous queue can be replaced by explicit preparation, while unfinished work still requires review.
 
 The preview is decoded from the same packed bits sent to the printer. It does not depend on artwork downloads or current API quotes. Physical paper size is remembered, not detected; confirm it when changing rolls. Gap/Transparent is a separate printer setting.
 

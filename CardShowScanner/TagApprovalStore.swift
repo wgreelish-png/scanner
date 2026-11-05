@@ -221,6 +221,61 @@ private struct TagApprovalFile: Codable {
         return changed
     }
 
+    /// Bind selected sticker prices to immutable queue revisions. Reprinting an
+    /// unchanged price is passive: its review baseline, approval metadata and
+    /// physical-label history remain exact, without another disk write. New or
+    /// explicitly changed prices create the same price cycle as an approval.
+    func prepareForPrinting(_ requests: [TagApprovalRequest], keepingExistingStickerIDs: Set<UUID> = []) throws {
+        try requireWritable()
+        let requestIDs = Set(requests.map(\.id))
+        guard requestIDs.count == requests.count else { throw TagApprovalStoreFailure.duplicateIdentity }
+        guard keepingExistingStickerIDs.isSubset(of: requestIDs) else {
+            throw TagApprovalStoreFailure.invalidSelection
+        }
+        // Validate the complete batch even when some unchanged records will
+        // ignore a newer quote or manual flag. No partial binding is published.
+        for request in requests {
+            try Self.validate(tag: request.approvedTag)
+            try Self.validate(market: request.currentMarket)
+            guard !keepingExistingStickerIDs.contains(request.id) || request.approvedTag.integerPriceCents != nil else {
+                throw TagApprovalStoreFailure.invalidSelection
+            }
+        }
+        guard !requests.isEmpty else { return }
+        let timestamp = now()
+        var next = records
+        let indicesByID = Dictionary(uniqueKeysWithValues: next.enumerated().map { ($0.element.id, $0.offset) })
+        var changed = false
+        for request in requests {
+            let index: Int
+            if let existing = indicesByID[request.id] {
+                index = existing
+                if next[index].approvedTag != request.approvedTag {
+                    next[index].approvedTag = request.approvedTag
+                    next[index].priceRevisionID = UUID()
+                    next[index].marketAtLastApproval = request.currentMarket
+                    next[index].isManualOverride = request.isManualOverride
+                    next[index].approvedAt = timestamp
+                    changed = true
+                }
+            } else {
+                index = next.count
+                next.append(TagApprovalRecord(id: request.id, approvedTag: request.approvedTag, priceRevisionID: UUID(),
+                    marketAtLastApproval: request.currentMarket, isManualOverride: request.isManualOverride,
+                    approvedAt: timestamp, lastPrintedTag: nil, lastPrintedAt: nil))
+                changed = true
+            }
+            // This remains an explicit confirmation that physical stickers
+            // already exist, separate from merely preparing a print queue.
+            if keepingExistingStickerIDs.contains(request.id), next[index].needsLabels {
+                next[index].lastPrintedTag = next[index].approvedTag
+                next[index].lastPrintedAt = timestamp
+                changed = true
+            }
+        }
+        if changed { try commit(next, preferences: preferences) }
+    }
+
     func updatePreferences(_ next: TagPricingPreferences) throws {
         try requireWritable()
         try next.validate()

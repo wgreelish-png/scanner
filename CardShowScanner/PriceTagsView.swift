@@ -1,16 +1,13 @@
 import SwiftUI
-import SwiftData
 
 /// Opening this foreground workspace finds the printer; printing stays explicit.
 @MainActor struct PriceTagsView: View {
-    @Environment(\.modelContext) private var context
     @Environment(\.scenePhase) private var scenePhase
     @State private var store: ShowBudgetStore
     @State private var approvals = TagApprovalStore.shared
     @State private var queue = LabelPrintQueue.shared
     @State private var printer = NiimbotPrinter.shared
     @State private var paperPreferences: LabelPaperPreferences
-    @State private var marketQuotes: [UUID: TagMarketQuote] = [:]
     @State private var batch: InventoryLabelBatchMode?
 
     init(store: ShowBudgetStore = .shared, paperPreferences: LabelPaperPreferences = .shared) {
@@ -21,7 +18,7 @@ import SwiftData
     private var available: [ShowInventoryItem] { store.inventory.filter { $0.quantity > 0 } }
     private var changedIDs: Set<UUID> {
         InventoryLabelBatch.selectedIDs(mode: .priceChanged, inventory: store.inventory,
-            marketQuotes: marketQuotes, store: approvals)
+            store: approvals)
     }
 
     var body: some View {
@@ -38,7 +35,7 @@ import SwiftData
                 VStack(spacing: 12) {
                     batchButton(.all, title: "Print All", subtitle: "One label per available copy, including reprints.",
                         symbol: "square.stack.3d.up.fill", count: available.count)
-                    batchButton(.priceChanged, title: "Print Price Changed", subtitle: "New cards, unprinted tags and prices due for review.",
+                    batchButton(.priceChanged, title: "Print Price Changed", subtitle: "New cards and saved sticker prices that still need labels.",
                         symbol: "arrow.triangle.2.circlepath", count: approvals.isLoaded ? changedIDs.count : nil)
                     NavigationLink { CustomPriceTagView(paperPreferences: paperPreferences) } label: {
                         routeLabel(title: "Custom Price Tag", subtitle: "PokéDen logo, price and copies. No inventory needed.",
@@ -53,7 +50,7 @@ import SwiftData
                     VStack(alignment: .leading, spacing: 10) {
                         Text(store.error ?? approvals.error ?? "Saved pricing data is unavailable.")
                             .font(.footnote).foregroundStyle(.orange)
-                        Button("Reload Saved Data") { store.reload(); approvals.reload(); refreshQuotes() }
+                        Button("Reload Saved Data") { store.reload(); approvals.reload() }
                     }
                 } else if available.isEmpty {
                     ContentUnavailableView("No available cards", systemImage: "shippingbox",
@@ -89,7 +86,7 @@ import SwiftData
                 }
                 .font(.subheadline.weight(.semibold)).padding(18)
                 .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
-                Text("Saved manual prices are retained. Bulk cards stay in the 2 for $1 category; use bulk-bin tags above. Opening a batch never starts printing.")
+                Text("Saved sticker prices are used without repricing. Bulk cards stay in the 2 for $1 category; use bulk-bin tags above. Opening a batch never starts printing.")
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(16)
         }
@@ -101,14 +98,13 @@ import SwiftData
             }
         }
         .sheet(item: $batch) { mode in
-            InventoryLabelFlowView(inventory: store.inventory, marketQuotes: marketQuotes, mode: mode,
+            InventoryLabelFlowView(inventory: store.inventory, mode: mode,
                                    paperPreferences: paperPreferences)
         }
-        .onAppear { refreshQuotes(); printer.startPriceTagsConnection() }
+        .onAppear { printer.startPriceTagsConnection() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { printer.startPriceTagsConnection() }
         }
-        .onChange(of: store.inventory) { _, _ in refreshQuotes() }
     }
 
     private var printerStatus: some View {
@@ -180,13 +176,10 @@ import SwiftData
         .contentShape(RoundedRectangle(cornerRadius: 20))
     }
 
-    private func refreshQuotes() {
-        marketQuotes = TagPricingContext.currentQuotes(inventory: store.inventory, context: context)
-    }
 }
 
 /// The same foreground action is available throughout label preparation.
-/// It removes saved print work without changing inventory or approved prices.
+/// It removes saved print work without changing inventory or sticker prices.
 @MainActor struct ClearLabelPrintQueueButton: View {
     let identifier: String
     @State private var queue = LabelPrintQueue.shared
@@ -222,8 +215,8 @@ import SwiftData
 
     private var confirmationMessage: String {
         let message = queue.isLoaded
-            ? "This removes all \(queue.entries.count.formatted()) saved labels and their print progress. Inventory and approved prices stay unchanged."
-            : "This discards the unreadable saved print queue. Inventory and approved prices stay unchanged."
+            ? "This removes all \(queue.entries.count.formatted()) saved labels and their print progress. Inventory and sticker prices stay unchanged."
+            : "This discards the unreadable saved print queue. Inventory and sticker prices stay unchanged."
         return queue.uncertainCount > 0 || !queue.isLoaded
             ? message + " Check any uncertain physical labels before preparing another batch."
             : message
