@@ -154,7 +154,7 @@ import XCTest
         assertNoBluetoothPrompt(app: app)
     }
 
-    func testKeepingExistingStickerPersistsApprovalWithoutReprintingUnchangedPrice() {
+    func testExplicitlySelectedCardQueuesReplacementAfterKeepingExistingStickerAcrossRelaunch() {
         continueAfterFailure = false
         let app = launch()
         defer { app.terminate() }
@@ -182,14 +182,31 @@ import XCTest
         openBatch(app: app)
         tap(app.buttons["labels.select." + stockAID], app: app)
         tap(app.buttons["labels.continueSelection"], app: app)
-        assertContains("0 labels", element: app.staticTexts["labels.totalCount"])
-        tap(app.buttons["labels.continueReview"], app: app)
+        assertContains("1 labels", element: app.staticTexts["labels.totalCount"])
+        let preview = app.images["labels.bitmapPreview"].firstMatch
+        reveal(preview, app: app)
+        XCTAssertTrue((preview.value as? String ?? "").contains("$35"),
+                      "Explicitly selecting an already-labeled card prepares its unchanged price for a replacement tag")
         tap(app.switches["labels.acknowledgePricingWarnings"], app: app)
         tap(app.buttons["labels.prepare"], app: app)
-        assertContains("Approved prices saved. No individual labels need printing.",
-            element: app.staticTexts["labels.approvedNotice"])
-        XCTAssertFalse(app.navigationBars["Label Print Queue"].exists)
+        XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
+        assertContains("0/1 completed", element: app.staticTexts["labelQueue.progress"])
+        assertContains("1", element: app.descendants(matching: .any)["labelQueue.totalCount"])
+        let entry = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "labelQueue.entry.")).firstMatch
+        reveal(entry, app: app)
+        assertContains("Stock A", element: entry)
+        assertContains("$35", element: entry)
+        XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled)
+        XCTAssertFalse(app.buttons["labelQueue.pause"].exists)
         assertNoBluetoothPrompt(app: app)
+        closeBatchToInventory(app: app)
+        assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
+        assertContains("$35.00", element: inventory("Stock A", app: app))
+        assertContains("Qty 2", element: inventory("Stock A", app: app))
+        assertContains("$5.00", element: inventory("Stock B", app: app))
+        assertContains("Qty 1", element: inventory("Stock B", app: app))
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        assertBalances(app: app)
     }
 
     func testPrintAllStartsWithStockQuantitiesAndPreviewCancelPreservesInventoryAndBudget() {

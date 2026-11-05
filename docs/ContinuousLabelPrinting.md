@@ -1,5 +1,9 @@
 # Continuous label printing — build 69
 
+Build 72 supersedes the unacknowledged-row transfer optimization described
+below: [print transfer recovery](PrintTransferRecovery.md) restores the verified
+acknowledged D110-M write path while keeping continuous print tasks.
+
 Opening **Show → Price Tags** now starts foreground printer discovery. The first
 visit shows nearby D110/D110-M printers for selection. Later visits connect only
 to the last peripheral that completed model/head/protocol verification. Bluetooth

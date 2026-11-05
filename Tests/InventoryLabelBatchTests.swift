@@ -122,6 +122,56 @@ import XCTest
         XCTAssertTrue(store.records.isEmpty)
     }
 
+    func testExplicitlyChosenAlreadyLabeledCardsReprintWhilePriceChangedSkipsThem() throws {
+        let store = store(), card = item(1, quantity: 4)
+        try approve(card, in: store)
+        let saved = try XCTUnwrap(store.record(for: card.id))
+        var chosen = InventoryLabelBatch.draft(for: card, mode: .custom, store: store)
+        XCTAssertEqual(chosen.copies, 1)
+        chosen.copies = 4
+        XCTAssertTrue(InventoryLabelBatch.shouldPrint(chosen, approval: saved, mode: .custom),
+                      "Choosing a card is an explicit request to print its requested copies again")
+        XCTAssertTrue(InventoryLabelBatch.shouldPrint(chosen, approval: saved, mode: .all))
+        XCTAssertFalse(InventoryLabelBatch.shouldPrint(chosen, approval: saved, mode: .priceChanged))
+        XCTAssertEqual(chosen.copies, 4)
+        XCTAssertEqual(store.record(for: card.id), saved, "Selecting replacements cannot change approval history")
+    }
+
+    func testEveryModeStillHonorsExplicitStickerRetentionAndExcludesBulkOrMissingPrices() throws {
+        let store = store(), card = item(1), bulk = item(2, market: 0.5), missing = item(3, market: nil)
+        try approve(card, in: store)
+        let saved = try XCTUnwrap(store.record(for: card.id))
+        let individual = InventoryLabelBatch.draft(for: card, mode: .custom, store: store)
+        let bulkDraft = InventoryLabelBatch.draft(for: bulk, mode: .custom, store: store)
+        let missingDraft = InventoryLabelBatch.draft(for: missing, mode: .custom, store: store)
+        for mode in InventoryLabelBatchMode.allCases {
+            XCTAssertFalse(InventoryLabelBatch.shouldPrint(individual, approval: saved, mode: mode, keepExisting: true))
+            XCTAssertFalse(InventoryLabelBatch.shouldPrint(individual, approval: nil, mode: mode, keepExisting: true))
+            XCTAssertFalse(InventoryLabelBatch.shouldPrint(bulkDraft, approval: nil, mode: mode))
+            XCTAssertFalse(InventoryLabelBatch.shouldPrint(missingDraft, approval: nil, mode: mode))
+        }
+    }
+
+    func testModeBasedReprintsPreserveRequestedCopiesAndDoNotBypassCopyValidation() throws {
+        let store = store(), card = item(1, quantity: 7)
+        try approve(card, in: store)
+        let saved = try XCTUnwrap(store.record(for: card.id))
+        for mode in InventoryLabelBatchMode.allCases {
+            var draft = InventoryLabelBatch.draft(for: card, mode: mode, store: store)
+            draft.askingPriceText = "11"
+            draft.copies = 7
+            XCTAssertTrue(InventoryLabelBatch.shouldPrint(draft, approval: saved, mode: mode))
+            XCTAssertEqual(draft.copies, 7)
+            XCTAssertNoThrow(try draft.validate())
+            draft.copies = InventoryLabelDraft.maximumCopies + 1
+            XCTAssertTrue(InventoryLabelBatch.shouldPrint(draft, approval: saved, mode: mode))
+            XCTAssertEqual(draft.copies, 101, "The existing validation must see an oversized request without clamping")
+            XCTAssertThrowsError(try draft.validate()) {
+                XCTAssertEqual($0 as? InventoryLabelFailure, .invalidCopies)
+            }
+        }
+    }
+
     func testAddingASelectionAfterBackNavigationUsesModeDefaultsAndPreservesManualCategory() throws {
         let store = store(), card = item(1, market: 12, quantity: 3)
         try approve(card, in: store, tag: .twoForOne, baseline: 1, manual: true)
