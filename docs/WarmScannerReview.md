@@ -63,7 +63,10 @@ the diagnostic file does not record individual visual rendering frames.
    eventual return works.
 6. Check pause/resume, identical-copy Add Another Copy, Undo Last Add, discard,
    zero-card scan dismissal, denied camera permission, large text and a small
-   iPhone screen. Retry Live Scanner remains available for real camera errors.
+   iPhone screen. After an actual Add at maximum text size, verify Undo/Copy
+   and Search/List/Finish remain visible while the recent-card scroll shrinks.
+   VoiceOver should announce the full Undo/Copy action names for their compact
+   icons. Retry Live Scanner remains available for real camera errors.
 
 Native/UI and physical-device execution require Xcode/an iPhone; portable
 scanner tests can verify lifecycle messages and state transitions, but cannot

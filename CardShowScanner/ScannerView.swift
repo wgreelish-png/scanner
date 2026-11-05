@@ -281,18 +281,27 @@ import UIKit
     }
 
     private var scannerQuickActions: some View {
-        let layout = dynamicTypeSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
-            : AnyLayout(HStackLayout(alignment: .top, spacing: 10))
-        return layout {
-            Button("Undo", systemImage: "arrow.uturn.backward") {
+        HStack(alignment: .top, spacing: 10) {
+            Button {
                 model.undoLastAdd(list: list, context: context)
+            } label: {
+                if dynamicTypeSize.isAccessibilitySize {
+                    Image(systemName: "arrow.uturn.backward").frame(minWidth: 44, minHeight: 44)
+                } else {
+                    Label("Undo", systemImage: "arrow.uturn.backward")
+                }
             }.buttonStyle(.bordered).frame(minHeight: 44)
                 .disabled(!model.canUndoLastAdd)
                 .accessibilityLabel("Undo Last Add")
                 .accessibilityIdentifier("scanner.undoLastAdd")
-            Button("Another Copy", systemImage: "plus.square.on.square") {
+            Button {
                 model.addAnotherCopy(list: list, context: context)
+            } label: {
+                if dynamicTypeSize.isAccessibilitySize {
+                    Image(systemName: "plus.square.on.square").frame(minWidth: 44, minHeight: 44)
+                } else {
+                    Label("Another Copy", systemImage: "plus.square.on.square")
+                }
             }.buttonStyle(.borderedProminent).tint(.blue).frame(minHeight: 44)
                 .disabled(!model.canAddAnotherCopy)
                 .accessibilityLabel("Add Another Copy")
