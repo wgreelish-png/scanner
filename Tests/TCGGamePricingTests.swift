@@ -72,7 +72,7 @@ import XCTest
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
         let fetchedAt = Date(timeIntervalSince1970: 1_800_000_000)
-        let replies = try games.map { TCGGamePricingLoader.Reply(data: product(category: $0.category)) }
+        let replies = try games.map { TCGGamePricingLoader.Reply(data: try product(category: $0.category)) }
         let loader = TCGGamePricingLoader(replies)
         let first = OpenAPIProductLookup(loader: loader, now: { fetchedAt }, cacheDirectory: folder)
         for game in games {

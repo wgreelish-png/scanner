@@ -79,10 +79,17 @@ Native execution and physical feed/placement require Xcode, an iPhone and the
 printer. A correct catalog transformation or syntax check alone does not prove
 firmware behavior or roll alignment.
 
-Local validation passed: 320 portable tests (172 JavaScript, 59 server, 49
-Postman and 40 Python), grammar for all 205 Swift files, application/test source
+Local validation passed: 322 portable tests (172 JavaScript, 59 server, 49
+Postman and 42 Python), grammar for all 205 Swift files, application/test source
 membership and bundled catalog resources, 47 pinned scanner assets, both OpenCV
 smoke tests, build metadata, exact-decimal catalog recovery and whitespace
 checks. Thirty-six native regression cases were added across catalog geometry,
 generated rendering, paper selection, queue preflight and RFID lifecycle; they
 require native Xcode execution and are not counted among the portable tests.
+
+CI also exposed an existing missing `try` in the game-pricing test fixture,
+mixed real/mock clocks in an HTTP-date test, and cold simulator startup beyond
+the previous 30-second limit. The fixture now propagates its error, the date
+test uses one deterministic clock, and simulator discovery/creation/boot use
+bounded 90/120/90-second limits without resets or retries. The affected suites
+were rerun locally; native compilation and execution remain separate CI checks.
