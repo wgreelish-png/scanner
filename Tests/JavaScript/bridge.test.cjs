@@ -13,7 +13,7 @@ function harness({ denyCamera = false, cacheState = 'ok', beforePackReady, playV
   const messages = [], elements = [], events = new Map(), windowEvents = new Map(), trackEvents = new Map(), draws = [];
   let overlayDestroyed = 0;
   const packOptions = [];
-  let captureOptions, scannerOptions, scannerStarts = 0, stopped = 0, disposed = 0, now = 0;
+  let captureOptions, scannerOptions, scannerStarts = 0, cameraRequests = 0, stopped = 0, disposed = 0, now = 0;
   const element = tag => {
     const e = { tag, style: {}, children: [], append(...items) { this.children.push(...items); }, setAttribute() {},
       remove() { this.removed = true; }, async play() { await playVideo?.(); } };
@@ -37,7 +37,7 @@ function harness({ denyCamera = false, cacheState = 'ok', beforePackReady, playV
     'app/shared.js': { useScope(scope) { assert.equal(scope, 'price'); }, catalogDetail() {} }
   };
   const sandbox = { URL, console, document, performance: { now: () => now },
-    navigator: { mediaDevices: { async getUserMedia(options) { if (denyCamera) throw new Error("Camera permission denied"); captureOptions = options; return { getTracks: () => [{ stop() { stopped++; }, addEventListener(name, fn) { trackEvents.set(name, fn); } }] }; } } },
+    navigator: { mediaDevices: { async getUserMedia(options) { cameraRequests++; if (denyCamera) throw new Error("Camera permission denied"); captureOptions = options; return { getTracks: () => [{ stop() { stopped++; }, addEventListener(name, fn) { trackEvents.set(name, fn); } }] }; } } },
     window: { addEventListener(name, fn) { windowEvents.set(name, fn); }, removeEventListener(name) { windowEvents.delete(name); }, webkit: { messageHandlers: { scanResult: { postMessage: m => messages.push(JSON.parse(JSON.stringify(m))) } } } }
   };
   const context = vm.createContext(sandbox);
@@ -49,7 +49,7 @@ function harness({ denyCamera = false, cacheState = 'ok', beforePackReady, playV
   } });
   script.runInContext(context);
   return { bridge: sandbox.CardShowBridge, messages, elements, events, windowEvents, trackEvents, draws, document, get overlayDestroyed() { return overlayDestroyed; }, advance(ms) { now += ms; },
-    packOptions, get scannerOptions() { return scannerOptions; }, get scannerStarts() { return scannerStarts; }, get captureOptions() { return captureOptions; }, get stopped() { return stopped; }, get disposed() { return disposed; } };
+    packOptions, get scannerOptions() { return scannerOptions; }, get scannerStarts() { return scannerStarts; }, get cameraRequests() { return cameraRequests; }, get captureOptions() { return captureOptions; }, get stopped() { return stopped; }, get disposed() { return disposed; } };
 }
 const tuple = (id = 123, variants = [{ id: 10, label: 'Normal', nm: 1.25, primary: true }, { id: 11, label: 'Holofoil', nm: 2.5 }]) =>
   [`p:${id}`, `Sample ${id}`, '1/10', 'DEMO', 'Demo Set', '', 'https://cdn.tcgtracking.com/test.jpg', variants];
@@ -664,4 +664,111 @@ test('border retry diagnostics retain booleans without copying candidate or imag
   h.scannerOptions.onStats({ diagnostics: { borderRetry: 'true', borderRetained: 'PRIVATE_BOOL' } });
   assert.equal(h.messages.filter(m => m.event === 'border_retry').length, count);
   h.bridge.stop();
+});
+
+test('manual entry keeps the camera, document, pack and backend warm and retires old worker callbacks', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'warm', game: 'tcgp:3', autoStart: true });
+  const oldLoop = h.scannerOptions, root = h.elements.find(e => e.tag === 'section');
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
+  const scans = () => h.messages.filter(m => m.kind === 'scan').length;
+  const before = scans(), disposed = h.disposed, cameras = h.cameraRequests;
+  assert.equal(h.bridge.suspendForManualSearch('warm'), true);
+  oldLoop.onShow({ ref: tuple(999), accepted: true, confidence: 96 });
+  oldLoop.onHide();
+  assert.equal(scans(), before);
+  await h.bridge.resumeAfterManualSearch('warm');
+  assert.equal(h.packOptions.length, 1); assert.equal(h.cameraRequests, cameras);
+  assert.equal(h.disposed, disposed); assert.equal(root.removed, undefined);
+  // A result already in flight from the retired loop cannot contaminate the
+  // fresh settling window, even once the manual screen has been dismissed.
+  oldLoop.onShow({ ref: tuple(999), accepted: true, confidence: 96 });
+  const messageCount = h.messages.length;
+  oldLoop.onHide(); oldLoop.onHint('Retired worker hint'); oldLoop.overlay.draw({ quad: [[0, 0]] });
+  assert.equal(h.messages.length, messageCount);
+  assert.equal(scans(), before);
+  settle(h, { ref: tuple(124), accepted: true, confidence: 96 });
+  assert.equal(scans(), before + 1); assert.equal(h.messages.at(-1).candidates[0].ref, 'p:124');
+  h.bridge.stop();
+});
+
+test('opening manual entry during pack startup defers camera and resumes without loading the pack twice', async () => {
+  const pack = deferred(), entered = deferred();
+  const h = harness({ beforePackReady: () => { entered.resolve(); return pack.promise; } });
+  const startup = h.bridge.install({ nonce: 'early', game: 'tcgp:3', autoStart: true });
+  await entered.promise;
+  h.bridge.suspendForManualSearch('early'); pack.resolve(); await startup;
+  assert.equal(h.cameraRequests, 0); assert.equal(h.scannerStarts, 0);
+  await h.bridge.resumeAfterManualSearch('early');
+  assert.equal(h.packOptions.length, 1); assert.equal(h.cameraRequests, 1); assert.equal(h.scannerStarts, 1);
+  h.bridge.stop();
+});
+
+test('a pause carried into installation prevents initial camera startup until manual dismissal', async () => {
+  const h = harness();
+  await h.bridge.install({ nonce: 'initial', game: 'tcgp:3', autoStart: true, manualSearchSuspended: true });
+  assert.equal(h.cameraRequests, 0); assert.equal(h.packOptions.length, 1);
+  await h.bridge.resumeAfterManualSearch('initial');
+  assert.equal(h.packOptions.length, 1); assert.equal(h.scannerStarts, 1);
+  h.bridge.stop();
+});
+
+test('a rapid manual open and dismissal while playback is pending retires the old capture then resumes once', async () => {
+  for (const abort of [false, true]) {
+    const video = deferred(), entered = deferred(); let plays = 0;
+    const h = harness({ playVideo: () => { if (++plays === 1) { entered.resolve(); return video.promise; } } });
+    const startup = h.bridge.install({ nonce: 'playback', game: 'tcgp:3', autoStart: true });
+    await entered.promise;
+    h.bridge.suspendForManualSearch('playback');
+    await h.bridge.resumeAfterManualSearch('playback');
+    if (abort) video.reject(Object.assign(new Error('Retired playback'), { name: 'AbortError' }));
+    else video.resolve();
+    await startup;
+    assert.equal(h.packOptions.length, 1); assert.equal(h.cameraRequests, 2); assert.equal(h.scannerStarts, 1);
+    h.bridge.stop();
+  }
+});
+
+test('background and terminal stop while manual entry is open cannot warm-resume capture', async () => {
+  for (const action of ['background', 'stop']) {
+    const h = harness(); await h.bridge.install({ nonce: 'retired', game: 'tcgp:3', autoStart: true });
+    h.bridge.suspendForManualSearch('retired');
+    if (action === 'background') { h.document.hidden = true; h.events.get('visibilitychange')(); }
+    else h.bridge.stop();
+    const starts = h.scannerStarts, cameras = h.cameraRequests;
+    assert.equal(await h.bridge.resumeAfterManualSearch('retired'), action === 'background');
+    assert.equal(h.scannerStarts, starts); assert.equal(h.cameraRequests, cameras);
+    if (action === 'background') h.bridge.stop();
+  }
+});
+
+test('manual dismissal while WebKit is still hidden defers one warm resume until visibility returns', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'visible', game: 'tcgp:3', autoStart: true });
+  h.bridge.suspendForManualSearch('visible');
+  h.document.hidden = true; h.events.get('visibilitychange')();
+  assert.equal(await h.bridge.resumeAfterManualSearch('visible'), true);
+  assert.equal(h.cameraRequests, 1);
+  h.document.hidden = false; h.events.get('visibilitychange')();
+  // Startup uses asynchronous module interfaces, so observe its ready event.
+  for (let i = 0; i < 100 && h.scannerStarts < 2; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.packOptions.length, 1); assert.equal(h.cameraRequests, 2); assert.equal(h.scannerStarts, 2);
+  h.events.get('visibilitychange')(); assert.equal(h.scannerStarts, 2);
+  h.bridge.suspendForManualSearch('visible'); h.document.hidden = true; h.events.get('visibilitychange')();
+  await h.bridge.resumeAfterManualSearch('visible');
+  const visible = h.events.get('visibilitychange'); h.bridge.stop(); h.document.hidden = false; visible();
+  assert.equal(h.cameraRequests, 2); assert.equal(h.scannerStarts, 2, 'A terminal stop cancels deferred visibility resume');
+});
+
+test('old document transitions and failed startup cannot silently restart a replacement or failed camera', async () => {
+  const h = harness(); await h.bridge.install({ nonce: 'new', game: 'tcgp:3', autoStart: true });
+  const starts = h.scannerStarts;
+  assert.equal(h.bridge.suspendForManualSearch('old'), false);
+  assert.equal(await h.bridge.resumeAfterManualSearch('old'), false);
+  assert.equal(h.scannerStarts, starts); h.bridge.stop();
+  const failed = harness({ denyCamera: true });
+  await failed.bridge.install({ nonce: 'failed', game: 'tcgp:3', autoStart: true });
+  failed.bridge.suspendForManualSearch('failed');
+  assert.equal(await failed.bridge.resumeAfterManualSearch('failed'), false);
+  assert.equal(failed.cameraRequests, 1);
+  assert.equal(failed.elements.find(e => e.tag === 'button').textContent, 'Retry Scanner');
+  failed.bridge.stop();
 });

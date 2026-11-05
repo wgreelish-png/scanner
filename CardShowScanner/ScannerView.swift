@@ -2,7 +2,7 @@ import SwiftUI
 import SwiftData
 import UIKit
 
-struct ScannerView: View {
+@MainActor struct ScannerView: View {
     let session: ScanSession
     let list: CardList
     let draft: ScanBatchDraft?
@@ -17,23 +17,30 @@ struct ScannerView: View {
     @State private var pendingGame: String?
     @State private var confirmGame = false
     @State private var nextDraft: ScanBatchDraft?
-    @State private var model = ScannerViewModel()
+    @State private var model: ScannerViewModel
     @State private var mode = "Live"
     @State private var showingConnection = false
     @State private var returningFromConnection = false
     @State private var showingListReview = false
     @State private var showingManualSearchPrompt = false
     @State private var showingManualSearch = false
-    init(session: ScanSession, list: CardList, draft: ScanBatchDraft? = nil) {
+    @State private var pendingManualSearchFromReview = false
+    @State private var manualSearchTransitionReady = false
+    @State private var selectedRecentCard: InventoryCard?
+    init(session: ScanSession, list: CardList, draft: ScanBatchDraft? = nil, model: ScannerViewModel? = nil) {
         self.session = session; self.list = list; self.draft = draft
         _game = State(initialValue: session.game ?? "Pokémon")
+        let scannerModel = model ?? ScannerViewModel()
+        _model = State(initialValue: scannerModel)
+        _mode = State(initialValue: scannerModel.liveProvider == nil ? "Mock" : "Live")
     }
     @State private var visible = false
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             if let live = model.liveProvider {
-                TCGScannerWebView(provider: live).ignoresSafeArea()
+                TCGScannerWebView(provider: live).ignoresSafeArea(.container).ignoresSafeArea(.keyboard)
+                    .accessibilityIdentifier("scanner.cameraSurface")
                     .onReceive(live.$manualSearchSuggested) { suggested in
                         guard suggested else { return }
                         // Published sends before its stored value changes. Check
@@ -42,7 +49,8 @@ struct ScannerView: View {
                             guard live.manualSearchSuggested else { return }
                             guard visible, session.isActive, !model.paused, model.selected == nil,
                                   !showingListReview, !showingConnection,
-                                  !returningFromConnection, !showingManualSearch else {
+                                  !returningFromConnection, !showingManualSearch,
+                                  !pendingManualSearchFromReview, selectedRecentCard == nil else {
                                 live.resumeAfterManualSearchPrompt(); return
                             }
                             showingManualSearchPrompt = true
@@ -55,10 +63,11 @@ struct ScannerView: View {
                     Text("Sample cards only • No camera or live prices")
                 }.foregroundStyle(.orange).padding()
             }
-            VStack(spacing: 12) {
+            VStack(spacing: 0) {
                 cameraHeader
                 Spacer(minLength: 0)
                 cameraFooter
+                    .padding(.horizontal, 12).padding(.bottom, 8)
                     .alert("Search for this card manually?", isPresented: $showingManualSearchPrompt) {
                         Button("Search Manually") { openManualSearch() }
                         Button("Keep Scanning", role: .cancel) {
@@ -68,20 +77,25 @@ struct ScannerView: View {
                     } message: {
                         Text("No stable match after four seconds. Search the saved catalog to add this card to the same list, or keep scanning.")
                     }
-            }.padding(.horizontal, 16).padding(.vertical, 8)
+            }
         }
+        .ignoresSafeArea(.keyboard)
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
-        .statusBarHidden()
-        .sheet(isPresented: Binding(get: { model.selected != nil }, set: { _ in })) {
+        .statusBarHidden(false)
+        .sheet(isPresented: Binding(get: { model.selected != nil }, set: { _ in }), onDismiss: finishRecognitionReview) {
             confirmationReview
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
                 .interactiveDismissDisabled()
         }
         .fullScreenCover(isPresented: $showingConnection, onDismiss: finishConnection) { connectionView }
-        .sheet(isPresented: $showingManualSearch, onDismiss: { startIfReady() }) {
-            ManualCardSearchView(list: list, game: session.game ?? game, allowsGameChange: false, draft: draft)
+        .sheet(isPresented: $showingManualSearch, onDismiss: finishManualSearch) {
+            ManualCardSearchView(list: list, game: session.game ?? game, allowsGameChange: false, draft: draft,
+                                 focusSearchOnAppear: true)
+        }
+        .sheet(item: $selectedRecentCard, onDismiss: finishRecentCard) { item in
+            NavigationStack { CardEditorView(item: item) }
         }
         .onAppear {
             visible = true
@@ -133,15 +147,23 @@ struct ScannerView: View {
         .failureAlert(Binding(get: { model.selected == nil ? model.error : nil }, set: { model.error = $0 }))
     }
     private var cameraHeader: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 12) {
+        HStack(spacing: 4) {
                 Button { model.stop(); dismiss() } label: {
                     Image(systemName: "chevron.left").frame(width: 44, height: 44)
                 }.accessibilityLabel("Close scanner").accessibilityIdentifier("scanner.close")
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(session.game ?? game).font(.headline)
-                    Text(mode == "Live" ? "LIVE CAMERA" : "MOCK • TESTING ONLY")
-                        .font(.caption.bold()).foregroundStyle(mode == "Live" ? Color.white : Color.orange)
+                    Text(session.game ?? game).font(.subheadline.weight(.semibold)).lineLimit(1)
+                        .accessibilityIdentifier("scanner.game")
+                    HStack(spacing: 5) {
+                        Circle().fill(model.paused ? Color.secondary : (mode == "Live" ? .green : .orange))
+                            .frame(width: 5, height: 5).accessibilityHidden(true)
+                        Text(model.paused ? "Paused" : (mode == "Live" ? "Live" : "Mock · testing"))
+                            .font(.caption2.weight(.semibold)).fixedSize()
+                            .accessibilityIdentifier("scanner.mode")
+                        if !model.paused, let live = model.liveProvider {
+                            ScannerCompactCameraStatus(provider: live)
+                        }
+                    }.foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, alignment: .leading)
                 Button {
                     model.paused.toggle()
@@ -149,6 +171,7 @@ struct ScannerView: View {
                 } label: {
                     Image(systemName: model.paused ? "play.fill" : "pause.fill").frame(width: 44, height: 44)
                 }.accessibilityLabel(model.paused ? "Resume camera" : "Pause camera")
+                    .accessibilityIdentifier("scanner.pause")
                 Menu {
                     Picker("Game", selection: $game) { ForEach(CatalogOptions.games(including: game), id: \.self) { Text($0) } }
                     Button("Retry Live Scanner") {
@@ -177,11 +200,10 @@ struct ScannerView: View {
                 } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
                     .accessibilityLabel("Scanner options")
                     .accessibilityIdentifier("scanner.options")
-            }
-            if model.paused { Text("Camera paused").font(.subheadline) }
-            else if let live = model.liveProvider { CameraStatusView(provider: live) }
-        }.foregroundStyle(.white).padding(8)
-            .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 18))
+        }.foregroundStyle(.primary).tint(.primary)
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(.regularMaterial, ignoresSafeAreaEdges: .top)
+            .accessibilityIdentifier("scanner.header")
     }
 
     private var scanIssueMenu: some View {
@@ -211,90 +233,78 @@ struct ScannerView: View {
                     Image(systemName: detailsCollapsed ? "chevron.up" : "chevron.down")
                         .font(.subheadline.weight(.semibold)).frame(width: 44, height: 44)
                 }.buttonStyle(.plain)
-                    .accessibilityLabel(detailsCollapsed ? "Expand scan details" : "Minimize scan details")
+                    .accessibilityLabel(detailsCollapsed ? "Show scanned cards" : "Hide scanned cards")
                     .accessibilityValue(detailsCollapsed ? "Collapsed" : "Expanded")
-                    .accessibilityHint("Card totals and quick actions stay visible.")
+                    .accessibilityHint("Card totals and scan actions stay visible.")
                     .accessibilityIdentifier("scanner.detailsToggle")
             }
-            if !detailsCollapsed, let last = model.lastAddedCard {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Last added: \(last.name)").font(.subheadline.bold()).lineLimit(2)
-                        .accessibilityIdentifier("scanner.lastAdded")
-                    Text("\(last.identity.printing) • \(last.identity.condition) • \(last.marketPrice?.money ?? "Price unavailable")")
-                        .font(.caption)
-                    Text("Another copy uses this printing, condition and market quote.")
-                        .font(.caption).foregroundStyle(.white.opacity(0.8))
-                }.frame(maxWidth: .infinity, alignment: .leading)
+            if !detailsCollapsed {
+                ScannerRecentCards(list: list, onSelect: openRecentCard)
+                    .disabled(model.selectionInProgress || model.saving || model.selected != nil || !session.isActive)
+                    .layoutPriority(-1)
             }
             if model.lastAddedCard != nil { scannerQuickActions }
-            if model.waitingForRemoval {
-                Text(model.paused ? "Camera paused" : "Saved. Ready for the next card.").font(.subheadline)
-                    .accessibilityIdentifier("scanner.nextCardReady")
-                if !detailsCollapsed {
-                    Text("Move the saved card out of view, then show the next. For an identical copy, use Add Another Copy.")
-                        .font(.caption).multilineTextAlignment(.center)
-                }
-            } else if !detailsCollapsed {
-                Text(model.paused ? "Resume when you're ready" : "Hold a card steady inside the camera")
-                    .font(.subheadline)
-                if !model.paused {
-                    Text("Tilt slightly to reduce glare. Use a light, plain background for dark borders.")
-                        .font(.caption).multilineTextAlignment(.center)
-                }
-            }
             footerNavigationActions
         }.foregroundStyle(.white).tint(.white).padding(detailsCollapsed ? 12 : 16)
             .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 18))
     }
 
     private var footerNavigationActions: some View {
-        let layout = detailsCollapsed && !dynamicTypeSize.isAccessibilitySize
-            ? AnyLayout(HStackLayout(alignment: .center, spacing: 12))
-            : AnyLayout(VStackLayout(spacing: 8))
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(spacing: 6))
+            : AnyLayout(HStackLayout(alignment: .center, spacing: 12))
         return layout {
-            if !model.paused {
-                Button(detailsCollapsed ? "Search" : "Search Manually", systemImage: "magnifyingglass") { openManualSearch() }
-                    .buttonStyle(.borderless).frame(minHeight: 44)
-                    .accessibilityLabel("Search Manually")
-                    .accessibilityIdentifier("scanner.manualSearch")
-            }
-            HStack {
-                Button {
-                    guard !showingListReview else { return }
-                    // Stop before navigation begins, and keep scene callbacks
-                    // from restarting this scanner beneath the review screen.
-                    model.stop(); showingListReview = true
-                    DiagnosticLog.shared.record("navigation.review_opened", ["phase": "scanner"])
-                } label: {
-                    Label(detailsCollapsed ? "List" : "View List", systemImage: "list.bullet").frame(minHeight: 44)
-                }.buttonStyle(.borderless).accessibilityLabel("View List").accessibilityIdentifier("scanner.viewList")
-                    .disabled(draft?.isCommitted == false)
-                Spacer()
-                if draft?.isCommitted == false {
-                    Button("Close Scan", systemImage: "xmark") { model.stop(); dismiss() }
-                        .frame(minHeight: 44).accessibilityIdentifier("scanner.finishSession")
-                } else if session.isActive {
-                    FinishSessionButton(session: session, title: detailsCollapsed ? "Finish" : "Finish Session") { model.stop(); dismiss() }
-                        .accessibilityIdentifier("scanner.finishSession")
-                }
+            Button("Search", systemImage: "magnifyingglass") { openManualSearch() }
+                .buttonStyle(.borderless).frame(maxWidth: .infinity, minHeight: 44)
+                .accessibilityLabel("Search Manually")
+                .accessibilityIdentifier("scanner.manualSearch")
+            Button {
+                guard !showingListReview else { return }
+                // Stop before navigation begins, and keep scene callbacks
+                // from restarting this scanner beneath the review screen.
+                model.stop(); showingListReview = true
+                DiagnosticLog.shared.record("navigation.review_opened", ["phase": "scanner"])
+            } label: {
+                Label("List", systemImage: "list.bullet").frame(maxWidth: .infinity, minHeight: 44)
+            }.buttonStyle(.borderless).accessibilityLabel("View List").accessibilityIdentifier("scanner.viewList")
+                .disabled(draft?.isCommitted == false)
+            if draft?.isCommitted == false {
+                Button("Close", systemImage: "xmark") { model.stop(); dismiss() }
+                    .frame(maxWidth: .infinity, minHeight: 44).accessibilityLabel("Close Scan")
+                    .accessibilityIdentifier("scanner.finishSession")
+            } else if session.isActive {
+                FinishSessionButton(session: session, title: "Finish") { model.stop(); dismiss() }
+                    .frame(maxWidth: .infinity)
+                    .accessibilityIdentifier("scanner.finishSession")
             }
         }.font(.subheadline)
     }
 
     private var scannerQuickActions: some View {
-        let layout = dynamicTypeSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
-            : AnyLayout(HStackLayout(alignment: .top, spacing: 10))
-        return layout {
-            Button("Undo Last Add", systemImage: "arrow.uturn.backward") {
+        HStack(alignment: .top, spacing: 10) {
+            Button {
                 model.undoLastAdd(list: list, context: context)
+            } label: {
+                if dynamicTypeSize.isAccessibilitySize {
+                    Image(systemName: "arrow.uturn.backward").frame(minWidth: 44, minHeight: 44)
+                } else {
+                    Label("Undo", systemImage: "arrow.uturn.backward")
+                }
             }.buttonStyle(.bordered).frame(minHeight: 44)
                 .disabled(!model.canUndoLastAdd)
+                .accessibilityLabel("Undo Last Add")
                 .accessibilityIdentifier("scanner.undoLastAdd")
-            Button("Add Another Copy", systemImage: "plus.square.on.square") {
+            Button {
                 model.addAnotherCopy(list: list, context: context)
+            } label: {
+                if dynamicTypeSize.isAccessibilitySize {
+                    Image(systemName: "plus.square.on.square").frame(minWidth: 44, minHeight: 44)
+                } else {
+                    Label("Another Copy", systemImage: "plus.square.on.square")
+                }
             }.buttonStyle(.borderedProminent).tint(.blue).frame(minHeight: 44)
                 .disabled(!model.canAddAnotherCopy)
+                .accessibilityLabel("Add Another Copy")
                 .accessibilityIdentifier("scanner.addAnotherCopy")
         }.font(.subheadline)
     }
@@ -365,7 +375,12 @@ struct ScannerView: View {
                 .safeAreaInset(edge: .bottom) {
                     VStack(spacing: 8) {
                         if model.selectionInProgress { ProgressView("Adding your card…") }
+                        Button("Search Manually", systemImage: "magnifyingglass") { openManualSearchFromReview() }
+                            .buttonStyle(.borderedProminent).frame(maxWidth: .infinity, minHeight: 44)
+                            .disabled(model.selectionInProgress || model.saving || !session.isActive)
+                            .accessibilityIdentifier("scanReview.manualSearch")
                         Button("Discard & Scan Again") { model.scanNextCard() }.frame(minHeight: 44)
+                            .disabled(model.selectionInProgress || model.saving || !session.isActive)
                     }.padding().frame(maxWidth: .infinity).background(.regularMaterial)
                 }
                 .failureAlert($model.error)
@@ -397,15 +412,48 @@ struct ScannerView: View {
     }
     private func openManualSearch() {
         guard session.isActive, model.selected == nil, !model.selectionInProgress, !model.saving,
-              !showingManualSearch else { return }
+              !showingManualSearch, !pendingManualSearchFromReview, selectedRecentCard == nil,
+              model.suspendForManualSearch() else { return }
         showingManualSearchPrompt = false
-        // Stop before presenting so camera results cannot interrupt catalog entry.
-        showingManualSearch = true; model.stop()
+        showingManualSearch = true
         DiagnosticLog.shared.record("scanner.manual_search_opened")
     }
+    private func openManualSearchFromReview() {
+        guard session.isActive, !showingManualSearch, !pendingManualSearchFromReview,
+              model.suspendForManualSearch(discardSelection: true) else { return }
+        showingManualSearchPrompt = false
+        // Clearing the held result dismisses its sheet. Present the catalog only
+        // after that dismissal finishes, with recognition still suspended.
+        pendingManualSearchFromReview = true
+        manualSearchTransitionReady = false
+    }
+    private func finishRecognitionReview() {
+        guard pendingManualSearchFromReview else { return }
+        manualSearchTransitionReady = true
+        startIfReady()
+    }
+    private func finishManualSearch() { startIfReady() }
+    private func openRecentCard(_ item: InventoryCard) {
+        guard session.isActive, selectedRecentCard == nil, !showingManualSearch,
+              !pendingManualSearchFromReview, model.suspendForManualSearch() else { return }
+        selectedRecentCard = item
+    }
+    private func finishRecentCard() { startIfReady() }
     private func startIfReady() {
-        guard visible, session.isActive, !model.paused, !showingConnection, !showingListReview,
-              !returningFromConnection, !showingManualSearchPrompt, !showingManualSearch else { return }
+        if pendingManualSearchFromReview, manualSearchTransitionReady,
+           visible, session.isActive, scenePhase == .active, !model.paused,
+           !showingConnection, !returningFromConnection, !showingListReview, selectedRecentCard == nil {
+            pendingManualSearchFromReview = false
+            manualSearchTransitionReady = false
+            showingManualSearch = true
+            DiagnosticLog.shared.record("scanner.manual_search_opened")
+            return
+        }
+        guard visible, scenePhase == .active, session.isActive, !showingConnection, !showingListReview,
+              !returningFromConnection, !showingManualSearchPrompt, !showingManualSearch,
+              !pendingManualSearchFromReview, selectedRecentCard == nil else { return }
+        model.resumeAfterManualSearch()
+        guard !model.paused else { return }
         model.start(game: session.game ?? game, list: list, context: context, session: session, draft: draft)
     }
 
@@ -415,6 +463,87 @@ struct ScannerView: View {
         if mode == "Live" { provider = TCGTrackingScannerProvider() } else { provider = MockScannerProvider() }
         model = ScannerViewModel(provider: provider)
         startIfReady()
+    }
+}
+
+private struct ScannerCompactCameraStatus: View {
+    @ObservedObject var provider: TCGTrackingScannerProvider
+    var body: some View {
+        Text(provider.status).font(.caption2).lineLimit(1).truncationMode(.tail)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityAddTraits(.updatesFrequently)
+            .accessibilityIdentifier("scanner.cameraStatus")
+    }
+}
+
+/// Reversing scan-order metadata affects display only; saved row order is kept.
+private struct ScannerRecentCards: View {
+    let list: CardList
+    let onSelect: (InventoryCard) -> Void
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        let cards = Array(list.orderedCards.reversed())
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Scanned cards").font(.caption.weight(.semibold))
+                Spacer()
+                Text("Newest first").font(.caption2)
+            }.foregroundStyle(.white.opacity(0.8))
+            if cards.isEmpty {
+                Text("Cards you add appear here. Tap a card to review or edit it.")
+                    .font(.caption).foregroundStyle(.white.opacity(0.8))
+                    .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+                    .accessibilityIdentifier("scanner.recentCards.empty")
+            } else {
+                ScrollViewReader { reader in
+                    ScrollView(.vertical) {
+                        LazyVStack(spacing: 0) {
+                            ForEach(cards) { item in
+                                Button { onSelect(item) } label: {
+                                    ScannerRecentCardRow(item: item, newest: item.id == cards.first?.id)
+                                }.buttonStyle(.plain).id(item.id)
+                                    .accessibilityElement(children: .combine)
+                                    .accessibilityHint("Review or edit this scanned card.")
+                                    .accessibilityIdentifier("scanner.recentCard." + item.id.uuidString)
+                                if item.id != cards.last?.id { Divider().overlay(.white.opacity(0.15)) }
+                            }
+                        }
+                    }
+                    .onChange(of: cards.first?.id) { _, id in
+                        if let id { reader.scrollTo(id, anchor: .top) }
+                    }
+                }
+                .frame(minHeight: 0, maxHeight: dynamicTypeSize.isAccessibilitySize ? 220 : 190)
+                .layoutPriority(-1)
+                .accessibilityIdentifier("scanner.recentCards")
+            }
+        }
+    }
+}
+
+private struct ScannerRecentCardRow: View {
+    let item: InventoryCard
+    let newest: Bool
+
+    var body: some View {
+        let card = item.snapshot
+        HStack(spacing: 10) {
+            AsyncImage(url: card.imageURL) { phase in
+                if let image = phase.image { image.resizable().scaledToFit() }
+                else { Image(systemName: "rectangle.portrait").foregroundStyle(.white.opacity(0.7)) }
+            }.frame(width: 32, height: 44).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(card.name).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    .accessibilityIdentifier(newest ? "scanner.lastAdded" : "scanner.recentName." + item.id.uuidString)
+                Text([card.set, card.number].filter { !$0.isEmpty }.joined(separator: " • "))
+                    .font(.caption2).lineLimit(1).foregroundStyle(.white.opacity(0.75))
+                Text("\(card.identity.printing) • \(card.identity.condition) • Qty \(item.quantity)")
+                    .font(.caption2).lineLimit(1).foregroundStyle(.white.opacity(0.75))
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            Text(card.marketPrice?.money ?? "Unpriced").font(.subheadline.weight(.semibold)).monospacedDigit()
+            Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.white.opacity(0.65))
+        }.frame(minHeight: 68).contentShape(Rectangle())
     }
 }
 

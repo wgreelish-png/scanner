@@ -6,7 +6,14 @@ import WebKit
     var results: AsyncStream<ScanResult> { get }
     func start(game: String)
     func stop()
+    func suspendForManualSearch()
+    func resumeAfterManualSearch()
     func clearCache() async throws
+}
+
+extension ScannerProvider {
+    func suspendForManualSearch() {}
+    func resumeAfterManualSearch() {}
 }
 
 @MainActor final class MockScannerProvider: ScannerProvider {

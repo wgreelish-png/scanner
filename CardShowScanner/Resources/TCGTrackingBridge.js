@@ -77,6 +77,8 @@
   let resetRecognition = () => {};
   let releaseReview = () => {};
   let resumeAfterManualSearchPrompt = () => {};
+  let suspendForManualSearch = () => false;
+  let resumeAfterManualSearch = () => false;
   let refreshDatabase = () => {};
   let markScanIssue = () => false;
   let setSteadyCardBorder = () => {};
@@ -87,6 +89,9 @@
     let heldRef = null, removalRef = null, removalAbsentSince = null;
     let steadyCardBorder = config.steadyCardBorder === true;
     let manualAttempt = null, manualPromptPending = false;
+    let manualSearchSuspended = config.manualSearchSuspended === true;
+    let resumeRequested = false, startupFailed = false, retiredPlayback = false, loopGeneration = 0;
+    let pack = null, cacheWarning = false;
     let latestScan = null, heldScan = null;
     let running = true, stopLoop = null, stream = null, backend = null, overlay = null, starting = false, held = false, awaitingRemoval = false, beginLoop = null;
     const post = message => { if (running) window.webkit?.messageHandlers?.scanResult?.postMessage({ ...message, nonce: config.nonce }); };
@@ -117,7 +122,7 @@
       post({ kind: 'hide' });
     };
     const observeCard = () => {
-      if (!running || !stream || held || awaitingRemoval || document.hidden) return;
+      if (!running || !stream || manualSearchSuspended || held || awaitingRemoval || document.hidden) return;
       const now = clock();
       if (!manualAttempt || now - manualAttempt.last > 1000) manualAttempt = { since: now, last: now, offered: false, queued: false };
       manualAttempt.last = now;
@@ -129,7 +134,7 @@
       Promise.resolve().then(() => {
         if (manualAttempt !== attempt) return;
         attempt.queued = false;
-        if (!running || !stream || held || awaitingRemoval || manualPromptPending || document.hidden || clock() - attempt.last > 1000) return;
+        if (!running || !stream || manualSearchSuspended || held || awaitingRemoval || manualPromptPending || document.hidden || clock() - attempt.last > 1000) return;
         attempt.offered = true; manualPromptPending = true; pending = null;
         post({ kind: 'manualSearchSuggested' });
       });
@@ -149,6 +154,7 @@
     const errorKind = error => ['NotAllowedError', 'NotFoundError', 'NotReadableError', 'AbortError', 'SecurityError', 'TypeError', 'RangeError'].includes(error?.name) ? error.name : 'Error';
     const recover = () => {
       if (!running || !stream) return;
+      startupFailed = true;
       pending = null; stopCamera(); backend?.dispose(); backend = null;
       report('Camera interrupted. Tap Retry Scanner to continue.');
       button.disabled = false; button.hidden = false; button.textContent = 'Retry Scanner';
@@ -175,14 +181,45 @@
     const canvas = document.createElement('canvas'); canvas.style.cssText = 'position:absolute;inset:0;display:block;width:100%;height:100%;pointer-events:none';
     frame.append(video, canvas); root.append(frame, button, hint); document.body.append(root);
     const report = value => { hint.hidden = config.autoStart === true || !!stream; hint.textContent = text(value); post({ kind: 'status', message: text(value) }); };
-    const stopCamera = () => { clearManualAttempt(); heldRef = removalRef = removalAbsentSince = null; stopLoop?.(); stopLoop = null; stream?.getTracks().forEach(t => t.stop()); stream = null; video.srcObject = null; overlay?.destroy?.(); overlay = null; latestScan = null; heldScan = null; };
-    const visibility = () => { if (document.hidden) { diagnostic('camera_backgrounded'); pending = null; stopCamera(); post({ kind: 'hide' }); button.disabled = false; button.hidden = false; button.textContent = 'Resume Camera'; } };
+    const stopCamera = () => { loopGeneration++; clearManualAttempt(); heldRef = removalRef = removalAbsentSince = null; stopLoop?.(); stopLoop = null; stream?.getTracks().forEach(t => t.stop()); stream = null; video.srcObject = null; overlay?.destroy?.(); overlay = null; latestScan = null; heldScan = null; };
+    const visibility = () => {
+      if (document.hidden) {
+        diagnostic('camera_backgrounded'); pending = null; stopCamera(); post({ kind: 'hide' });
+        button.disabled = false; button.hidden = false; button.textContent = 'Resume Camera';
+      } else if (running && resumeRequested && !manualSearchSuspended && !starting) {
+        resumeRequested = false;
+        void resumeAfterManualSearch(config.nonce);
+      }
+    };
     document.addEventListener('visibilitychange', visibility);
-    dispose = () => { diagnostic('bridge_stopped'); running = false; pending = null; stopCamera(); backend?.dispose(); backend = null; root.remove(); document.removeEventListener('visibilitychange', visibility); window.removeEventListener?.('error', onError); window.removeEventListener?.('unhandledrejection', onRejection); };
+    dispose = () => { diagnostic('bridge_stopped'); running = false; pending = null; stopCamera(); backend?.dispose(); backend = null; pack = null; root.remove(); document.removeEventListener('visibilitychange', visibility); window.removeEventListener?.('error', onError); window.removeEventListener?.('unhandledrejection', onRejection); };
+    suspendForManualSearch = expectedNonce => {
+      if (!running || (expectedNonce !== undefined && expectedNonce !== config.nonce)) return false;
+      manualSearchSuspended = true; resumeRequested = false; loopGeneration++;
+      clearManualAttempt(); pending = null; held = false; heldRef = removalRef = removalAbsentSince = null;
+      heldScan = latestScan = null; awaitingRemoval = false;
+      stopLoop?.(); stopLoop = null; backend?.reset?.(); overlay?.clear();
+      // Startup can still be awaiting camera playback. Retire that acquisition;
+      // a ready preview stays mounted and keeps its already-authorized stream.
+      if (starting) { retiredPlayback = stream !== null; stopCamera(); }
+      return true;
+    };
+    resumeAfterManualSearch = async expectedNonce => {
+      if (!running || startupFailed || (expectedNonce !== undefined && expectedNonce !== config.nonce)) return false;
+      manualSearchSuspended = false;
+      // Sheet dismissal can precede WebKit's visibility notification. Remember
+      // this explicit resume, without acquiring a camera in a hidden document.
+      if (document.hidden) { resumeRequested = true; return true; }
+      if (starting) { resumeRequested = true; return true; }
+      if (stream && beginLoop && backend) {
+        stopLoop?.(); backend.reset?.(); stopLoop = beginLoop();
+      } else await button.onclick();
+      return true;
+    };
     report('Ready. Saved databases are reused; the first download may be large.');
     button.onclick = async (options = {}) => {
       if (starting || !running) return;
-      starting = true; button.disabled = true; button.hidden = true;
+      starting = true; startupFailed = false; retiredPlayback = false; button.disabled = true; button.hidden = true;
       let stage = 'modules', began = clock(), lastStats = -Infinity;
       diagnostic('startup_started');
       try {
@@ -192,40 +229,43 @@
           import(base + 'core/pack.js'), import(base + 'app/scan-backends.js'), import(base + 'core/overlay.js'),
           import(base + 'app/quickscan.js'), import(base + 'app/shared.js')
         ]);
-        if (!running) return;
+        if (!running) { pack = null; return; }
         diagnostic('modules_ready', { elapsedMS: clock() - began });
         shared.useScope('price');
-        stage = 'pack'; began = clock();
-        report(options.refreshDatabase ? 'Checking for database updates…' : 'Opening saved game database…');
-        let packStats = null;
-        const pack = await packs.loadPack(config.game, (loaded, total, stats) => {
-          if (!running) return;
-          if (stats) packStats = { ...stats };
-          if (stats?.downloaded === 0 && stats?.total === 0) report('Using saved game database');
-          else report(stats?.label || `Downloading database: ${Math.round(100 * loaded / Math.max(1, total))}%`);
-        }, { cacheFirst: !options.refreshDatabase });
-        if (!running) return;
-        const cachedShards = (packStats?.cachedHashShards || 0) + (packStats?.cachedMetaShards || 0);
-        const cacheFields = {
-          downloadedBytes: Number.isFinite(packStats?.downloaded) ? packStats.downloaded : 0,
-          cachedShards,
-          cacheState: ['ok', 'failed', 'unavailable'].includes(packStats?.cache) ? packStats.cache : 'unknown',
-          cacheSource: !packStats ? 'unknown' : !packStats.downloaded ? 'cache' : cachedShards ? 'mixed' : 'download',
-          storagePersisted: packStats?.storage?.persisted === true,
-          cacheBackend: packStats?.cacheBackend === 'native' ? 'native' : 'indexeddb'
-        };
-        diagnostic('pack_ready', { elapsedMS: clock() - began, ...cacheFields });
-        const cacheWarning = ['failed', 'unavailable'].includes(cacheFields.cacheState);
-        if (cacheWarning) diagnostic('pack_cache_warning', cacheFields);
+        if (!pack || options.refreshDatabase) {
+          stage = 'pack'; began = clock();
+          report(options.refreshDatabase ? 'Checking for database updates…' : 'Opening saved game database…');
+          let packStats = null;
+          pack = await packs.loadPack(config.game, (loaded, total, stats) => {
+            if (!running) return;
+            if (stats) packStats = { ...stats };
+            if (stats?.downloaded === 0 && stats?.total === 0) report('Using saved game database');
+            else report(stats?.label || `Downloading database: ${Math.round(100 * loaded / Math.max(1, total))}%`);
+          }, { cacheFirst: !options.refreshDatabase });
+          if (!running) { pack = null; return; }
+          const cachedShards = (packStats?.cachedHashShards || 0) + (packStats?.cachedMetaShards || 0);
+          const cacheFields = {
+            downloadedBytes: Number.isFinite(packStats?.downloaded) ? packStats.downloaded : 0,
+            cachedShards,
+            cacheState: ['ok', 'failed', 'unavailable'].includes(packStats?.cache) ? packStats.cache : 'unknown',
+            cacheSource: !packStats ? 'unknown' : !packStats.downloaded ? 'cache' : cachedShards ? 'mixed' : 'download',
+            storagePersisted: packStats?.storage?.persisted === true,
+            cacheBackend: packStats?.cacheBackend === 'native' ? 'native' : 'indexeddb'
+          };
+          diagnostic('pack_ready', { elapsedMS: clock() - began, ...cacheFields });
+          cacheWarning = ['failed', 'unavailable'].includes(cacheFields.cacheState);
+          if (cacheWarning) diagnostic('pack_cache_warning', cacheFields);
+        }
         stage = 'backend'; began = clock();
-        backend?.dispose(); backend = await backends.createBackend();
+        if (!backend) backend = await backends.createBackend();
         if (!running) { backend.dispose(); return; }
         backend.setPack(pack);
         diagnostic('backend_ready', { elapsedMS: clock() - began, backend: backend.kind });
+        if (manualSearchSuspended) return;
         stage = 'camera'; began = clock(); diagnostic('camera_requested');
         report('Starting rear camera…');
         const captured = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
-        if (!running || document.hidden) { captured.getTracks().forEach(t => t.stop()); return; }
+        if (!running || document.hidden || manualSearchSuspended) { captured.getTracks().forEach(t => t.stop()); return; }
         diagnostic('camera_acquired', { elapsedMS: clock() - began });
         stage = 'video'; began = clock();
         stream = captured;
@@ -234,7 +274,7 @@
           diagnostic('camera_interrupted'); recover();
         }, { once: true });
         video.srcObject = stream; await video.play();
-        if (!running || document.hidden || stream !== captured) { stopCamera(); return; }
+        if (!running || document.hidden || manualSearchSuspended || stream !== captured) { stopCamera(); return; }
         diagnostic('video_playing', { elapsedMS: clock() - began });
         stage = 'scan';
         overlay = overlays.createOverlay(canvas, { fit: 'cover' });
@@ -245,9 +285,17 @@
           clear: () => overlay?.clear(),
           draw: options => { if (options?.quad) observeCard(); overlay?.draw({ ...options, label: null }); }
         };
-        beginLoop = () => quick.startQuickScan({ video, overlay: scanOverlay, backend, pack, fetchDetails: null, resolveCandidates: false, retainAcceptedBorder: steadyCardBorder,
+        beginLoop = () => {
+          const generation = ++loopGeneration;
+          const current = () => running && !manualSearchSuspended && generation === loopGeneration;
+          const liveOverlay = {
+            setSource: (...args) => { if (current()) scanOverlay.setSource(...args); },
+            clear: () => { if (current()) scanOverlay.clear(); },
+            draw: options => { if (current()) scanOverlay.draw(options); }
+          };
+          return quick.startQuickScan({ video, overlay: liveOverlay, backend, pack, fetchDetails: null, resolveCandidates: false, retainAcceptedBorder: steadyCardBorder,
           onShow: view => {
-            if (held || manualPromptPending) return;
+            if (!current() || held || manualPromptPending) return;
             const update = normalizeView(view);
             if (!update.same && !update.candidates?.length) return;
             if (awaitingRemoval) {
@@ -289,6 +337,7 @@
             post(pending.result);
             pending = null;
           }, onHide: () => {
+            if (!current()) return;
             if (!held) {
               pending = null;
               // Motion or an expired guess can hide the upstream panel without
@@ -297,8 +346,8 @@
               if (!awaitingRemoval && !manualPromptPending) post({ kind: 'hide' });
             }
           },
-          onHint: report, onStats: stats => {
-            if (!running) return;
+          onHint: value => { if (current()) report(value); }, onStats: stats => {
+            if (!current()) return;
             const now = clock();
             const fields = scanStats(stats);
             if (awaitingRemoval) {
@@ -324,9 +373,10 @@
             }
             diagnostic('scan_stats', { ...fields, ...quality });
           } });
+        };
         resetRecognition = () => {
           clearManualAttempt(); pending = null; held = false; heldRef = removalRef = removalAbsentSince = null; heldScan = null; latestScan = null; awaitingRemoval = false; stopLoop?.(); backend?.reset?.();
-          if (running && stream) stopLoop = beginLoop();
+          if (running && !manualSearchSuspended && stream) stopLoop = beginLoop();
         };
         releaseReview = ref => {
           if (awaitingRemoval) return;
@@ -337,7 +387,7 @@
           // The upstream loop may already have advanced while native review was
           // held. Re-arm full payloads without reopening the authorized camera.
           stopLoop?.(); backend?.reset?.();
-          if (running && stream) stopLoop = beginLoop();
+          if (running && !manualSearchSuspended && stream) stopLoop = beginLoop();
         };
         resumeAfterManualSearchPrompt = () => {
           manualPromptPending = false; pending = null;
@@ -345,24 +395,34 @@
           // same:true updates. Re-arm the loop for a full payload, retaining this
           // attempt's offered flag and the already-authorized camera stream.
           stopLoop?.(); backend?.reset?.();
-          if (running && stream) stopLoop = beginLoop();
+          if (running && !manualSearchSuspended && stream) stopLoop = beginLoop();
         };
-        stopLoop = beginLoop();
+        if (!manualSearchSuspended) stopLoop = beginLoop();
         diagnostic('scanner_ready');
         button.hidden = true; report(cacheWarning ? 'Camera ready. Database could not be saved; it may download again next time.' : 'Live camera ready — hold a card steady.'); hint.hidden = true;
       } catch (error) {
+        if (!running || (retiredPlayback && stage === 'video' && error?.name === 'AbortError')) return;
+        startupFailed = true; resumeRequested = false;
         diagnostic('startup_failed', { stage, errorKind: errorKind(error), elapsedMS: clock() - began });
         stopCamera(); backend?.dispose(); backend = null;
         report(`Scanner unavailable: ${text(error?.message) || 'Check your connection and camera permission.'}`);
         button.hidden = false; button.textContent = 'Retry Scanner';
-      } finally { starting = false; button.disabled = false; }
+      } finally {
+        starting = false; button.disabled = false;
+        if (!running || stream) resumeRequested = false;
+        if (resumeRequested && running && !manualSearchSuspended && !document.hidden && !stream) {
+          resumeRequested = false;
+          await button.onclick();
+        }
+      }
     };
     refreshDatabase = () => {
       if (!running || starting || held) return;
       stopCamera(); pending = null; awaitingRemoval = false;
+      backend?.dispose(); backend = null;
       return button.onclick({ refreshDatabase: true });
     };
     if (config.autoStart) await button.onclick();
   }
-  globalThis.CardShowBridge = { install, stop: () => dispose(), resetRecognition: () => resetRecognition(), releaseReview: ref => releaseReview(ref), resumeAfterManualSearchPrompt: () => resumeAfterManualSearchPrompt(), refreshDatabase: () => refreshDatabase(), markScanIssue: reason => markScanIssue(reason), setSteadyCardBorder: enabled => setSteadyCardBorder(enabled), normalizeView };
+  globalThis.CardShowBridge = { install, stop: () => dispose(), resetRecognition: () => resetRecognition(), releaseReview: ref => releaseReview(ref), resumeAfterManualSearchPrompt: () => resumeAfterManualSearchPrompt(), suspendForManualSearch: nonce => suspendForManualSearch(nonce), resumeAfterManualSearch: nonce => resumeAfterManualSearch(nonce), refreshDatabase: () => refreshDatabase(), markScanIssue: reason => markScanIssue(reason), setSteadyCardBorder: enabled => setSteadyCardBorder(enabled), normalizeView };
 })();

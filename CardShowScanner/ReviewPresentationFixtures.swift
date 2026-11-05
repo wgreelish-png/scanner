@@ -44,6 +44,46 @@ import SwiftData
     }
 }
 
+/// Exercises the scanner's recent-card drawer without camera or timer races.
+@MainActor struct ScannerRecentCardsFixtureScreen: View {
+    @State private var fixture = ScannerRecentCardsFixtureStore()
+
+    var body: some View {
+        NavigationStack {
+            ScannerView(session: fixture.session, list: fixture.list, model: fixture.model)
+        }.modelContainer(fixture.container)
+    }
+}
+
+@MainActor private final class ScannerRecentCardsFixtureStore {
+    let container: ModelContainer
+    let list: CardList
+    let session: ScanSession
+    let model: ScannerViewModel
+
+    init() {
+        container = try! ModelContainer(for: CardList.self, InventoryCard.self, ScanSession.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        list = CardList(name: "Scanner recent-card fixture")
+        session = ScanSession(listName: list.name)
+        session.listID = list.id; session.game = "Pokémon"; session.statusRaw = "active"
+        let context = container.mainContext
+        context.insert(list); context.insert(session)
+        for index in 1...3 {
+            let card = CardCandidate(identity: CardIdentity(game: "Pokémon", productID: "mock:scanner-recent:\(index)", printing: "Normal"),
+                name: "Synthetic scan \(index)", set: "Synthetic scan set", number: String(index),
+                marketPrice: Decimal(index * 10), confidence: 100, printings: ["Normal"])
+            let row = try! InventoryCard(card: card)
+            row.id = UUID(uuidString: "20000000-0000-0000-0000-00000000000\(index)")!
+            row.addedAt = Date(timeIntervalSince1970: 1_800_000_000 + Double(index))
+            context.insert(row); list.cards.append(row); session.record(card)
+        }
+        try! context.save()
+        model = ScannerViewModel(provider: MockScannerProvider())
+        model.paused = true
+    }
+}
+
 /// Runs the real five-tab shell against synthetic, in-memory lists. Its source
 /// marker is acknowledged so merely visiting Show cannot seed financial stock.
 @MainActor struct PersistentNavigationFixtureScreen: View {

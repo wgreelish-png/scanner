@@ -26,6 +26,12 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 75 adds [warm manual-search return and recent scan review](docs/WarmScannerReview.md):
+Search Manually is available in Choose the Card, scan-origin catalog entry opens
+the keyboard, and returning reuses the loaded camera/database. The expandable
+scanner panel shows the list newest first with direct card editing, while a
+compact top strip keeps scanner status beside the camera controls.
+
 Build 74 simplifies [inventory label preparation](docs/DirectInventoryLabels.md):
 selected price, copies, paper and preview, followed by Prepare Labels. Printing
 no longer offers suggested-price actions or requires cost/profit warning
