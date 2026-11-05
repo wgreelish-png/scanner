@@ -26,6 +26,12 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 72 restores [reliable printer transfers and explicit selected-card
+reprints](docs/PrintTransferRecovery.md). Every packet uses the negotiated write
+type, including acknowledged raster writes on the verified D110-M. Manually
+selected cards can prepare replacement labels even after a prior completed job;
+Price Changed retains its automatic skip rule. Physical printing needs a rerun.
+
 Build 71 adds [branded PokéDen price tags](docs/BrandedPriceTags.md): the wordmark,
 divider, rounded border and a large whole-dollar price, plus standalone
 2-for-$1 bulk-bin tags. This is the default for newly prepared inventory labels;

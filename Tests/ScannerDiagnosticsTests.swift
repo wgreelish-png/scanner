@@ -123,7 +123,10 @@ import UniformTypeIdentifiers
              "packet_count": "1", "write_mode": "acknowledged", "mean_luma": "71.500"],
             ["phase": "handshake", "stage": "printer_info", "request_code": "0", "response_code": "255",
              "last_response_code": "0", "sent_bytes": "0", "notification_bytes": "1000000", "notification_count": "0",
-             "packet_count": "1000000", "write_mode": "unacknowledged"]
+             "packet_count": "1000000", "write_mode": "unacknowledged"],
+            ["phase": "print_failed", "stage": "page_end", "request_code": "227", "response_code": "228",
+             "last_response_code": "179", "sent_bytes": "8", "notification_bytes": "11", "notification_count": "1",
+             "packet_count": "1", "write_mode": "acknowledged", "reason": "responseTimeout"]
         ]
         for fields in expected {
             log.record("label.handshake_completed", fields.merging([

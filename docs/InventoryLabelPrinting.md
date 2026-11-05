@@ -1,4 +1,7 @@
-# Price labels — build 71
+# Price labels — build 72
+
+Build 72 restores [the verified print transfer path and explicit selected-card
+reprints](PrintTransferRecovery.md), with connected-print command diagnostics.
 
 Build 71 adds [PokéDen logo-and-price labels and bulk-bin
 stickers](BrandedPriceTags.md). The branded price layout is the new default;
@@ -28,11 +31,11 @@ Create price labels from saved working inventory or enter a price for a standalo
 - **Custom Price Tag** opens a simple whole-dollar price, copy count and paper form, with a price-only bitmap preview. No inventory, market price, saved show or tag approval is needed. Prepare saves pending labels; printing remains a separate action. Custom stickers never change an inventory asking price or mark any card as labeled.
 - **Choose Inventory Cards** keeps search and individual selection, with **Select All / Select All Results** and **Clear**. **Set Same Price for Selected Cards** applies one whole-dollar draft price to selected individual-tag entries; bulk cards stay in their category. **Use Suggested Prices** explicitly replaces selected manual draft prices with available suggestions.
 - Choose **Price only** for a large asking price, or **Card details** for name/number, price and condition. Long names truncate; asking prices remain complete.
-- Select the paper loaded in the printer: **30 × 14 mm**, **40 × 12 mm**, or **50 × 14 mm**. New inventory and custom labels remember the last selected size across relaunches. Saved queues keep their original size and artwork. The supported head prints a 12 mm strip at eight dots per millimetre; larger stock retains its physical margins.
+- Select the paper loaded in the printer: **30 × 14 mm**, **40 × 12 mm**, **30 × 15 mm**, or **50 × 14 mm**. New inventory and custom labels remember the last selected size across relaunches. Saved queues keep their original size and artwork. The supported head prints a 12 mm strip at eight dots per millimetre; larger stock retains its physical margins.
 - New prices follow the final tiers: below $0.75 goes to the 2 for $1 bulk category, $0.75–$0.99 becomes $1, values below $100 round down to dollars, and $100+ rounds down to $5. Bulk cards receive no individual tags. Approved/manual prices stay selected until reviewed. Edit whole-dollar prices/copies in the isolated editor; cost/profit warnings require explicit review.
 - All/changed batches start with stock quantities; custom/single-card drafts start at one copy per entry. **Match Stock Quantities** requests one label per available copy; **Use One Label per Card** restores one per lot. The app reports quantities exceeding 100 labels per lot or 250 total instead of silently reducing them. Missing prices can be edited or explicitly skipped as a group.
 - Review the actual monochrome bitmap, price, copies, profit information and paper before approving and preparing changed labels. An unchanged existing sticker can be retained without reprinting. Preparing never starts the printer.
-- All/changed batch reviews use compact rows with expandable previews, price/copy editors are collapsed together, and Continue/Approve stays pinned to the bottom. Cost and profit warnings still require explicit review. Changed/custom batches skip unchanged, already-labeled stickers; Print All is an explicit replacement-label action.
+- Batch reviews use compact rows with expandable previews, price/copy editors are collapsed together, and Approve stays pinned to the bottom. Cost and profit warnings still require explicit review. Price Changed skips unchanged, already-labeled stickers; Print All and explicit card selections prepare requested replacement labels. A completed previous queue can be replaced by explicit preparation, while unfinished work still requires review.
 
 The preview is decoded from the same packed bits sent to the printer. It does not depend on artwork downloads or current API quotes. Physical paper size is remembered, not detected; confirm it when changing rolls. Gap/Transparent is a separate printer setting.
 

@@ -191,8 +191,11 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     private var printableDrafts: [InventoryLabelDraft] {
         drafts.filter { draft in
             InventoryLabelBatch.shouldPrint(draft, approval: approvals.record(for: draft.id),
-                reprintAll: mode == .all, keepExisting: keepExistingStickerIDs.contains(draft.id))
+                mode: mode, keepExisting: keepExistingStickerIDs.contains(draft.id))
         }
+    }
+    private var canPrepareNewQueue: Bool {
+        queue.isLoaded && !queue.isPrinting && queue.entries.allSatisfy { $0.state == .completed }
     }
     private var labelCount: Int { printableDrafts.reduce(0) { $0 + $1.copies } }
     private var bulkCount: Int { drafts.filter(\.isBulk).reduce(0) { $0 + $1.copies } }
@@ -500,7 +503,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         Button { prepareQueue() } label: {
             Group {
                 if preparing { ProgressView() }
-                else { Text(queue.isLoaded && queue.entries.isEmpty && labelCount > 0 ? "Approve & Prepare Labels" : "Approve Prices") }
+                else { Text(canPrepareNewQueue && labelCount > 0 ? "Approve & Prepare Labels" : "Approve Prices") }
             }.frame(maxWidth: .infinity)
         }
         .buttonStyle(.borderedProminent).controlSize(.large)
@@ -522,9 +525,9 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 }
                 LabeledContent("Paper", value: paper.title)
                 LabeledContent("Style", value: style.title)
-                Text(mode == .all
-                     ? "Print All includes replacement copies of unchanged individual tags. Preparing approves the selected prices; printing still needs a separate Print action."
-                     : "Preparing approves selected prices and saves the market review baseline. Unchanged, already-labeled stickers are skipped. Printing needs a separate Print action.")
+                Text(mode == .priceChanged
+                     ? "Preparing approves selected prices and saves the market review baseline. Unchanged, already-labeled stickers are skipped. Printing needs a separate Print action."
+                     : "Prepare the requested labels, including replacements for cards labeled before. Preparing approves the selected prices; printing still needs a separate Print action.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             pricingWarningsSection
@@ -632,10 +635,14 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
             if mode == .all {
                 Label("Print All includes this tag, even if already labeled.", systemImage: "printer")
                     .font(.footnote).foregroundStyle(.secondary)
-            } else if let saved = approvals.record(for: draft.id), saved.approvedTag == draft.tag, !saved.needsLabels {
+            } else if mode == .priceChanged, let saved = approvals.record(for: draft.id), saved.approvedTag == draft.tag, !saved.needsLabels {
                 Label("Existing sticker retained · no reprint", systemImage: "checkmark.circle")
                     .font(.footnote).foregroundStyle(.secondary)
             } else if canKeepExistingSticker(for: draft) {
+                if let saved = approvals.record(for: draft.id), !saved.needsLabels {
+                    Label("Previously labeled · selected for reprint", systemImage: "printer")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
                 Toggle("Keep Existing Sticker", isOn: keepExistingStickerBinding(for: draft.id))
                     .accessibilityIdentifier("labels.keepExistingSticker." + draft.id.uuidString)
                 Text("Confirm you checked the physical \(draft.priceText ?? "") sticker and already have the labels you need. This records it as labeled and skips printing.")
@@ -666,7 +673,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     }
 
     @ViewBuilder private var savedQueueSection: some View {
-        if !queue.isLoaded || !queue.entries.isEmpty {
+        if !canPrepareNewQueue {
             Section("Saved queue needs review") {
                 Text(queue.isLoaded
                      ? "A queue with \(queue.entries.count.formatted()) labels is saved. Review it or explicitly discard it before preparing this batch."
@@ -742,7 +749,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 approvedNotice = "Approved prices saved. No individual labels need printing."
                 return
             }
-            guard queue.isLoaded, queue.entries.isEmpty else {
+            guard canPrepareNewQueue else {
                 approvedNotice = "Approved prices saved. \(draftsToPrint.reduce(0) { $0 + $1.copies }.formatted()) labels still need printing. Clear the saved print queue to prepare replacements."
                 return
             }

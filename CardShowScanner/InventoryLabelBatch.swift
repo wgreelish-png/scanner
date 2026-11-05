@@ -68,6 +68,13 @@ enum InventoryLabelBatchMode: String, CaseIterable, Identifiable, Sendable {
         return draft
     }
 
+    /// Choosing cards or Print All explicitly requests replacement stickers.
+    /// Only the automatic Price Changed mode suppresses unchanged labeled tags.
+    static func shouldPrint(_ draft: InventoryLabelDraft, approval: TagApprovalRecord?,
+                            mode: InventoryLabelBatchMode, keepExisting: Bool = false) -> Bool {
+        shouldPrint(draft, approval: approval, reprintAll: mode != .priceChanged, keepExisting: keepExisting)
+    }
+
     static func shouldPrint(_ draft: InventoryLabelDraft, approval: TagApprovalRecord?,
                             reprintAll: Bool, keepExisting: Bool = false) -> Bool {
         guard !draft.isBulk, !keepExisting, draft.tag != nil else { return false }
