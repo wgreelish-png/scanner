@@ -127,8 +127,8 @@ struct InventoryLabelDraft: Codable, Equatable, Identifiable, Sendable {
         guard !cardName.isEmpty, cardName.count <= 500, cardNumber.count <= 100,
               condition.count <= 100, askingPriceText.count <= 40 else { throw InventoryLabelFailure.invalidText }
         guard !isBulk else { throw InventoryLabelFailure.bulkCategory }
-        guard priceCents != nil else { throw InventoryLabelFailure.invalidPrice }
-        guard let priceCents, priceCents % 100 == 0 else { throw InventoryLabelFailure.wholeDollarRequired }
+        guard let priceCents else { throw InventoryLabelFailure.invalidPrice }
+        guard priceCents % 100 == 0 else { throw InventoryLabelFailure.wholeDollarRequired }
         guard (1...Self.maximumCopies).contains(copies) else { throw InventoryLabelFailure.invalidCopies }
     }
 

@@ -285,7 +285,6 @@ struct PublicPricingPagePolicy {
 /// Online catalog details expose quotes by exact language and condition.
 struct OnlineMarketPricing: MarketPricing {
     typealias DetailLoader = @Sendable ([String]) async throws -> (status: Int, data: Data)
-    static let endpoint = URL(string: "https://tcgtracking.com/newscanplus/api/detail.php")!
     private let cache = MarketDetailCache()
     private let load: DetailLoader
     init(load: @escaping DetailLoader = { try await PublicMarketBrowser.shared.detail(refs: $0) }) {

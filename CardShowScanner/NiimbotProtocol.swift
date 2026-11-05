@@ -66,9 +66,9 @@ struct NiimbotRequest: Equatable, Sendable {
     let command: UInt8
     let data: Data
     let response: UInt8?
-    var responseAlternatives: Set<UInt8> = []
-    var beginsPrint = false
-    var requiresTrue = false
+    let responseAlternatives: Set<UInt8>
+    let beginsPrint: Bool
+    let requiresTrue: Bool
 
     init(_ command: UInt8, _ data: [UInt8] = [1], response: UInt8? = nil,
          responseAlternatives: Set<UInt8> = [], beginsPrint: Bool = false, requiresTrue: Bool = false) {

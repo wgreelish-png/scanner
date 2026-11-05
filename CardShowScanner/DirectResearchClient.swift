@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 
 /// User-entered credentials for the fixed Beta origin. They are never bundled,
 /// included in diagnostic fields, or used as the app-to-server device token.
@@ -17,10 +16,6 @@ struct DirectResearchCredentials: Codable, Equatable, Sendable, CustomStringConv
             throw ResearchFailure.directNotConfigured
         }
         return Self(shipperID: shipperID, apiKey: apiKey)
-    }
-
-    fileprivate var cacheNamespace: String {
-        SHA256.hash(data: Data((shipperID + "\0" + apiKey).utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }
 

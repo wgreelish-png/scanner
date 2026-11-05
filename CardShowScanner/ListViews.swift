@@ -527,7 +527,6 @@ struct ListDeletionConfirmationView: View {
             if let session = reviewSession {
                 SessionReviewHeader(session: session, list: list,
                     onContinue: { continueScanning(session) },
-                    onSavedOffers: { open(.savedOffers(session.id), session: session) },
                     myCardPriceText: $offerCardPrice, transactionMode: $offerTransactionMode,
                     restoredInputs: $restoredOfferInputs,
                     outcomeActions: transactionEditing ? nil : { totals, transaction in AnyView(listOutcomeActions(totals: totals, transaction: transaction)) },

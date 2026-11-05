@@ -322,7 +322,6 @@ struct ScannerReviewReleaseQueue {
     private var reviewRelease = ScannerReviewReleaseQueue()
     private var databaseLease: UUID?
     static let pageURL = LocalScannerServer.pageURL
-    static let gameKeys = TCGGameRegistry.gameKeys
     private var messageProxy: WeakScanMessageHandler?
     private static let deniedCameraStatus = "Camera access is off. Enable Camera in iPhone Settings → Card Show Scanner, then tap Retry Live Scanner."
 

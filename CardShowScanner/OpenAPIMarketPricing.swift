@@ -125,9 +125,10 @@ struct OpenAPIMarketPricing: MarketPricing {
         let condition = conditions[conditionInput] ?? (Set(conditions.values).contains(conditionInput.uppercased()) ? conditionInput.uppercased() : nil)
         guard let condition else { return result }
         let languageCodes = Set(languages.values)
+        let printing = normalized(card.identity.printing)
         let matchingSelection = rows.filter { sku, row in
             numericID(sku, maximumLength: 20) && languageCodes.contains(row.language) &&
-            row.condition == condition && normalized(row.variant) == normalized(card.identity.printing)
+            row.condition == condition && normalized(row.variant) == printing
         }
         // Count every SKU identity before checking its price. An unpriced
         // duplicate still makes an otherwise priced language ambiguous.
@@ -139,7 +140,7 @@ struct OpenAPIMarketPricing: MarketPricing {
         guard let language else { return result }
         let matches = rows.filter { sku, row in
             numericID(sku, maximumLength: 20) &&
-            row.language == language && row.condition == condition && normalized(row.variant) == normalized(card.identity.printing)
+            row.language == language && row.condition == condition && normalized(row.variant) == printing
         }
         // Even equal prices do not make two different SKU identities interchangeable.
         guard matches.count == 1, let match = matches.first else { return result }
