@@ -47,7 +47,7 @@ struct CustomPriceTagDraft: Equatable, Sendable {
 
     var hasPreparedQueue: Bool {
         guard queue.isLoaded, let preparedDraft, preparedDraft == draft, !preparedIDs.isEmpty else { return false }
-        return preparedIDs.isSubset(of: Set(queue.entries.map(\.id)))
+        return preparedIDs.isSubset(of: Set(queue.entries.lazy.map(\.id)))
     }
 
     /// Persists pending labels only. Transport still needs an explicit Print action.
@@ -70,7 +70,7 @@ struct CustomPriceTagDraft: Equatable, Sendable {
             }
             try queue.replace(with: entries)
             preparedDraft = draft
-            preparedIDs = Set(entries.map(\.id))
+            preparedIDs = Set(entries.lazy.map(\.id))
             DiagnosticLog.shared.record("labels.custom_prepared", ["quantity": String(entries.count)])
             return true
         } catch {

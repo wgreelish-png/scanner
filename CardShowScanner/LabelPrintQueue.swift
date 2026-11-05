@@ -163,10 +163,14 @@ private struct LabelQueueFile: Codable {
     private(set) var error: String?
 
     var canStart: Bool { isLoaded && !isPrinting && pendingCount > 0 }
-    var pendingCount: Int { entries.filter { $0.state == .pending }.count }
-    var completedCount: Int { entries.filter { $0.state == .completed }.count }
-    var failedCount: Int { entries.filter { $0.state == .failed }.count }
-    var uncertainCount: Int { entries.filter { $0.state == .uncertain }.count }
+    var pendingCount: Int { entryCount(in: .pending) }
+    var completedCount: Int { entryCount(in: .completed) }
+    var failedCount: Int { entryCount(in: .failed) }
+    var uncertainCount: Int { entryCount(in: .uncertain) }
+
+    private func entryCount(in state: LabelQueueState) -> Int {
+        entries.reduce(0) { $0 + ($1.state == state ? 1 : 0) }
+    }
 
     private let url: URL
     private let read: Reader

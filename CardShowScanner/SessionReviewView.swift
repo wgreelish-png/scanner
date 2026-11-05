@@ -171,7 +171,6 @@ struct SessionReviewHeader: View {
     let session: ScanSession
     let list: CardList
     let onContinue: () -> Void
-    let onSavedOffers: () -> Void
     @Binding var myCardPriceText: String
     @Binding var transactionMode: TradeTransactionMode
     @Binding var restoredInputs: Bool

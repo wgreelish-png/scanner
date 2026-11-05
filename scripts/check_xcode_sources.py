@@ -2,7 +2,6 @@
 """Read-only diagnosis of missing Swift files in the app's Xcode target. No dependencies on macOS."""
 import json
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 

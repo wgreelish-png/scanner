@@ -20,7 +20,7 @@ import Observation
     }
 
     var variantKeys: [String] {
-        (details?.product.variants ?? [:]).filter { $0.key == $0.value.key }.keys.sorted()
+        (details?.product.variants ?? [:]).compactMap { key, variant in key == variant.key ? key : nil }.sorted()
     }
     var selectedVariant: ResearchVariant? {
         guard let key = selectedVariantKey, let variant = details?.product.variants[key], key == variant.key else { return nil }
@@ -90,8 +90,9 @@ import Observation
         let language = languages.first { $0.key.caseInsensitiveCompare(input) == .orderedSame }?.value
             ?? (Set(languages.values).contains(input.uppercased()) ? input.uppercased() : nil)
         guard let language else { return nil }
+        let printing = normalized(identity.printing)
         let matches = details.product.variants.filter { key, variant in
-            key == variant.key && variant.language == language && normalized(variant.finish) == normalized(identity.printing)
+            key == variant.key && variant.language == language && normalized(variant.finish) == printing
         }
         return matches.count == 1 ? matches.first?.key : nil
     }

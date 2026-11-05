@@ -115,8 +115,8 @@ enum TCGGameRegistry {
             guard isScannerKey(key), let id = Int(key.dropFirst(5)) else { return nil }
             return entriesByID[id]
         }
+        let ranks = [3: 0, 1: 1, 2: 2]
         return definitions.sorted { left, right in
-            let ranks = [3: 0, 1: 1, 2: 2]
             let first = ranks[left.id] ?? 3, second = ranks[right.id] ?? 3
             if first != second { return first < second }
             let names = left.name.localizedStandardCompare(right.name)
