@@ -4,6 +4,8 @@ import SwiftData
 @main struct CardShowScannerApp: App {
     private let container: ModelContainer?
     private let startupError: String?
+    @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("diagnosticsEnabled") private var diagnosticsEnabled = true
     init() {
         DiagnosticLog.shared.record("app.launch", [
             "app_version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
@@ -17,7 +19,16 @@ import SwiftData
     var body: some Scene {
         WindowGroup {
             rootView
+                .onAppear { updateHealthMonitoring() }
+                .onChange(of: scenePhase) { _, _ in updateHealthMonitoring() }
+                .onChange(of: diagnosticsEnabled) { _, _ in updateHealthMonitoring() }
         }
+    }
+
+    @MainActor private func updateHealthMonitoring() {
+        DeviceHealthMonitor.shared.setForeground(scenePhase == .active)
+        DeviceHealthMonitor.shared.refreshDiagnosticsPreference()
+        DeviceMetricReports.shared.setEnabled(scenePhase == .active && diagnosticsEnabled)
     }
 
     @ViewBuilder private var rootView: some View {

@@ -278,7 +278,7 @@ private struct ScannerDatabaseSettingsView: View {
                     Text("Diagnostics could not be written to local storage.").foregroundStyle(.orange)
                 }
             } footer: {
-                Text("Keeps about 512 KB of recent local events, including scanner stages, timings and save errors. Card contents, credentials and camera images are excluded. Copy puts the diagnostic file on the clipboard; Export opens file sharing.")
+                Text("Keeps about 512 KB of recent local events, including scanner timings, save errors, device heat and memory warnings. While the app is active, health summaries include app memory/CPU, battery state and responsiveness. Available iOS crash/hang report counts are included. Card contents, credentials, camera images and call stacks are excluded. Copy puts the diagnostic file on the clipboard; Export opens file sharing.")
             }
             Section {
                 Button("Clear Diagnostic Log", role: .destructive) { confirmClear = true }

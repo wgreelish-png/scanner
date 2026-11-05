@@ -82,6 +82,7 @@
   let refreshDatabase = () => {};
   let markScanIssue = () => false;
   let setSteadyCardBorder = () => {};
+  let setResourceMode = () => false;
   async function install(config) {
     dispose();
     globalThis.CardShowNativeCache = typeof config.cacheToken === 'string' && config.cacheToken.length >= 32 ? { token: config.cacheToken } : null;
@@ -90,13 +91,36 @@
     let steadyCardBorder = config.steadyCardBorder === true;
     let manualAttempt = null, manualPromptPending = false;
     let manualSearchSuspended = config.manualSearchSuspended === true;
-    let resumeRequested = false, startupFailed = false, retiredPlayback = false, loopGeneration = 0;
+    const validResourceMode = value => ['normal', 'reduced', 'cooling'].includes(value);
+    let resourceMode = validResourceMode(config.resourceMode) ? config.resourceMode : 'normal';
+    let foreground = config.foreground !== false;
+    let thermalResumePending = resourceMode === 'cooling' || !foreground;
+    let resumeRequested = false, startupFailed = false, retiredPlayback = false, retiredResourceAcquisition = false, preserveRetiredReview = false, loopGeneration = 0;
     let pack = null, cacheWarning = false;
     let latestScan = null, heldScan = null;
     let running = true, stopLoop = null, stream = null, backend = null, overlay = null, starting = false, held = false, awaitingRemoval = false, beginLoop = null;
     const post = message => { if (running) window.webkit?.messageHandlers?.scanResult?.postMessage({ ...message, nonce: config.nonce }); };
     const diagnostic = (event, fields = {}) => post({ kind: 'diagnostic', event, ...fields });
     const clock = () => globalThis.performance?.now?.() ?? Date.now();
+    const cooling = () => resourceMode === 'cooling';
+    const coolingMessage = 'Cooling down… Scanning resumes when your iPhone is ready.';
+    const eligible = () => running && foreground && !manualSearchSuspended && !cooling() && !document.hidden;
+    // The existing frame seam bounds capture, motion analysis, recognition and
+    // overlay work together. Normal mode keeps the runtime's own scheduler.
+    const reducedFrame = (source, callback) => {
+      let cancelled = false, cancelFrame = () => {};
+      const timer = setTimeout(() => {
+        if (cancelled || !eligible()) return;
+        if (typeof source.requestVideoFrameCallback === 'function') {
+          const id = source.requestVideoFrameCallback(callback);
+          cancelFrame = () => source.cancelVideoFrameCallback(id);
+        } else {
+          const id = requestAnimationFrame(callback);
+          cancelFrame = () => cancelAnimationFrame(id);
+        }
+      }, 100);
+      return () => { cancelled = true; clearTimeout(timer); cancelFrame(); };
+    };
     // Follow a continuously observed card, not camera-open time. Brief tracking
     // gaps retain the attempt; a longer absence begins another physical attempt.
     const clearManualAttempt = () => { manualAttempt = null; manualPromptPending = false; };
@@ -105,7 +129,7 @@
       steadyCardBorder = enabled;
       // The option can be changed during startup, before a loop exists. Later
       // changes re-arm geometry in the same already-authorized camera stream.
-      if (stream && beginLoop && backend) {
+      if (eligible() && stream && beginLoop && backend) {
         pending = null; clearManualAttempt(); stopLoop?.(); backend?.reset?.(); stopLoop = beginLoop();
       }
     };
@@ -117,12 +141,12 @@
         // emit only same:true for the next copy/reprint. A verified absence is
         // a new physical episode: require a fresh full candidate payload.
         pending = null; stopLoop?.(); backend?.reset?.();
-        if (running && stream && beginLoop) stopLoop = beginLoop();
+        if (eligible() && stream && beginLoop) stopLoop = beginLoop();
       }
       post({ kind: 'hide' });
     };
     const observeCard = () => {
-      if (!running || !stream || manualSearchSuspended || held || awaitingRemoval || document.hidden) return;
+      if (!eligible() || !stream || held || awaitingRemoval) return;
       const now = clock();
       if (!manualAttempt || now - manualAttempt.last > 1000) manualAttempt = { since: now, last: now, offered: false, queued: false };
       manualAttempt.last = now;
@@ -134,7 +158,7 @@
       Promise.resolve().then(() => {
         if (manualAttempt !== attempt) return;
         attempt.queued = false;
-        if (!running || !stream || manualSearchSuspended || held || awaitingRemoval || manualPromptPending || document.hidden || clock() - attempt.last > 1000) return;
+        if (!eligible() || !stream || held || awaitingRemoval || manualPromptPending || clock() - attempt.last > 1000) return;
         attempt.offered = true; manualPromptPending = true; pending = null;
         post({ kind: 'manualSearchSuggested' });
       });
@@ -180,13 +204,20 @@
     video.style.cssText = 'position:absolute;inset:0;display:block;width:100%;height:100%;object-fit:cover;object-position:center;background:#000';
     const canvas = document.createElement('canvas'); canvas.style.cssText = 'position:absolute;inset:0;display:block;width:100%;height:100%;pointer-events:none';
     frame.append(video, canvas); root.append(frame, button, hint); document.body.append(root);
-    const report = value => { hint.hidden = config.autoStart === true || !!stream; hint.textContent = text(value); post({ kind: 'status', message: text(value) }); };
-    const stopCamera = () => { loopGeneration++; clearManualAttempt(); heldRef = removalRef = removalAbsentSince = null; stopLoop?.(); stopLoop = null; stream?.getTracks().forEach(t => t.stop()); stream = null; video.srcObject = null; overlay?.destroy?.(); overlay = null; latestScan = null; heldScan = null; };
+    const report = value => { value = cooling() ? coolingMessage : value; hint.hidden = config.autoStart === true || !!stream; hint.textContent = text(value); post({ kind: 'status', message: text(value) }); };
+    const stopCamera = (preserveReview = false) => {
+      loopGeneration++;
+      const promptPending = preserveReview && manualPromptPending;
+      clearManualAttempt(); manualPromptPending = promptPending; removalAbsentSince = null;
+      if (!preserveReview) { heldRef = removalRef = null; heldScan = null; }
+      stopLoop?.(); stopLoop = null; stream?.getTracks().forEach(t => t.stop()); stream = null;
+      video.srcObject = null; overlay?.destroy?.(); overlay = null; latestScan = null;
+    };
     const visibility = () => {
       if (document.hidden) {
         diagnostic('camera_backgrounded'); pending = null; stopCamera(); post({ kind: 'hide' });
         button.disabled = false; button.hidden = false; button.textContent = 'Resume Camera';
-      } else if (running && resumeRequested && !manualSearchSuspended && !starting) {
+      } else if (eligible() && (resumeRequested || thermalResumePending) && !starting) {
         resumeRequested = false;
         void resumeAfterManualSearch(config.nonce);
       }
@@ -207,19 +238,38 @@
     resumeAfterManualSearch = async expectedNonce => {
       if (!running || startupFailed || (expectedNonce !== undefined && expectedNonce !== config.nonce)) return false;
       manualSearchSuspended = false;
+      if (cooling()) { thermalResumePending = true; report(coolingMessage); return true; }
       // Sheet dismissal can precede WebKit's visibility notification. Remember
       // this explicit resume, without acquiring a camera in a hidden document.
-      if (document.hidden) { resumeRequested = true; return true; }
+      if (document.hidden || !foreground) { resumeRequested = true; return true; }
       if (starting) { resumeRequested = true; return true; }
       if (stream && beginLoop && backend) {
         stopLoop?.(); backend.reset?.(); stopLoop = beginLoop();
       } else await button.onclick();
       return true;
     };
+    setResourceMode = (mode, expectedNonce, isForeground = foreground) => {
+      if (!running || !validResourceMode(mode) || expectedNonce !== config.nonce || typeof isForeground !== 'boolean') return false;
+      const previous = resourceMode, wasForeground = foreground;
+      resourceMode = mode; foreground = isForeground;
+      if (cooling() || !foreground) {
+        thermalResumePending = true; pending = null;
+        if (starting) retiredResourceAcquisition = true;
+        if (starting && stream) { retiredPlayback = true; preserveRetiredReview = true; }
+        stopCamera(true); backend?.reset?.(); if (cooling()) report(coolingMessage);
+      } else if ((previous === 'cooling' || !wasForeground) && thermalResumePending) {
+        if (eligible() && !startupFailed) void resumeAfterManualSearch(config.nonce);
+      } else if (previous !== mode && eligible() && stream && beginLoop && backend) {
+        pending = null; stopLoop?.(); backend.reset?.(); stopLoop = beginLoop();
+      }
+      return true;
+    };
     report('Ready. Saved databases are reused; the first download may be large.');
     button.onclick = async (options = {}) => {
       if (starting || !running) return;
-      starting = true; startupFailed = false; retiredPlayback = false; button.disabled = true; button.hidden = true;
+      if (cooling()) { thermalResumePending = true; report(coolingMessage); return; }
+      if (!foreground || document.hidden) { thermalResumePending = true; return; }
+      starting = true; startupFailed = false; retiredPlayback = false; retiredResourceAcquisition = false; preserveRetiredReview = false; button.disabled = true; button.hidden = true;
       let stage = 'modules', began = clock(), lastStats = -Infinity;
       diagnostic('startup_started');
       try {
@@ -261,11 +311,11 @@
         if (!running) { backend.dispose(); return; }
         backend.setPack(pack);
         diagnostic('backend_ready', { elapsedMS: clock() - began, backend: backend.kind });
-        if (manualSearchSuspended) return;
+        if (!eligible()) { if (cooling()) report(coolingMessage); return; }
         stage = 'camera'; began = clock(); diagnostic('camera_requested');
         report('Starting rear camera…');
         const captured = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
-        if (!running || document.hidden || manualSearchSuspended) { captured.getTracks().forEach(t => t.stop()); return; }
+        if (!eligible()) { captured.getTracks().forEach(t => t.stop()); return; }
         diagnostic('camera_acquired', { elapsedMS: clock() - began });
         stage = 'video'; began = clock();
         stream = captured;
@@ -274,7 +324,7 @@
           diagnostic('camera_interrupted'); recover();
         }, { once: true });
         video.srcObject = stream; await video.play();
-        if (!running || document.hidden || manualSearchSuspended || stream !== captured) { stopCamera(); return; }
+        if (!eligible() || stream !== captured) { stopCamera(preserveRetiredReview || cooling()); return; }
         diagnostic('video_playing', { elapsedMS: clock() - began });
         stage = 'scan';
         overlay = overlays.createOverlay(canvas, { fit: 'cover' });
@@ -287,13 +337,14 @@
         };
         beginLoop = () => {
           const generation = ++loopGeneration;
-          const current = () => running && !manualSearchSuspended && generation === loopGeneration;
+          const current = () => eligible() && generation === loopGeneration;
           const liveOverlay = {
             setSource: (...args) => { if (current()) scanOverlay.setSource(...args); },
             clear: () => { if (current()) scanOverlay.clear(); },
             draw: options => { if (current()) scanOverlay.draw(options); }
           };
           return quick.startQuickScan({ video, overlay: liveOverlay, backend, pack, fetchDetails: null, resolveCandidates: false, retainAcceptedBorder: steadyCardBorder,
+          ...(resourceMode === 'reduced' ? { frame: reducedFrame } : {}),
           onShow: view => {
             if (!current() || held || manualPromptPending) return;
             const update = normalizeView(view);
@@ -376,7 +427,7 @@
         };
         resetRecognition = () => {
           clearManualAttempt(); pending = null; held = false; heldRef = removalRef = removalAbsentSince = null; heldScan = null; latestScan = null; awaitingRemoval = false; stopLoop?.(); backend?.reset?.();
-          if (running && !manualSearchSuspended && stream) stopLoop = beginLoop();
+          if (eligible() && stream) stopLoop = beginLoop();
         };
         releaseReview = ref => {
           if (awaitingRemoval) return;
@@ -387,7 +438,7 @@
           // The upstream loop may already have advanced while native review was
           // held. Re-arm full payloads without reopening the authorized camera.
           stopLoop?.(); backend?.reset?.();
-          if (running && !manualSearchSuspended && stream) stopLoop = beginLoop();
+          if (eligible() && stream) stopLoop = beginLoop();
         };
         resumeAfterManualSearchPrompt = () => {
           manualPromptPending = false; pending = null;
@@ -395,13 +446,15 @@
           // same:true updates. Re-arm the loop for a full payload, retaining this
           // attempt's offered flag and the already-authorized camera stream.
           stopLoop?.(); backend?.reset?.();
-          if (running && !manualSearchSuspended && stream) stopLoop = beginLoop();
+          if (eligible() && stream) stopLoop = beginLoop();
         };
-        if (!manualSearchSuspended) stopLoop = beginLoop();
+        if (eligible()) stopLoop = beginLoop();
+        thermalResumePending = false;
         diagnostic('scanner_ready');
         button.hidden = true; report(cacheWarning ? 'Camera ready. Database could not be saved; it may download again next time.' : 'Live camera ready — hold a card steady.'); hint.hidden = true;
       } catch (error) {
-        if (!running || (retiredPlayback && stage === 'video' && error?.name === 'AbortError')) return;
+        if (!running || (retiredPlayback && stage === 'video' && error?.name === 'AbortError') ||
+            (retiredResourceAcquisition && stage === 'camera' && error?.name === 'NotAllowedError')) return;
         startupFailed = true; resumeRequested = false;
         diagnostic('startup_failed', { stage, errorKind: errorKind(error), elapsedMS: clock() - began });
         stopCamera(); backend?.dispose(); backend = null;
@@ -410,19 +463,19 @@
       } finally {
         starting = false; button.disabled = false;
         if (!running || stream) resumeRequested = false;
-        if (resumeRequested && running && !manualSearchSuspended && !document.hidden && !stream) {
+        if ((resumeRequested || thermalResumePending) && eligible() && !stream && !startupFailed) {
           resumeRequested = false;
           await button.onclick();
         }
       }
     };
     refreshDatabase = () => {
-      if (!running || starting || held) return;
+      if (!eligible() || starting || held) return;
       stopCamera(); pending = null; awaitingRemoval = false;
       backend?.dispose(); backend = null;
       return button.onclick({ refreshDatabase: true });
     };
     if (config.autoStart) await button.onclick();
   }
-  globalThis.CardShowBridge = { install, stop: () => dispose(), resetRecognition: () => resetRecognition(), releaseReview: ref => releaseReview(ref), resumeAfterManualSearchPrompt: () => resumeAfterManualSearchPrompt(), suspendForManualSearch: nonce => suspendForManualSearch(nonce), resumeAfterManualSearch: nonce => resumeAfterManualSearch(nonce), refreshDatabase: () => refreshDatabase(), markScanIssue: reason => markScanIssue(reason), setSteadyCardBorder: enabled => setSteadyCardBorder(enabled), normalizeView };
+  globalThis.CardShowBridge = { install, stop: () => dispose(), resetRecognition: () => resetRecognition(), releaseReview: ref => releaseReview(ref), resumeAfterManualSearchPrompt: () => resumeAfterManualSearchPrompt(), suspendForManualSearch: nonce => suspendForManualSearch(nonce), resumeAfterManualSearch: nonce => resumeAfterManualSearch(nonce), setResourceMode: (mode, nonce, foreground) => setResourceMode(mode, nonce, foreground), refreshDatabase: () => refreshDatabase(), markScanIssue: reason => markScanIssue(reason), setSteadyCardBorder: enabled => setSteadyCardBorder(enabled), normalizeView };
 })();
