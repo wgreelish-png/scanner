@@ -31,14 +31,16 @@ import UIKit
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { queue.stop(using: printer) }
         }
-        .onDisappear { if !printer.isConnected { printer.stop() } }
+        .onDisappear { if printer.isConfiguringPaper || !printer.isConnected { printer.stop() } }
     }
 }
 
 @MainActor private struct LabelPrinterConnectionSection: View {
     let printer: NiimbotPrinter
+    @State private var queue = LabelPrintQueue.shared
+    private var paperBusy: Bool { queue.isPrinting || printer.isPrinting || printer.isConfiguringPaper }
 
-    var body: some View {
+    @ViewBuilder var body: some View {
         Section {
             Label(printer.isConnected ? "\(printer.modelName) connected" : "Printer not connected",
                   systemImage: printer.isConnected ? "checkmark.circle.fill" : "printer")
@@ -52,7 +54,7 @@ import UIKit
             }
             if printer.isConnected {
                 Button("Disconnect", role: .destructive) { printer.disconnect() }
-                    .disabled(printer.isPrinting).accessibilityIdentifier("labelPrinter.disconnect")
+                    .disabled(paperBusy).accessibilityIdentifier("labelPrinter.disconnect")
             } else {
                 Button { printer.startSearch() } label: {
                     HStack {
@@ -60,15 +62,41 @@ import UIKit
                         Spacer()
                         if printer.isScanning { ProgressView() }
                     }
-                }.disabled(printer.isPrinting).accessibilityIdentifier("labelPrinter.search")
+                }.disabled(paperBusy).accessibilityIdentifier("labelPrinter.search")
                 ForEach(printer.devices) { device in
                     Button { printer.connect(device.id) } label: {
                         Label(device.name, systemImage: "printer")
-                    }.accessibilityIdentifier("labelPrinter.device." + device.id.uuidString)
+                    }.disabled(paperBusy).accessibilityIdentifier("labelPrinter.device." + device.id.uuidString)
                 }
             }
         } header: { Text("Bluetooth printer") } footer: {
             Text("Disconnect the printer in other apps before searching. Allow Bluetooth access and keep this app open while connecting and printing.")
+        }
+        Section {
+            Picker("Paper type", selection: Binding(get: { printer.paperMode }, set: { mode in
+                guard !paperBusy else { return }
+                printer.selectPaperMode(mode)
+            })) {
+                ForEach(NiimbotPaperMode.allCases) { mode in Text(mode.title).tag(mode) }
+            }.pickerStyle(.segmented).disabled(paperBusy)
+                .accessibilityIdentifier("labelPrinter.paperMode")
+            Button("Apply Paper Type") {
+                guard !paperBusy else { return }
+                printer.applyPaperMode()
+            }.frame(minHeight: 44).disabled(!printer.isConnected || paperBusy)
+                .accessibilityIdentifier("labelPrinter.applyPaperMode")
+            Button("Read Printer Setting") {
+                guard !paperBusy else { return }
+                printer.readPaperMode()
+            }.frame(minHeight: 44).disabled(!printer.isConnected || paperBusy)
+                .accessibilityIdentifier("labelPrinter.readPaperMode")
+            if printer.isConfiguringPaper { ProgressView().accessibilityLabel("Updating paper setting") }
+            if let status = printer.paperModeStatus {
+                Text(status).font(.footnote).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("labelPrinter.paperModeStatus")
+            }
+        } header: { Text("Paper type") } footer: {
+            Text("Choose Gap for standard labels separated by gaps, or Transparent for clear labels. The choice is applied when printing. Read Printer Setting reads the configured type; select label size separately.")
         }
     }
 }
@@ -222,7 +250,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         }
         .onDisappear {
             stopPrinting()
-            if !printer.isConnected { printer.stop() }
+            if printer.isConfiguringPaper || !printer.isConnected { printer.stop() }
         }
     }
 
@@ -1063,6 +1091,8 @@ private struct LabelActionBar<Content: View>: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("\(queue.completedCount)/\(queue.entries.count) completed").font(.caption).monospacedDigit()
                     .accessibilityIdentifier("labelQueue.progress")
+                Text("Paper type: \(printer.paperMode.title)").font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("labelQueue.paperMode")
                 if queue.isPrinting {
                     ProgressView(value: Double(queue.completedCount), total: Double(max(1, queue.entries.count)))
                         .accessibilityLabel("Print progress")
@@ -1073,9 +1103,14 @@ private struct LabelActionBar<Content: View>: View {
                     .buttonStyle(.borderedProminent).accessibilityIdentifier("labelQueue.pause")
             } else {
                 Button("Print Queued Labels") {
-                    Task { await queue.start(using: printer) }
+                    guard !printer.isConfiguringPaper else { return }
+                    let sender = printer.senderForCurrentPaperMode()
+                    Task {
+                        guard !printer.isConfiguringPaper else { return }
+                        await queue.start(using: sender)
+                    }
                 }.buttonStyle(.borderedProminent)
-                    .disabled(!queue.canStart || !printer.isConnected || scenePhase != .active)
+                    .disabled(!queue.canStart || !printer.isConnected || printer.isConfiguringPaper || scenePhase != .active)
                     .accessibilityIdentifier("labelQueue.print")
             }
         }

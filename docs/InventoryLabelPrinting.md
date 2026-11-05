@@ -1,5 +1,8 @@
 # Price labels — build 52
 
+Build 67 adds [Gap / Transparent paper types](PrinterPaperTypes.md), explicit
+printer-setting read/apply actions, and one captured type per print batch.
+
 Build 66 adds [D110-M discovery and its model-specific print workflows](D110MConnection.md).
 Both standard D110 and D110-M printers connect through the existing explicit
 Search action; their actual model, head and protocol are checked before printing.

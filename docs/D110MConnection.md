@@ -1,5 +1,8 @@
 # D110-M connection and printing — build 66
 
+Build 68 improves [connection handling and setup-timeout diagnostics](PrinterConnectionTimeout.md)
+after an actual printer linked over BLE but did not finish identification.
+
 The reported printer advertises with a `D110_M-` prefix. `D110_M` is the internal
 and Bluetooth spelling of the D110-M variant. Earlier discovery deliberately
 excluded this variant because it requires a different print workflow from the

@@ -20,6 +20,31 @@ enum DiagnosticScanFields {
     }
 }
 
+/// Printer transport diagnostics describe byte counts and command identifiers,
+/// never packet contents, Bluetooth names or device identifiers. Validate at
+/// storage as well as at the native caller so accidental free-form values drop.
+enum DiagnosticPrinterFields {
+    static func accepts(_ key: String, _ value: String) -> Bool {
+        switch key {
+        case "request_code", "response_code", "last_response_code":
+            return acceptsInteger(value, maximum: 255)
+        case "sent_bytes", "notification_bytes", "notification_count", "packet_count":
+            return acceptsInteger(value, maximum: 1_000_000)
+        case "write_mode":
+            return ["acknowledged", "unacknowledged"].contains(value)
+        default:
+            return true
+        }
+    }
+
+    private static func acceptsInteger(_ value: String, maximum: UInt64) -> Bool {
+        guard let number = UInt64(value), number <= maximum else { return false }
+        // Native String(integer) values are canonical decimal text. Reject
+        // signs, whitespace, fractions, exponent notation and padded strings.
+        return String(number) == value
+    }
+}
+
 /// Only fixed classifications and numeric status/timing values leave a service
 /// client. Never copy response messages, request URLs or credential values here.
 enum ServiceDiagnosticFields {
@@ -160,7 +185,8 @@ enum ServiceDiagnosticFields {
         "printing_required", "priced", "merged", "automatic", "quantity", "reason", "stage", "backend", "elapsed_ms",
         "scan_ms", "capture_ms", "frames", "domain", "code", "records", "rejected_records", "phase", "candidate_index", "app_version", "build", "downloaded_bytes", "cached_shards", "cache", "source", "persisted", "cache_backend", "revision",
         "record_index", "page", "total", "shape", "priced_records", "unpriced_records", "invalid_price_records", "observed_count", "entry_limit", "method", "solid", "tracked", "border_retry", "border_retained", "scan_stage", "raw_quads", "rejected_quads", "candidate_quads", "selected_base", "quad_source",
-        "quad_aspect", "quad_area", "quad_support", "mean_luma", "luma_std", "match_distance", "match_gap", "sample_age_ms"]
+        "quad_aspect", "quad_area", "quad_support", "mean_luma", "luma_std", "match_distance", "match_gap", "sample_age_ms",
+        "request_code", "response_code", "last_response_code", "sent_bytes", "notification_bytes", "notification_count", "packet_count", "write_mode"]
     private var current: URL { directory.appendingPathComponent("current.jsonl") }
     private var previous: URL { directory.appendingPathComponent("previous.jsonl") }
     var enabled: Bool { defaults.object(forKey: "diagnosticsEnabled") as? Bool ?? true }
@@ -180,7 +206,8 @@ enum ServiceDiagnosticFields {
         // Unknown fields and free-form values are dropped at the storage boundary.
         let safe = fields.filter { key, value in
             keys.contains(key) && value.count <= 80 &&
-                value.range(of: #"^[A-Za-z0-9_.-]{1,80}$"#, options: .regularExpression) != nil && DiagnosticScanFields.accepts(key, value)
+                value.range(of: #"^[A-Za-z0-9_.-]{1,80}$"#, options: .regularExpression) != nil &&
+                DiagnosticScanFields.accepts(key, value) && DiagnosticPrinterFields.accepts(key, value)
         }
         let entry: [String: Any] = ["schema": 1, "time": ISO8601DateFormatter().string(from: now),
             "run": run, "event": event, "fields": safe]
