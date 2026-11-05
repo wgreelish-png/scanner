@@ -26,6 +26,24 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 71 adds [branded PokéDen price tags](docs/BrandedPriceTags.md): the wordmark,
+divider, rounded border and a large whole-dollar price, plus standalone
+2-for-$1 bulk-bin tags. This is the default for newly prepared inventory labels;
+Card Details remains selectable. The 30 × 15 mm paper option joins existing
+sizes, using the supported printer's 12 mm printable strip.
+
+Build 70 removes duplicate card codes from printed label titles, adds direct
+approval/preparation from Label Details with optional full review, and puts
+Clear Print Queue in the price-tag toolbars. See [label approval and queue
+controls](docs/LabelApprovalAndQueueControls.md). Existing saved rasters keep
+their original artwork; clear and prepare them again to apply title cleanup.
+
+Build 69 adds [continuous D110-M print batches](docs/ContinuousLabelPrinting.md),
+automatic foreground search/reconnection when opening Price Tags and a shared,
+remembered physical label size. Each copy still requires a saved physical
+completion receipt, and reconnecting never resumes printing. Native execution
+and physical batch timing remain to be checked on the phone.
+
 Build 24 adds a [persistent show cash budget](docs/ShowBudget.md): record purchases, sales and cash trades, reinvest 65% of gross receipts, and reserve 35% for yourself. Fees reduce buying funds separately. Open Show Budget from Lists or Scan, or record cash linked to a list from its review screen.
 
 Build 25 adds [automatic Beta IP access](docs/AutomaticBetaIP.md). With a saved Direct connection and matching website sign-in, the app updates this phone’s recorded address while preserving the other allowed addresses (build 33). Checks run only while the app is active and stop when you leave it.

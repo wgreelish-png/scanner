@@ -1,27 +1,64 @@
 import Foundation
+import Observation
 
 enum InventoryLabelStyle: String, Codable, CaseIterable, Identifiable, Sendable {
     case priceOnly, cardDetails
     var id: Self { self }
-    var title: String { self == .priceOnly ? "Price only" : "Card details" }
+    var title: String { self == .priceOnly ? "PokéDen price" : "Card details" }
 }
 
 /// The printable head is 12 mm wide. Larger stock leaves its factory margins;
 /// the long dimension runs along the paper feed, at eight dots per millimetre.
 enum InventoryLabelSize: String, Codable, CaseIterable, Identifiable, Sendable {
-    case small30x14, medium40x12, large50x14
+    case small30x14, medium40x12, small30x15, large50x14
     var id: Self { self }
     var title: String {
         switch self {
         case .small30x14: return "30 × 14 mm"
         case .medium40x12: return "40 × 12 mm"
+        case .small30x15: return "30 × 15 mm"
         case .large50x14: return "50 × 14 mm"
         }
     }
     var feedDots: Int {
-        switch self { case .small30x14: return 240; case .medium40x12: return 320; case .large50x14: return 400 }
+        switch self {
+        case .small30x14, .small30x15: return 240
+        case .medium40x12: return 320
+        case .large50x14: return 400
+        }
     }
     var headDots: Int { 96 }
+}
+
+/// Physical roll dimensions are an explicit, remembered choice. The printable
+/// head width and Gap/Transparent setting do not identify the loaded roll.
+@MainActor @Observable final class LabelPaperPreferences {
+    static let shared: LabelPaperPreferences = {
+        let fixture = ProcessInfo.processInfo.arguments.first(where: {
+            $0.hasPrefix("--show-transactions-fixture-id=")
+        }).map { String($0.dropFirst("--show-transactions-fixture-id=".count)) }
+        let key = fixture.map { "niimbotLabelSize.fixture." + $0 } ?? "niimbotLabelSize"
+        return LabelPaperPreferences(defaults: .standard, key: key)
+    }()
+
+    private(set) var size: InventoryLabelSize
+    @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let key: String
+
+    convenience init(defaults: UserDefaults = .standard) {
+        self.init(defaults: defaults, key: "niimbotLabelSize")
+    }
+
+    private init(defaults: UserDefaults, key: String) {
+        self.defaults = defaults
+        self.key = key
+        size = defaults.string(forKey: key).flatMap(InventoryLabelSize.init(rawValue:)) ?? .small30x14
+    }
+
+    func select(_ size: InventoryLabelSize) {
+        self.size = size
+        defaults.set(size.rawValue, forKey: key)
+    }
 }
 
 /// A local label draft is independent of quotes, inventory and financial data.
@@ -33,7 +70,7 @@ struct InventoryLabelDraft: Codable, Equatable, Identifiable, Sendable {
     let condition: String
     var askingPriceText: String
     var copies: Int = 1
-    var style: InventoryLabelStyle = .cardDetails
+    var style: InventoryLabelStyle = .priceOnly
     var paperSize: InventoryLabelSize = .small30x14
     var marketValue: Decimal?
     var profitInputs: TagProfitInputs
@@ -176,4 +213,14 @@ enum LabelSendOutcome: Equatable, Sendable {
 @MainActor protocol LabelPrinterSending: AnyObject {
     func printLabel(_ raster: LabelRaster) async -> LabelSendOutcome
     func cancelPrinting()
+}
+
+/// Every callback is awaited: the queue must persist the next sending state
+/// before radio writes, and each confirmed receipt before advancing a page.
+@MainActor protocol LabelBatchPrinterSending: LabelPrinterSending {
+    func printBatch(
+        _ rasters: [LabelRaster],
+        beforePage: @escaping @MainActor (Int) async throws -> Void,
+        afterPage: @escaping @MainActor (Int) async throws -> Void
+    ) async -> LabelSendOutcome
 }

@@ -12,8 +12,9 @@ import XCTest
     }
 
     private func custom(price: Int64 = 500, copy: Int = 1,
-                        paper: InventoryLabelSize = .small30x14) throws -> LabelQueueEntry {
-        try LabelQueueEntry(customPriceCents: price, raster: raster(paper), copyNumber: copy, paperSize: paper)
+                        paper: InventoryLabelSize = .small30x14, isBulk: Bool = false) throws -> LabelQueueEntry {
+        try LabelQueueEntry(customPriceCents: price, raster: raster(paper), copyNumber: copy,
+                           paperSize: paper, isBulk: isBulk)
     }
 
     private func inventory(id: UUID = UUID(), cents: Int64 = 1_000,
@@ -96,6 +97,139 @@ import XCTest
         let completed = self.queue(storage, approvals: approvals)
         XCTAssertEqual(completed.completedCount, 2)
         XCTAssertFalse(completed.canStart, "Completed standalone labels cannot restart automatically")
+    }
+
+    func testBulkDraftUsesAnExplicitCategoryWithZeroSentinelAndExistingCopyLimits() throws {
+        let bulk = CustomPriceTagDraft(priceCents: 0, copies: 100, paperSize: .large50x14, isBulk: true)
+        XCTAssertNoThrow(try bulk.validate())
+        XCTAssertTrue(bulk.isBulk)
+        XCTAssertEqual(bulk.priceText, StickerPrice.twoForOne.displayText)
+        let zero = CustomPriceTagDraft(priceCents: 0, copies: 1, paperSize: .small30x14)
+        XCTAssertFalse(zero.isBulk)
+        XCTAssertEqual(zero.priceText, StickerPrice.individual(0).displayText)
+        for price in [Int64(-100), 50, 100, 500] {
+            XCTAssertThrowsError(try CustomPriceTagDraft(priceCents: price, copies: 1,
+                paperSize: .small30x14, isBulk: true).validate())
+            XCTAssertThrowsError(try custom(price: price, isBulk: true))
+        }
+        for copies in [0, 101] {
+            XCTAssertThrowsError(try CustomPriceTagDraft(priceCents: 0, copies: copies,
+                paperSize: .small30x14, isBulk: true).validate())
+            XCTAssertThrowsError(try custom(price: 0, copy: copies, isBulk: true))
+        }
+    }
+
+    func testBulkModelIgnoresPriceInputAndOnlyPreparesItsRequestedStickerCopies() throws {
+        let storage = CustomLabelQueueStorage(), queue = queue(storage)
+        var rendered: [CustomPriceTagDraft] = []
+        let bitmap = raster(.medium40x12)
+        let model = CustomPriceTagModel(queue: queue, paperSize: .medium40x12, render: {
+            rendered.append($0)
+            return bitmap
+        })
+        model.isBulk = true
+        model.copies = "3"
+        XCTAssertEqual(model.draft?.priceCents, 0)
+        XCTAssertEqual(model.draft?.priceText, StickerPrice.twoForOne.displayText)
+        model.price = "not a price"
+        XCTAssertTrue(model.prepare())
+        XCTAssertEqual(rendered.count, 1, "All copies reuse the same immutable bulk raster")
+        XCTAssertEqual(rendered.first?.isBulk, true)
+        XCTAssertEqual(queue.entries.count, 3)
+        XCTAssertEqual(queue.entries.map(\.copyNumber), [1, 2, 3])
+        XCTAssertTrue(queue.entries.allSatisfy {
+            $0.source == .custom && $0.customBulk == true && $0.priceCents == 0
+                && $0.cardName == "Bulk price tag" && $0.inventoryID == nil && $0.pricingRevisionID == nil
+                && $0.paperSize == .medium40x12 && $0.raster == bitmap && $0.state == .pending
+        })
+        XCTAssertFalse(queue.isPrinting)
+        XCTAssertEqual(storage.writes, 1)
+        model.price = "99"
+        XCTAssertTrue(model.hasPreparedQueue, "Unused individual price input does not change the bulk draft")
+        XCTAssertTrue(model.prepare())
+        XCTAssertEqual(storage.writes, 1)
+        XCTAssertEqual(rendered.count, 1)
+        model.isBulk = false
+        XCTAssertEqual(model.draft?.priceCents, 9_900)
+        XCTAssertFalse(model.hasPreparedQueue)
+    }
+
+    func testBulkCategoryPersistsAndPrintsWithoutApprovalStorageOrAutomaticStart() async throws {
+        let storage = CustomLabelQueueStorage(), approvals = approvalStore(unavailable: true)
+        let queue = queue(storage, approvals: approvals), printer = CustomLabelQueuePrinter()
+        let entries = try [custom(price: 0, copy: 1, isBulk: true), custom(price: 0, copy: 2, isBulk: true)]
+        try queue.replace(with: entries)
+        XCTAssertFalse(approvals.isLoaded)
+        XCTAssertEqual(printer.sent, 0)
+        let restored = self.queue(storage, approvals: approvals)
+        XCTAssertEqual(restored.entries, entries)
+        XCTAssertTrue(restored.entries.allSatisfy { $0.customBulk == true && $0.priceText == StickerPrice.twoForOne.displayText })
+        XCTAssertNil(TagPricingContext.printingIssue(for: entries[0], store: approvals))
+        await restored.start(using: printer)
+        XCTAssertEqual(printer.sent, 2)
+        XCTAssertEqual(restored.completedCount, 2)
+        XCTAssertTrue(approvals.records.isEmpty)
+        let completed = self.queue(storage, approvals: approvals)
+        XCTAssertTrue(completed.entries.allSatisfy { $0.customBulk == true && $0.state == .completed })
+        await completed.start(using: printer)
+        XCTAssertEqual(printer.sent, 2, "Reopening confirmed bulk tags never reprints them")
+    }
+
+    func testLegacyCustomZeroWithoutBulkFlagRemainsAnIndividualZeroPrice() throws {
+        let original = try custom(price: 0)
+        let bytes = try document(original) { $0.removeValue(forKey: "customBulk") }
+        let storage = CustomLabelQueueStorage(bytes: bytes), queue = queue(storage)
+        let restored = try XCTUnwrap(queue.entries.first)
+        XCTAssertTrue(queue.isLoaded)
+        XCTAssertNil(restored.customBulk)
+        XCTAssertEqual(restored.source, .custom)
+        XCTAssertEqual(restored.priceCents, 0)
+        XCTAssertEqual(restored.priceText, ShowBudgetMoney.decimal(0).money)
+        XCTAssertNotEqual(restored.priceText, StickerPrice.twoForOne.displayText)
+        XCTAssertEqual(storage.bytes, bytes)
+        XCTAssertEqual(storage.writes, 0)
+        let explicitFalse = try decodedEntry(document(original) { $0["customBulk"] = false })
+        XCTAssertNoThrow(try explicitFalse.validate())
+        XCTAssertEqual(explicitFalse.priceText, restored.priceText)
+    }
+
+    func testBulkFlagCannotDisguiseAnIndividualPriceOrInventoryIdentity() throws {
+        let bulk = try custom(price: 0, isBulk: true)
+        let mutations: [(inout [String: Any]) -> Void] = [
+            { $0["priceCents"] = 50 },
+            { $0["priceCents"] = 100 },
+            { $0["source"] = "inventory"; $0["inventoryID"] = UUID().uuidString },
+            { $0.removeValue(forKey: "source"); $0["inventoryID"] = UUID().uuidString },
+            { $0["inventoryID"] = UUID().uuidString },
+            { $0["pricingRevisionID"] = UUID().uuidString },
+            { $0["style"] = InventoryLabelStyle.cardDetails.rawValue }
+        ]
+        for change in mutations {
+            let bytes = try document(bulk, change: change)
+            XCTAssertThrowsError(try decodedEntry(bytes).validate())
+            let storage = CustomLabelQueueStorage(bytes: bytes), queue = queue(storage)
+            XCTAssertFalse(queue.isLoaded)
+            XCTAssertFalse(queue.canStart)
+            XCTAssertEqual(storage.bytes, bytes)
+            XCTAssertEqual(storage.writes, 0)
+        }
+        let malformedFlag = try document(bulk) { $0["customBulk"] = "true" }
+        XCTAssertFalse(queue(CustomLabelQueueStorage(bytes: malformedFlag)).isLoaded)
+        XCTAssertNil(try inventory().customBulk)
+    }
+
+    func testBulkCompletionCannotAcknowledgeAZeroPricedInventoryApproval() async throws {
+        let approvals = approvalStore(), id = UUID()
+        try approvals.approve([.init(id: id, approvedTag: .individual(0), currentMarket: 0)])
+        let before = approvals.records
+        let storage = CustomLabelQueueStorage(), queue = queue(storage, approvals: approvals)
+        try queue.replace(with: [custom(price: 0, isBulk: true)])
+        await queue.start(using: CustomLabelQueuePrinter())
+        XCTAssertEqual(queue.completedCount, 1)
+        XCTAssertEqual(approvals.records, before)
+        XCTAssertTrue(try XCTUnwrap(approvals.record(for: id)).needsLabels,
+                      "Standalone bulk stickers have no lot identity and never change inventory labeling history")
+        XCTAssertTrue(queue.entries.allSatisfy { $0.inventoryID == nil && $0.pricingRevisionID == nil })
     }
 
     func testLegacyMissingSourceKeepsItsInventoryIdentityAndCentsWithoutRewritingStorage() throws {

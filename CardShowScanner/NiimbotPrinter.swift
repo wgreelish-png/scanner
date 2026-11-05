@@ -9,7 +9,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
 }
 
 /// A foreground-only, single-flight connection. Constructing this object never
-/// creates CBCentralManager; only the explicit Search action can request access.
+/// creates CBCentralManager. Opening Price Tags or tapping Search requests access.
 @MainActor @Observable final class NiimbotPrinter: NSObject, LabelPrinterSending {
     static let shared = NiimbotPrinter()
 
@@ -34,6 +34,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     @ObservationIgnored private var pending: Transfer?
     @ObservationIgnored private var connectionGeneration = UUID()
     @ObservationIgnored private var scanRequested = false
+    @ObservationIgnored private var autoReconnectID: UUID?
     @ObservationIgnored private var permissionSearchIntent = NiimbotPermissionSearchIntent()
     @ObservationIgnored private var scanTimeout: Task<Void, Never>?
     @ObservationIgnored private var connectionTimeout: Task<Void, Never>?
@@ -46,8 +47,10 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     @ObservationIgnored private var connectionStage: ConnectionStage?
     @ObservationIgnored private var identificationStep: NiimbotIdentificationStep?
     private static let paperModeDefaultsKey = "niimbotPaperMode"
+    private static let lastPrinterDefaultsKey = "niimbotLastVerifiedPrinter"
 
     private enum ConnectionStage: String { case connecting, services, characteristics, notifications, identification }
+    private enum PrintPhase: String { case batchStarted = "batch_started", pageStarted = "page_started", pageCompleted = "page_completed" }
     private enum DiagnosticPhase: String {
         case search, connect, identified, cancel, complete, uncertain
         case connectFailed = "connect_failed"
@@ -72,6 +75,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         let expectedResponse: UInt8?
         let responseAlternatives: Set<UInt8>
         let beginsPrint: Bool
+        let writeType: CBCharacteristicWriteType
         let continuation: CheckedContinuation<NiimbotPacket?, Error>
         var offset = 0
         var awaitingWriteResponse = false
@@ -85,6 +89,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         var lastResponseCode: UInt8?
 
         init(id: UUID, command: UInt8, bytes: Data, expectedResponse: UInt8?, responseAlternatives: Set<UInt8>, beginsPrint: Bool,
+             writeType: CBCharacteristicWriteType,
              continuation: CheckedContinuation<NiimbotPacket?, Error>) {
             self.id = id
             self.command = command
@@ -92,6 +97,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             self.expectedResponse = expectedResponse
             self.responseAlternatives = responseAlternatives
             self.beginsPrint = beginsPrint
+            self.writeType = writeType
             self.continuation = continuation
         }
     }
@@ -108,6 +114,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
 
     @objc private func applicationWillResignActive() {
         let permissionIntent = permissionSearchIntent
+        let reconnectID = autoReconnectID
         let preserveSearch = scanRequested && peripheral == nil && !isPrinting
             && permissionIntent.preserveOnInactive(permissionUndetermined: CBManager.authorization == .notDetermined)
         stop()
@@ -117,6 +124,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             // survive this foreground boundary.
             permissionSearchIntent = permissionIntent
             scanRequested = true
+            autoReconnectID = reconnectID
             status = "Waiting for Bluetooth permission…"
         }
     }
@@ -138,7 +146,23 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         updateBluetoothState(central)
     }
 
+    /// Price Tags is the user's foreground entry point for printer discovery.
+    /// Only a previously verified peripheral may be connected automatically.
+    func startPriceTagsConnection() {
+        guard !ProcessInfo.processInfo.arguments.contains("--uitest-disable-printer-auto-connect"),
+              UIApplication.shared.applicationState == .active,
+              !isPrinting, !isConfiguringPaper,
+              peripheral == nil, !scanRequested else { return }
+        autoReconnectID = UserDefaults.standard.string(forKey: Self.lastPrinterDefaultsKey).flatMap(UUID.init(uuidString:))
+        requestSearch()
+    }
+
     func startSearch() {
+        autoReconnectID = nil
+        requestSearch()
+    }
+
+    private func requestSearch() {
         guard UIApplication.shared.applicationState == .active else {
             present(.notActive)
             return
@@ -196,7 +220,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     }
 
     /// Called when the app leaves the foreground. There is no restoration,
-    /// reconnect, retained print queue, or automatic replay on returning.
+    /// background reconnect or automatic print replay on returning.
     func stop() {
         if isPrinting { printCancellation = .notActive }
         stopScanning()
@@ -224,7 +248,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         PaperModeSender(printer: self, paperMode: paperMode)
     }
 
-    @MainActor private final class PaperModeSender: LabelPrinterSending {
+    @MainActor private final class PaperModeSender: LabelBatchPrinterSending {
         let printer: NiimbotPrinter
         let paperMode: NiimbotPaperMode
 
@@ -234,14 +258,26 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         func printLabel(_ raster: LabelRaster) async -> LabelSendOutcome {
             await printer.printLabel(raster, paperMode: paperMode)
         }
+        func printBatch(_ rasters: [LabelRaster],
+                        beforePage: @escaping @MainActor (Int) async throws -> Void,
+                        afterPage: @escaping @MainActor (Int) async throws -> Void) async -> LabelSendOutcome {
+            await printer.printBatch(rasters, paperMode: paperMode, beforePage: beforePage, afterPage: afterPage)
+        }
         func cancelPrinting() { printer.cancelPrinting() }
     }
 
     private func printLabel(_ raster: LabelRaster, paperMode: NiimbotPaperMode) async -> LabelSendOutcome {
+        await printBatch([raster], paperMode: paperMode, beforePage: { _ in }, afterPage: { _ in })
+    }
+
+    private func printBatch(_ rasters: [LabelRaster], paperMode: NiimbotPaperMode,
+                            beforePage: @escaping @MainActor (Int) async throws -> Void,
+                            afterPage: @escaping @MainActor (Int) async throws -> Void) async -> LabelSendOutcome {
         guard UIApplication.shared.applicationState == .active else { return .notSent(.notActive) }
         guard isConnected else { return .notSent(.notConnected) }
         guard !isPrinting, !isConfiguringPaper, pending == nil else { return .notSent(.printerBusy) }
-        do { try raster.validate() } catch { return .notSent(.invalidLabel) }
+        guard !rasters.isEmpty, rasters.count <= 250 else { return .notSent(.invalidLabel) }
+        do { for raster in rasters { try raster.validate() } } catch { return .notSent(.invalidLabel) }
 
         let operation = UUID()
         printOperation = operation
@@ -261,9 +297,10 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         return await withTaskCancellationHandler {
             do {
                 try checkPrintOperation(operation)
-                try await sendLabel(raster, operation: operation, paperMode: paperMode)
+                try await sendBatch(rasters, operation: operation, paperMode: paperMode,
+                                    beforePage: beforePage, afterPage: afterPage)
                 try checkPrintOperation(operation)
-                status = "Label printed."
+                status = rasters.count == 1 ? "Label printed." : "\(rasters.count) labels printed."
                 diagnostic(.complete)
                 return .completed
             } catch {
@@ -354,6 +391,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
 
     private func stopScanning() {
         scanRequested = false
+        autoReconnectID = nil
         permissionSearchIntent.cancel()
         scanTimeout?.cancel()
         scanTimeout = nil
@@ -362,7 +400,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     }
 
     private func beginScanning(_ central: CBCentralManager) {
-        guard scanRequested, UIApplication.shared.applicationState == .active else { return }
+        guard scanRequested, !isScanning, UIApplication.shared.applicationState == .active else { return }
         permissionSearchIntent.cancel()
         scanTimeout?.cancel()
         devices = []
@@ -492,8 +530,13 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 guard !Task.isCancelled else { continuation.resume(throwing: LabelPrinterIssue.cancelled); return }
+                // Bitmap rows are one-way UART data. Use the reference's fast
+                // write path with CoreBluetooth backpressure; control requests
+                // retain acknowledged writes on channels that support them.
+                let imageRow = response == nil && [UInt8(0x83), 0x84, 0x85].contains(command)
                 let transaction = Transfer(id: id, command: command, bytes: bytes, expectedResponse: response,
                                            responseAlternatives: responseAlternatives, beginsPrint: beginsPrint,
+                                           writeType: imageRow ? .withoutResponse : writeType,
                                            continuation: continuation)
                 pending = transaction
                 if !isConnected { diagnostic(.requestStarted) }
@@ -519,6 +562,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             connectionFailed(.connectionLost)
             return
         }
+        let writeType = transaction.writeType
         let maximumLength = peripheral.maximumWriteValueLength(for: writeType)
         guard maximumLength > 0 else { connectionFailed(.writeFailed); return }
         // CoreBluetooth reports the negotiated payload limit for this write
@@ -612,6 +656,9 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                 guard self.connectionGeneration == generation else { return }
                 self.identity = identity
                 self.isConnected = true
+                if let id = self.peripheral?.identifier {
+                    UserDefaults.standard.set(id.uuidString, forKey: Self.lastPrinterDefaultsKey)
+                }
                 self.connectionTimeout?.cancel()
                 self.connectionTimeout = nil
                 self.handshakeTask = nil
@@ -632,18 +679,46 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                                   responseAlternatives: request.responseAlternatives, beginsPrint: request.beginsPrint)
     }
 
-    private func sendLabel(_ raster: LabelRaster, operation: UUID, paperMode: NiimbotPaperMode) async throws {
+    private func sendBatch(_ rasters: [LabelRaster], operation: UUID, paperMode: NiimbotPaperMode,
+                           beforePage: @escaping @MainActor (Int) async throws -> Void,
+                           afterPage: @escaping @MainActor (Int) async throws -> Void) async throws {
         guard let identity else { throw LabelPrinterIssue.unsupportedPrinter }
         let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(60))
-        try await NiimbotD110Session.printLabel(raster, identity: identity, paperMode: paperMode) { [weak self] request in
+        // Bound each page, not the entire batch: a long, healthy job must not
+        // inherit the former single-label 60-second task deadline.
+        var deadline = clock.now.advanced(by: .seconds(60))
+        var pageStarted = Date()
+        recordPrintProgress(.batchStarted, page: 0, total: rasters.count, started: pageStarted)
+        try await NiimbotD110Session.printBatch(rasters, identity: identity, paperMode: paperMode) { [weak self] request in
             guard let self else { throw LabelPrinterIssue.connectionLost }
             try self.checkPrintOperation(operation)
             guard clock.now < deadline else { throw LabelPrinterIssue.responseTimeout }
             return try await self.exchange(request)
         } pause: {
             try await Task.sleep(for: .milliseconds(300))
+        } onPageWillSend: { [weak self] page in
+            guard let self else { throw LabelPrinterIssue.connectionLost }
+            try self.checkPrintOperation(operation)
+            try await beforePage(page)
+            try self.checkPrintOperation(operation)
+            deadline = clock.now.advanced(by: .seconds(60))
+            pageStarted = Date()
+            self.status = "Printing label \(page + 1) of \(rasters.count)…"
+            self.recordPrintProgress(.pageStarted, page: page + 1, total: rasters.count, started: pageStarted)
+        } onPageCompleted: { [weak self] page in
+            guard let self, self.printOperation == operation else { throw LabelPrinterIssue.cancelled }
+            // Physical proof must reach durable storage even if Stop arrived
+            // with the reply. The next page still passes the foreground gate.
+            self.printWasDispatched = false
+            try await afterPage(page)
+            self.recordPrintProgress(.pageCompleted, page: page + 1, total: rasters.count, started: pageStarted)
         }
+    }
+
+    private func recordPrintProgress(_ phase: PrintPhase, page: Int, total: Int, started: Date) {
+        let elapsed = Int(max(0, min(3_600_000, Date().timeIntervalSince(started) * 1_000)))
+        DiagnosticLog.shared.record("label.print", ["phase": phase.rawValue, "page": String(page),
+            "total": String(total), "elapsed_ms": String(elapsed)])
     }
 
     /// CoreBluetooth callbacks need not reuse the discovery wrapper object.
@@ -662,12 +737,17 @@ extension NiimbotPrinter: @preconcurrency CBCentralManagerDelegate {
 
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
                         advertisementData: [String: Any], rssi RSSI: NSNumber) {
-        guard isScanning, UIApplication.shared.applicationState == .active,
-              let name = advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? peripheral.name,
-              NiimbotProtocol.isD110Advertisement(name) else { return }
+        guard isScanning, UIApplication.shared.applicationState == .active else { return }
+        let name = advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? peripheral.name
+        let isRemembered = autoReconnectID == peripheral.identifier
+        guard isRemembered || name.map(NiimbotProtocol.isD110Advertisement) == true else { return }
         discovered[peripheral.identifier] = peripheral
+        if isRemembered {
+            connect(peripheral.identifier)
+            return
+        }
         guard !devices.contains(where: { $0.id == peripheral.identifier }) else { return }
-        devices.append(NiimbotDiscoveredPrinter(id: peripheral.identifier, name: name))
+        devices.append(NiimbotDiscoveredPrinter(id: peripheral.identifier, name: name ?? "NIIMBOT printer"))
         devices.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 

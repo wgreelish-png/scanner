@@ -2,7 +2,8 @@ import SwiftUI
 
 /// Standalone stickers work without stock, a saved show or tag approvals.
 @MainActor struct CustomPriceTagView: View {
-    @State private var model = CustomPriceTagModel()
+    @State private var model: CustomPriceTagModel
+    @State private var paperPreferences: LabelPaperPreferences
     @State private var queue = LabelPrintQueue.shared
     @State private var showingQueue = false
     @State private var bitmap: InventoryLabelBitmap?
@@ -11,16 +12,32 @@ import SwiftUI
     @FocusState private var focused: Field?
     private enum Field { case price, copies }
 
+    init(isBulk: Bool = false, paperPreferences: LabelPaperPreferences = .shared) {
+        _paperPreferences = State(initialValue: paperPreferences)
+        let model = CustomPriceTagModel(paperSize: paperPreferences.size)
+        model.isBulk = isBulk
+        _model = State(initialValue: model)
+    }
+
     var body: some View {
         Form {
-            Section("Price") {
-                HStack {
-                    Text("$").foregroundStyle(.secondary)
-                    TextField("Whole-dollar price", text: $model.price).keyboardType(.numberPad)
-                        .focused($focused, equals: .price).accessibilityIdentifier("customLabels.price")
+            Section("Tag") {
+                Picker("Tag", selection: $model.isBulk) {
+                    Text("Individual price").tag(false)
+                    Text("2 for $1").tag(true)
+                }.pickerStyle(.segmented).accessibilityIdentifier("customLabels.tag")
+                if model.isBulk {
+                    Text("A PokéDen logo and 2 for $1 sticker for your bulk bins. Individual bulk cards do not need separate tags.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    HStack {
+                        Text("$").foregroundStyle(.secondary)
+                        TextField("Whole-dollar price", text: $model.price).keyboardType(.numberPad)
+                            .focused($focused, equals: .price).accessibilityIdentifier("customLabels.price")
+                    }
+                    Text("PokéDen logo and price. Check each card's cost before using it; inventory prices stay unchanged.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                Text("A price-only sticker. Check each card's cost before using it; inventory prices stay unchanged.")
-                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Labels") {
                 LabeledContent("Copies") {
@@ -28,10 +45,13 @@ import SwiftUI
                         .focused($focused, equals: .copies).frame(minWidth: 60)
                         .accessibilityIdentifier("customLabels.copies")
                 }
-                Picker("Physical paper", selection: $model.paperSize) {
+                Picker("Physical paper", selection: Binding(get: { model.paperSize }, set: { size in
+                    model.paperSize = size
+                    paperPreferences.select(size)
+                })) {
                     ForEach(InventoryLabelSize.allCases) { paper in Text(paper.title).tag(paper) }
                 }.accessibilityIdentifier("customLabels.paper")
-                Text("1–100 copies. Choose the size on the roll loaded in your printer.")
+                Text("1–100 copies. Your last label size is remembered. Check it matches the loaded roll.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Preview") {
@@ -43,7 +63,9 @@ import SwiftUI
                         .accessibilityValue("\(previewDraft.priceText) · \(previewDraft.paperSize.title)")
                         .accessibilityIdentifier("customLabels.preview")
                 } else {
-                    Text(previewError ?? "Enter a whole-dollar price and copy count to preview your sticker.")
+                    Text(previewError ?? (model.isBulk
+                        ? "Enter 1–100 copies to preview your bulk-bin sticker."
+                        : "Enter a whole-dollar price and copy count to preview your sticker."))
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -82,12 +104,18 @@ import SwiftUI
             }.padding(16).background(.bar)
         }
         .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                ClearLabelPrintQueueButton(identifier: "customLabels.clearQueue")
+            }
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
                 Button("Done") { focused = nil }.fixedSize().frame(minWidth: 64, minHeight: 44)
                     .accessibilityIdentifier("customLabels.keyboardDone")
             }
         }
+        .onAppear { model.paperSize = paperPreferences.size }
+        .onChange(of: paperPreferences.size) { _, size in model.paperSize = size }
+        .onChange(of: model.isBulk) { _, _ in focused = nil }
         .task(id: model.draft) {
             bitmap = nil; previewDraft = nil; previewError = nil
             guard let draft = model.draft else { return }

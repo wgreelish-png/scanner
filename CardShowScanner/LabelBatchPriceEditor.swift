@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// One explicit draft edit; each card still keeps its own cost/profit evaluation.
-struct LabelBatchPriceEditor: View {
+@MainActor struct LabelBatchPriceEditor: View {
     let cardCount: Int
     let onSave: (Int64) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -32,6 +32,7 @@ struct LabelBatchPriceEditor: View {
             }
             .navigationTitle("Set Batch Price").navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarTrailing) { ClearLabelPrintQueueButton(identifier: "labels.batchPrice.clearQueue") }
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }.accessibilityIdentifier("labels.batchPrice.cancel")
                 }

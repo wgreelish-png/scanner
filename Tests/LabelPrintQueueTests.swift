@@ -177,6 +177,267 @@ import XCTest
         XCTAssertEqual(printer.rasters.count, 2)
     }
 
+    func testContinuousBatchUsesOneTaskAndSavesEachPageBeforeTransportCanAdvance() async throws {
+        let storage = LabelQueueTestStorage(), printer = LabelQueueTestBatchPrinter()
+        let queue = queue(storage), entries = try labels()
+        try queue.replace(with: entries)
+        printer.onSend = { page, raster in
+            XCTAssertEqual(try? storage.entries().map(\.state),
+                Array(repeating: .completed, count: page) + [.sending]
+                    + Array(repeating: .pending, count: entries.count - page - 1))
+            XCTAssertEqual(raster, entries[page].raster)
+            XCTAssertTrue(queue.isPrinting)
+        }
+        printer.onCompleted = { page in
+            XCTAssertEqual(try? storage.entries().map(\.state),
+                Array(repeating: .completed, count: page + 1)
+                    + Array(repeating: .pending, count: entries.count - page - 1))
+        }
+        await queue.start(using: printer)
+        XCTAssertEqual(printer.batches, [entries.map(\.raster)])
+        XCTAssertEqual(printer.singleLabelCalls, 0)
+        XCTAssertEqual(printer.rasters.count, 3)
+        XCTAssertEqual(queue.entries.map(\.state), [.completed, .completed, .completed])
+        XCTAssertEqual(storage.writeAttempts, 7)
+        XCTAssertFalse(queue.isPrinting)
+        XCTAssertNil(queue.error)
+        let restored = self.queue(storage)
+        await restored.start(using: printer)
+        XCTAssertEqual(printer.batches.count, 1, "Completed work is never replayed on reopening")
+    }
+
+    func testContinuousBatchIncludesOnlyPendingSnapshotsInTheirSavedOrder() async throws {
+        var entries = try labels(copies: 4)
+        entries[0].state = .completed
+        entries[2].state = .uncertain
+        entries[2].lastIssue = .connectionLost
+        let storage = LabelQueueTestStorage(entries: entries), queue = queue(storage)
+        let printer = LabelQueueTestBatchPrinter()
+        printer.onSend = { page, _ in
+            let expectedIndex = [1, 3][page]
+            let saved = try? storage.entries()
+            XCTAssertEqual(saved?[expectedIndex].id, entries[expectedIndex].id)
+            XCTAssertEqual(saved?[expectedIndex].state, .sending)
+            XCTAssertEqual(saved?[2].state, .uncertain)
+        }
+        await queue.start(using: printer)
+        XCTAssertEqual(printer.batches, [[entries[1].raster, entries[3].raster]])
+        XCTAssertEqual(queue.entries.map(\.state), [.completed, .completed, .uncertain, .completed])
+        XCTAssertEqual(queue.entries[2].lastIssue, .connectionLost)
+    }
+
+    func testContinuousBatchFailureChangesOnlyItsActivePageAndRequiresExplicitRetry() async throws {
+        for failure in [LabelSendOutcome.notSent(.printerNotReady), .uncertain(.responseTimeout)] {
+            let storage = LabelQueueTestStorage(), printer = LabelQueueTestBatchPrinter()
+            let queue = queue(storage), entries = try labels()
+            try queue.replace(with: entries)
+            printer.outcomes = [.completed, failure]
+            await queue.start(using: printer)
+            let state: LabelQueueState = failure == .notSent(.printerNotReady) ? .failed : .uncertain
+            XCTAssertEqual(queue.entries.map(\.state), [.completed, state, .pending])
+            XCTAssertEqual(printer.batches.count, 1)
+            XCTAssertEqual(printer.rasters.count, 2)
+            XCTAssertEqual(try storage.entries(), queue.entries)
+            XCTAssertNotNil(queue.error)
+            let restored = self.queue(storage)
+            XCTAssertEqual(restored.entries, queue.entries)
+            XCTAssertEqual(printer.rasters.count, 2, "Restoring the queue must not start a printer")
+            if state == .uncertain {
+                XCTAssertThrowsError(try restored.retry(ids: [entries[1].id])) {
+                    XCTAssertEqual($0 as? LabelPrintQueueFailure, .acknowledgeUncertain)
+                }
+            }
+            try restored.retry(ids: [entries[1].id], acknowledgeUncertain: true)
+            XCTAssertEqual(printer.batches.count, 1, "Selecting a retry requires a separate Start")
+            await restored.start(using: printer)
+            XCTAssertEqual(printer.batches.count, 2)
+            XCTAssertEqual(printer.rasters.count, 4)
+            XCTAssertEqual(restored.completedCount, 3)
+        }
+    }
+
+    func testContinuousBatchSendingSaveFailureNeverDispatchesThatPageOrLaterPages() async throws {
+        for failAfterPersist in [false, true] {
+            let storage = LabelQueueTestStorage(), printer = LabelQueueTestBatchPrinter()
+            let queue = queue(storage), entries = try labels()
+            try queue.replace(with: entries)
+            storage.failOnWrite = 4 // The second page's sending marker.
+            storage.failAfterPersist = failAfterPersist
+            await queue.start(using: printer)
+            XCTAssertEqual(printer.batches.count, 1)
+            XCTAssertEqual(printer.rasters.count, 1)
+            XCTAssertEqual(queue.entries.map(\.state), [.completed, .pending, .pending])
+            XCTAssertFalse(queue.isLoaded)
+            XCTAssertFalse(queue.canStart)
+            await queue.start(using: printer)
+            XCTAssertEqual(printer.batches.count, 1)
+            storage.failOnWrite = nil
+            queue.reload()
+            XCTAssertEqual(queue.entries.map(\.state),
+                failAfterPersist ? [.completed, .uncertain, .pending] : [.completed, .pending, .pending])
+            XCTAssertEqual(printer.rasters.count, 1)
+        }
+    }
+
+    func testContinuousBatchInitialSendingSaveFailurePreventsAllPageBytes() async throws {
+        let storage = LabelQueueTestStorage(), printer = LabelQueueTestBatchPrinter()
+        let queue = queue(storage), entries = try labels()
+        try queue.replace(with: entries)
+        storage.failOnWrite = 2
+        await queue.start(using: printer)
+        XCTAssertEqual(printer.batches.count, 1)
+        XCTAssertTrue(printer.rasters.isEmpty)
+        XCTAssertEqual(queue.entries, entries)
+        XCTAssertFalse(queue.isLoaded)
+        XCTAssertFalse(queue.canStart)
+        XCTAssertEqual(try storage.entries(), entries)
+    }
+
+    func testContinuousBatchCompletionSaveFailureRetainsObservedResultAndBlocksFuturePages() async throws {
+        for failAfterPersist in [false, true] {
+            let storage = LabelQueueTestStorage(), printer = LabelQueueTestBatchPrinter()
+            let queue = queue(storage), entries = try labels()
+            try queue.replace(with: entries)
+            storage.failOnWrite = 5 // The second page's confirmed completion.
+            storage.failAfterPersist = failAfterPersist
+            await queue.start(using: printer)
+            XCTAssertEqual(printer.rasters.count, 2)
+            XCTAssertEqual(queue.entries.map(\.state), [.completed, .completed, .pending])
+            XCTAssertFalse(queue.isLoaded)
+            XCTAssertFalse(queue.isPrinting)
+            XCTAssertFalse(queue.canStart)
+            await queue.start(using: printer)
+            XCTAssertEqual(printer.batches.count, 1)
+            storage.failOnWrite = nil
+            queue.reload()
+            XCTAssertEqual(queue.entries.map(\.state),
+                failAfterPersist ? [.completed, .completed, .pending] : [.completed, .uncertain, .pending])
+            XCTAssertEqual(printer.rasters.count, 2)
+        }
+    }
+
+    func testContinuousBatchStopAfterConfirmationLeavesFuturePagesPending() async throws {
+        let storage = LabelQueueTestStorage(), printer = LabelQueueTestBatchPrinter()
+        let stalePrinter = LabelQueueTestPrinter(), queue = queue(storage)
+        try queue.replace(with: labels())
+        printer.onCompleted = { page in
+            if page == 0 {
+                queue.stop(using: stalePrinter)
+                queue.stop(using: stalePrinter)
+            }
+        }
+        await queue.start(using: printer)
+        XCTAssertEqual(printer.cancellations, 1)
+        XCTAssertEqual(stalePrinter.cancellations, 0)
+        XCTAssertEqual(printer.rasters.count, 1)
+        XCTAssertEqual(queue.entries.map(\.state), [.completed, .pending, .pending])
+        XCTAssertEqual(try storage.entries(), queue.entries)
+    }
+
+    func testContinuousBatchStopKeepsLatePhysicalConfirmationAndRejectsDoubleStart() async throws {
+        let storage = LabelQueueTestStorage(), printer = LabelQueueTestBatchPrinter()
+        let stalePrinter = LabelQueueTestPrinter(), queue = queue(storage)
+        try queue.replace(with: labels())
+        printer.held = true
+        let job = Task { await queue.start(using: printer) }
+        try await printer.waitForSends(1)
+        await queue.start(using: stalePrinter)
+        XCTAssertTrue(stalePrinter.rasters.isEmpty)
+        queue.stop(using: stalePrinter)
+        XCTAssertTrue(queue.isPrinting)
+        printer.finish(0, with: .completed)
+        await job.value
+        XCTAssertEqual(printer.cancellations, 1)
+        XCTAssertEqual(printer.rasters.count, 1)
+        XCTAssertEqual(queue.entries.map(\.state), [.completed, .pending, .pending])
+        XCTAssertFalse(queue.isPrinting)
+    }
+
+    func testContinuousBatchTaskCancellationMarksOnlyUnconfirmedPageUncertain() async throws {
+        let storage = LabelQueueTestStorage(), printer = LabelQueueTestBatchPrinter()
+        let queue = queue(storage)
+        try queue.replace(with: labels())
+        printer.outcomes = [.completed]
+        printer.onCompleted = { page in if page == 0 { printer.held = true } }
+        printer.cancelOutcome = .uncertain(.cancelled)
+        let job = Task { await queue.start(using: printer) }
+        try await printer.waitForSends(2)
+        job.cancel()
+        await job.value
+        XCTAssertEqual(printer.cancellations, 1)
+        XCTAssertEqual(printer.rasters.count, 2)
+        XCTAssertEqual(queue.entries.map(\.state), [.completed, .uncertain, .pending])
+        XCTAssertEqual(queue.entries[1].lastIssue, .cancelled)
+        XCTAssertEqual(try storage.entries(), queue.entries)
+        XCTAssertTrue(queue.isLoaded)
+    }
+
+    func testContinuousBatchRechecksApprovalBeforeEveryPage() async throws {
+        let storage = LabelQueueTestStorage(), printer = LabelQueueTestBatchPrinter()
+        let entries = try labels()
+        var revoked = false
+        let queue = LabelPrintQueue(url: location(), read: { _ in try storage.read() },
+            write: { data, _ in try storage.write(data) }, approvalIssue: { entry in
+                revoked && entry.id == entries[1].id ? "Approve the updated price before printing." : nil
+            })
+        try queue.replace(with: entries)
+        printer.onCompleted = { _ in revoked = true }
+        await queue.start(using: printer)
+        XCTAssertEqual(printer.rasters.count, 1)
+        XCTAssertEqual(queue.entries.map(\.state), [.completed, .failed, .pending])
+        XCTAssertEqual(queue.entries[1].lastIssue, .invalidLabel)
+        XCTAssertEqual(queue.error, "Approve the updated price before printing.")
+        XCTAssertEqual(try storage.entries(), queue.entries)
+    }
+
+    func testContinuousBatchTaskSuccessCannotReplaceAMissingPageConfirmation() async throws {
+        let storage = LabelQueueTestStorage(), printer = LabelQueueTestBatchPrinter()
+        let queue = queue(storage)
+        try queue.replace(with: labels())
+        printer.omitCompletionAt = 0
+        await queue.start(using: printer)
+        XCTAssertEqual(printer.rasters.count, 1)
+        XCTAssertEqual(queue.entries.map(\.state), [.uncertain, .pending, .pending])
+        XCTAssertEqual(queue.entries[0].lastIssue, .unsupportedResponse)
+        XCTAssertEqual(try storage.entries(), queue.entries)
+    }
+
+    func testContinuousBatchEndFailureDoesNotInvalidateAlreadyConfirmedPages() async throws {
+        let storage = LabelQueueTestStorage(), printer = LabelQueueTestBatchPrinter()
+        let queue = queue(storage)
+        try queue.replace(with: labels())
+        printer.endOutcome = .uncertain(.connectionLost)
+        await queue.start(using: printer)
+        XCTAssertEqual(printer.rasters.count, 3)
+        XCTAssertEqual(queue.entries.map(\.state), [.completed, .completed, .completed])
+        XCTAssertEqual(queue.error, LabelPrinterIssue.connectionLost.localizedDescription)
+        XCTAssertFalse(queue.canStart)
+        XCTAssertEqual(try storage.entries(), queue.entries)
+    }
+
+    func testContinuousBatchLateCallbacksCannotMutateANewerSession() async throws {
+        let storage = LabelQueueTestStorage(), printer = LabelQueueTestBatchPrinter()
+        let queue = queue(storage)
+        try queue.replace(with: labels(copies: 1))
+        await queue.start(using: printer)
+        let oldBefore = try XCTUnwrap(printer.savedBeforePage)
+        let oldAfter = try XCTUnwrap(printer.savedAfterPage)
+        try queue.replace(with: labels(copies: 1))
+        printer.held = true
+        let job = Task { await queue.start(using: printer) }
+        try await printer.waitForSends(2)
+        let bytes = storage.bytes
+        do { try await oldBefore(0); XCTFail("A stale callback must fail") }
+        catch { XCTAssertEqual(error as? LabelPrinterIssue, .cancelled) }
+        do { try await oldAfter(0); XCTFail("A stale callback must fail") }
+        catch { XCTAssertEqual(error as? LabelPrinterIssue, .cancelled) }
+        XCTAssertEqual(storage.bytes, bytes)
+        XCTAssertEqual(queue.entries.map(\.state), [.sending])
+        printer.finish(1, with: .completed)
+        await job.value
+        XCTAssertEqual(queue.entries.map(\.state), [.completed])
+    }
+
     func testInterruptedCopyRestoresUncertainAndRequiresAcknowledgementAndSeparateStart() async throws {
         var entries = try labels()
         entries[0].state = .completed
@@ -646,6 +907,76 @@ private struct LabelQueueTestDocument: Codable {
             await Task.yield()
         }
         XCTFail("The queue did not call its printer")
+        throw CocoaError(.coderReadCorrupt)
+    }
+}
+
+/// Models the batch driver's physical counter gate: no page is dispatched until
+/// beforePage returns, and the next page waits for the durable afterPage return.
+@MainActor private final class LabelQueueTestBatchPrinter: LabelBatchPrinterSending {
+    typealias PageCallback = @MainActor (Int) async throws -> Void
+
+    var held = false
+    var outcomes: [LabelSendOutcome] = []
+    var cancelOutcome: LabelSendOutcome?
+    var omitCompletionAt: Int?
+    var endOutcome = LabelSendOutcome.completed
+    var onSend: ((Int, LabelRaster) -> Void)?
+    var onCompleted: ((Int) -> Void)?
+    private(set) var batches: [[LabelRaster]] = []
+    private(set) var rasters: [LabelRaster] = []
+    private(set) var singleLabelCalls = 0
+    private(set) var cancellations = 0
+    private(set) var savedBeforePage: PageCallback?
+    private(set) var savedAfterPage: PageCallback?
+    private var pending: [Int: CheckedContinuation<LabelSendOutcome, Never>] = [:]
+
+    func printLabel(_ raster: LabelRaster) async -> LabelSendOutcome {
+        singleLabelCalls += 1
+        return .notSent(.unsupportedPrinter)
+    }
+
+    func printBatch(_ pages: [LabelRaster], beforePage: @escaping PageCallback,
+                    afterPage: @escaping PageCallback) async -> LabelSendOutcome {
+        batches.append(pages)
+        savedBeforePage = beforePage
+        savedAfterPage = afterPage
+        for (page, raster) in pages.enumerated() {
+            do { try await beforePage(page) }
+            catch { return .notSent(error as? LabelPrinterIssue ?? .writeFailed) }
+            let sendIndex = rasters.count
+            rasters.append(raster)
+            onSend?(page, raster)
+            let outcome: LabelSendOutcome
+            if held {
+                outcome = await withCheckedContinuation { pending[sendIndex] = $0 }
+            } else {
+                outcome = outcomes.isEmpty ? .completed : outcomes.removeFirst()
+            }
+            guard outcome == .completed else { return outcome }
+            if omitCompletionAt == page { return .completed }
+            do { try await afterPage(page) }
+            catch { return .uncertain(error as? LabelPrinterIssue ?? .writeFailed) }
+            onCompleted?(page)
+        }
+        return endOutcome
+    }
+
+    func cancelPrinting() {
+        cancellations += 1
+        if let cancelOutcome, let index = pending.keys.min() { finish(index, with: cancelOutcome) }
+    }
+
+    func finish(_ index: Int, with outcome: LabelSendOutcome) {
+        pending.removeValue(forKey: index)?.resume(returning: outcome)
+    }
+
+    func waitForSends(_ count: Int) async throws {
+        for _ in 0..<1_000 {
+            if rasters.count >= count { return }
+            await Task.yield()
+        }
+        XCTFail("The queue did not dispatch the expected batch page")
         throw CocoaError(.coderReadCorrupt)
     }
 }

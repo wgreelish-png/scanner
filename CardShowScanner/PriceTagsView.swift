@@ -1,16 +1,22 @@
 import SwiftUI
 import SwiftData
 
-/// A foreground-only workspace. Choosing a batch never starts Bluetooth or prints.
+/// Opening this foreground workspace finds the printer; printing stays explicit.
 @MainActor struct PriceTagsView: View {
     @Environment(\.modelContext) private var context
+    @Environment(\.scenePhase) private var scenePhase
     @State private var store: ShowBudgetStore
     @State private var approvals = TagApprovalStore.shared
     @State private var queue = LabelPrintQueue.shared
+    @State private var printer = NiimbotPrinter.shared
+    @State private var paperPreferences: LabelPaperPreferences
     @State private var marketQuotes: [UUID: TagMarketQuote] = [:]
     @State private var batch: InventoryLabelBatchMode?
 
-    init(store: ShowBudgetStore = .shared) { _store = State(initialValue: store) }
+    init(store: ShowBudgetStore = .shared, paperPreferences: LabelPaperPreferences = .shared) {
+        _store = State(initialValue: store)
+        _paperPreferences = State(initialValue: paperPreferences)
+    }
 
     private var available: [ShowInventoryItem] { store.inventory.filter { $0.quantity > 0 } }
     private var changedIDs: Set<UUID> {
@@ -28,15 +34,20 @@ import SwiftData
                     Text("Choose a batch, check the labels, then print.")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
+                printerStatus
                 VStack(spacing: 12) {
                     batchButton(.all, title: "Print All", subtitle: "One label per available copy, including reprints.",
                         symbol: "square.stack.3d.up.fill", count: available.count)
                     batchButton(.priceChanged, title: "Print Price Changed", subtitle: "New cards, unprinted tags and prices due for review.",
                         symbol: "arrow.triangle.2.circlepath", count: approvals.isLoaded ? changedIDs.count : nil)
-                    NavigationLink { CustomPriceTagView() } label: {
-                        routeLabel(title: "Custom Price Tag", subtitle: "Enter a price and copies. No inventory needed.",
+                    NavigationLink { CustomPriceTagView(paperPreferences: paperPreferences) } label: {
+                        routeLabel(title: "Custom Price Tag", subtitle: "PokéDen logo, price and copies. No inventory needed.",
                             symbol: "square.and.pencil", count: nil)
                     }.buttonStyle(.plain).accessibilityIdentifier("priceTags.custom")
+                    NavigationLink { CustomPriceTagView(isBulk: true, paperPreferences: paperPreferences) } label: {
+                        routeLabel(title: "2 for $1 Bulk Tags", subtitle: "PokéDen stickers for bulk bins. Choose copies and paper.",
+                            symbol: "tray.2", count: nil)
+                    }.buttonStyle(.plain).accessibilityIdentifier("priceTags.bulk")
                 }
                 if !store.isLoaded || !approvals.isLoaded {
                     VStack(alignment: .leading, spacing: 10) {
@@ -78,17 +89,65 @@ import SwiftData
                 }
                 .font(.subheadline.weight(.semibold)).padding(18)
                 .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
-                Text("Saved manual prices are retained. Bulk cards stay in the 2 for $1 category without individual tags. Opening a batch never starts printing.")
+                Text("Saved manual prices are retained. Bulk cards stay in the 2 for $1 category; use bulk-bin tags above. Opening a batch never starts printing.")
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(16)
         }
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle("Price Tags").navigationBarTitleDisplayMode(.inline)
-        .sheet(item: $batch) { mode in
-            InventoryLabelFlowView(inventory: store.inventory, marketQuotes: marketQuotes, mode: mode)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                ClearLabelPrintQueueButton(identifier: "priceTags.clearQueue")
+            }
         }
-        .onAppear { refreshQuotes() }
+        .sheet(item: $batch) { mode in
+            InventoryLabelFlowView(inventory: store.inventory, marketQuotes: marketQuotes, mode: mode,
+                                   paperPreferences: paperPreferences)
+        }
+        .onAppear { refreshQuotes(); printer.startPriceTagsConnection() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { printer.startPriceTagsConnection() }
+        }
         .onChange(of: store.inventory) { _, _ in refreshQuotes() }
+    }
+
+    private var printerStatus: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label(printer.isConnected ? "\(printer.modelName) connected" : "Label printer",
+                      systemImage: printer.isConnected ? "checkmark.circle.fill" : "printer")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(printer.isConnected ? Color.green : Color.primary)
+                    .accessibilityIdentifier("priceTags.printerConnection")
+                Spacer()
+                if printer.isScanning { ProgressView().accessibilityLabel("Searching for printer") }
+            }
+            Text(printer.status).font(.footnote).foregroundStyle(.secondary)
+                .accessibilityIdentifier("priceTags.printerStatus")
+            if let error = printer.error {
+                Text(error).font(.footnote).foregroundStyle(.orange)
+                    .accessibilityIdentifier("priceTags.printerError")
+            }
+            if !printer.isConnected {
+                ForEach(printer.devices) { device in
+                    Button { printer.connect(device.id) } label: {
+                        Label(device.name, systemImage: "printer")
+                    }
+                    .disabled(printer.isPrinting || printer.isConfiguringPaper)
+                    .accessibilityIdentifier("priceTags.printerDevice." + device.id.uuidString)
+                }
+                if !printer.isScanning {
+                    Button("Search for Printer") { printer.startSearch() }
+                        .disabled(printer.isPrinting || printer.isConfiguringPaper)
+                        .accessibilityIdentifier("priceTags.printerSearch")
+                }
+            }
+            Text("Last used: \(paperPreferences.size.title) · Check the loaded roll")
+                .font(.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier("priceTags.paperSize")
+        }
+        .padding(16)
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
     }
 
     private func batchButton(_ mode: InventoryLabelBatchMode, title: String, subtitle: String,
@@ -123,5 +182,58 @@ import SwiftData
 
     private func refreshQuotes() {
         marketQuotes = TagPricingContext.currentQuotes(inventory: store.inventory, context: context)
+    }
+}
+
+/// The same foreground action is available throughout label preparation.
+/// It removes saved print work without changing inventory or approved prices.
+@MainActor struct ClearLabelPrintQueueButton: View {
+    let identifier: String
+    @State private var queue = LabelPrintQueue.shared
+    @State private var printer = NiimbotPrinter.shared
+    @State private var confirming = false
+    @State private var failure: String?
+
+    init(identifier: String = "labels.clearQueue") { self.identifier = identifier }
+
+    private var busy: Bool { queue.isPrinting || printer.isPrinting || printer.isConfiguringPaper }
+    private var empty: Bool { queue.isLoaded && queue.entries.isEmpty }
+
+    var body: some View {
+        Button { confirming = true } label: {
+            Label("Clear Print Queue", systemImage: "trash")
+        }
+        .disabled(busy || empty)
+        .accessibilityIdentifier(identifier)
+        .confirmationDialog("Clear the print queue?", isPresented: $confirming, titleVisibility: .visible) {
+            Button("Clear Print Queue", role: .destructive) { clearQueue() }
+                .accessibilityIdentifier(identifier + ".confirm")
+            Button("Cancel", role: .cancel) {}
+                .accessibilityIdentifier(identifier + ".cancel")
+        } message: {
+            Text(confirmationMessage)
+        }
+        .alert("Unable to Clear Print Queue", isPresented: Binding(get: { failure != nil }, set: {
+            if !$0 { failure = nil }
+        })) {
+            Button("OK", role: .cancel) { failure = nil }
+        } message: { Text(failure ?? "") }
+    }
+
+    private var confirmationMessage: String {
+        let message = queue.isLoaded
+            ? "This removes all \(queue.entries.count.formatted()) saved labels and their print progress. Inventory and approved prices stay unchanged."
+            : "This discards the unreadable saved print queue. Inventory and approved prices stay unchanged."
+        return queue.uncertainCount > 0 || !queue.isLoaded
+            ? message + " Check any uncertain physical labels before preparing another batch."
+            : message
+    }
+
+    private func clearQueue() {
+        do {
+            guard !busy else { throw LabelPrinterIssue.printerBusy }
+            if queue.isLoaded { try queue.clear() }
+            else { try queue.discardSavedQueue() }
+        } catch { failure = error.localizedDescription }
     }
 }
