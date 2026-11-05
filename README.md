@@ -26,6 +26,10 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 78 adds an [estimated labels-remaining display](docs/EstimatedLabelCount.md)
+from the printer's RFID counters. Reads happen on connection, after printing,
+or through Refresh Roll. Unknown or stale counts never block printing.
+
 Build 77 adds a remembered [Price Left / Price Right label option](docs/LabelPricePosition.md).
 It swaps the price and PokéDen logo without mirroring their text, shares the
 choice across inventory/custom/bulk labels, and preserves already queued art.

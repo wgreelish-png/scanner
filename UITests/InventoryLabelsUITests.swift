@@ -707,6 +707,38 @@ import XCTest
         assertNoBluetoothPrompt(app: app)
     }
 
+    func testUnavailableRollEstimateStaysUnknownAcrossPrinterScreensAndDoesNotBlockPreparation() {
+        continueAfterFailure = false
+        let app = launch()
+        defer { app.terminate() }
+        tap(app.buttons["show.priceTags"], app: app)
+        assertContains("Estimated labels remaining: Unknown", element: app.staticTexts["priceTags.roll.estimate"])
+        XCTAssertFalse(app.buttons["priceTags.roll.refresh"].isEnabled)
+        XCTAssertFalse(app.staticTexts["priceTags.roll.warning"].exists)
+        tap(app.buttons["priceTags.printer"], app: app)
+        assertContains("Estimated labels remaining: Unknown", element: app.staticTexts["labelPrinter.roll.estimate"])
+        XCTAssertFalse(app.buttons["labelPrinter.roll.refresh"].isEnabled)
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        tap(app.buttons["priceTags.custom"], app: app)
+        enter("5", field: app.textFields["customLabels.price"], app: app)
+        enter("3", field: app.textFields["customLabels.copies"], app: app)
+        tap(app.buttons["customLabels.keyboardDone"], app: app)
+        XCTAssertTrue(app.buttons["customLabels.prepare"].isEnabled, "An unavailable roll count does not block preparing labels")
+        tap(app.buttons["customLabels.prepare"], app: app)
+        assertContains("0/3 completed", element: app.staticTexts["labelQueue.progress"])
+        let estimate = app.staticTexts["labelQueue.roll.estimate"]
+        reveal(estimate, app: app)
+        assertContains("Estimated labels remaining: Unknown", element: estimate)
+        XCTAssertFalse(app.buttons["labelQueue.roll.refresh"].isEnabled)
+        XCTAssertFalse(app.staticTexts["labelQueue.roll.warning"].exists, "An unknown count cannot claim the roll is empty or insufficient")
+        clearQueue("labelQueue.clearQueue", app: app)
+        assertContains("0/0 completed", element: app.staticTexts["labelQueue.progress"])
+        reveal(estimate, app: app)
+        assertContains("Estimated labels remaining: Unknown", element: estimate)
+        XCTAssertFalse(app.buttons["labelQueue.roll.refresh"].isEnabled)
+        assertNoBluetoothPrompt(app: app)
+    }
+
     func testPaperModeCanBeChosenOfflineAndPersistsWithoutChangingTheSavedQueue() {
         continueAfterFailure = false
         let app = launch()

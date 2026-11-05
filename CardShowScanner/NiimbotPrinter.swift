@@ -20,6 +20,22 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     private(set) var isConfiguringPaper = false
     private(set) var paperMode: NiimbotPaperMode
     private(set) var paperModeStatus: String?
+    var rollEstimate: NiimbotRollEstimate? { rollReader.estimate }
+    var rollEstimateIsFresh: Bool { rollReader.freshness == .fresh }
+    var rollEstimateFreshness: NiimbotRollEstimateFreshness { rollReader.freshness }
+    var isReadingRoll: Bool { rollReader.isReading }
+    var canRefreshRollEstimate: Bool {
+        isConnected && UIApplication.shared.applicationState == .active && !isPrinting && !isConfiguringPaper
+            && !isReadingRoll && !rollReplyGuard.isQuarantined && pending == nil
+    }
+    var rollEstimateStatus: String? {
+        if rollReplyGuard.isQuarantined { return "Reconnect to refresh the roll estimate." }
+        switch rollReader.freshness {
+        case .unknown, .fresh: return nil
+        case .stale: return "Refresh to update the estimate."
+        case .unavailable: return "Roll estimate unavailable."
+        }
+    }
     private(set) var status = "Search for a NIIMBOT D110 or D110-M to connect."
     var modelName: String { identity?.modelName ?? "D110 / D110-M" }
     var supportsContinuousPrinting: Bool { isConnected && identity?.modelID == 2320 }
@@ -49,6 +65,8 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     @ObservationIgnored private var paperTask: Task<Void, Never>?
     @ObservationIgnored private var connectionStage: ConnectionStage?
     @ObservationIgnored private var identificationStep: NiimbotIdentificationStep?
+    @ObservationIgnored private let rollReader = NiimbotRollReadCoordinator()
+    @ObservationIgnored private var rollReplyGuard = NiimbotOptionalRollReplyGuard()
     private static let paperModeDefaultsKey = "niimbotPaperMode"
     private static let lastPrinterDefaultsKey = "niimbotLastVerifiedPrinter"
 
@@ -79,6 +97,8 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         let expectedResponse: UInt8?
         let responseAlternatives: Set<UInt8>
         let beginsPrint: Bool
+        let optionalRollRead: Bool
+        let writeType: CBCharacteristicWriteType
         let continuation: CheckedContinuation<NiimbotPacket?, Error>
         var offset = 0
         var awaitingWriteResponse = false
@@ -92,6 +112,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         var lastResponseCode: UInt8?
 
         init(id: UUID, command: UInt8, bytes: Data, expectedResponse: UInt8?, responseAlternatives: Set<UInt8>, beginsPrint: Bool,
+             optionalRollRead: Bool, writeType: CBCharacteristicWriteType,
              continuation: CheckedContinuation<NiimbotPacket?, Error>) {
             self.id = id
             self.command = command
@@ -99,6 +120,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             self.expectedResponse = expectedResponse
             self.responseAlternatives = responseAlternatives
             self.beginsPrint = beginsPrint
+            self.optionalRollRead = optionalRollRead; self.writeType = writeType
             self.continuation = continuation
         }
     }
@@ -290,7 +312,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                                  afterPages: @escaping @MainActor ([Int]) async throws -> Void) async -> LabelSendOutcome {
         guard UIApplication.shared.applicationState == .active else { return .notSent(.notActive) }
         guard isConnected else { return .notSent(.notConnected) }
-        guard !isPrinting, !isConfiguringPaper, pending == nil else { return .notSent(.printerBusy) }
+        guard !isPrinting, !isConfiguringPaper, pending == nil || pending?.optionalRollRead == true else { return .notSent(.printerBusy) }
         guard !rasters.isEmpty, rasters.count <= 250 else { return .notSent(.invalidLabel) }
         do { for raster in rasters { try raster.validate() } } catch { return .notSent(.invalidLabel) }
 
@@ -301,6 +323,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         dispatchedPages = []
         printCancellation = nil
         isPrinting = true
+        rollReader.markStale()
         error = nil
         status = "Checking \(modelName)…"
         defer {
@@ -310,11 +333,13 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                 printCancellation = nil
                 sendingPages = []
                 dispatchedPages = []
+                refreshRollEstimate()
             }
         }
 
         return await withTaskCancellationHandler {
             do {
+                await rollReader.waitUntilIdle()
                 try checkPrintOperation(operation)
                 try await sendBatch(rasters, operation: operation, paperMode: paperMode, continuous: continuous,
                                     beforePages: beforePages, afterPages: afterPages)
@@ -348,7 +373,23 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     func readPaperMode() { configurePaper(reading: true) }
     func applyPaperMode() { configurePaper(reading: false) }
 
+    /// Read-only and optional: inability to read a roll never prevents printing.
+    func refreshRollEstimate() {
+        guard canRefreshRollEstimate else { return }
+        let generation = connectionGeneration
+        rollReader.refresh { [weak self] in
+            guard let self, self.connectionGeneration == generation,
+                  self.isConnected, !self.isPrinting, !self.isConfiguringPaper,
+                  !self.rollReplyGuard.isQuarantined else { throw LabelPrinterIssue.printerBusy }
+            return try await NiimbotD110Session.readRollEstimate { [weak self] request in
+                guard let self, self.connectionGeneration == generation else { throw LabelPrinterIssue.connectionLost }
+                return try await self.exchange(request, timeout: .milliseconds(750), optionalRollRead: true)
+            }
+        }
+    }
+
     private func savePaperMode(_ mode: NiimbotPaperMode) {
+        if paperMode != mode { rollReader.markStale() }
         paperMode = mode
         UserDefaults.standard.set(mode.rawValue, forKey: Self.paperModeDefaultsKey)
     }
@@ -356,7 +397,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     private func configurePaper(reading: Bool) {
         guard UIApplication.shared.applicationState == .active else { present(.notActive); return }
         guard isConnected, identity != nil else { present(.notConnected); return }
-        guard !isPrinting, !isConfiguringPaper, pending == nil else { present(.printerBusy); return }
+        guard !isPrinting, !isConfiguringPaper, pending == nil || pending?.optionalRollRead == true else { present(.printerBusy); return }
         let generation = connectionGeneration, selected = paperMode
         isConfiguringPaper = true
         paperModeStatus = reading ? "Reading printer setting…" : "Applying \(selected.title)…"
@@ -367,9 +408,13 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                 if self.connectionGeneration == generation {
                     self.isConfiguringPaper = false
                     self.paperTask = nil
+                    if !self.rollEstimateIsFresh { self.refreshRollEstimate() }
                 }
             }
             do {
+                await self.rollReader.waitUntilIdle()
+                try Task.checkCancellation()
+                guard self.connectionGeneration == generation else { return }
                 let exchange: NiimbotD110Session.Exchange = { [weak self] request in
                     guard let self, self.connectionGeneration == generation,
                           self.isConfiguringPaper else { throw LabelPrinterIssue.connectionLost }
@@ -383,6 +428,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                     self.paperModeStatus = "Printer setting: \(mode.title)"
                     self.diagnostic(.paperRead)
                 } else {
+                    self.rollReader.markStale()
                     try await NiimbotD110Session.applyPaperMode(selected, exchange: exchange)
                     try Task.checkCancellation()
                     guard self.connectionGeneration == generation else { return }
@@ -469,6 +515,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     private func endConnection(issue: LabelPrinterIssue) {
         if isPrinting, printCancellation == nil { printCancellation = issue }
         connectionGeneration = UUID()
+        rollReader.reset(); rollReplyGuard = NiimbotOptionalRollReplyGuard()
         connectionStage = nil
         identificationStep = nil
         connectionTimeout?.cancel()
@@ -556,43 +603,55 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
 
     /// Trace control requests and failures, without logging every raster row.
     private var tracesPendingTransfer: Bool {
-        !isConnected || (isPrinting && pending?.expectedResponse != nil)
+        pending?.optionalRollRead != true && (!isConnected || (isPrinting && pending?.expectedResponse != nil))
     }
 
-    /// Exactly one request is in flight. NIIMBOT frames have no transaction ID;
-    /// a timeout tears down the connection so a late reply cannot match a later
-    /// request with the same opcode. Commands are never automatically retried.
+    /// Exactly one request is in flight. Required-command timeouts retire the
+    /// connection. Optional RFID timeouts instead quarantine further reads
+    /// until reconnect, so a late reply cannot be accepted as fresh metadata.
     private func transfer(command: UInt8, data: Data, response: UInt8?, responseAlternatives: Set<UInt8> = [],
                           beginsPrint: Bool = false,
+                          optionalRollRead: Bool = false,
                           timeout: Duration = .seconds(5)) async throws -> NiimbotPacket? {
         try Task.checkCancellation()
         guard UIApplication.shared.applicationState == .active else { throw LabelPrinterIssue.notActive }
         guard peripheral?.state == .connected, writeCharacteristic != nil else { throw LabelPrinterIssue.notConnected }
         guard pending == nil else { throw LabelPrinterIssue.printerBusy }
+        if optionalRollRead {
+            guard command == 0x1a, response == 0x1b, responseAlternatives.isEmpty, !beginsPrint,
+                  writeCharacteristic?.properties.contains(.writeWithoutResponse) == true else {
+                rollReplyGuard.markUnsupported()
+                throw LabelPrinterIssue.unsupportedResponse
+            }
+        }
         let bytes = try NiimbotProtocol.encode(command: command, data: data)
         let id = UUID()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 guard !Task.isCancelled else { continuation.resume(throwing: LabelPrinterIssue.cancelled); return }
-                // Use the same negotiated ATT write type for every packet.
-                // The verified D110-M path acknowledges raster rows as well as
-                // control commands before the next request advances.
+                // Printing/settings retain their negotiated ATT write type.
+                // The tiny optional read uses the advertised no-response path
+                // so abandoning it cannot misapply a later ATT write callback.
                 let transaction = Transfer(id: id, command: command, bytes: bytes, expectedResponse: response,
                                            responseAlternatives: responseAlternatives, beginsPrint: beginsPrint,
+                                           optionalRollRead: optionalRollRead, writeType: optionalRollRead ? .withoutResponse : writeType,
                                            continuation: continuation)
                 pending = transaction
                 if tracesPendingTransfer { diagnostic(.requestStarted) }
                 transaction.timeout = Task { [weak self] in
                     do { try await Task.sleep(for: timeout) } catch { return }
                     guard let self, self.pending?.id == id else { return }
-                    self.connectionFailed(.responseTimeout)
+                    if optionalRollRead { self.failOptionalRollTransfer(.responseTimeout, ambiguous: (self.pending?.offset ?? 0) > 0) }
+                    else { self.connectionFailed(.responseTimeout) }
                 }
                 driveWrite()
             }
         } onCancel: {
             Task { @MainActor [weak self] in
                 guard let self, self.pending?.id == id else { return }
-                self.endConnection(issue: .cancelled)
+                if self.pending?.optionalRollRead == true {
+                    self.failOptionalRollTransfer(.cancelled, ambiguous: (self.pending?.offset ?? 0) > 0)
+                } else { self.endConnection(issue: .cancelled) }
             }
         }
     }
@@ -604,7 +663,11 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             connectionFailed(.connectionLost)
             return
         }
-        let maximumLength = peripheral.maximumWriteValueLength(for: writeType)
+        let maximumLength = peripheral.maximumWriteValueLength(for: transaction.writeType)
+        if transaction.optionalRollRead && maximumLength < transaction.bytes.count {
+            failOptionalRollTransfer(.unsupportedResponse, ambiguous: false)
+            return
+        }
         guard maximumLength > 0 else { connectionFailed(.writeFailed); return }
         // CoreBluetooth reports the negotiated payload limit for this write
         // type. No ATT size is assumed; without-response writes additionally
@@ -612,7 +675,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         let chunkLength = maximumLength
 
         while transaction.offset < transaction.bytes.count {
-            if writeType == .withoutResponse && !peripheral.canSendWriteWithoutResponse {
+            if transaction.writeType == .withoutResponse && !peripheral.canSendWriteWithoutResponse {
                 if !transaction.reportedWriteBlocked {
                     transaction.reportedWriteBlocked = true
                     diagnostic(.writeBlocked)
@@ -626,9 +689,9 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                 dispatchedPages.formUnion(sendingPages)
                 printWasDispatched = !dispatchedPages.isEmpty
             }
-            if writeType == .withResponse { transaction.awaitingWriteResponse = true }
-            peripheral.writeValue(chunk, for: writeCharacteristic, type: writeType)
-            if writeType == .withResponse { return }
+            if transaction.writeType == .withResponse { transaction.awaitingWriteResponse = true }
+            peripheral.writeValue(chunk, for: writeCharacteristic, type: transaction.writeType)
+            if transaction.writeType == .withResponse { return }
         }
         if tracesPendingTransfer && !transaction.reportedSent {
             transaction.reportedSent = true
@@ -653,6 +716,13 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         transaction.continuation.resume(throwing: issue)
     }
 
+    private func failOptionalRollTransfer(_ issue: LabelPrinterIssue, ambiguous: Bool) {
+        guard pending?.optionalRollRead == true else { return }
+        rollReplyGuard.abandonRead(wasSent: ambiguous)
+        if issue == .unsupportedResponse { rollReplyGuard.markUnsupported() }
+        failTransfer(issue)
+    }
+
     private func receive(_ bytes: Data) {
         if let transaction = pending {
             transaction.notificationCount = min(1_000_000, transaction.notificationCount + 1)
@@ -667,9 +737,22 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                 connectionFailed(NiimbotProtocol.issueForPrintError(packet))
                 return
             }
+            if rollReplyGuard.consumeLateResponse(packet.command) { continue }
             if packet.command == 0x00 {
+                if pending?.optionalRollRead == true {
+                    failOptionalRollTransfer(.unsupportedResponse, ambiguous: false)
+                    continue
+                }
                 connectionFailed(isConnected ? .unsupportedResponse : .unsupportedPrinter)
                 return
+            }
+            if packet.command == 0x1b && pending?.optionalRollRead != true {
+                rollReader.markStale()
+                continue
+            }
+            if let identity, [UInt8(0xdd), 0xd9].contains(packet.command) {
+                do { try NiimbotProtocol.validateReadiness(packet, identity: identity) }
+                catch { rollReader.markStale() }
             }
             guard let transaction = pending,
                   transaction.offset == transaction.bytes.count,
@@ -708,6 +791,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                 self.handshakeTask = nil
                 self.status = "\(identity.modelName) connected. Confirm the loaded label size before printing."
                 self.diagnostic(.identified)
+                self.refreshRollEstimate()
             } catch {
                 guard self.connectionGeneration == generation else { return }
                 self.connectionFailed((error as? LabelPrinterIssue) ?? .unsupportedPrinter)
@@ -715,12 +799,13 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         }
     }
 
-    private func exchange(_ request: NiimbotRequest, timeout: Duration = .seconds(5)) async throws -> NiimbotPacket? {
+    private func exchange(_ request: NiimbotRequest, timeout: Duration = .seconds(5), optionalRollRead: Bool = false) async throws -> NiimbotPacket? {
         // The reference's BLE transport spaces complete packets by 10ms. Radio
         // backpressure alone does not bound the UART module's consumer speed.
         try await Task.sleep(for: .milliseconds(10))
         return try await transfer(command: request.command, data: request.data, response: request.response,
                                   responseAlternatives: request.responseAlternatives, beginsPrint: request.beginsPrint,
+                                  optionalRollRead: optionalRollRead,
                                   timeout: timeout)
     }
 

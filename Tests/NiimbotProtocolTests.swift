@@ -3,6 +3,173 @@ import XCTest
 @testable import CardShowScanner
 
 final class NiimbotProtocolTests: XCTestCase {
+    /// Synthetic identifiers only. The default has the same 40-byte field
+    /// layout as the reported discrete-label reply, without any personal data.
+    private func syntheticRFIDPayload(product: String = "TESTSKU84", serial: String = "TEST000000000001",
+                                      total: Int = 84, used: Int = 9, type: UInt8 = 1,
+                                      tail: Data = Data(), uid: [UInt8] = [0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80]) -> Data {
+        let productBytes = Array(product.utf8), serialBytes = Array(serial.utf8)
+        let counts = [UInt8((total >> 8) & 0xff), UInt8(total & 0xff),
+                      UInt8((used >> 8) & 0xff), UInt8(used & 0xff), type]
+        var result = Data(uid)
+        result.append(UInt8(productBytes.count))
+        result.append(contentsOf: productBytes)
+        result.append(UInt8(serialBytes.count))
+        result.append(contentsOf: serialBytes)
+        result.append(contentsOf: counts)
+        result.append(tail)
+        return result
+    }
+
+    func testRFIDCounterSnapshotParsesSyntheticFortyBytePayloadAsSeventyFiveRemaining() throws {
+        let payload = syntheticRFIDPayload()
+        XCTAssertEqual(payload.count, 40)
+        let estimate = try XCTUnwrap(NiimbotProtocol.rollEstimate(.init(command: 0x1b, data: payload)))
+        XCTAssertEqual(estimate.productCode, "TESTSKU84")
+        XCTAssertEqual(estimate.totalLabels, 84)
+        XCTAssertEqual(estimate.usedLabels, 9)
+        XCTAssertEqual(estimate.remainingLabels, 75)
+        XCTAssertEqual(estimate.labelType, 1)
+    }
+
+    func testRFIDCountersAreBigEndianAndTrueExhaustionRemainsDistinctFromUnknown() throws {
+        let estimate = try XCTUnwrap(NiimbotProtocol.rollEstimate(.init(command: 0x1b,
+            data: syntheticRFIDPayload(total: 0x1234, used: 0x0102))))
+        XCTAssertEqual(estimate.totalLabels, 4_660)
+        XCTAssertEqual(estimate.usedLabels, 258)
+        XCTAssertEqual(estimate.remainingLabels, 4_402)
+        for total in [1, 84, 65_535] {
+            let exhausted = try XCTUnwrap(NiimbotProtocol.rollEstimate(.init(command: 0x1b,
+                data: syntheticRFIDPayload(total: total, used: total))))
+            XCTAssertEqual(exhausted.remainingLabels, 0)
+        }
+        let unused = try XCTUnwrap(NiimbotProtocol.rollEstimate(.init(command: 0x1b,
+            data: syntheticRFIDPayload(used: 0))))
+        XCTAssertEqual(unused.remainingLabels, 84)
+        for (total, used) in [(0, 0), (0, 1), (84, 85), (1, 65_535)] {
+            XCTAssertThrowsError(try NiimbotProtocol.rollEstimate(.init(command: 0x1b,
+                data: syntheticRFIDPayload(total: total, used: used)))) {
+                XCTAssertEqual($0 as? LabelPrinterIssue, .unsupportedResponse)
+            }
+        }
+    }
+
+    func testRFIDOneByteNoTagRepliesNeverInventAnEmptyRoll() throws {
+        for value in [UInt8(0), 1, 0xff] {
+            XCTAssertNil(try NiimbotProtocol.rollEstimate(.init(command: 0x1b, data: Data([value]))))
+        }
+        XCTAssertThrowsError(try NiimbotProtocol.rollEstimate(.init(command: 0x1b, data: Data())))
+        XCTAssertThrowsError(try NiimbotProtocol.rollEstimate(.init(command: 0x00, data: Data([0]))))
+    }
+
+    func testRFIDOnlyDiscreteSupportedMediaCanEstablishAnEstimatedLabelCount() throws {
+        for type in [UInt8(1), 5] {
+            let estimate = try XCTUnwrap(NiimbotProtocol.rollEstimate(.init(command: 0x1b,
+                data: syntheticRFIDPayload(type: type))))
+            XCTAssertEqual(estimate.labelType, type)
+            XCTAssertEqual(estimate.remainingLabels, 75)
+        }
+        for type in [UInt8(0), 2, 3, 4, 6, 10, 11, 0xff] {
+            XCTAssertThrowsError(try NiimbotProtocol.rollEstimate(.init(command: 0x1b,
+                data: syntheticRFIDPayload(type: type))))
+        }
+    }
+
+    func testRFIDOptionalCapacityAndSecondUIDHaveExactSupportedTailLengths() throws {
+        let capacity = Data([0, 100])
+        let secondUID = Data([0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7])
+        for tail in [Data(), capacity, capacity + secondUID] {
+            let estimate = try XCTUnwrap(NiimbotProtocol.rollEstimate(.init(command: 0x1b,
+                data: syntheticRFIDPayload(tail: tail))))
+            XCTAssertEqual(estimate.totalLabels, 84)
+            XCTAssertEqual(estimate.remainingLabels, 75, "Optional capacity never replaces the reported total/used counters")
+        }
+        for length in [1, 3, 4, 5, 6, 7, 8, 9, 11] {
+            XCTAssertThrowsError(try NiimbotProtocol.rollEstimate(.init(command: 0x1b,
+                data: syntheticRFIDPayload(tail: Data(repeating: 0, count: length)))))
+        }
+    }
+
+    func testRFIDRejectsEveryTruncatedTaggedPayloadAndWrongOrOversizedPackets() throws {
+        let payload = syntheticRFIDPayload()
+        for length in 0..<payload.count where length != 1 {
+            XCTAssertThrowsError(try NiimbotProtocol.rollEstimate(.init(command: 0x1b,
+                data: Data(payload.prefix(length)))), "Truncated tagged payload length: \(length)")
+        }
+        XCTAssertThrowsError(try NiimbotProtocol.rollEstimate(.init(command: 0x1d, data: payload)))
+        XCTAssertThrowsError(try NiimbotProtocol.rollEstimate(.init(command: 0x1b,
+            data: Data(repeating: 0, count: 256))))
+    }
+
+    func testRFIDVStringsRequireBoundedPrintableASCIIWithoutOverreading() throws {
+        for (product, serial) in [("", "TEST000000000001"), ("TESTSKU84", ""),
+                                  ("TEST\tSKU", "TEST000000000001"), ("TESTSKU84", "TEST\u{0}000000000001"),
+                                  ("TEST\u{7f}SKU", "TEST000000000001"), ("TéstSKU84", "TEST000000000001"),
+                                  (String(repeating: "X", count: 128), "TEST000000000001")] {
+            XCTAssertThrowsError(try NiimbotProtocol.rollEstimate(.init(command: 0x1b,
+                data: syntheticRFIDPayload(product: product, serial: serial))))
+        }
+        for length in [UInt8(127), 255] {
+            var overrun = syntheticRFIDPayload()
+            overrun[8] = length
+            XCTAssertThrowsError(try NiimbotProtocol.rollEstimate(.init(command: 0x1b, data: overrun)))
+        }
+        let boundary = syntheticRFIDPayload(product: String(repeating: "X", count: 127),
+                                            serial: String(repeating: "S", count: 113))
+        XCTAssertEqual(boundary.count, 255)
+        XCTAssertEqual(try NiimbotProtocol.rollEstimate(.init(command: 0x1b, data: boundary))?.remainingLabels, 75)
+    }
+
+    func testRFIDSnapshotDoesNotRetainUniqueTagOrRollSerialIdentifiers() throws {
+        let first = try NiimbotProtocol.rollEstimate(.init(command: 0x1b, data: syntheticRFIDPayload()))
+        let second = try NiimbotProtocol.rollEstimate(.init(command: 0x1b,
+            data: syntheticRFIDPayload(serial: "TEST000000000002", uid: Array(repeating: 0xee, count: 8))))
+        XCTAssertEqual(first, second, "Only product and discrete counters belong in the transient estimate")
+    }
+
+    @MainActor func testRFIDReadMakesExactlyOneReadOnlyRequestWithoutPrintingOrChangingMedia() async throws {
+        var requests: [NiimbotRequest] = []
+        let estimate = try await NiimbotD110Session.readRollEstimate { request in
+            requests.append(request)
+            return .init(command: 0x1b, data: self.syntheticRFIDPayload())
+        }
+        XCTAssertEqual(estimate?.remainingLabels, 75)
+        XCTAssertEqual(requests, [NiimbotRequest(0x1a, [1], response: 0x1b)])
+        XCTAssertEqual(try NiimbotProtocol.encode(command: requests[0].command, data: requests[0].data),
+                       Data([0x55, 0x55, 0x1a, 1, 1, 0x1a, 0xaa, 0xaa]))
+        XCTAssertFalse(requests[0].beginsPrint)
+        XCTAssertFalse(requests[0].requiresTrue)
+    }
+
+    @MainActor func testRFIDReadReturnsNoTagAndDoesNotRetryUnavailableOrMalformedReplies() async throws {
+        var noTagRequests = 0
+        let absent = try await NiimbotD110Session.readRollEstimate { _ in
+            noTagRequests += 1
+            return .init(command: 0x1b, data: Data([0]))
+        }
+        XCTAssertNil(absent)
+        XCTAssertEqual(noTagRequests, 1)
+        let replies: [NiimbotPacket?] = [nil, .init(command: 0x00, data: Data([0])),
+                                       .init(command: 0x1b, data: Data([0, 0]))]
+        for reply in replies {
+            var requests = 0
+            do {
+                _ = try await NiimbotD110Session.readRollEstimate { _ in requests += 1; return reply }
+                XCTFail("An unavailable or malformed RFID read must remain unknown")
+            } catch { XCTAssertEqual(error as? LabelPrinterIssue, .unsupportedResponse) }
+            XCTAssertEqual(requests, 1)
+        }
+        var attempts = 0
+        do {
+            _ = try await NiimbotD110Session.readRollEstimate { _ in
+                attempts += 1
+                throw LabelPrinterIssue.responseTimeout
+            }
+            XCTFail("An optional read timeout must propagate without retry")
+        } catch { XCTAssertEqual(error as? LabelPrinterIssue, .responseTimeout) }
+        XCTAssertEqual(attempts, 1)
+    }
+
     func testFirstPermissionSearchSurvivesPromptAndResumesOnlyOnce() {
         var intent = NiimbotPermissionSearchIntent()
         XCTAssertFalse(intent.preserveOnInactive(permissionUndetermined: true))

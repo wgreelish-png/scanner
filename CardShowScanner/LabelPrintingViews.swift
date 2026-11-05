@@ -45,6 +45,7 @@ import UIKit
 
 @MainActor private struct LabelPrinterConnectionSection: View {
     let printer: NiimbotPrinter
+    var rollIdentifier = "labelPrinter.roll"
     @State private var queue = LabelPrintQueue.shared
     @State private var paperPreferences = LabelPaperPreferences.shared
     private var paperBusy: Bool { queue.isPrinting || printer.isPrinting || printer.isConfiguringPaper }
@@ -57,6 +58,7 @@ import UIKit
                 .accessibilityIdentifier("labelPrinter.connection")
             Text(printer.status).font(.footnote).foregroundStyle(.secondary)
                 .accessibilityIdentifier("labelPrinter.status")
+            LabelRollEstimateView(printer: printer, pendingLabels: queue.pendingCount, identifier: rollIdentifier)
             if let error = printer.error {
                 Text(error).font(.footnote).foregroundStyle(.orange)
                     .accessibilityIdentifier("labelPrinter.error")
@@ -122,6 +124,95 @@ import UIKit
                 .disabled(paperBusy)
         } header: { Text("PokéDen label layout") } footer: {
             Text("Applies to newly prepared PokéDen price labels. The saved print queue stays unchanged.")
+        }
+    }
+}
+
+/// The estimate changes presentation only; it never decides whether a queue can print.
+struct LabelRollEstimatePresentation {
+    let estimate: NiimbotRollEstimate?
+    let freshness: NiimbotRollEstimateFreshness
+    let isReading: Bool
+    let pendingLabels: Int
+    let status: String?
+
+    init(estimate: NiimbotRollEstimate?, freshness: NiimbotRollEstimateFreshness, isReading: Bool,
+         pendingLabels: Int, status: String? = nil) {
+        self.estimate = estimate; self.freshness = freshness; self.isReading = isReading
+        self.pendingLabels = pendingLabels; self.status = status
+    }
+
+    private var displayedEstimate: NiimbotRollEstimate? {
+        switch freshness {
+        case .fresh, .stale: return estimate
+        case .unknown, .unavailable: return nil
+        }
+    }
+
+    var title: String {
+        if isReading { return "Estimated labels remaining: Checking…" }
+        guard let displayedEstimate else { return "Estimated labels remaining: Unknown" }
+        let value = displayedEstimate.remainingLabels.formatted()
+        if case .stale = freshness { return "Estimated labels remaining: \(value) (stale)" }
+        return "Estimated labels remaining: \(value)"
+    }
+
+    var detail: String? {
+        if isReading { return status ?? "Reading the printer's roll counter…" }
+        guard let displayedEstimate else { return status }
+        let counts = "\(displayedEstimate.usedLabels.formatted()) used of \(displayedEstimate.totalLabels.formatted()) reported."
+        if case .stale = freshness {
+            return [status, "Last report: \(counts)"].compactMap { $0 }.joined(separator: " ")
+        }
+        return "\(counts) Counter estimate; actual labels can differ."
+    }
+
+    var warning: String? {
+        guard !isReading, case .fresh = freshness, let estimate,
+              pendingLabels > estimate.remainingLabels else { return nil }
+        return "The \(pendingLabels.formatted()) queued labels may exceed this roll estimate."
+    }
+}
+
+@MainActor struct LabelRollEstimateView: View {
+    let printer: NiimbotPrinter
+    var pendingLabels = 0
+    let identifier: String
+    @State private var queue = LabelPrintQueue.shared
+
+    init(printer: NiimbotPrinter, pendingLabels: Int = 0, identifier: String) {
+        self.printer = printer; self.pendingLabels = pendingLabels; self.identifier = identifier
+    }
+
+    var body: some View {
+        let presentation = LabelRollEstimatePresentation(estimate: printer.rollEstimate,
+            freshness: printer.rollEstimateFreshness, isReading: printer.isReadingRoll,
+            pendingLabels: pendingLabels, status: printer.rollEstimateStatus)
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Text(presentation.title).font(.footnote.weight(.semibold))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier(identifier + ".estimate")
+                Button {
+                    guard printer.canRefreshRollEstimate, !queue.isPrinting else { return }
+                    printer.refreshRollEstimate()
+                } label: {
+                    Group {
+                        if printer.isReadingRoll { ProgressView().controlSize(.small) }
+                        else { Image(systemName: "arrow.clockwise") }
+                    }.frame(minWidth: 44, minHeight: 44)
+                }.buttonStyle(.borderless)
+                    .disabled(!printer.canRefreshRollEstimate || queue.isPrinting)
+                    .accessibilityLabel("Refresh roll")
+                    .accessibilityIdentifier(identifier + ".refresh")
+            }
+            Text(presentation.detail ?? "Connect the printer to read its roll counter.")
+                .font(.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier(identifier + ".context")
+            if let warning = presentation.warning {
+                Text(warning).font(.caption).foregroundStyle(.orange)
+                    .accessibilityIdentifier(identifier + ".warning")
+            }
         }
     }
 }
@@ -984,12 +1075,15 @@ private struct LabelActionBar<Content: View>: View {
             } else {
                 summary
                 if queue.entries.isEmpty {
+                    Section("Label roll") {
+                        LabelRollEstimateView(printer: printer, identifier: "labelQueue.roll")
+                    }
                     Section {
                         ContentUnavailableView("No queued labels", systemImage: "printer",
                             description: Text("Select cards in Show Inventory to prepare a label batch."))
                     }
                 } else {
-                    LabelPrinterConnectionSection(printer: printer)
+                    LabelPrinterConnectionSection(printer: printer, rollIdentifier: "labelQueue.roll")
                     if let error = queue.error {
                         Section { Text(error).font(.footnote).foregroundStyle(.orange) }
                             .accessibilityIdentifier("labelQueue.error")

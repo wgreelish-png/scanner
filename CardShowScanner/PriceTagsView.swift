@@ -120,6 +120,7 @@ import SwiftUI
             }
             Text(printer.status).font(.footnote).foregroundStyle(.secondary)
                 .accessibilityIdentifier("priceTags.printerStatus")
+            LabelRollEstimateView(printer: printer, pendingLabels: queue.pendingCount, identifier: "priceTags.roll")
             if let error = printer.error {
                 Text(error).font(.footnote).foregroundStyle(.orange)
                     .accessibilityIdentifier("priceTags.printerError")

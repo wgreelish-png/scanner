@@ -103,6 +103,17 @@ struct NiimbotD110Identity: Equatable, Sendable {
     var modelName: String { modelID == 2320 ? "D110-M" : "D110" }
 }
 
+/// A read-only estimate from a discrete-label RFID counter. It is deliberately
+/// not Codable and excludes the tag UID, roll serial and optional second UID.
+struct NiimbotRollEstimate: Equatable, Sendable {
+    let productCode: String
+    let totalLabels: Int
+    let usedLabels: Int
+    let labelType: UInt8
+
+    var remainingLabels: Int { totalLabels - usedLabels }
+}
+
 /// The printer's configured media mode, separate from physical label size.
 /// These are the documented SetLabelType values supported by this app.
 enum NiimbotPaperMode: String, CaseIterable, Identifiable, Codable, Sendable {
@@ -207,6 +218,64 @@ enum NiimbotProtocol {
         // Connect is the only command with this leading wake-up byte.
         if command == 0xc1 { result.insert(0x03, at: result.startIndex) }
         return result
+    }
+
+    /// The reference uses an eight-byte UID, signed-byte-length ASCII strings,
+    /// big-endian counters and an optional two-byte capacity/eight-byte UID tail.
+    /// Unknown formats or non-discrete media cannot establish a label count.
+    static func rollEstimate(_ packet: NiimbotPacket) throws -> NiimbotRollEstimate? {
+        guard packet.command == 0x1b, packet.data.count <= 255 else {
+            throw LabelPrinterIssue.unsupportedResponse
+        }
+        // The documented one-byte response means that no tag was read; its
+        // byte is not a count and must never appear as zero remaining labels.
+        if packet.data.count == 1 { return nil }
+        guard packet.data.count >= 17 else { throw LabelPrinterIssue.unsupportedResponse }
+        let bytes = Array(packet.data)
+        var offset = 8 // Skip the unique tag identifier without retaining it.
+        func readASCII() throws -> String {
+            guard offset < bytes.count else { throw LabelPrinterIssue.unsupportedResponse }
+            let length = Int(bytes[offset])
+            offset += 1
+            guard (1...127).contains(length), length <= bytes.count - offset else {
+                throw LabelPrinterIssue.unsupportedResponse
+            }
+            let end = offset + length
+            let value = bytes[offset..<end]
+            guard value.allSatisfy({ (0x20...0x7e).contains($0) }),
+                  let text = String(bytes: value, encoding: .ascii) else {
+                throw LabelPrinterIssue.unsupportedResponse
+            }
+            offset = end
+            return text
+        }
+        func readU16() throws -> Int {
+            guard bytes.count - offset >= 2 else { throw LabelPrinterIssue.unsupportedResponse }
+            let value = Int(bytes[offset]) << 8 | Int(bytes[offset + 1])
+            offset += 2
+            return value
+        }
+        let productCode = try readASCII()
+        _ = try readASCII() // Validate and discard the unique roll serial.
+        let total = try readU16(), used = try readU16()
+        guard offset < bytes.count else { throw LabelPrinterIssue.unsupportedResponse }
+        let type = bytes[offset]
+        offset += 1
+        switch bytes.count - offset {
+        case 0: break
+        case 2:
+            _ = try readU16() // Capacity is not the remaining-label counter.
+        case 10:
+            _ = try readU16()
+            offset += 8 // Discard the optional unique identifier.
+        default:
+            throw LabelPrinterIssue.unsupportedResponse
+        }
+        guard offset == bytes.count, total > 0, used <= total,
+              type == NiimbotPaperMode.gap.commandValue || type == NiimbotPaperMode.transparent.commandValue else {
+            throw LabelPrinterIssue.unsupportedResponse
+        }
+        return NiimbotRollEstimate(productCode: productCode, totalLabels: total, usedLabels: used, labelType: type)
     }
 
     static func modelID(_ packet: NiimbotPacket) throws -> Int {
@@ -475,6 +544,15 @@ enum NiimbotProtocol {
 /// tests can exercise native requests, responses and completion without a radio.
 @MainActor enum NiimbotD110Session {
     typealias Exchange = @MainActor (NiimbotRequest) async throws -> NiimbotPacket?
+
+    /// One optional read, with no retry, calibration, feed or setting command.
+    static func readRollEstimate(exchange: Exchange) async throws -> NiimbotRollEstimate? {
+        try Task.checkCancellation()
+        guard let packet = try await exchange(NiimbotRequest(0x1a, [1], response: 0x1b)) else {
+            throw LabelPrinterIssue.unsupportedResponse
+        }
+        return try NiimbotProtocol.rollEstimate(packet)
+    }
 
     /// Read the configured label-type property. This does not establish which
     /// roll is physically loaded, and it does not change printer settings.
