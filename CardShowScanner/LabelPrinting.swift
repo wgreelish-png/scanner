@@ -7,6 +7,12 @@ enum InventoryLabelStyle: String, Codable, CaseIterable, Identifiable, Sendable 
     var title: String { self == .priceOnly ? "PokéDen price" : "Card details" }
 }
 
+enum LabelPricePosition: String, Codable, CaseIterable, Identifiable, Sendable {
+    case left, right
+    var id: Self { self }
+    var title: String { self == .left ? "Price Left" : "Price Right" }
+}
+
 /// The printable head is 12 mm wide. Larger stock leaves its factory margins;
 /// the long dimension runs along the paper feed, at eight dots per millimetre.
 enum InventoryLabelSize: String, Codable, CaseIterable, Identifiable, Sendable {
@@ -38,26 +44,36 @@ enum InventoryLabelSize: String, Codable, CaseIterable, Identifiable, Sendable {
             $0.hasPrefix("--show-transactions-fixture-id=")
         }).map { String($0.dropFirst("--show-transactions-fixture-id=".count)) }
         let key = fixture.map { "niimbotLabelSize.fixture." + $0 } ?? "niimbotLabelSize"
-        return LabelPaperPreferences(defaults: .standard, key: key)
+        let positionKey = fixture.map { "niimbotLabelPricePosition.fixture." + $0 } ?? "niimbotLabelPricePosition"
+        return LabelPaperPreferences(defaults: .standard, key: key, pricePositionKey: positionKey)
     }()
 
     private(set) var size: InventoryLabelSize
+    private(set) var pricePosition: LabelPricePosition
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let key: String
+    @ObservationIgnored private let pricePositionKey: String
 
     convenience init(defaults: UserDefaults = .standard) {
-        self.init(defaults: defaults, key: "niimbotLabelSize")
+        self.init(defaults: defaults, key: "niimbotLabelSize", pricePositionKey: "niimbotLabelPricePosition")
     }
 
-    private init(defaults: UserDefaults, key: String) {
+    private init(defaults: UserDefaults, key: String, pricePositionKey: String) {
         self.defaults = defaults
         self.key = key
+        self.pricePositionKey = pricePositionKey
         size = defaults.string(forKey: key).flatMap(InventoryLabelSize.init(rawValue:)) ?? .small30x14
+        pricePosition = defaults.string(forKey: pricePositionKey).flatMap(LabelPricePosition.init(rawValue:)) ?? .right
     }
 
     func select(_ size: InventoryLabelSize) {
         self.size = size
         defaults.set(size.rawValue, forKey: key)
+    }
+
+    func selectPricePosition(_ position: LabelPricePosition) {
+        pricePosition = position
+        defaults.set(position.rawValue, forKey: pricePositionKey)
     }
 }
 
@@ -72,6 +88,7 @@ struct InventoryLabelDraft: Codable, Equatable, Identifiable, Sendable {
     var copies: Int = 1
     var style: InventoryLabelStyle = .priceOnly
     var paperSize: InventoryLabelSize = .small30x14
+    var pricePosition: LabelPricePosition = .right
     var marketValue: Decimal?
     var profitInputs: TagProfitInputs
     var isBulk = false
@@ -91,6 +108,30 @@ struct InventoryLabelDraft: Codable, Equatable, Identifiable, Sendable {
         isBulk = tag == .twoForOne
         isManualOverride = approval?.isManualOverride ?? false
         askingPriceText = tag?.integerPriceCents.map(Self.inputText) ?? ""
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, cardName, cardNumber, condition, askingPriceText, copies, style, paperSize, pricePosition
+        case marketValue, profitInputs, isBulk, isManualOverride
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        cardName = try values.decode(String.self, forKey: .cardName)
+        cardNumber = try values.decode(String.self, forKey: .cardNumber)
+        condition = try values.decode(String.self, forKey: .condition)
+        askingPriceText = try values.decode(String.self, forKey: .askingPriceText)
+        copies = try values.decode(Int.self, forKey: .copies)
+        style = try values.decode(InventoryLabelStyle.self, forKey: .style)
+        paperSize = try values.decode(InventoryLabelSize.self, forKey: .paperSize)
+        if values.contains(.pricePosition) {
+            pricePosition = try values.decode(LabelPricePosition.self, forKey: .pricePosition)
+        } else { pricePosition = .right }
+        marketValue = try values.decodeIfPresent(Decimal.self, forKey: .marketValue)
+        profitInputs = try values.decode(TagProfitInputs.self, forKey: .profitInputs)
+        isBulk = try values.decode(Bool.self, forKey: .isBulk)
+        isManualOverride = try values.decode(Bool.self, forKey: .isManualOverride)
     }
 
     var priceCents: Int64? { isBulk ? nil : ShowBudgetMoney.parse(askingPriceText) }

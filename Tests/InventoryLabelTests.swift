@@ -432,4 +432,116 @@ import UIKit
             XCTAssertThrowsError(try raster.validate())
         }
     }
+
+    func testPriceSideSwapsContentBoxesWhileKeepingEstablishedWidthsAndMargins() {
+        for paper in InventoryLabelSize.allCases {
+            let width = paper.feedDots
+            let right = InventoryLabelRenderer.brandedPriceLayout(width: width, height: 96, pricePosition: .right)
+            let left = InventoryLabelRenderer.brandedPriceLayout(width: width, height: 96, pricePosition: .left)
+            let establishedDivider = [240: CGFloat(134), 320: 179, 400: 224][width]!
+            XCTAssertEqual(right.dividerX, establishedDivider)
+            XCTAssertEqual(left.dividerX, CGFloat(width) - establishedDivider)
+            XCTAssertEqual(right.logoArea, CGRect(x: 12, y: 14, width: establishedDivider - 24, height: 68))
+            XCTAssertEqual(right.priceArea, CGRect(x: establishedDivider + 8, y: 8,
+                                                 width: CGFloat(width) - establishedDivider - 18, height: 80))
+            XCTAssertEqual(left.logoArea.size, right.logoArea.size)
+            XCTAssertEqual(left.priceArea.size, right.priceArea.size)
+            XCTAssertEqual(left.priceArea.minX, 10)
+            XCTAssertEqual(CGFloat(width) - left.logoArea.maxX, 12)
+            XCTAssertEqual(left.dividerX - left.priceArea.maxX, 8)
+            XCTAssertEqual(left.logoArea.minX - left.dividerX, 12)
+            XCTAssertLessThan(left.priceArea.maxX, left.logoArea.minX)
+        }
+    }
+
+    func testLeftPriceTranslatesEachUnmirroredBlockForAllPapersWholePricesAndBulk() throws {
+        for paper in InventoryLabelSize.allCases {
+            let rightLayout = InventoryLabelRenderer.brandedPriceLayout(width: paper.feedDots, height: 96, pricePosition: .right)
+            let leftLayout = InventoryLabelRenderer.brandedPriceLayout(width: paper.feedDots, height: 96, pricePosition: .left)
+            let samples: [(cents: Int64, bulk: Bool)] = [(100, false), (2_800, false), (12_500, false),
+                (125_000, false), (ShowBudgetMoney.maximumCents / 100 * 100, false), (0, true)]
+            for sample in samples {
+                let right = try InventoryLabelRenderer.renderRaster(CustomPriceTagDraft(priceCents: sample.cents,
+                    copies: 1, paperSize: paper, isBulk: sample.bulk, pricePosition: .right))
+                let draft = CustomPriceTagDraft(priceCents: sample.cents, copies: 1, paperSize: paper,
+                                               isBulk: sample.bulk, pricePosition: .left)
+                let left = try InventoryLabelRenderer.renderRaster(draft)
+                let rightLogo = pixels(right, in: rightLayout.logoArea)
+                let leftLogo = pixels(left, in: leftLayout.logoArea)
+                let rightPrice = pixels(right, in: rightLayout.priceArea)
+                let leftPrice = pixels(left, in: leftLayout.priceArea)
+                XCTAssertEqual(leftLogo, rightLogo, "The same readable vector lettering must move to the right")
+                XCTAssertEqual(leftPrice, rightPrice, "The complete amount/deal must move without changed font or clipping")
+                XCTAssertNotEqual(leftLogo, pixels(right, in: rightLayout.logoArea, mirrored: true))
+                XCTAssertNotEqual(leftPrice, pixels(right, in: rightLayout.priceArea, mirrored: true))
+                XCTAssertGreaterThan(leftLogo.filter { $0 }.count, 150)
+                XCTAssertGreaterThan(leftPrice.filter { $0 }.count, 100)
+
+                let dividerColumns = (20..<(paper.feedDots - 20)).filter { x in
+                    (12..<84).filter { black(left, x: x, y: $0) }.count >= 68
+                }
+                XCTAssertEqual(dividerColumns, [Int(leftLayout.dividerX) - 1, Int(leftLayout.dividerX)])
+                for x in 0..<paper.feedDots {
+                    XCTAssertFalse(black(left, x: x, y: 0))
+                    XCTAssertFalse(black(left, x: x, y: 95))
+                    XCTAssertEqual(black(left, x: x, y: 3), black(right, x: x, y: 3), "Rounded frame stays in place")
+                    XCTAssertEqual(black(left, x: x, y: 92), black(right, x: x, y: 92))
+                }
+                let bitmap = try InventoryLabelRenderer.render(draft)
+                XCTAssertEqual(bitmap.raster, left)
+                XCTAssertEqual(left.width, 96)
+                XCTAssertEqual(left.height, paper.feedDots)
+                let image = try XCTUnwrap(bitmap.previewImage.cgImage)
+                let preview = try XCTUnwrap(image.dataProvider?.data) as Data
+                let expected = Data((0..<96).flatMap { y in
+                    (0..<paper.feedDots).map { black(left, x: $0, y: y) ? UInt8(0) : UInt8(255) }
+                })
+                XCTAssertEqual(preview, expected, "Preview pixels must decode the exact rotated printer bits")
+            }
+        }
+    }
+
+    func testInventoryAndCustomBrandedDraftsShareBothPricePositionsAndClassicLayoutIgnoresTheOption() throws {
+        for paper in InventoryLabelSize.allCases {
+            var inventory = InventoryLabelDraft(item: stock(price: 28))
+            inventory.paperSize = paper
+            for position in [LabelPricePosition.left, .right] {
+                inventory.pricePosition = position
+                let custom = CustomPriceTagDraft(priceCents: 2_800, copies: 1, paperSize: paper, pricePosition: position)
+                XCTAssertEqual(try InventoryLabelRenderer.renderRaster(inventory),
+                               try InventoryLabelRenderer.renderRaster(custom))
+            }
+            inventory.style = .cardDetails
+            inventory.pricePosition = .right
+            let establishedDetails = try InventoryLabelRenderer.renderRaster(inventory)
+            inventory.pricePosition = .left
+            XCTAssertEqual(try InventoryLabelRenderer.renderRaster(inventory), establishedDetails)
+        }
+    }
+
+    func testDefaultRightProducesTheSameRasterAsExplicitRightForExistingDraftInputs() throws {
+        for paper in InventoryLabelSize.allCases {
+            for price in [Int64(100), 2_800, ShowBudgetMoney.maximumCents / 100 * 100] {
+                let existing = CustomPriceTagDraft(priceCents: price, copies: 1, paperSize: paper)
+                var explicit = existing
+                explicit.pricePosition = .right
+                XCTAssertEqual(try InventoryLabelRenderer.renderRaster(existing),
+                               try InventoryLabelRenderer.renderRaster(explicit))
+            }
+            let existingBulk = CustomPriceTagDraft(priceCents: 0, copies: 1, paperSize: paper, isBulk: true)
+            var explicitBulk = existingBulk
+            explicitBulk.pricePosition = .right
+            XCTAssertEqual(try InventoryLabelRenderer.renderRaster(existingBulk),
+                           try InventoryLabelRenderer.renderRaster(explicitBulk))
+        }
+    }
+
+    private func pixels(_ raster: LabelRaster, in rect: CGRect, mirrored: Bool = false) -> [Bool] {
+        (Int(rect.minY)..<Int(rect.maxY)).flatMap { y in
+            (0..<Int(rect.width)).map { offset in
+                let x = mirrored ? Int(rect.maxX) - 1 - offset : Int(rect.minX) + offset
+                return black(raster, x: x, y: y)
+            }
+        }
+    }
 }

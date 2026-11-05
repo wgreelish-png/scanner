@@ -6,6 +6,10 @@ a thin rounded border. **PokéDen price** is the default inventory style.
 **Card details** remains available for the existing name/code/condition layout.
 The preview comes from the same monochrome bits sent to the printer.
 
+Build 77 adds [Price Left / Price Right](LabelPricePosition.md). The original
+price-right arrangement remains the default; the selected position is saved
+and reused for newly prepared inventory, custom and bulk labels.
+
 The uploaded compact side-by-side SVGs guide the composition. The wordmark is
 bundled as PDF glyph outlines, rather than an enlarged 203-DPI PNG or a crop of
 the app icon. The development-only generator draws DejaVu typeface outlines;

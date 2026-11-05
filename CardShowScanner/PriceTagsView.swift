@@ -141,6 +141,9 @@ import SwiftUI
             Text("Last used: \(paperPreferences.size.title) · Check the loaded roll")
                 .font(.caption).foregroundStyle(.secondary)
                 .accessibilityIdentifier("priceTags.paperSize")
+            Text("New labels: \(paperPreferences.pricePosition.title)")
+                .font(.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier("priceTags.pricePosition")
         }
         .padding(16)
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))

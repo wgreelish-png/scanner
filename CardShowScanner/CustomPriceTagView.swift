@@ -14,7 +14,7 @@ import SwiftUI
 
     init(isBulk: Bool = false, paperPreferences: LabelPaperPreferences = .shared) {
         _paperPreferences = State(initialValue: paperPreferences)
-        let model = CustomPriceTagModel(paperSize: paperPreferences.size)
+        let model = CustomPriceTagModel(paperSize: paperPreferences.size, pricePosition: paperPreferences.pricePosition)
         model.isBulk = isBulk
         _model = State(initialValue: model)
     }
@@ -51,7 +51,11 @@ import SwiftUI
                 })) {
                     ForEach(InventoryLabelSize.allCases) { paper in Text(paper.title).tag(paper) }
                 }.accessibilityIdentifier("customLabels.paper")
-                Text("1–100 copies. Your last label size is remembered. Check it matches the loaded roll.")
+                LabelPricePositionPicker(selection: Binding(get: { model.pricePosition }, set: { position in
+                    model.pricePosition = position
+                    paperPreferences.selectPricePosition(position)
+                }), identifier: "customLabels.pricePosition")
+                Text("1–100 copies. Label size and price position are remembered. Check the size matches the loaded roll.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Preview") {
@@ -60,7 +64,7 @@ import SwiftUI
                         .frame(maxWidth: .infinity).padding(12).background(.white)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                         .accessibilityLabel("Price tag preview")
-                        .accessibilityValue("\(previewDraft.priceText) · \(previewDraft.paperSize.title)")
+                        .accessibilityValue("\(previewDraft.priceText) · \(previewDraft.paperSize.title) · \(previewDraft.pricePosition.title)")
                         .accessibilityIdentifier("customLabels.preview")
                 } else {
                     Text(previewError ?? (model.isBulk
@@ -113,8 +117,12 @@ import SwiftUI
                     .accessibilityIdentifier("customLabels.keyboardDone")
             }
         }
-        .onAppear { model.paperSize = paperPreferences.size }
+        .onAppear {
+            model.paperSize = paperPreferences.size
+            model.pricePosition = paperPreferences.pricePosition
+        }
         .onChange(of: paperPreferences.size) { _, size in model.paperSize = size }
+        .onChange(of: paperPreferences.pricePosition) { _, position in model.pricePosition = position }
         .onChange(of: model.isBulk) { _, _ in focused = nil }
         .task(id: model.draft) {
             bitmap = nil; previewDraft = nil; previewError = nil

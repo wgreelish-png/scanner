@@ -115,6 +115,28 @@ import UIKit
         } header: { Text("Paper type") } footer: {
             Text("Choose Gap for standard labels separated by gaps, or Transparent for clear labels. The choice is applied when printing. Read Printer Setting reads the configured type. Label size is remembered from label preparation; check it matches the loaded roll.")
         }
+        Section {
+            LabelPricePositionPicker(selection: Binding(get: { paperPreferences.pricePosition }, set: {
+                paperPreferences.selectPricePosition($0)
+            }), identifier: "labelPrinter.pricePosition")
+                .disabled(paperBusy)
+        } header: { Text("PokéDen label layout") } footer: {
+            Text("Applies to newly prepared PokéDen price labels. The saved print queue stays unchanged.")
+        }
+    }
+}
+
+@MainActor struct LabelPricePositionPicker: View {
+    @Binding var selection: LabelPricePosition
+    let identifier: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Price position").font(.subheadline)
+            Picker("Price position", selection: $selection) {
+                ForEach(LabelPricePosition.allCases) { position in Text(position.title).tag(position) }
+            }.pickerStyle(.segmented).labelsHidden().accessibilityIdentifier(identifier)
+        }
     }
 }
 
@@ -137,6 +159,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     @State private var drafts: [InventoryLabelDraft]
     @State private var style: InventoryLabelStyle = .priceOnly
     @State private var paper: InventoryLabelSize
+    @State private var pricePosition: LabelPricePosition
     @State private var paperPreferences: LabelPaperPreferences
     @State private var editing: InventoryLabelDraft?
     @State private var queue = LabelPrintQueue.shared
@@ -159,13 +182,17 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         self.mode = mode
         _paperPreferences = State(initialValue: paperPreferences)
         _paper = State(initialValue: paperPreferences.size)
+        _pricePosition = State(initialValue: paperPreferences.pricePosition)
         let initial = inventory.first { $0.id == initialInventoryID && $0.quantity > 0 }
         let batchDrafts = InventoryLabelBatch.drafts(mode: mode, inventory: inventory,
             marketQuotes: marketQuotes, store: .shared)
         var initialDrafts = initial.map {
             [InventoryLabelBatch.draft(for: $0, mode: .custom, marketQuotes: marketQuotes, store: .shared)]
         } ?? batchDrafts
-        for index in initialDrafts.indices { initialDrafts[index].paperSize = paperPreferences.size }
+        for index in initialDrafts.indices {
+            initialDrafts[index].paperSize = paperPreferences.size
+            initialDrafts[index].pricePosition = paperPreferences.pricePosition
+        }
         _selectedIDs = State(initialValue: Set(initialDrafts.map(\.id)))
         _drafts = State(initialValue: initialDrafts)
         _path = State(initialValue: initialDrafts.isEmpty ? [] : [.configure])
@@ -230,7 +257,9 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         .sheet(item: $editing) { draft in
             InventoryLabelEditor(draft: draft) { updated in
                 if let index = drafts.firstIndex(where: { $0.id == updated.id }) {
-                    drafts[index] = updated
+                    var current = updated
+                    current.style = style; current.paperSize = paper; current.pricePosition = pricePosition
+                    drafts[index] = current
                     keepExistingStickerIDs.remove(updated.id)
                     resetPreparationNotice()
                 }
@@ -262,8 +291,12 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { stopPrinting() }
         }
-        .onAppear { updatePaperSize(paperPreferences.size) }
+        .onAppear {
+            updatePaperSize(paperPreferences.size)
+            updatePricePosition(paperPreferences.pricePosition)
+        }
         .onChange(of: paperPreferences.size) { _, size in updatePaperSize(size) }
+        .onChange(of: paperPreferences.pricePosition) { _, position in updatePricePosition(position) }
         .onDisappear {
             stopPrinting()
             if printer.isConfiguringPaper || !printer.isConnected { printer.stop() }
@@ -380,7 +413,15 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                         Text(value.title).tag(value).accessibilityIdentifier("labels.paper." + value.rawValue)
                     }
                 }.accessibilityIdentifier("labels.paper")
-                Text("Your last label size is remembered. Check it matches the loaded roll. Artwork is centered in the printer's 12 mm printable strip.")
+                if style == .priceOnly {
+                    LabelPricePositionPicker(selection: Binding(get: { pricePosition }, set: { position in
+                        updatePricePosition(position)
+                        paperPreferences.selectPricePosition(position)
+                    }), identifier: "labels.pricePosition")
+                }
+                Text(style == .priceOnly
+                     ? "Label size and price position are remembered. Check the size matches the loaded roll. Artwork is centered in the printer's 12 mm printable strip."
+                     : "Your last label size is remembered. Check it matches the loaded roll. Artwork is centered in the printer's 12 mm printable strip.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             if let draft = printableDrafts.first {
@@ -461,6 +502,11 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         for index in drafts.indices { drafts[index].paperSize = size }
     }
 
+    private func updatePricePosition(_ position: LabelPricePosition) {
+        pricePosition = position
+        for index in drafts.indices { drafts[index].pricePosition = position }
+    }
+
     @ViewBuilder private var preparationNoticeSection: some View {
         if let preparationNotice {
             Section {
@@ -496,6 +542,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 }
                 LabeledContent("Paper", value: paper.title)
                 LabeledContent("Style", value: style.title)
+                if style == .priceOnly { LabeledContent("Price position", value: pricePosition.title) }
                 Text(mode == .priceChanged
                      ? "Prepare labels for changed prices. Unchanged, already-labeled stickers are skipped. Printing starts when you tap Print Queued Labels."
                      : "Prepare the requested labels, including replacements for cards labeled before. Printing starts when you tap Print Queued Labels.")
@@ -634,7 +681,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         drafts = available.filter { selectedIDs.contains($0.id) }.map { item in
             var draft = previous[item.id] ?? InventoryLabelBatch.draft(for: item, mode: mode,
                 marketQuotes: marketQuotes, store: approvals)
-            draft.style = style; draft.paperSize = paper
+            draft.style = style; draft.paperSize = paper; draft.pricePosition = pricePosition
             return draft
         }
         keepExistingStickerIDs.formIntersection(selectedIDs)
@@ -682,7 +729,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 if draft.style == .priceOnly {
                     // The branded design depends only on the final price and
                     // roll. Reuse identical artwork across inventory entries.
-                    let key = draft.paperSize.rawValue + ":" + (draft.priceText ?? "")
+                    let key = draft.paperSize.rawValue + ":" + draft.pricePosition.rawValue + ":" + (draft.priceText ?? "")
                     if let saved = priceRasters[key] { raster = saved }
                     else {
                         raster = try InventoryLabelRenderer.renderRaster(draft)
@@ -752,6 +799,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                     Text([draft.cardNumber, draft.condition].filter { !$0.isEmpty }.joined(separator: " · "))
                         .font(.subheadline).foregroundStyle(.secondary)
                     LabeledContent("Paper", value: draft.paperSize.title)
+                    if draft.style == .priceOnly { LabeledContent("Price position", value: draft.pricePosition.title) }
                 }
                 Section("Label price") {
                     if edited.isBulk {
@@ -835,6 +883,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     private var previewDescription: String {
         let amount = previewPrice.flatMap(ShowBudgetMoney.parse).map { StickerPrice.individual($0).displayText } ?? "Price required"
         return "\(draft.style.title), \(amount), \(draft.paperSize.title)"
+            + (draft.style == .priceOnly ? ", \(draft.pricePosition.title)" : "")
     }
 }
 
@@ -847,7 +896,8 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         Group {
             if let image {
                 LabelBitmapImage(image: image,
-                    description: "\(draft.style.title), \(draft.priceText ?? "Price required"), \(draft.paperSize.title)")
+                    description: "\(draft.style.title), \(draft.priceText ?? "Price required"), \(draft.paperSize.title)"
+                        + (draft.style == .priceOnly ? ", \(draft.pricePosition.title)" : ""))
             }
             else { Text(error ?? "Preparing preview…").font(.footnote).foregroundStyle(.secondary) }
         }.onAppear { render() }.onChange(of: draft) { _, _ in render() }

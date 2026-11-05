@@ -19,7 +19,7 @@ import UIKit
         try draft.validate()
         guard let price = draft.priceText else { throw InventoryLabelFailure.invalidPrice }
         return try Self.raster(price: price, name: draft.cardName, number: draft.cardNumber,
-            condition: draft.condition, style: draft.style, paper: draft.paperSize)
+            condition: draft.condition, style: draft.style, paper: draft.paperSize, pricePosition: draft.pricePosition)
     }
 
     static func render(_ draft: CustomPriceTagDraft) throws -> InventoryLabelBitmap {
@@ -30,11 +30,12 @@ import UIKit
     static func renderRaster(_ draft: CustomPriceTagDraft) throws -> LabelRaster {
         try draft.validate()
         return try Self.raster(price: draft.priceText, name: "", number: "", condition: "",
-            style: .priceOnly, paper: draft.paperSize, isBulk: draft.isBulk)
+            style: .priceOnly, paper: draft.paperSize, isBulk: draft.isBulk, pricePosition: draft.pricePosition)
     }
 
     private static func raster(price: String, name cardName: String, number cardNumber: String, condition conditionText: String,
-                               style: InventoryLabelStyle, paper: InventoryLabelSize, isBulk: Bool = false) throws -> LabelRaster {
+                               style: InventoryLabelStyle, paper: InventoryLabelSize, isBulk: Bool = false,
+                               pricePosition: LabelPricePosition) throws -> LabelRaster {
         let width = paper.feedDots, height = paper.headDots
         // Draw the branded vectors at four samples per printer dot, then use
         // area coverage for the final bit decision. Card details retain their
@@ -54,7 +55,8 @@ import UIKit
         let margin: CGFloat = 8, available = CGFloat(width) - margin * 2
         switch style {
         case .priceOnly:
-            try drawBrandedPrice(price, isBulk: isBulk, width: width, height: height, context: context)
+            try drawBrandedPrice(price, isBulk: isBulk, width: width, height: height,
+                                 pricePosition: pricePosition, context: context)
         case .cardDetails:
             let titleFont = UIFont.systemFont(ofSize: 17, weight: .semibold)
             let title = titleComponents(name: cardName, number: cardNumber)
@@ -78,12 +80,37 @@ import UIKit
                                samplesPerDot: samplesPerDot)
     }
 
+    struct BrandedPriceLayout {
+        let dividerX: CGFloat
+        let logoArea: CGRect
+        let priceArea: CGRect
+    }
+
+    static func brandedPriceLayout(width: Int, height: Int, pricePosition: LabelPricePosition) -> BrandedPriceLayout {
+        let dividerX = floor(CGFloat(width) * 0.56)
+        let logoArea = CGRect(x: 12, y: 14, width: dividerX - 24, height: CGFloat(height) - 28)
+        let priceArea = CGRect(x: dividerX + 8, y: 8, width: CGFloat(width) - dividerX - 18,
+                               height: CGFloat(height) - 16)
+        guard pricePosition == .left else {
+            return BrandedPriceLayout(dividerX: dividerX, logoArea: logoArea, priceArea: priceArea)
+        }
+        // Reflect only the content boxes. Each block keeps its dimensions and
+        // draws normally at its new origin, so letters and digits stay readable.
+        return BrandedPriceLayout(dividerX: CGFloat(width) - dividerX,
+            logoArea: CGRect(x: CGFloat(width) - logoArea.maxX, y: logoArea.minY,
+                             width: logoArea.width, height: logoArea.height),
+            priceArea: CGRect(x: CGFloat(width) - priceArea.maxX, y: priceArea.minY,
+                              width: priceArea.width, height: priceArea.height))
+    }
+
     private static func drawBrandedPrice(_ price: String, isBulk: Bool, width: Int, height: Int,
+                                         pricePosition: LabelPricePosition,
                                          context: CGContext) throws {
         guard let page = labelBrandDocument?.page(at: 1) else { throw InventoryLabelFailure.invalidRaster }
         let bounds = page.getBoxRect(.mediaBox)
         guard bounds.width > 0, bounds.height > 0 else { throw InventoryLabelFailure.invalidRaster }
-        let dividerX = floor(CGFloat(width) * 0.56)
+        let layout = brandedPriceLayout(width: width, height: height, pricePosition: pricePosition)
+        let dividerX = layout.dividerX
         context.saveGState()
         context.setStrokeColor(UIColor.black.cgColor)
         context.setLineWidth(2)
@@ -95,7 +122,7 @@ import UIKit
         context.addLine(to: CGPoint(x: dividerX, y: CGFloat(height) - 13))
         context.strokePath()
 
-        let logoArea = CGRect(x: 12, y: 14, width: dividerX - 24, height: CGFloat(height) - 28)
+        let logoArea = layout.logoArea
         let scale = min(logoArea.width / bounds.width, logoArea.height / bounds.height)
         let logoSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
         let logoRect = CGRect(x: logoArea.midX - logoSize.width / 2, y: logoArea.midY - logoSize.height / 2,
@@ -109,8 +136,7 @@ import UIKit
         context.drawPDFPage(page)
         context.restoreGState()
 
-        let priceArea = CGRect(x: dividerX + 8, y: 8, width: CGFloat(width) - dividerX - 18,
-                               height: CGFloat(height) - 16)
+        let priceArea = layout.priceArea
         if isBulk {
             let deal = width == 240 ? "2/$1" : "2 FOR $1"
             let font = try priceFont(deal, maximum: width == 240 ? 44 : 32, minimum: 9, width: priceArea.width)
