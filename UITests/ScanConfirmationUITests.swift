@@ -60,16 +60,25 @@ import XCTest
         let manualSearch = app.buttons["scanner.manualSearch"]
         let viewList = app.buttons["scanner.viewList"]
         let details = app.buttons["scanner.detailsToggle"]
+        let camera = app.descendants(matching: .any)["scanner.cameraSurface"].firstMatch
+        XCTAssertTrue(camera.waitForExistence(timeout: 5))
+        let cameraFrame = camera.frame
+        let header = app.descendants(matching: .any)["scanner.header"].firstMatch
+        XCTAssertTrue(header.waitForExistence(timeout: 5))
+        XCTAssertLessThan(header.frame.height, 90, "Scanner information stays in a compact top strip")
+        XCTAssertTrue(app.statusBars.firstMatch.exists, "The scanner keeps the real system status bar")
         assertOverlayVisible(totals, in: app)
         assertOverlayVisible(manualSearch, in: app)
         XCTAssertTrue(waitForValue("Expanded", of: details))
         tapFixedControl(details, in: app)
         XCTAssertTrue(waitForValue("Collapsed", of: details))
+        XCTAssertEqual(camera.frame, cameraFrame, "Collapsing the scanned list cannot resize the camera")
         assertOverlayVisible(totals, in: app)
         assertOverlayVisible(manualSearch, in: app)
         assertOverlayVisible(viewList, in: app)
         tapFixedControl(details, in: app)
         XCTAssertTrue(waitForValue("Expanded", of: details))
+        XCTAssertEqual(camera.frame, cameraFrame)
         let options = app.buttons["scanner.options"]
         tapCameraOptions(options, in: app)
         tapMenuItem("Developer Testing", in: app)
@@ -79,7 +88,24 @@ import XCTest
 
         let confirmation = app.navigationBars["Choose the Card"]
         XCTAssertTrue(confirmation.waitForExistence(timeout: 10))
-        let firstProduct = "mock:Pokémon:0"
+        let fallback = app.buttons["scanReview.manualSearch"]
+        assertOverlayVisible(fallback, in: app)
+        tapFixedControl(fallback, in: app)
+        let search = app.navigationBars["Search & Add"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5), "A missing candidate can be searched without saving a wrong match")
+        let query = app.textFields["catalog.query"]
+        XCTAssertTrue(query.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "Scanner manual search focuses the keyboard immediately")
+        query.typeText("scanner search draft")
+        _ = UITestInteraction.tap(app.buttons["catalog.keyboardDone"], in: app)
+        let keyboardDismissed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.keyboards.firstMatch)
+        XCTAssertEqual(XCTWaiter.wait(for: [keyboardDismissed], timeout: 5), .completed)
+        XCTAssertEqual(query.value as? String, "scanner search draft", "Keyboard Done keeps the search text")
+        _ = UITestInteraction.tapToolbar(search.buttons["Done"], in: app)
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 10), "Closing catalog search returns to scanning new matches")
+        let firstAdd = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "scanReview.add.")).firstMatch
+        XCTAssertTrue(firstAdd.waitForExistence(timeout: 5))
+        let firstProduct = String(firstAdd.identifier.dropFirst("scanReview.add.".count))
         let condition = app.buttons["scanReview.condition"]
         let printing = app.buttons["scanReview.printing." + firstProduct]
         XCTAssertTrue(condition.waitForExistence(timeout: 5)); XCTAssertTrue(condition.isHittable)
@@ -98,8 +124,10 @@ import XCTest
 
         let add = app.buttons["scanReview.add." + firstProduct]
         XCTAssertTrue(add.waitForExistence(timeout: 5)); add.tap()
-        XCTAssertTrue(app.staticTexts["scanner.lastAdded"].waitForExistence(timeout: 10),
-            "Explicit confirmation must return with a committed last-card action")
+        let recent = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "scanner.recentCard.")).firstMatch
+        XCTAssertTrue(recent.waitForExistence(timeout: 10), "Explicit confirmation returns to the newest scanned card")
+        XCTAssertTrue(recent.label.contains("Holofoil")); XCTAssertTrue(recent.label.contains("Lightly Played"))
+        XCTAssertTrue(app.staticTexts["scanner.totals"].label.contains("1 cards"), "The discarded candidate was never added")
         XCTAssertTrue(app.buttons["scanner.undoLastAdd"].exists)
         XCTAssertTrue(app.buttons["scanner.addAnotherCopy"].exists)
         XCTAssertFalse(app.buttons["scanner.scanNext"].exists, "The next card must not require a Next button")
@@ -119,6 +147,74 @@ import XCTest
         let export = app.buttons["list.exportCSV"], share = app.buttons["list.shareCSV"]
         XCTAssertTrue(export.waitForExistence(timeout: 5)); XCTAssertTrue(export.isHittable); XCTAssertTrue(export.isEnabled)
         XCTAssertTrue(share.waitForExistence(timeout: 5)); XCTAssertTrue(share.isHittable); XCTAssertTrue(share.isEnabled)
+    }
+
+    func testRecentCardsShowNewestFirstAndOpenTheExistingCardEditor() {
+        continueAfterFailure = false
+        let app = launchRecentCardsFixture()
+        defer { app.terminate() }
+        let newestID = "scanner.recentCard.20000000-0000-0000-0000-000000000003"
+        let middleID = "scanner.recentCard.20000000-0000-0000-0000-000000000002"
+        let newest = app.buttons[newestID], middle = app.buttons[middleID]
+        XCTAssertTrue(newest.waitForExistence(timeout: 5))
+        XCTAssertTrue(middle.waitForExistence(timeout: 5))
+        let recent = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "scanner.recentCard."))
+        XCTAssertEqual(recent.firstMatch.identifier, newestID)
+        XCTAssertLessThan(newest.frame.minY, middle.frame.minY)
+        assertFixedScanActions(in: app)
+        tapFixedControl(newest, in: app)
+        XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["cardEditor.name"].label, "Synthetic scan 3")
+        let quantity = app.steppers["cardEditor.quantity"]
+        _ = UITestInteraction.reveal(quantity, in: app)
+        _ = UITestInteraction.tap(quantity.buttons["Increment"], in: app)
+        _ = UITestInteraction.tapToolbar(app.buttons["cardEditor.save"], in: app)
+        XCTAssertTrue(newest.waitForExistence(timeout: 5))
+        XCTAssertTrue(newest.label.contains("Qty 2"), "Quick edits update the same scanned row")
+        XCTAssertEqual(recent.firstMatch.identifier, newestID, "Editing a quantity does not reorder scan history")
+        XCTAssertTrue(app.staticTexts["scanner.totals"].label.contains("4 cards"))
+        XCTAssertTrue(app.staticTexts["scanner.mode"].label.contains("Paused"), "Closing an editor respects a paused camera")
+        assertFixedScanActions(in: app)
+        tapFixedControl(middle, in: app)
+        XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5), "Another recent card remains editable after a warm return")
+        XCTAssertEqual(app.staticTexts["cardEditor.name"].label, "Synthetic scan 2")
+        _ = UITestInteraction.tapToolbar(app.buttons["cardEditor.cancel"], in: app)
+        assertFixedScanActions(in: app)
+    }
+
+    func testRecentCardDrawerKeepsActionsOnScreenAtAccessibilityTextSize() {
+        continueAfterFailure = false
+        let app = launchRecentCardsFixture(largeText: true)
+        defer { app.terminate() }
+        let details = app.buttons["scanner.detailsToggle"]
+        XCTAssertTrue(waitForValue("Expanded", of: details))
+        assertFixedScanActions(in: app)
+        tapFixedControl(details, in: app)
+        XCTAssertTrue(waitForValue("Collapsed", of: details))
+        assertFixedScanActions(in: app)
+        tapFixedControl(details, in: app)
+        XCTAssertTrue(waitForValue("Expanded", of: details))
+        assertFixedScanActions(in: app)
+    }
+
+    private func launchRecentCardsFixture(largeText: Bool = false) -> XCUIApplication {
+        let app = XCUIApplication()
+        if let path = ProcessInfo.processInfo.environment["DYLD_FALLBACK_LIBRARY_PATH"] {
+            app.launchEnvironment["DYLD_FALLBACK_LIBRARY_PATH"] = path
+        }
+        app.launchArguments = ["--uitest-scanner-recents", "-scannerDetailsCollapsed", "NO"]
+        if largeText {
+            app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        }
+        app.launch()
+        XCTAssertTrue(app.buttons["scanner.detailsToggle"].waitForExistence(timeout: 10))
+        return app
+    }
+
+    private func assertFixedScanActions(in app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        for identifier in ["scanner.manualSearch", "scanner.viewList", "scanner.finishSession", "scanner.options"] {
+            assertOverlayVisible(app.buttons[identifier], in: app, file: file, line: line)
+        }
     }
 
     private func assertOverlayVisible(_ element: XCUIElement, in app: XCUIApplication,

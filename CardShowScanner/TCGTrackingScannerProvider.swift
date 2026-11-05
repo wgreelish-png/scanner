@@ -313,6 +313,9 @@ struct ScannerReviewReleaseQueue {
     @Published private(set) var status = "Preparing TCGTracking…"
     @Published private(set) var manualSearchSuggested = false
     private var active = false
+    private var manualSearchSuspended = false
+    private var documentFailed = false
+    private var bridgeInstalled = false
     private var game = "Pokémon"
     private var nonce = UUID().uuidString
     private var normalizer = TCGBridgeNormalizer()
@@ -369,12 +372,13 @@ struct ScannerReviewReleaseQueue {
         default: diagnosticGame = TCGGameRegistry.categoryID(for: game).map { "tcgp_\($0)" } ?? "unsupported"
         }
         DiagnosticLog.shared.record("web.load_started", ["game": diagnosticGame])
-        self.game = game; active = true; nonce = UUID().uuidString; normalizer = TCGBridgeNormalizer()
+        self.game = game; active = true; manualSearchSuspended = false; documentFailed = false; nonce = UUID().uuidString; normalizer = TCGBridgeNormalizer()
         recoveryAttempts = 0
         status = "Starting bundled scanner…"
         loadBundledPage(restartingServer: false)
     }
     private func loadBundledPage(restartingServer: Bool) {
+        bridgeInstalled = false
         reviewRelease.loading()
         pageTask?.cancel()
         let startupNonce = nonce
@@ -385,17 +389,18 @@ struct ScannerReviewReleaseQueue {
                 else { try await LocalScannerServer.shared.start() }
                 guard let self, self.active, self.nonce == startupNonce, !Task.isCancelled else { return }
                 self.pageNavigation = self.webView.load(URLRequest(url: Self.pageURL))
-                if self.pageNavigation == nil { self.status = "Scanner could not open. Tap Retry Live Scanner." }
+                if self.pageNavigation == nil { self.documentFailed = true; self.status = "Scanner could not open. Tap Retry Live Scanner." }
             } catch {
                 guard let self, self.active, self.nonce == startupNonce, !Task.isCancelled else { return }
                 DiagnosticLog.shared.failure("scanner.local_start_failed", error)
+                self.documentFailed = true
                 self.status = "Local scanner could not start. Tap Retry Live Scanner."
             }
         }
     }
     func stop() {
         if active { DiagnosticLog.shared.record("web.stopped") }
-        active = false; nonce = UUID().uuidString; manualSearchSuggested = false
+        active = false; manualSearchSuspended = false; bridgeInstalled = false; nonce = UUID().uuidString; manualSearchSuggested = false
         reviewRelease.restart()
         pageTask?.cancel(); pageTask = nil; pageNavigation = nil
         continuation.finish()
@@ -455,6 +460,31 @@ struct ScannerReviewReleaseQueue {
         DiagnosticLog.shared.record("scanner.manual_search_resumed")
         webView.evaluateJavaScript("window.CardShowBridge?.resumeAfterManualSearchPrompt()", completionHandler: nil)
     }
+    func suspendForManualSearch() {
+        guard active, !manualSearchSuspended else { return }
+        manualSearchSuspended = true; manualSearchSuggested = false
+        normalizer = TCGBridgeNormalizer(); reviewRelease.discardPending()
+        dispatchManualSearch("suspendForManualSearch")
+    }
+    func resumeAfterManualSearch() {
+        guard active, manualSearchSuspended else { return }
+        manualSearchSuspended = false
+        guard !documentFailed else { return }
+        DiagnosticLog.shared.record("scanner.manual_search_resumed")
+        dispatchManualSearch("resumeAfterManualSearch")
+    }
+    private func dispatchManualSearch(_ operation: String) {
+        guard bridgeInstalled, !documentFailed else { return }
+        let requestNonce = nonce
+        guard let data = try? JSONEncoder().encode(requestNonce), let argument = String(data: data, encoding: .utf8) else { return }
+        // WebKit can finish an old queued evaluation after navigation. The JS
+        // document checks its own nonce before applying a warm transition.
+        webView.evaluateJavaScript("window.CardShowBridge?.\(operation)(\(argument)); null;") { [weak self] _, error in
+            guard let self, self.active, self.nonce == requestNonce, error != nil else { return }
+            self.documentFailed = true
+            self.status = "Scanner could not resume. Tap Retry Live Scanner."
+        }
+    }
     func refreshDatabase() {
         guard active else { return }
         manualSearchSuggested = false
@@ -496,20 +526,33 @@ struct ScannerReviewReleaseQueue {
         guard active, webView === self.webView, let navigation, navigation === pageNavigation, Self.allowed(webView.url) else { return }
         pageNavigation = nil
         let requestNonce = nonce
+        let installedSuspended = manualSearchSuspended
         if recoveryAttempts > 0 { DiagnosticLog.shared.record("scanner.local_recovered", ["quantity": String(recoveryAttempts)]) }
         DiagnosticLog.shared.record("web.page_loaded")
         guard let url = Bundle.main.url(forResource: "TCGTrackingBridge", withExtension: "js"),
               let source = try? String(contentsOf: url, encoding: .utf8),
               let gameKey = TCGGameRegistry.scannerKey(for: game),
               let data = try? JSONSerialization.data(withJSONObject: ["nonce": nonce, "game": gameKey, "autoStart": true, "cacheToken": LocalScannerServer.shared.cacheToken,
-                  "steadyCardBorder": UserDefaults.standard.object(forKey: "steadyCardBorder") as? Bool ?? true]),
+                  "steadyCardBorder": UserDefaults.standard.object(forKey: "steadyCardBorder") as? Bool ?? true,
+                  "manualSearchSuspended": manualSearchSuspended]),
               let config = String(data: data, encoding: .utf8) else {
+            documentFailed = true
             DiagnosticLog.shared.record("web.resource_missing")
             status = "Scanner adapter resource or game configuration is missing."; return
         }
         webView.evaluateJavaScript(source + "\nwindow.CardShowBridge.install(" + config + "); null;") { [weak self] _, error in
             guard let self, self.active, self.nonce == requestNonce else { return }
-            if let error { DiagnosticLog.shared.failure("web.injection_failed", error); self.status = "Could not initialize bundled scanner modules. Retry Live Scanner." }
+            if let error {
+                self.documentFailed = true; DiagnosticLog.shared.failure("web.injection_failed", error)
+                self.status = "Could not initialize bundled scanner modules. Retry Live Scanner."
+            } else {
+                self.bridgeInstalled = true
+                // Pause/dismissal may have arrived after config was captured
+                // but before this document installed its bridge callbacks.
+                if self.manualSearchSuspended || installedSuspended {
+                    self.dispatchManualSearch(self.manualSearchSuspended ? "suspendForManualSearch" : "resumeAfterManualSearch")
+                }
+            }
         }
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -530,6 +573,7 @@ struct ScannerReviewReleaseQueue {
             status = "Reconnecting scanner…"
             loadBundledPage(restartingServer: true)
         } else {
+            documentFailed = true
             DiagnosticLog.shared.record("scanner.local_load_failed", ["quantity": String(recoveryAttempts),
                 "reason": recoveryAttempts > 0 ? "retry_exhausted" : "not_retryable"])
             status = "Scanner could not reconnect. Tap Retry Live Scanner."
@@ -538,6 +582,8 @@ struct ScannerReviewReleaseQueue {
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         guard active, webView === self.webView else { return }
         pageTask?.cancel(); pageTask = nil; pageNavigation = nil; manualSearchSuggested = false
+        documentFailed = true
+        bridgeInstalled = false
         reviewRelease.restart()
         DiagnosticLog.shared.record("web.process_terminated")
         status = "Scanner process stopped. Tap Retry Live Scanner."
@@ -593,6 +639,7 @@ struct ScannerReviewReleaseQueue {
             let envelope = try JSONDecoder().decode(TCGBridgeEnvelope.self, from: data)
             guard envelope.nonce == nonce else { return }
             if envelope.kind == "diagnostic" { logDiagnostic(envelope); return }
+            if manualSearchSuspended && envelope.kind != "status" { return }
             if envelope.kind == "manualSearchSuggested" {
                 guard !manualSearchSuggested else { return }
                 manualSearchSuggested = true
@@ -613,6 +660,10 @@ struct ScannerReviewReleaseQueue {
     }
     private func logDiagnostic(_ message: TCGBridgeEnvelope) {
         guard let record = ScannerDiagnosticRecord.validated(message) else { return }
+        if let event = message.event, ["startup_failed", "camera_interrupted", "javascript_error", "javascript_rejection"].contains(event) {
+            documentFailed = true
+        }
+        if message.event == "scanner_ready" { documentFailed = false }
         if let event = message.event, ["startup_started", "startup_failed", "camera_interrupted", "camera_backgrounded", "javascript_error", "javascript_rejection"].contains(event) {
             reviewRelease.loading()
         }

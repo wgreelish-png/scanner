@@ -1,4 +1,5 @@
 import XCTest
+import SwiftData
 @testable import CardShowScanner
 
 final class ScannerPageRecoveryTests: XCTestCase {
@@ -45,4 +46,95 @@ final class ScannerPageRecoveryTests: XCTestCase {
         XCTAssertEqual(queue.request("p:125"), "p:125", "Discarding a draft does not make the authorized camera unready")
         XCTAssertNil(queue.becameReady())
     }
+}
+
+@MainActor final class ScannerManualSearchLifecycleTests: XCTestCase {
+    private func store() throws -> ModelContainer {
+        try ModelContainer(for: CardList.self, InventoryCard.self, ScanSession.self,
+                           configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+    }
+    private func card() -> CardCandidate {
+        CardCandidate(identity: CardIdentity(game: "Pokémon", productID: "p:123", printing: "Normal"),
+                      name: "Manual return fixture", set: "Lifecycle", number: "1", marketPrice: nil,
+                      confidence: 96, printings: ["Normal"])
+    }
+    func testManualEntryKeepsOneConsumerAndRejectsLateRecognitionUntilDismissal() throws {
+        let container = try store(), context = container.mainContext
+        let session = try SessionService.start(game: "Pokémon", context: context)
+        let list = try XCTUnwrap(SessionService.list(for: session, context: context))
+        let provider = ManualSearchScannerProvider(), model = ScannerViewModel(provider: provider, pricing: ManualSearchPricing())
+        model.start(game: "Pokémon", list: list, context: context, session: session)
+        defer { model.stop() }
+        XCTAssertTrue(model.suspendForManualSearch())
+        model.receive(ScanResult(id: UUID(), candidates: [card()], accepted: true, same: false))
+        model.start(game: "Pokémon", list: list, context: context, session: session)
+        XCTAssertNil(model.selected); XCTAssertEqual(provider.starts, 1)
+        XCTAssertEqual(provider.stops, 0); XCTAssertEqual(provider.suspensions, 1)
+        model.resumeAfterManualSearch(); model.resumeAfterManualSearch()
+        XCTAssertEqual(provider.resumptions, 1, "One dismissal resumes the existing stream exactly once")
+        XCTAssertEqual(provider.starts, 1); XCTAssertEqual(provider.stops, 0)
+        model.receive(ScanResult(id: UUID(), candidates: [card()], accepted: true, same: false))
+        XCTAssertEqual(model.selected?.identity.productID, "p:123")
+        XCTAssertEqual(list.quantity, 0, "Returning to capture cannot save a card")
+    }
+    func testBackgroundStopWhileManualEntryIsOpenNeedsFreshValidatedStartAfterDismissal() throws {
+        let container = try store(), context = container.mainContext
+        let session = try SessionService.start(game: "Pokémon", context: context)
+        let list = try XCTUnwrap(SessionService.list(for: session, context: context))
+        let provider = ManualSearchScannerProvider(), model = ScannerViewModel(provider: provider, pricing: ManualSearchPricing())
+        model.start(game: "Pokémon", list: list, context: context, session: session)
+        XCTAssertTrue(model.suspendForManualSearch())
+        model.stop()
+        model.start(game: "Pokémon", list: list, context: context, session: session)
+        XCTAssertEqual(provider.starts, 1, "Foreground cannot reopen capture behind catalog entry")
+        model.resumeAfterManualSearch()
+        XCTAssertEqual(provider.resumptions, 0, "A dismissed sheet cannot resurrect a stopped provider")
+        model.start(game: "Pokémon", list: list, context: context, session: session)
+        XCTAssertEqual(provider.starts, 2)
+        model.stop()
+    }
+    func testManualFallbackRequiresExplicitDiscardAndCannotDiscardAnOngoingConfirmation() throws {
+        let container = try store(), context = container.mainContext
+        let session = try SessionService.start(game: "Pokémon", context: context)
+        let list = try XCTUnwrap(SessionService.list(for: session, context: context))
+        let provider = ManualSearchScannerProvider(), model = ScannerViewModel(provider: provider, pricing: ManualSearchPricing())
+        model.start(game: "Pokémon", list: list, context: context, session: session)
+        defer { model.stop() }
+        model.receive(ScanResult(id: UUID(), candidates: [card()], accepted: true, same: false))
+        XCTAssertFalse(model.suspendForManualSearch(), "A frozen review is preserved without explicit discard")
+        XCTAssertNotNil(model.selected)
+        model.selectionInProgress = true
+        XCTAssertFalse(model.suspendForManualSearch(discardSelection: true))
+        XCTAssertNotNil(model.selected)
+        model.selectionInProgress = false
+        XCTAssertTrue(model.suspendForManualSearch(discardSelection: true))
+        XCTAssertNil(model.selected); XCTAssertNil(model.result); XCTAssertFalse(model.priceLoading)
+        XCTAssertEqual(list.quantity, 0); XCTAssertEqual(session.addedQuantity, 0)
+        model.paused = true; model.resumeAfterManualSearch()
+        XCTAssertEqual(provider.resumptions, 0, "Explicit camera pause survives manual dismissal")
+    }
+}
+
+@MainActor private final class ManualSearchScannerProvider: ScannerProvider {
+    let label = "Manual lifecycle fixture"
+    private(set) var results: AsyncStream<ScanResult>
+    private var continuation: AsyncStream<ScanResult>.Continuation
+    var starts = 0, stops = 0, suspensions = 0, resumptions = 0
+    init() {
+        let pair = AsyncStream<ScanResult>.makeStream()
+        results = pair.stream; continuation = pair.continuation
+    }
+    func start(game: String) {
+        starts += 1
+        let pair = AsyncStream<ScanResult>.makeStream()
+        results = pair.stream; continuation = pair.continuation
+    }
+    func stop() { stops += 1; continuation.finish() }
+    func suspendForManualSearch() { suspensions += 1 }
+    func resumeAfterManualSearch() { resumptions += 1 }
+    func clearCache() async throws {}
+}
+
+private struct ManualSearchPricing: MarketPricing {
+    func quote(for card: CardCandidate) async throws -> MarketQuote? { nil }
 }

@@ -10,6 +10,7 @@ import AudioToolbox
     var selected: CardCandidate?
     var confirmed = false
     var paused = false
+    private(set) var manualSearchSuspended = false
     var error: String?
     var session: ScanSession?
     private var scanDraft: ScanBatchDraft?
@@ -69,7 +70,7 @@ import AudioToolbox
         self.quickActionCooldown = quickActionCooldown; self.undoCard = undoCard
     }
     func start(game: String, list: CardList, context: ModelContext, session: ScanSession, draft: ScanBatchDraft? = nil) {
-        guard consumer == nil, !paused else { return }
+        guard consumer == nil, !paused, !manualSearchSuspended else { return }
         guard session.isActive, session.listID == list.id, session.game == game else {
             error = BatchFailure.unavailable.localizedDescription; return
         }
@@ -87,7 +88,7 @@ import AudioToolbox
         }
     }
     func receive(_ scan: ScanResult) {
-        guard !paused, !saving, selected == nil else {
+        guard !paused, !manualSearchSuspended, !saving, selected == nil else {
             DiagnosticLog.shared.record("recognition.held", sampleEvery: 5); return
         }
         if !scan.visible { waitingForRemoval = false; savedRecognitionRef = nil; savedRecognitionEpisode = nil; return }
@@ -114,6 +115,29 @@ import AudioToolbox
         if consumer != nil { DiagnosticLog.shared.record("scanner.stop") }
         provider.stop(); consumer?.cancel(); consumer = nil
         // Keep the pending review and price selection across navigation/backgrounding.
+    }
+    /// Catalog entry pauses recognition in the existing camera document. A real
+    /// navigation/background stop still retires that document and its stream.
+    @discardableResult func suspendForManualSearch(discardSelection: Bool = false) -> Bool {
+        guard !saving, !selectionInProgress, !manualSearchSuspended,
+              selected == nil || discardSelection else { return false }
+        manualSearchSuspended = true
+        priceTask?.cancel(); priceRequestID = UUID(); priceLoading = false
+        printingOptionsTask?.cancel(); printingOptionsTask = nil
+        if discardSelection {
+            result = nil; selected = nil; confirmed = false; candidatePrintings = [:]
+            waitingForRemoval = false; savedRecognitionRef = nil; savedRecognitionEpisode = nil
+            priceMessage = nil; priceConnectionRequired = false; error = nil
+        }
+        provider.suspendForManualSearch()
+        return true
+    }
+    func resumeAfterManualSearch() {
+        guard manualSearchSuspended else { return }
+        manualSearchSuspended = false
+        // A background stop requires start's session validation and a new
+        // stream; dismissing catalog entry alone cannot resurrect capture.
+        if consumer != nil, !paused { provider.resumeAfterManualSearch() }
     }
     func togglePause(game: String, list: CardList, context: ModelContext, session: ScanSession) {
         paused.toggle()

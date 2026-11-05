@@ -10,13 +10,18 @@ struct ManualCardSearchView: View {
     let list: CardList
     let allowsGameChange: Bool
     let draft: ScanBatchDraft?
+    let focusSearchOnAppear: Bool
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var model: ManualCardSearchModel
     @State private var selection: ManualSearchSelection?
     @State private var lastAdded: String?
-    init(list: CardList, game: String, allowsGameChange: Bool, draft: ScanBatchDraft? = nil) {
+    @State private var isVisible = false
+    @FocusState private var searchFocused: Bool
+    init(list: CardList, game: String, allowsGameChange: Bool, draft: ScanBatchDraft? = nil,
+         focusSearchOnAppear: Bool = false) {
         self.list = list; self.allowsGameChange = allowsGameChange; self.draft = draft
+        self.focusSearchOnAppear = focusSearchOnAppear
         _model = State(initialValue: ManualCardSearchModel(game: TCGGameRegistry.scannerKey(for: game) != nil ? game : "Pokémon"))
     }
     var body: some View {
@@ -30,6 +35,7 @@ struct ManualCardSearchView: View {
                     }
                     TextField("Name, card number or set", text: Binding(get: { model.query }, set: { model.updateQuery($0) }))
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .focused($searchFocused)
                         .accessibilityIdentifier("catalog.query")
                     Text("Search saved \(model.game) cards. Add a number or set to narrow the five closest matches.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -50,7 +56,10 @@ struct ManualCardSearchView: View {
                     Section("Closest matches") {
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: dynamicTypeSize.isAccessibilitySize ? 1 : 2), spacing: 16) {
                             ForEach(model.results) { card in
-                                Button { selection = ManualSearchSelection(card: card) } label: { CatalogSearchTile(card: card) }
+                                Button {
+                                    searchFocused = false
+                                    selection = ManualSearchSelection(card: card)
+                                } label: { CatalogSearchTile(card: card) }
                                     .buttonStyle(.plain).disabled(model.isSearching).accessibilityIdentifier("catalog.result." + card.identity.productID)
                             }
                         }
@@ -58,14 +67,35 @@ struct ManualCardSearchView: View {
                 }
             }.navigationTitle("Search & Add").navigationBarTitleDisplayMode(.inline)
                 .scrollDismissesKeyboard(.interactively)
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
-                .sheet(item: $selection) { selected in
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { isVisible = false; searchFocused = false; dismiss() }
+                    }
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button("Done") { searchFocused = false }
+                            .fixedSize().frame(minWidth: 64, minHeight: 44)
+                            .accessibilityIdentifier("catalog.keyboardDone")
+                    }
+                }
+                .sheet(item: $selection, onDismiss: {
+                    if focusSearchOnAppear, isVisible, selection == nil { searchFocused = true }
+                }) { selected in
                     ManualCardConfirmationView(card: selected.card, list: list, draft: draft) { card in
                         lastAdded = card.name; selection = nil
                     }
                 }
-                .task { model.load() }
-                .onDisappear { model.cancel() }
+                .onAppear { isVisible = true }
+                .task {
+                    model.load()
+                    guard focusSearchOnAppear else { return }
+                    // Wait for the presented sheet's search field to enter the
+                    // responder hierarchy; disappearing cancels this request.
+                    do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
+                    guard isVisible, selection == nil, !Task.isCancelled else { return }
+                    searchFocused = true
+                }
+                .onDisappear { isVisible = false; searchFocused = false; model.cancel() }
         }
     }
 }
