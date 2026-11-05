@@ -26,6 +26,12 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 71 adds [branded PokéDen price tags](docs/BrandedPriceTags.md): the wordmark,
+divider, rounded border and a large whole-dollar price, plus standalone
+2-for-$1 bulk-bin tags. This is the default for newly prepared inventory labels;
+Card Details remains selectable. The 30 × 15 mm paper option joins existing
+sizes, using the supported printer's 12 mm printable strip.
+
 Build 70 removes duplicate card codes from printed label titles, adds direct
 approval/preparation from Label Details with optional full review, and puts
 Clear Print Queue in the price-tag toolbars. See [label approval and queue

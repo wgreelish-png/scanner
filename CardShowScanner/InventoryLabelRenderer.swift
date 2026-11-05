@@ -23,20 +23,30 @@ import UIKit
     }
 
     static func render(_ draft: CustomPriceTagDraft) throws -> InventoryLabelBitmap {
-        try draft.validate()
-        let raster = try Self.raster(price: draft.priceText, name: "", number: "", condition: "",
-            style: .priceOnly, paper: draft.paperSize)
+        let raster = try renderRaster(draft)
         return InventoryLabelBitmap(raster: raster, previewImage: try image(raster: raster))
     }
 
+    static func renderRaster(_ draft: CustomPriceTagDraft) throws -> LabelRaster {
+        try draft.validate()
+        return try Self.raster(price: draft.priceText, name: "", number: "", condition: "",
+            style: .priceOnly, paper: draft.paperSize, isBulk: draft.isBulk)
+    }
+
     private static func raster(price: String, name cardName: String, number cardNumber: String, condition conditionText: String,
-                               style: InventoryLabelStyle, paper: InventoryLabelSize) throws -> LabelRaster {
+                               style: InventoryLabelStyle, paper: InventoryLabelSize, isBulk: Bool = false) throws -> LabelRaster {
         let width = paper.feedDots, height = paper.headDots
-        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
-            bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue),
+        // Draw the branded vectors at four samples per printer dot, then use
+        // area coverage for the final bit decision. Card details retain their
+        // established native-dot rendering exactly.
+        let samplesPerDot = style == .priceOnly ? 4 : 1
+        let sampleWidth = width * samplesPerDot, sampleHeight = height * samplesPerDot
+        guard let context = CGContext(data: nil, width: sampleWidth, height: sampleHeight, bitsPerComponent: 8,
+            bytesPerRow: sampleWidth, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue),
               let storage = context.data else { throw InventoryLabelFailure.invalidRaster }
         context.setFillColor(gray: 1, alpha: 1)
-        context.fill(CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
+        context.fill(CGRect(x: 0, y: 0, width: CGFloat(sampleWidth), height: CGFloat(sampleHeight)))
+        context.scaleBy(x: CGFloat(samplesPerDot), y: CGFloat(samplesPerDot))
         context.translateBy(x: 0, y: CGFloat(height))
         context.scaleBy(x: 1, y: -1)
         UIGraphicsPushContext(context)
@@ -44,8 +54,7 @@ import UIKit
         let margin: CGFloat = 8, available = CGFloat(width) - margin * 2
         switch style {
         case .priceOnly:
-            let font = try priceFont(price, maximum: 64, minimum: 14, width: available)
-            drawCentered(price, font: font, rect: CGRect(x: margin, y: 0, width: available, height: CGFloat(height)))
+            try drawBrandedPrice(price, isBulk: isBulk, width: width, height: height, context: context)
         case .cardDetails:
             let titleFont = UIFont.systemFont(ofSize: 17, weight: .semibold)
             let title = titleComponents(name: cardName, number: cardNumber)
@@ -64,23 +73,92 @@ import UIKit
             drawCentered(condition, font: conditionFont,
                 rect: CGRect(x: left + priceWidth + gap, y: 31, width: conditionWidth, height: 56))
         }
-        let grayscale = Array(UnsafeBufferPointer(start: storage.assumingMemoryBound(to: UInt8.self), count: width * height))
-        return try Self.raster(grayscale: grayscale, landscapeWidth: width, landscapeHeight: height)
+        let grayscale = Array(UnsafeBufferPointer(start: storage.assumingMemoryBound(to: UInt8.self), count: sampleWidth * sampleHeight))
+        return try Self.raster(grayscale: grayscale, landscapeWidth: width, landscapeHeight: height,
+                               samplesPerDot: samplesPerDot)
     }
 
-    static func bitmap(grayscale: [UInt8], landscapeWidth: Int, landscapeHeight: Int) throws -> InventoryLabelBitmap {
-        let raster = try Self.raster(grayscale: grayscale, landscapeWidth: landscapeWidth, landscapeHeight: landscapeHeight)
+    private static func drawBrandedPrice(_ price: String, isBulk: Bool, width: Int, height: Int,
+                                         context: CGContext) throws {
+        guard let page = labelBrandDocument?.page(at: 1) else { throw InventoryLabelFailure.invalidRaster }
+        let bounds = page.getBoxRect(.mediaBox)
+        guard bounds.width > 0, bounds.height > 0 else { throw InventoryLabelFailure.invalidRaster }
+        let dividerX = floor(CGFloat(width) * 0.56)
+        context.saveGState()
+        context.setStrokeColor(UIColor.black.cgColor)
+        context.setLineWidth(2)
+        let border = UIBezierPath(roundedRect: CGRect(x: 4, y: 4,
+            width: CGFloat(width) - 8, height: CGFloat(height) - 8), cornerRadius: 10)
+        context.addPath(border.cgPath)
+        context.strokePath()
+        context.move(to: CGPoint(x: dividerX, y: 13))
+        context.addLine(to: CGPoint(x: dividerX, y: CGFloat(height) - 13))
+        context.strokePath()
+
+        let logoArea = CGRect(x: 12, y: 14, width: dividerX - 24, height: CGFloat(height) - 28)
+        let scale = min(logoArea.width / bounds.width, logoArea.height / bounds.height)
+        let logoSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
+        let logoRect = CGRect(x: logoArea.midX - logoSize.width / 2, y: logoArea.midY - logoSize.height / 2,
+                              width: logoSize.width, height: logoSize.height)
+        // PDF paths use a bottom-left origin; the label's drawing coordinates
+        // use a top-left origin. Draw the outlined letters directly, preserving
+        // vectors until the final printer-dot coverage calculation.
+        context.translateBy(x: logoRect.minX, y: logoRect.maxY)
+        context.scaleBy(x: scale, y: -scale)
+        context.translateBy(x: -bounds.minX, y: -bounds.minY)
+        context.drawPDFPage(page)
+        context.restoreGState()
+
+        let priceArea = CGRect(x: dividerX + 8, y: 8, width: CGFloat(width) - dividerX - 18,
+                               height: CGFloat(height) - 16)
+        if isBulk {
+            let deal = width == 240 ? "2/$1" : "2 FOR $1"
+            let font = try priceFont(deal, maximum: width == 240 ? 44 : 32, minimum: 9, width: priceArea.width)
+            drawCentered(deal, font: font, rect: priceArea)
+        } else {
+            // Normal show prices remain large. Very long valid amounts shrink
+            // as a complete string, rather than clipping digits or currency.
+            let font = try priceFont(price, maximum: 64, minimum: 9, width: priceArea.width)
+            drawCentered(price, font: font, rect: priceArea)
+        }
+    }
+
+    /// The supplied reference lettering is bundled as outlined vector paths,
+    /// avoiding app-icon crops, bitmap enlargement and font substitution.
+    private static let labelBrandDocument: CGPDFDocument? = {
+        guard let data = NSDataAsset(name: "PokeDenWordmark")?.data,
+              let provider = CGDataProvider(data: data as CFData) else { return nil }
+        return CGPDFDocument(provider)
+    }()
+
+    static func bitmap(grayscale: [UInt8], landscapeWidth: Int, landscapeHeight: Int,
+                       samplesPerDot: Int = 1) throws -> InventoryLabelBitmap {
+        let raster = try Self.raster(grayscale: grayscale, landscapeWidth: landscapeWidth, landscapeHeight: landscapeHeight,
+                                     samplesPerDot: samplesPerDot)
         return InventoryLabelBitmap(raster: raster, previewImage: try image(raster: raster))
     }
 
-    private static func raster(grayscale: [UInt8], landscapeWidth: Int, landscapeHeight: Int) throws -> LabelRaster {
+    private static func raster(grayscale: [UInt8], landscapeWidth: Int, landscapeHeight: Int,
+                               samplesPerDot: Int = 1) throws -> LabelRaster {
         guard landscapeHeight == 96, [240, 320, 400].contains(landscapeWidth),
-              grayscale.count == landscapeWidth * landscapeHeight else { throw InventoryLabelFailure.invalidRaster }
+              [1, 4].contains(samplesPerDot),
+              grayscale.count == landscapeWidth * landscapeHeight * samplesPerDot * samplesPerDot else {
+            throw InventoryLabelFailure.invalidRaster
+        }
         var packed = [UInt8](repeating: 0, count: landscapeWidth * 12)
+        let sampleWidth = landscapeWidth * samplesPerDot
+        let threshold = 128 * samplesPerDot * samplesPerDot
         for x in 0..<landscapeWidth {
-            for y in 0..<landscapeHeight where grayscale[y * landscapeWidth + x] < 128 {
-                let head = landscapeHeight - 1 - y
-                packed[x * 12 + head / 8] |= 0x80 >> (head % 8)
+            for y in 0..<landscapeHeight {
+                var coverage = 0
+                for sampleY in 0..<samplesPerDot {
+                    let row = (y * samplesPerDot + sampleY) * sampleWidth + x * samplesPerDot
+                    for sampleX in 0..<samplesPerDot { coverage += Int(grayscale[row + sampleX]) }
+                }
+                if coverage < threshold {
+                    let head = landscapeHeight - 1 - y
+                    packed[x * 12 + head / 8] |= 0x80 >> (head % 8)
+                }
             }
         }
         let raster = LabelRaster(width: landscapeHeight, height: landscapeWidth, data: Data(packed))

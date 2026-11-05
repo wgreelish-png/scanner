@@ -4,23 +4,28 @@ import Observation
 enum InventoryLabelStyle: String, Codable, CaseIterable, Identifiable, Sendable {
     case priceOnly, cardDetails
     var id: Self { self }
-    var title: String { self == .priceOnly ? "Price only" : "Card details" }
+    var title: String { self == .priceOnly ? "PokéDen price" : "Card details" }
 }
 
 /// The printable head is 12 mm wide. Larger stock leaves its factory margins;
 /// the long dimension runs along the paper feed, at eight dots per millimetre.
 enum InventoryLabelSize: String, Codable, CaseIterable, Identifiable, Sendable {
-    case small30x14, medium40x12, large50x14
+    case small30x14, medium40x12, small30x15, large50x14
     var id: Self { self }
     var title: String {
         switch self {
         case .small30x14: return "30 × 14 mm"
         case .medium40x12: return "40 × 12 mm"
+        case .small30x15: return "30 × 15 mm"
         case .large50x14: return "50 × 14 mm"
         }
     }
     var feedDots: Int {
-        switch self { case .small30x14: return 240; case .medium40x12: return 320; case .large50x14: return 400 }
+        switch self {
+        case .small30x14, .small30x15: return 240
+        case .medium40x12: return 320
+        case .large50x14: return 400
+        }
     }
     var headDots: Int { 96 }
 }
@@ -65,7 +70,7 @@ struct InventoryLabelDraft: Codable, Equatable, Identifiable, Sendable {
     let condition: String
     var askingPriceText: String
     var copies: Int = 1
-    var style: InventoryLabelStyle = .cardDetails
+    var style: InventoryLabelStyle = .priceOnly
     var paperSize: InventoryLabelSize = .small30x14
     var marketValue: Decimal?
     var profitInputs: TagProfitInputs

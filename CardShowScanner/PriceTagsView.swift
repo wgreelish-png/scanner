@@ -41,9 +41,13 @@ import SwiftData
                     batchButton(.priceChanged, title: "Print Price Changed", subtitle: "New cards, unprinted tags and prices due for review.",
                         symbol: "arrow.triangle.2.circlepath", count: approvals.isLoaded ? changedIDs.count : nil)
                     NavigationLink { CustomPriceTagView(paperPreferences: paperPreferences) } label: {
-                        routeLabel(title: "Custom Price Tag", subtitle: "Enter a price and copies. No inventory needed.",
+                        routeLabel(title: "Custom Price Tag", subtitle: "PokéDen logo, price and copies. No inventory needed.",
                             symbol: "square.and.pencil", count: nil)
                     }.buttonStyle(.plain).accessibilityIdentifier("priceTags.custom")
+                    NavigationLink { CustomPriceTagView(isBulk: true, paperPreferences: paperPreferences) } label: {
+                        routeLabel(title: "2 for $1 Bulk Tags", subtitle: "PokéDen stickers for bulk bins. Choose copies and paper.",
+                            symbol: "tray.2", count: nil)
+                    }.buttonStyle(.plain).accessibilityIdentifier("priceTags.bulk")
                 }
                 if !store.isLoaded || !approvals.isLoaded {
                     VStack(alignment: .leading, spacing: 10) {
@@ -85,7 +89,7 @@ import SwiftData
                 }
                 .font(.subheadline.weight(.semibold)).padding(18)
                 .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
-                Text("Saved manual prices are retained. Bulk cards stay in the 2 for $1 category without individual tags. Opening a batch never starts printing.")
+                Text("Saved manual prices are retained. Bulk cards stay in the 2 for $1 category; use bulk-bin tags above. Opening a batch never starts printing.")
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(16)
         }

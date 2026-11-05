@@ -25,6 +25,11 @@ import UIKit
                     Text(NiimbotProtocol.thirdPartyNotice)
                         .font(.footnote).textSelection(.enabled)
                 }
+                DisclosureGroup("Label typeface credits") {
+                    if let data = NSDataAsset(name: "PokeDenWordmarkNotice")?.data {
+                        Text(String(decoding: data, as: UTF8.self)).font(.footnote).textSelection(.enabled)
+                    }
+                }
             }
         }
         .navigationTitle("Label Printer").navigationBarTitleDisplayMode(.inline)
@@ -124,7 +129,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     @State private var search = ""
     @State private var selectedIDs: Set<UUID>
     @State private var drafts: [InventoryLabelDraft]
-    @State private var style: InventoryLabelStyle = .cardDetails
+    @State private var style: InventoryLabelStyle = .priceOnly
     @State private var paper: InventoryLabelSize
     @State private var paperPreferences: LabelPaperPreferences
     @State private var editing: InventoryLabelDraft?
@@ -381,7 +386,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                         Text(value.title).tag(value).accessibilityIdentifier("labels.paper." + value.rawValue)
                     }
                 }.accessibilityIdentifier("labels.paper")
-                Text("Your last label size is remembered. Check it matches the loaded roll. The printable area is 12 mm wide.")
+                Text("Your last label size is remembered. Check it matches the loaded roll. Artwork is centered in the printer's 12 mm printable strip.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             if let draft = printableDrafts.first {
@@ -742,8 +747,19 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 return
             }
             var entries: [LabelQueueEntry] = []
+            var priceRasters: [String: LabelRaster] = [:]
             for draft in draftsToPrint {
-                let raster = try InventoryLabelRenderer.renderRaster(draft)
+                let raster: LabelRaster
+                if draft.style == .priceOnly {
+                    // The branded design depends only on the final price and
+                    // roll. Reuse identical artwork across inventory entries.
+                    let key = draft.paperSize.rawValue + ":" + (draft.priceText ?? "")
+                    if let saved = priceRasters[key] { raster = saved }
+                    else {
+                        raster = try InventoryLabelRenderer.renderRaster(draft)
+                        priceRasters[key] = raster
+                    }
+                } else { raster = try InventoryLabelRenderer.renderRaster(draft) }
                 for copy in 1...draft.copies {
                     entries.append(try LabelQueueEntry(draft: draft, raster: raster, copyNumber: copy,
                         pricingRevisionID: approvals.record(for: draft.id)?.priceRevisionID))

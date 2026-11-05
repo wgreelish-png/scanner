@@ -36,10 +36,15 @@ struct LabelQueueEntry: Codable, Equatable, Identifiable, Sendable {
     let raster: LabelRaster
     /// Optional for saved queues from before durable pricing approvals existed.
     let pricingRevisionID: UUID?
+    /// Explicit standalone discount category. Missing/false remains an ordinary
+    /// custom price, including a known $0 price; inventory entries never use it.
+    let customBulk: Bool?
     var state: LabelQueueState
     var lastIssue: LabelPrinterIssue?
 
-    var priceText: String { ShowBudgetMoney.decimal(priceCents).money }
+    var priceText: String {
+        source == .custom && customBulk == true ? StickerPrice.twoForOne.displayText : ShowBudgetMoney.decimal(priceCents).money
+    }
 
     init(draft: InventoryLabelDraft, raster: LabelRaster, copyNumber: Int, pricingRevisionID: UUID? = nil) throws {
         try draft.validate()
@@ -57,23 +62,25 @@ struct LabelQueueEntry: Codable, Equatable, Identifiable, Sendable {
         self.style = draft.style
         self.raster = raster
         self.pricingRevisionID = pricingRevisionID
+        self.customBulk = nil
         self.state = .pending
         self.lastIssue = nil
         try validate()
     }
 
     init(customPriceCents: Int64, raster: LabelRaster, copyNumber: Int,
-         paperSize: InventoryLabelSize) throws {
+         paperSize: InventoryLabelSize, isBulk: Bool = false) throws {
         self.id = UUID()
         self.source = .custom
         self.inventoryID = nil
-        self.cardName = "Custom price tag"
+        self.cardName = isBulk ? "Bulk price tag" : "Custom price tag"
         self.priceCents = customPriceCents
         self.copyNumber = copyNumber
         self.paperSize = paperSize
         self.style = .priceOnly
         self.raster = raster
         self.pricingRevisionID = nil
+        self.customBulk = isBulk ? true : nil
         self.state = .pending
         self.lastIssue = nil
         try validate()
@@ -88,13 +95,14 @@ struct LabelQueueEntry: Codable, Equatable, Identifiable, Sendable {
               raster.height == paperSize.feedDots else { throw LabelPrintQueueFailure.invalidEntry }
         if source == .custom {
             guard inventoryID == nil, pricingRevisionID == nil,
-                  style == .priceOnly, priceCents % 100 == 0 else {
+                  style == .priceOnly, priceCents % 100 == 0,
+                  customBulk != true || priceCents == 0 else {
                 throw LabelPrintQueueFailure.invalidEntry
             }
         } else {
             // Keep cents-priced legacy inventory snapshots readable. Their
             // existing approval checks still apply before transport starts.
-            guard inventoryID != nil else { throw LabelPrintQueueFailure.invalidEntry }
+            guard inventoryID != nil, customBulk != true else { throw LabelPrintQueueFailure.invalidEntry }
         }
         try raster.validate()
         switch state {

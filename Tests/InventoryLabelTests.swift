@@ -54,7 +54,7 @@ import UIKit
         XCTAssertEqual(draft.copies, 1)
         XCTAssertEqual(draft.priceCents, 1_000)
         XCTAssertEqual(draft.condition, "NM")
-        XCTAssertEqual(draft.style, .cardDetails)
+        XCTAssertEqual(draft.style, .priceOnly)
         draft.askingPriceText = "32"; draft.copies = 2; draft.style = .priceOnly
         try draft.validate()
         XCTAssertEqual(draft.priceCents, 3_200)
@@ -144,6 +144,8 @@ import UIKit
         let original = item
         var draft = InventoryLabelDraft(item: item)
         var expected = InventoryLabelDraft(item: stock(name: "Battle Cage", number: "116/094"))
+        draft.style = .cardDetails
+        expected.style = .cardDetails
         let title = InventoryLabelRenderer.titleComponents(name: draft.cardName, number: draft.cardNumber)
         XCTAssertEqual(title.name, "Battle Cage")
         XCTAssertEqual(title.number, "116/094")
@@ -219,6 +221,110 @@ import UIKit
             XCTAssertEqual(try InventoryLabelRenderer.renderRaster(duplicated),
                            try InventoryLabelRenderer.renderRaster(other))
         }
+    }
+
+    private func black(_ raster: LabelRaster, x: Int, y: Int) -> Bool {
+        let head = raster.width - 1 - y
+        return raster.data[x * 12 + head / 8] & (0x80 >> (head % 8)) != 0
+    }
+
+    func testBrandedPriceLayoutKeepsWhitePaperMarginsRoundedFrameDividerAndWordmarkAcrossEveryRoll() throws {
+        let data = try XCTUnwrap(NSDataAsset(name: "PokeDenWordmark")?.data,
+                                "The label must draw its outlined wordmark directly from the vector source")
+        let provider = try XCTUnwrap(CGDataProvider(data: data as CFData))
+        let document = try XCTUnwrap(CGPDFDocument(provider))
+        XCTAssertEqual(document.numberOfPages, 1)
+        for paper in InventoryLabelSize.allCases {
+            let draft = CustomPriceTagDraft(priceCents: 1_500, copies: 1, paperSize: paper)
+            let raster = try InventoryLabelRenderer.renderRaster(draft)
+            XCTAssertEqual(raster.width, 96)
+            XCTAssertEqual(raster.height, paper.feedDots)
+            for x in 0..<paper.feedDots {
+                XCTAssertFalse(black(raster, x: x, y: 0))
+                XCTAssertFalse(black(raster, x: x, y: 95))
+            }
+            for y in 0..<96 {
+                XCTAssertFalse(black(raster, x: 0, y: y))
+                XCTAssertFalse(black(raster, x: paper.feedDots - 1, y: y))
+            }
+            // A rounded frame leaves its corner clear but has a continuous top
+            // edge. The only tall interior rule must divide logo and price.
+            XCTAssertFalse(black(raster, x: 4, y: 4))
+            XCTAssertTrue(black(raster, x: paper.feedDots / 3, y: 3))
+            let dividerColumns = (20..<(paper.feedDots - 20)).filter { x in
+                (12..<84).filter { black(raster, x: x, y: $0) }.count >= 68
+            }
+            let divider = try XCTUnwrap(dividerColumns.first)
+            XCTAssertEqual(dividerColumns.count, 2, "A two-dot rule survives thermal printing without a gray fringe")
+            XCTAssertFalse(black(raster, x: divider, y: 10), "The divider stays separate from the rounded frame")
+            XCTAssertGreaterThan(divider, paper.feedDots / 2)
+            XCTAssertLessThan(divider, paper.feedDots * 3 / 5)
+            let logoInk = (12..<(divider - 8)).reduce(0) { count, x in
+                count + (18..<78).filter { black(raster, x: x, y: $0) }.count
+            }
+            let priceInk = ((divider + 8)..<(paper.feedDots - 10)).reduce(0) { count, x in
+                count + (12..<84).filter { black(raster, x: x, y: $0) }.count
+            }
+            XCTAssertGreaterThan(logoInk, 150)
+            XCTAssertGreaterThan(priceInk, 100)
+        }
+    }
+
+    func testBrandedWholePricesAndBulkKeepTheSameLogoAndNeverClipToTheFrame() throws {
+        for paper in InventoryLabelSize.allCases {
+            let baseline = try InventoryLabelRenderer.renderRaster(CustomPriceTagDraft(priceCents: 100, copies: 1, paperSize: paper))
+            let divider = Int(floor(CGFloat(paper.feedDots) * 0.56))
+            let baselineLogo = (8..<(divider - 4)).flatMap { x in (8..<88).map { black(baseline, x: x, y: $0) } }
+            for price in [Int64(100), 1_500, 12_500, 125_000, ShowBudgetMoney.maximumCents / 100 * 100] {
+                let draft = CustomPriceTagDraft(priceCents: price, copies: 1, paperSize: paper)
+                let raster = try InventoryLabelRenderer.renderRaster(draft)
+                let bitmap = try InventoryLabelRenderer.render(draft)
+                XCTAssertEqual(raster, bitmap.raster)
+                let logo = (8..<(divider - 4)).flatMap { x in (8..<88).map { black(raster, x: x, y: $0) } }
+                XCTAssertEqual(logo, baselineLogo)
+                for x in (divider + 2)..<(paper.feedDots - 8) {
+                    XCTAssertFalse(black(raster, x: x, y: 7), "A complete amount must fit inside the frame")
+                    XCTAssertFalse(black(raster, x: x, y: 88), "A complete amount must fit inside the frame")
+                }
+            }
+            let bulk = try InventoryLabelRenderer.renderRaster(CustomPriceTagDraft(priceCents: 0, copies: 1, paperSize: paper, isBulk: true))
+            let bulkLogo = (8..<(divider - 4)).flatMap { x in (8..<88).map { black(bulk, x: x, y: $0) } }
+            XCTAssertEqual(bulkLogo, baselineLogo)
+            let bulkInk = ((divider + 8)..<(paper.feedDots - 10)).reduce(0) { count, x in
+                count + (18..<78).filter { black(bulk, x: x, y: $0) }.count
+            }
+            XCTAssertGreaterThan(bulkInk, 100, "The supplied bulk variant must fit entirely inside the price panel")
+            XCTAssertNotEqual(bulk, baseline, "Bulk must use its explicit deal design, not an individual-price guess")
+        }
+    }
+
+    func testSupersampledCoveragePacksOnlyFinalPrinterDotsWithoutDitherOrResolutionChanges() throws {
+        let width = 240, height = 96, scale = 4
+        let sampleWidth = width * scale
+        var samples = [UInt8](repeating: 255, count: width * height * scale * scale)
+        let marks = [(10, 16), (11, 9), (12, 8), (13, 7)]
+        for (x, darkSamples) in marks {
+            for sample in 0..<darkSamples {
+                samples[(20 * scale + sample / scale) * sampleWidth + x * scale + sample % scale] = 0
+            }
+        }
+        for x in [14, 15] {
+            for sample in 0..<16 {
+                samples[(20 * scale + sample / scale) * sampleWidth + x * scale + sample % scale] = x == 14 ? 127 : 128
+            }
+        }
+        let bitmap = try InventoryLabelRenderer.bitmap(grayscale: samples, landscapeWidth: width,
+                                                       landscapeHeight: height, samplesPerDot: scale)
+        XCTAssertEqual(bitmap.raster.width, 96)
+        XCTAssertEqual(bitmap.raster.height, 240)
+        XCTAssertEqual(bitmap.raster.data.count, 240 * 12)
+        for x in [10, 11, 12, 14] { XCTAssertTrue(black(bitmap.raster, x: x, y: 20)) }
+        for x in [13, 15] { XCTAssertFalse(black(bitmap.raster, x: x, y: 20)) }
+        XCTAssertEqual(bitmap.raster.data.reduce(0) { $0 + $1.nonzeroBitCount }, 4,
+                       "Coverage produces one bit per physical dot, without spreading dots into a dither pattern")
+        let image = try XCTUnwrap(bitmap.previewImage.cgImage)
+        let pixels = try XCTUnwrap(image.dataProvider?.data) as Data
+        XCTAssertTrue(pixels.allSatisfy { $0 == 0 || $0 == 255 }, "The preview must decode the same 1-bit printer data")
     }
 
     func testBothLayoutsEveryPaperSizeProduceExactNonblankPrinterRastersAndActualPreviews() throws {

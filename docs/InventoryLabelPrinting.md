@@ -1,4 +1,8 @@
-# Price labels — build 70
+# Price labels — build 71
+
+Build 71 adds [PokéDen logo-and-price labels and bulk-bin
+stickers](BrandedPriceTags.md). The branded price layout is the new default;
+Card details remains available.
 
 Build 70 adds [direct approval, label-title cleanup and queue-clearing
 toolbars](LabelApprovalAndQueueControls.md). Full Review Details is optional.
