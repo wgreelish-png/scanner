@@ -20,7 +20,7 @@ struct CustomPriceTagDraft: Equatable, Sendable {
     typealias Render = @MainActor (CustomPriceTagDraft) throws -> LabelRaster
     var price = ""
     var copies = "1"
-    var paperSize: InventoryLabelSize = .small30x14
+    var paperSize: InventoryLabelSize
     private(set) var error: String?
     private(set) var preparing = false
     @ObservationIgnored private let queue: LabelPrintQueue
@@ -28,9 +28,10 @@ struct CustomPriceTagDraft: Equatable, Sendable {
     private var preparedDraft: CustomPriceTagDraft?
     private var preparedIDs: Set<UUID> = []
 
-    init(queue: LabelPrintQueue = .shared,
+    init(queue: LabelPrintQueue = .shared, paperSize: InventoryLabelSize = .small30x14,
          render: @escaping Render = { try InventoryLabelRenderer.render($0).raster }) {
         self.queue = queue
+        self.paperSize = paperSize
         self.render = render
     }
 

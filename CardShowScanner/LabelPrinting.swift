@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 enum InventoryLabelStyle: String, Codable, CaseIterable, Identifiable, Sendable {
     case priceOnly, cardDetails
@@ -22,6 +23,37 @@ enum InventoryLabelSize: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self { case .small30x14: return 240; case .medium40x12: return 320; case .large50x14: return 400 }
     }
     var headDots: Int { 96 }
+}
+
+/// Physical roll dimensions are an explicit, remembered choice. The printable
+/// head width and Gap/Transparent setting do not identify the loaded roll.
+@MainActor @Observable final class LabelPaperPreferences {
+    static let shared: LabelPaperPreferences = {
+        let fixture = ProcessInfo.processInfo.arguments.first(where: {
+            $0.hasPrefix("--show-transactions-fixture-id=")
+        }).map { String($0.dropFirst("--show-transactions-fixture-id=".count)) }
+        let key = fixture.map { "niimbotLabelSize.fixture." + $0 } ?? "niimbotLabelSize"
+        return LabelPaperPreferences(defaults: .standard, key: key)
+    }()
+
+    private(set) var size: InventoryLabelSize
+    @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let key: String
+
+    convenience init(defaults: UserDefaults = .standard) {
+        self.init(defaults: defaults, key: "niimbotLabelSize")
+    }
+
+    private init(defaults: UserDefaults, key: String) {
+        self.defaults = defaults
+        self.key = key
+        size = defaults.string(forKey: key).flatMap(InventoryLabelSize.init(rawValue:)) ?? .small30x14
+    }
+
+    func select(_ size: InventoryLabelSize) {
+        self.size = size
+        defaults.set(size.rawValue, forKey: key)
+    }
 }
 
 /// A local label draft is independent of quotes, inventory and financial data.
@@ -176,4 +208,14 @@ enum LabelSendOutcome: Equatable, Sendable {
 @MainActor protocol LabelPrinterSending: AnyObject {
     func printLabel(_ raster: LabelRaster) async -> LabelSendOutcome
     func cancelPrinting()
+}
+
+/// Every callback is awaited: the queue must persist the next sending state
+/// before radio writes, and each confirmed receipt before advancing a page.
+@MainActor protocol LabelBatchPrinterSending: LabelPrinterSending {
+    func printBatch(
+        _ rasters: [LabelRaster],
+        beforePage: @escaping @MainActor (Int) async throws -> Void,
+        afterPage: @escaping @MainActor (Int) async throws -> Void
+    ) async -> LabelSendOutcome
 }

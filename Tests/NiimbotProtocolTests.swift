@@ -601,4 +601,252 @@ final class NiimbotProtocolTests: XCTestCase {
             XCTAssertEqual(seen.filter { $0 == 0xa3 }.count, rejectPage ? 0 : 100)
         }
     }
+
+    func testBatchStatusCounterIsBoundedByTheDeclaredCountAndKeepsSingleLabelDefault() throws {
+        for pages in [0, 1, 2, 250] {
+            let packet = NiimbotPacket(command: 0xb3, data: Data([0, UInt8(pages), 100, 100]))
+            XCTAssertEqual(try NiimbotProtocol.printStatus(packet, maximumPages: 250).completedPages, pages)
+        }
+        XCTAssertThrowsError(try NiimbotProtocol.printStatus(.init(command: 0xb3, data: Data([0, 2, 100, 100]))))
+        for (bytes, maximum) in [([UInt8(0), 3, 100, 100], 2), ([0, 251, 100, 100], 250),
+                                 ([0, 1, 101, 100], 2), ([0, 1, 100, 101], 2),
+                                 ([0, 0, 0, 0], 0), ([0, 1, 100, 100], 251)] {
+            XCTAssertThrowsError(try NiimbotProtocol.printStatus(.init(command: 0xb3, data: Data(bytes)), maximumPages: maximum))
+        }
+    }
+
+    func testMProfilesDeclareOneBatchAndRetainEveryRawPageAndPaperMode() throws {
+        var secondBytes = Data(repeating: 0, count: 12 * 320)
+        secondBytes[0] = 0x80
+        let second = LabelRaster(width: 96, height: 320, data: secondBytes)
+        for version in [0, 1, 3, 4, 5] {
+            let batch = try NiimbotProtocol.batchRequests(for: [denseRaster, second],
+                identity: d110MIdentity(version: version), paperMode: .transparent)
+            XCTAssertTrue(batch.usesCumulativePageCounter)
+            XCTAssertEqual(batch.initialization.filter { $0.command == 0x23 }.map(\.data), [Data([5])])
+            let start = try XCTUnwrap(batch.initialization.first { $0.command == 0x01 })
+            XCTAssertEqual(start.data, Data(version == 4
+                ? [0, 2, 0, 0, 0, 0, 0, 1, 0] : [0, 2, 0, 0, 0, 0, 0]))
+            XCTAssertTrue(start.beginsPrint)
+            XCTAssertEqual(batch.pages.count, 2)
+            XCTAssertEqual(batch.pages.map { $0.last?.command }, [0xe3, 0xe3])
+            XCTAssertEqual(batch.pages.flatMap { $0 }.filter(\.beginsPrint).map(\.command),
+                           version == 4 ? [0x13, 0x13] : [0x03, 0x03])
+            XCTAssertEqual(batch.pages.map { $0.first { $0.command == 0x13 }?.data.prefix(4) },
+                           [Data([0, 240, 0, 96]), Data([1, 64, 0, 96])])
+            // Batch changes only task framing and conservative dispatch markers.
+            // Its row packets must still contain each exact prepared raster.
+            for (page, raster) in zip(batch.pages, [denseRaster, second]) {
+                let single = try NiimbotProtocol.printRequests(for: raster, identity: d110MIdentity(version: version))
+                let imageCommands: Set<UInt8> = [0x83, 0x84, 0x85]
+                XCTAssertEqual(page.filter { imageCommands.contains($0.command) },
+                               single.filter { imageCommands.contains($0.command) })
+            }
+            XCTAssertFalse(batch.pages.flatMap { $0 }.contains { [UInt8(0x01), 0xf3, 0x21, 0x23].contains($0.command) })
+        }
+    }
+
+    @MainActor func testMContinuousTaskConfirmsAndPersistsEachPageBeforeTheNextPageThenEndsOnce() async throws {
+        for version in [3, 4] {
+            var requests: [NiimbotRequest] = []
+            var events: [String] = []
+            var sentPages = 0, pollsForPage = 0, pauses = 0
+            var confirmed: [Int] = []
+            try await NiimbotD110Session.printBatch([denseRaster, denseRaster, denseRaster],
+                identity: d110MIdentity(version: version), exchange: { request in
+                    requests.append(request)
+                    if request.command == 0xdc { return request.response == nil ? nil : self.d110MReadiness }
+                    if request.command == 0x01 { XCTAssertEqual(events, ["will0"]) }
+                    if request.command == 0x13 {
+                        XCTAssertEqual(events.last, "will\(sentPages)")
+                        XCTAssertEqual(confirmed, Array(0..<sentPages))
+                        XCTAssertEqual(request.beginsPrint, version == 4)
+                    }
+                    if request.command == 0xe3 {
+                        events.append("received\(sentPages)")
+                        sentPages += 1
+                        pollsForPage = 0
+                    }
+                    if request.command == 0xa3 {
+                        guard request.response != nil else { return nil }
+                        pollsForPage += 1
+                        let count = pollsForPage == 1 ? sentPages - 1 : sentPages
+                        // Completed-page proof is authoritative even if the
+                        // independent progress percentages have not reached 100.
+                        return .init(command: 0xb3, data: Data([0, UInt8(count), 80, 0]))
+                    }
+                    if request.command == 0xf3 { XCTAssertEqual(confirmed, [0, 1, 2]) }
+                    return request.response.map { .init(command: $0, data: Data([1])) }
+                }, pause: { pauses += 1 }, onPageWillSend: { index in
+                    events.append("will\(index)")
+                }, onPageCompleted: { index in
+                    confirmed.append(index)
+                    events.append("saved\(index)")
+                })
+            XCTAssertEqual(events, ["will0", "received0", "saved0", "will1", "received1", "saved1",
+                                    "will2", "received2", "saved2"])
+            XCTAssertEqual(pauses, 6)
+            XCTAssertEqual(requests.filter { $0.command == 0x01 }.count, 1)
+            XCTAssertEqual(requests.filter { $0.command == 0xf3 }.count, 1)
+            XCTAssertEqual(requests.filter { $0.command == 0x21 }.count, 1)
+            XCTAssertEqual(requests.filter { $0.command == 0x23 }.count, 1)
+            XCTAssertEqual(requests.filter { $0.command == 0xe3 }.count, 3)
+            XCTAssertEqual(requests.filter(\.beginsPrint).map(\.command),
+                           version == 4 ? [0x01, 0x13, 0x13, 0x13] : [0x01, 0x03, 0x03, 0x03])
+            XCTAssertEqual(Array(requests.suffix(version == 4 ? 2 : 1)).map(\.command),
+                           version == 4 ? [0xf3, 0xdc] : [0xf3])
+        }
+    }
+
+    @MainActor func testLegacyD110BatchKeepsTheEstablishedOneLabelTasksAndCallbacks() async throws {
+        let identity = NiimbotD110Identity(modelID: 2304, protocolVersion: 1, firmwareBytes: Data([5, 34]))
+        let batch = try NiimbotProtocol.batchRequests(for: [denseRaster, denseRaster], identity: identity)
+        XCTAssertFalse(batch.usesCumulativePageCounter)
+        XCTAssertTrue(batch.initialization.isEmpty)
+        XCTAssertEqual(batch.pages, Array(repeating: try NiimbotProtocol.printRequests(for: denseRaster), count: 2))
+        var requests: [NiimbotRequest] = []
+        var events: [String] = []
+        try await NiimbotD110Session.printBatch([denseRaster, denseRaster], identity: identity, exchange: { request in
+            requests.append(request)
+            if request.command == 0xdc { return .init(command: 0xdd, data: Data([0, 0, 0, 0, 0, 0, 0, 0, 1, 4])) }
+            if request.command == 0xa3 { return .init(command: 0xb3, data: Data([0, 1, 100, 100])) }
+            if request.command == 0xf3 { events.append("ended") }
+            return request.response.map { .init(command: $0, data: Data([1])) }
+        }, pause: {}, onPageWillSend: { events.append("will\($0)") },
+           onPageCompleted: { events.append("saved\($0)") })
+        XCTAssertEqual(events, ["will0", "ended", "saved0", "will1", "ended", "saved1"])
+        XCTAssertEqual(requests.filter { $0.command == 0x01 }.count, 2)
+        XCTAssertEqual(requests.filter { $0.command == 0xf3 }.count, 2)
+    }
+
+    @MainActor func testBatchValidatesAllPagesAndCountBeforeAnyRadioOrJournalCallback() async throws {
+        let invalid = LabelRaster(width: 96, height: 241, data: Data(repeating: 0xff, count: 12 * 241))
+        for rasters in [[], [denseRaster, invalid], Array(repeating: denseRaster, count: 251)] {
+            var exchanges = 0, callbacks = 0
+            do {
+                try await NiimbotD110Session.printBatch(rasters, identity: d110MIdentity(),
+                    exchange: { _ in exchanges += 1; return nil }, pause: {},
+                    onPageWillSend: { _ in callbacks += 1 }, onPageCompleted: { _ in callbacks += 1 })
+                XCTFail("No part of an invalid batch may print")
+            } catch { XCTAssertEqual(error as? LabelPrinterIssue, .invalidLabel) }
+            XCTAssertEqual(exchanges, 0)
+            XCTAssertEqual(callbacks, 0)
+        }
+        let bounded = try NiimbotProtocol.batchRequests(for: Array(repeating: denseRaster, count: 250), identity: d110MIdentity())
+        XCTAssertEqual(bounded.initialization.first { $0.command == 0x01 }?.data.prefix(2), Data([0, 250]))
+    }
+
+    @MainActor func testFailedWriteAheadOrCompletionPersistenceStopsTheBatchBeforeFuturePageBytes() async throws {
+        for failure in 0..<3 {
+            var requests: [NiimbotRequest] = []
+            var sentPages = 0
+            var will: [Int] = [], completed: [Int] = []
+            do {
+                try await NiimbotD110Session.printBatch([denseRaster, denseRaster], identity: d110MIdentity(), exchange: { request in
+                    requests.append(request)
+                    if request.command == 0xdc { return self.d110MReadiness }
+                    if request.command == 0xe3 { sentPages += 1 }
+                    if request.command == 0xa3 {
+                        return request.response == nil ? nil : .init(command: 0xb3, data: Data([0, UInt8(sentPages), 100, 100]))
+                    }
+                    return request.response.map { .init(command: $0, data: Data([1])) }
+                }, pause: {}, onPageWillSend: { index in
+                    will.append(index)
+                    if (failure == 0 && index == 0) || (failure == 1 && index == 1) { throw LabelPrinterIssue.writeFailed }
+                }, onPageCompleted: { index in
+                    completed.append(index)
+                    if failure == 2 { throw LabelPrinterIssue.writeFailed }
+                })
+                XCTFail("A failed queue save must stop future dispatch")
+            } catch { XCTAssertEqual(error as? LabelPrinterIssue, .writeFailed) }
+            XCTAssertEqual(sentPages, failure == 0 ? 0 : 1)
+            XCTAssertEqual(completed, failure == 0 ? [] : [0])
+            XCTAssertEqual(will, failure == 1 ? [0, 1] : [0])
+            XCTAssertEqual(requests.filter { $0.command == 0x01 }.count, failure == 0 ? 0 : 1)
+            XCTAssertFalse(requests.contains { $0.command == 0xf3 })
+            if failure == 0 { XCTAssertFalse(requests.contains(where: \.beginsPrint)) }
+        }
+    }
+
+    @MainActor func testBatchRejectsRegressedOrUnsentPageCountersWithoutCompletingOrSendingFutureCopies() async throws {
+        for invalidCount in [UInt8(0), 3] {
+            var requests: [NiimbotRequest] = []
+            var sentPages = 0
+            var will: [Int] = [], completed: [Int] = []
+            do {
+                try await NiimbotD110Session.printBatch([denseRaster, denseRaster, denseRaster], identity: d110MIdentity(), exchange: { request in
+                    requests.append(request)
+                    if request.command == 0xdc { return self.d110MReadiness }
+                    if request.command == 0xe3 { sentPages += 1 }
+                    if request.command == 0xa3 {
+                        return request.response == nil ? nil : .init(command: 0xb3,
+                            data: Data([0, sentPages == 1 ? 1 : invalidCount, 100, 100]))
+                    }
+                    return request.response.map { .init(command: $0, data: Data([1])) }
+                }, pause: {}, onPageWillSend: { will.append($0) }, onPageCompleted: { completed.append($0) })
+                XCTFail("A counter outside the sent range cannot prove a physical copy")
+            } catch { XCTAssertEqual(error as? LabelPrinterIssue, .unsupportedResponse) }
+            XCTAssertEqual(will, [0, 1]); XCTAssertEqual(completed, [0])
+            XCTAssertEqual(sentPages, 2)
+            XCTAssertEqual(requests.filter { $0.command == 0x01 }.count, 1)
+            XCTAssertFalse(requests.contains { $0.command == 0xf3 })
+        }
+    }
+
+    @MainActor func testPartialBatchErrorsTimeoutAndCancellationNeverReplayOrSendRemainingPages() async throws {
+        let expectedIssues: [LabelPrinterIssue] = [.printerNotReady, .responseTimeout, .cancelled, .connectionLost]
+        for failure in 0..<4 {
+            var requests: [NiimbotRequest] = []
+            var sentPages = 0, secondPagePolls = 0
+            var will: [Int] = [], completed: [Int] = []
+            do {
+                try await NiimbotD110Session.printBatch([denseRaster, denseRaster, denseRaster], identity: d110MIdentity(), exchange: { request in
+                    requests.append(request)
+                    if request.command == 0xdc { return self.d110MReadiness }
+                    if request.command == 0x13 && sentPages == 1 && failure == 3 { throw LabelPrinterIssue.connectionLost }
+                    if request.command == 0xe3 { sentPages += 1 }
+                    if request.command == 0xa3 {
+                        guard request.response != nil else { return nil }
+                        if sentPages == 2 { secondPagePolls += 1 }
+                        return .init(command: 0xb3, data: Data([0, 1, 100, 100]))
+                    }
+                    let value: UInt8 = failure == 0 && request.command == 0xe3 && sentPages == 2 ? 0 : 1
+                    return request.response.map { .init(command: $0, data: Data([value])) }
+                }, pause: {
+                    if failure == 2 && sentPages == 2 { throw LabelPrinterIssue.cancelled }
+                }, onPageWillSend: { will.append($0) }, onPageCompleted: { completed.append($0) })
+                XCTFail("An interrupted batch must retain proof only for its first page")
+            } catch {
+                XCTAssertEqual(error as? LabelPrinterIssue, expectedIssues[failure])
+            }
+            XCTAssertEqual(will, [0, 1]); XCTAssertEqual(completed, [0])
+            XCTAssertEqual(sentPages, failure == 3 ? 1 : 2)
+            XCTAssertEqual(secondPagePolls, failure == 1 ? 100 : 0)
+            XCTAssertEqual(requests.filter { $0.command == 0x01 }.count, 1)
+            XCTAssertFalse(requests.contains { $0.command == 0xf3 })
+        }
+    }
+
+    @MainActor func testCancellationImmediatelyAfterPhysicalCounterStillRecordsThatProofAndStopsFuturePages() async {
+        var will: [Int] = [], completed: [Int] = []
+        var sentPages = 0
+        let operation = Task { @MainActor in
+            try await NiimbotD110Session.printBatch([denseRaster, denseRaster], identity: d110MIdentity(), exchange: { request in
+                if request.command == 0xdc { return self.d110MReadiness }
+                if request.command == 0xe3 { sentPages += 1 }
+                if request.command == 0xa3 {
+                    guard request.response != nil else { return nil }
+                    withUnsafeCurrentTask { $0?.cancel() }
+                    return .init(command: 0xb3, data: Data([0, 1, 100, 100]))
+                }
+                return request.response.map { .init(command: $0, data: Data([1])) }
+            }, pause: {}, onPageWillSend: { will.append($0) }, onPageCompleted: { completed.append($0) })
+        }
+        do {
+            try await operation.value
+            XCTFail("Cancellation cannot send the second page")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(will, [0]); XCTAssertEqual(completed, [0])
+        XCTAssertEqual(sentPages, 1)
+    }
 }

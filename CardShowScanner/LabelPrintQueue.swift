@@ -242,6 +242,11 @@ private struct LabelQueueFile: Codable {
             stopRequested = false
         }
 
+        if let batchPrinter = printer as? any LabelBatchPrinterSending {
+            await sendBatch(using: batchPrinter, sessionID: sessionID)
+            return
+        }
+
         while !stopRequested && !Task.isCancelled,
               let index = entries.firstIndex(where: { $0.state == .pending }) {
             if let issue = approvalIssue(entries[index]) {
@@ -297,6 +302,108 @@ private struct LabelQueueFile: Codable {
                 error = issue.localizedDescription
                 return
             }
+        }
+    }
+
+    /// A continuous printer task still has only one unconfirmed copy at a time.
+    /// The printer must await both callbacks before advancing to another page.
+    private func sendBatch(using printer: any LabelBatchPrinterSending, sessionID: UUID) async {
+        let pending = entries.filter { $0.state == .pending }
+        var nextPage = 0
+        var activePage: Int?
+        let outcome = await withTaskCancellationHandler {
+            await printer.printBatch(pending.map(\.raster), beforePage: { [weak self] page in
+                guard let self, self.isPrinting, self.activeSessionID == sessionID else {
+                    throw LabelPrinterIssue.cancelled
+                }
+                guard self.isLoaded else { throw LabelPrintQueueFailure.notLoaded }
+                guard !self.stopRequested, !Task.isCancelled else { throw LabelPrinterIssue.cancelled }
+                guard page == nextPage, activePage == nil, pending.indices.contains(page),
+                      let index = self.entries.firstIndex(where: { $0.id == pending[page].id }),
+                      self.entries[index].state == .pending else {
+                    throw LabelPrinterIssue.unsupportedResponse
+                }
+                if let issue = self.approvalIssue(self.entries[index]) {
+                    var rejected = self.entries
+                    rejected[index].state = .failed
+                    rejected[index].lastIssue = .invalidLabel
+                    try self.commit(rejected)
+                    self.error = issue
+                    throw LabelPrinterIssue.invalidLabel
+                }
+                var sending = self.entries
+                sending[index].state = .sending
+                sending[index].lastIssue = nil
+                // If saving fails, the callback throws before any page bytes.
+                try self.commit(sending)
+                activePage = page
+                guard !self.stopRequested, !Task.isCancelled else { throw LabelPrinterIssue.cancelled }
+            }, afterPage: { [weak self] page in
+                guard let self, self.isPrinting, self.activeSessionID == sessionID else {
+                    throw LabelPrinterIssue.cancelled
+                }
+                guard self.isLoaded else { throw LabelPrintQueueFailure.notLoaded }
+                guard page == nextPage, activePage == page, pending.indices.contains(page),
+                      let index = self.entries.firstIndex(where: { $0.id == pending[page].id }),
+                      self.entries[index].state == .sending else {
+                    throw LabelPrinterIssue.unsupportedResponse
+                }
+                // Keep a physically confirmed completion even when Stop or task
+                // cancellation arrived while the printer was acknowledging it.
+                var completed = self.entries
+                completed[index].state = .completed
+                completed[index].lastIssue = nil
+                do {
+                    try self.commit(completed)
+                } catch {
+                    // The on-disk sending marker protects recovery, while the
+                    // observed completion remains visible until an explicit reload.
+                    self.entries = completed
+                    activePage = nil
+                    throw error
+                }
+                activePage = nil
+                nextPage += 1
+            })
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.requestStop(sessionID: sessionID) }
+        }
+
+        guard isPrinting, activeSessionID == sessionID, isLoaded else { return }
+        if let page = activePage,
+           let index = entries.firstIndex(where: { $0.id == pending[page].id }),
+           entries[index].state == .sending {
+            var finished = entries
+            let issue: LabelPrinterIssue
+            switch outcome {
+            case .completed:
+                // A task-level success cannot substitute for the physical
+                // counter and durable completion callback of its active page.
+                finished[index].state = .uncertain
+                issue = .unsupportedResponse
+            case .notSent(let failure):
+                finished[index].state = .failed
+                issue = failure
+            case .uncertain(let failure):
+                finished[index].state = .uncertain
+                issue = failure
+            }
+            finished[index].lastIssue = issue
+            do { try commit(finished) }
+            catch { entries = finished; return }
+            error = issue.localizedDescription
+            return
+        }
+
+        // A failure between pages must leave future copies pending. Confirmed
+        // copies are never made uncertain by a later task-end or connection error.
+        switch outcome {
+        case .completed:
+            if nextPage != pending.count, error == nil {
+                error = LabelPrinterIssue.unsupportedResponse.localizedDescription
+            }
+        case .notSent(let issue), .uncertain(let issue):
+            if error == nil { error = issue.localizedDescription }
         }
     }
 

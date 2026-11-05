@@ -3,6 +3,44 @@ import UIKit
 @testable import CardShowScanner
 
 @MainActor final class InventoryLabelTests: XCTestCase {
+    func testLabelPaperPreferenceRemembersEverySupportedSizeAcrossReopen() throws {
+        let suite = "LabelPaperPreferences." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = LabelPaperPreferences(defaults: defaults)
+
+        XCTAssertEqual(preferences.size, .small30x14)
+        XCTAssertNil(defaults.object(forKey: "niimbotLabelSize"), "Opening a new preference does not claim a detected roll")
+        for size in InventoryLabelSize.allCases {
+            preferences.select(size)
+            XCTAssertEqual(preferences.size, size)
+            XCTAssertEqual(defaults.string(forKey: "niimbotLabelSize"), size.rawValue)
+            XCTAssertEqual(LabelPaperPreferences(defaults: defaults).size, size,
+                           "A new inventory or custom-label screen must retain the last physical paper choice")
+        }
+    }
+
+    func testUnknownSavedPaperSizeUsesDefaultWithoutOverwritingUntilExplicitSelection() throws {
+        let suite = "UnknownLabelPaperPreferences." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("transparent", forKey: "niimbotPaperMode")
+
+        for raw in ["unsupported-paper", "", "30x14"] {
+            defaults.set(raw, forKey: "niimbotLabelSize")
+            let preferences = LabelPaperPreferences(defaults: defaults)
+            XCTAssertEqual(preferences.size, .small30x14)
+            XCTAssertEqual(defaults.string(forKey: "niimbotLabelSize"), raw,
+                           "Opening the screen must keep an unknown saved choice available for recovery")
+            XCTAssertEqual(LabelPaperPreferences(defaults: defaults).size, .small30x14)
+            preferences.select(.medium40x12)
+            XCTAssertEqual(defaults.string(forKey: "niimbotLabelSize"), InventoryLabelSize.medium40x12.rawValue)
+            XCTAssertEqual(LabelPaperPreferences(defaults: defaults).size, .medium40x12)
+            XCTAssertEqual(defaults.string(forKey: "niimbotPaperMode"), "transparent",
+                           "Physical dimensions and Gap/Transparent sensing remain separate settings")
+        }
+    }
+
     private func stock(price: Decimal? = 10.49, quantity: Int = 3, name: String = "Charmander", number: String = "044") -> ShowInventoryItem {
         let card = CardCandidate(identity: .init(game: "Pokémon", productID: "p:512035", printing: "Holofoil", condition: "Near Mint"),
             name: name, set: "SV Promo", number: number, marketPrice: price, confidence: 100, printings: ["Holofoil"])

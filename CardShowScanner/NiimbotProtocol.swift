@@ -128,10 +128,17 @@ struct NiimbotPrintStatus: Equatable, Sendable {
     var finishedOneLabel: Bool { completedPages == 1 }
 }
 
+struct NiimbotPrintBatchRequests: Sendable {
+    let initialization: [NiimbotRequest]
+    let pages: [[NiimbotRequest]]
+    let usesCumulativePageCounter: Bool
+}
+
 /// Native Swift subset of niimbluelib's documented D110 and D110-M workflows.
 /// Model and negotiated protocol choose the task; unknown hardware has no
 /// fallback print algorithm.
 enum NiimbotProtocol {
+    static let maximumBatchPages = 250
     static let serviceUUID = "E7810A71-73AE-499D-8C15-FAA9AEF0C3F2"
     static let referenceURL = "https://github.com/MultiMote/niimbluelib"
     static let referenceCommit = "f451be49d8e30046dee0a8f9d14747fe38f303c2"
@@ -286,8 +293,9 @@ enum NiimbotProtocol {
         }
     }
 
-    static func printStatus(_ packet: NiimbotPacket) throws -> NiimbotPrintStatus {
-        guard packet.command == 0xb3, [4, 8, 10].contains(packet.data.count) else {
+    static func printStatus(_ packet: NiimbotPacket, maximumPages: Int = 1) throws -> NiimbotPrintStatus {
+        guard (1...maximumBatchPages).contains(maximumPages),
+              packet.command == 0xb3, [4, 8, 10].contains(packet.data.count) else {
             throw LabelPrinterIssue.unsupportedResponse
         }
         let bytes = Array(packet.data)
@@ -295,7 +303,7 @@ enum NiimbotProtocol {
             throw issueForPrintError(NiimbotPacket(command: 0xdb, data: Data([bytes[6]])))
         }
         let page = Int(bytes[0]) << 8 | Int(bytes[1])
-        guard page <= 1, bytes[2] <= 100, bytes[3] <= 100 else { throw LabelPrinterIssue.unsupportedResponse }
+        guard page <= maximumPages, bytes[2] <= 100, bytes[3] <= 100 else { throw LabelPrinterIssue.unsupportedResponse }
         return NiimbotPrintStatus(completedPages: page, printProgress: Int(bytes[2]), feedProgress: Int(bytes[3]))
     }
 
@@ -303,38 +311,86 @@ enum NiimbotProtocol {
     /// MSB first. No second rotation or image re-render is performed here.
     static func printRequests(for raster: LabelRaster, identity: NiimbotD110Identity? = nil,
                               paperMode: NiimbotPaperMode = .gap) throws -> [NiimbotRequest] {
+        try validateRaster(raster)
+        let task = try printTask(for: identity)
+        return initializationRequests(task: task, totalPages: 1, paperMode: paperMode)
+            + pageRequests(for: raster, task: task, beginsPrint: false)
+    }
+
+    /// M tasks declare the complete count once, keeping intermediate pages at
+    /// the head instead of ending and feeding a separate task for every label.
+    /// The older D110 task has no declared-count start, so retain its established
+    /// complete one-label workflow instead of inventing new legacy commands.
+    static func batchRequests(for rasters: [LabelRaster], identity: NiimbotD110Identity,
+                              paperMode: NiimbotPaperMode = .gap) throws -> NiimbotPrintBatchRequests {
+        guard (1...maximumBatchPages).contains(rasters.count) else { throw LabelPrinterIssue.invalidLabel }
+        let task = try printTask(for: identity)
+        try rasters.forEach { try validateRaster($0) }
+        switch task {
+        case .d110:
+            return NiimbotPrintBatchRequests(initialization: [], pages: try rasters.map {
+                try printRequests(for: $0, identity: identity, paperMode: paperMode)
+            }, usesCumulativePageCounter: false)
+        case .b1, .d110MV4:
+            return NiimbotPrintBatchRequests(
+                initialization: initializationRequests(task: task, totalPages: rasters.count, paperMode: paperMode),
+                pages: rasters.map { pageRequests(for: $0, task: task, beginsPrint: true) },
+                usesCumulativePageCounter: true)
+        }
+    }
+
+    private static func validateRaster(_ raster: LabelRaster) throws {
         do { try raster.validate() } catch { throw LabelPrinterIssue.invalidLabel }
         guard [240, 320, 400].contains(raster.height) else { throw LabelPrinterIssue.invalidLabel }
-        let task = try printTask(for: identity)
-        var requests: [NiimbotRequest]
+    }
+
+    private static func initializationRequests(task: PrintTask, totalPages: Int,
+                                               paperMode: NiimbotPaperMode) -> [NiimbotRequest] {
         switch task {
         case .d110:
             // Preserve the established standard-D110 bytes and ordering.
-            requests = [
+            return [
                 NiimbotRequest(0x21, [2], response: 0x31),
                 NiimbotRequest(0x23, [paperMode.commandValue], response: 0x33),
-                NiimbotRequest(0x01, response: 0x02, beginsPrint: true),
+                NiimbotRequest(0x01, response: 0x02, beginsPrint: true)
+            ]
+        case .b1:
+            return [
+                NiimbotRequest(0x21, [3], response: 0x31),
+                NiimbotRequest(0x23, [paperMode.commandValue], response: 0x33),
+                NiimbotRequest(0x01, u16(totalPages) + [0, 0, 0, 0, 0], response: 0x02, beginsPrint: true)
+            ]
+        case .d110MV4:
+            return [
+                NiimbotRequest(0x23, [paperMode.commandValue], response: 0x33),
+                NiimbotRequest(0x21, [3], response: 0x31),
+                NiimbotRequest(0x01, u16(totalPages) + [0, 0, 0, 0, 0, 1, 0], response: 0x02, beginsPrint: true)
+            ]
+        }
+    }
+
+    private static func pageRequests(for raster: LabelRaster, task: PrintTask,
+                                     beginsPrint: Bool) -> [NiimbotRequest] {
+        var requests: [NiimbotRequest]
+        switch task {
+        case .d110:
+            requests = [
                 NiimbotRequest(0x20, response: 0x30),
-                NiimbotRequest(0x03, response: 0x04, requiresTrue: true),
+                NiimbotRequest(0x03, response: 0x04, beginsPrint: beginsPrint, requiresTrue: true),
                 NiimbotRequest(0x13, u16(raster.height) + u16(raster.width), response: 0x14),
                 NiimbotRequest(0x15, [0, 1], response: 0x16)
             ]
         case .b1:
             requests = [
-                NiimbotRequest(0x21, [3], response: 0x31),
-                NiimbotRequest(0x23, [paperMode.commandValue], response: 0x33),
-                NiimbotRequest(0x01, [0, 1, 0, 0, 0, 0, 0], response: 0x02, beginsPrint: true),
-                NiimbotRequest(0x03, response: 0x04, requiresTrue: true),
+                NiimbotRequest(0x03, response: 0x04, beginsPrint: beginsPrint, requiresTrue: true),
                 NiimbotRequest(0x13, u16(raster.height) + u16(raster.width) + [0, 1], response: 0x14)
             ]
         case .d110MV4:
             requests = [
-                NiimbotRequest(0x23, [paperMode.commandValue], response: 0x33),
-                NiimbotRequest(0x21, [3], response: 0x31),
-                NiimbotRequest(0x01, [0, 1, 0, 0, 0, 0, 0, 1, 0], response: 0x02, beginsPrint: true),
                 // The v4 task deliberately does not wait for this status reply.
                 NiimbotRequest(0xa3),
-                NiimbotRequest(0x13, u16(raster.height) + u16(raster.width) + [0, 1, 0, 0, 0, 0, 0, 0, 0], response: 0x14)
+                NiimbotRequest(0x13, u16(raster.height) + u16(raster.width) + [0, 1, 0, 0, 0, 0, 0, 0, 0],
+                               response: 0x14, beginsPrint: beginsPrint)
             ]
         }
         let bytes = Array(raster.data)
@@ -480,5 +536,94 @@ enum NiimbotProtocol {
             }
         }
         throw LabelPrinterIssue.responseTimeout
+    }
+
+    /// A page is journaled before any of its print bytes and confirmed only by
+    /// the physical completed-page counter. Await each confirmation's durable
+    /// callback before sending the next page: a disconnect can then leave at
+    /// most one uncertain copy, and no future page is silently replayed.
+    ///
+    /// M profiles keep one declared-count print task open throughout the batch.
+    /// Counter gating adds only the status cadence; there is no intermediate
+    /// PrintEnd, setup cycle or final-label feed between those pages.
+    static func printBatch(_ rasters: [LabelRaster], identity: NiimbotD110Identity,
+                           paperMode: NiimbotPaperMode = .gap,
+                           exchange: Exchange, pause: @MainActor () async throws -> Void,
+                           onPageWillSend: @MainActor (Int) async throws -> Void = { _ in },
+                           onPageCompleted: @MainActor (Int) async throws -> Void = { _ in }) async throws {
+        // Every page and the negotiated profile must validate before touching
+        // the radio, including a bad later page in an otherwise valid batch.
+        let batch = try NiimbotProtocol.batchRequests(for: rasters, identity: identity, paperMode: paperMode)
+        try Task.checkCancellation()
+        guard batch.usesCumulativePageCounter else {
+            // Legacy D110 has a one-byte PrintStart without a declared count.
+            // Preserve the already supported one-label algorithm per copy.
+            for (index, raster) in rasters.enumerated() {
+                try Task.checkCancellation()
+                try await onPageWillSend(index)
+                try Task.checkCancellation()
+                try await printLabel(raster, identity: identity, paperMode: paperMode,
+                                     exchange: exchange, pause: pause)
+                try await onPageCompleted(index)
+            }
+            return
+        }
+
+        let advanced = identity.protocolVersion >= 3
+        let readiness = NiimbotRequest(0xdc, [advanced ? 4 : 1], response: advanced ? 0xd9 : 0xdd,
+                                      responseAlternatives: [0xdd, 0xd9])
+        guard let reply = try await exchange(readiness) else { throw LabelPrinterIssue.unsupportedResponse }
+        try NiimbotProtocol.validateReadiness(reply, identity: identity)
+        try Task.checkCancellation()
+        // PrintStart itself can actuate the printer. The first write-ahead
+        // callback therefore precedes initialization as well as page zero.
+        try await onPageWillSend(0)
+        for request in batch.initialization {
+            try Task.checkCancellation()
+            try request.validateResponse(try await exchange(request))
+        }
+
+        for (index, requests) in batch.pages.enumerated() {
+            if index > 0 {
+                try Task.checkCancellation()
+                try await onPageWillSend(index)
+            }
+            for request in requests {
+                try Task.checkCancellation()
+                try request.validateResponse(try await exchange(request))
+            }
+
+            var completed = false
+            for _ in 0..<100 {
+                try Task.checkCancellation()
+                try await pause()
+                try Task.checkCancellation()
+                guard let packet = try await exchange(NiimbotRequest(0xa3, response: 0xb3)) else {
+                    throw LabelPrinterIssue.unsupportedResponse
+                }
+                let status = try NiimbotProtocol.printStatus(packet, maximumPages: rasters.count)
+                // Only one new page has been sent since the last proof. A
+                // regressed or advanced counter cannot confirm this queue copy.
+                guard (index...(index + 1)).contains(status.completedPages) else {
+                    throw LabelPrinterIssue.unsupportedResponse
+                }
+                if status.completedPages == index + 1 {
+                    // Persist known physical completion even if cancellation
+                    // arrives just after receiving this counter response.
+                    try await onPageCompleted(index)
+                    completed = true
+                    break
+                }
+            }
+            guard completed else { throw LabelPrinterIssue.responseTimeout }
+        }
+
+        try Task.checkCancellation()
+        let end = NiimbotRequest(0xf3, response: 0xf4, requiresTrue: true)
+        try end.validateResponse(try await exchange(end))
+        if identity.protocolVersion == 4 {
+            // Same one-way cleanup heartbeat as the pinned M-v4 task.
+            _ = try await exchange(NiimbotRequest(0xdc, [1]))
+        }
     }
 }

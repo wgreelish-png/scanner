@@ -2,7 +2,8 @@ import SwiftUI
 
 /// Standalone stickers work without stock, a saved show or tag approvals.
 @MainActor struct CustomPriceTagView: View {
-    @State private var model = CustomPriceTagModel()
+    @State private var model: CustomPriceTagModel
+    @State private var paperPreferences: LabelPaperPreferences
     @State private var queue = LabelPrintQueue.shared
     @State private var showingQueue = false
     @State private var bitmap: InventoryLabelBitmap?
@@ -10,6 +11,11 @@ import SwiftUI
     @State private var previewError: String?
     @FocusState private var focused: Field?
     private enum Field { case price, copies }
+
+    init(paperPreferences: LabelPaperPreferences = .shared) {
+        _paperPreferences = State(initialValue: paperPreferences)
+        _model = State(initialValue: CustomPriceTagModel(paperSize: paperPreferences.size))
+    }
 
     var body: some View {
         Form {
@@ -28,10 +34,13 @@ import SwiftUI
                         .focused($focused, equals: .copies).frame(minWidth: 60)
                         .accessibilityIdentifier("customLabels.copies")
                 }
-                Picker("Physical paper", selection: $model.paperSize) {
+                Picker("Physical paper", selection: Binding(get: { model.paperSize }, set: { size in
+                    model.paperSize = size
+                    paperPreferences.select(size)
+                })) {
                     ForEach(InventoryLabelSize.allCases) { paper in Text(paper.title).tag(paper) }
                 }.accessibilityIdentifier("customLabels.paper")
-                Text("1–100 copies. Choose the size on the roll loaded in your printer.")
+                Text("1–100 copies. Your last label size is remembered. Check it matches the loaded roll.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Preview") {
@@ -88,6 +97,8 @@ import SwiftUI
                     .accessibilityIdentifier("customLabels.keyboardDone")
             }
         }
+        .onAppear { model.paperSize = paperPreferences.size }
+        .onChange(of: paperPreferences.size) { _, size in model.paperSize = size }
         .task(id: model.draft) {
             bitmap = nil; previewDraft = nil; previewError = nil
             guard let draft = model.draft else { return }

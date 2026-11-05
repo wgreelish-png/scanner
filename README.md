@@ -26,6 +26,12 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 69 adds [continuous D110-M print batches](docs/ContinuousLabelPrinting.md),
+automatic foreground search/reconnection when opening Price Tags and a shared,
+remembered physical label size. Each copy still requires a saved physical
+completion receipt, and reconnecting never resumes printing. Native execution
+and physical batch timing remain to be checked on the phone.
+
 Build 24 adds a [persistent show cash budget](docs/ShowBudget.md): record purchases, sales and cash trades, reinvest 65% of gross receipts, and reserve 35% for yourself. Fees reduce buying funds separately. Open Show Budget from Lists or Scan, or record cash linked to a list from its review screen.
 
 Build 25 adds [automatic Beta IP access](docs/AutomaticBetaIP.md). With a saved Direct connection and matching website sign-in, the app updates this phone’s recorded address while preserving the other allowed addresses (build 33). Checks run only while the app is active and stop when you leave it.

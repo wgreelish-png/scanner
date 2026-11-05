@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// Opening this screen does not initialize Bluetooth. Search is always explicit.
+/// Printer settings also reflect the connection started from Price Tags.
 @MainActor struct LabelPrinterSettingsView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var queue = LabelPrintQueue.shared
@@ -18,7 +18,7 @@ import UIKit
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section {
-                Text("Supports NIIMBOT D110 and D110-M. Charge the printer, load matching labels, close its lid, then tap Search. Check one test label before printing a batch.")
+                Text("Supports NIIMBOT D110 and D110-M. Charge the printer, load matching labels and close its lid. Price Tags searches automatically; use Search to try again. Check one test label before printing a batch.")
                     .font(.footnote).foregroundStyle(.secondary)
                     .accessibilityIdentifier("labelPrinter.hardwareNote")
                 DisclosureGroup("Printer protocol credits") {
@@ -38,6 +38,7 @@ import UIKit
 @MainActor private struct LabelPrinterConnectionSection: View {
     let printer: NiimbotPrinter
     @State private var queue = LabelPrintQueue.shared
+    @State private var paperPreferences = LabelPaperPreferences.shared
     private var paperBusy: Bool { queue.isPrinting || printer.isPrinting || printer.isConfiguringPaper }
 
     @ViewBuilder var body: some View {
@@ -73,6 +74,8 @@ import UIKit
             Text("Disconnect the printer in other apps before searching. Allow Bluetooth access and keep this app open while connecting and printing.")
         }
         Section {
+            LabeledContent("Last used label size", value: paperPreferences.size.title)
+                .accessibilityIdentifier("labelPrinter.paperSize")
             Picker("Paper type", selection: Binding(get: { printer.paperMode }, set: { mode in
                 guard !paperBusy else { return }
                 printer.selectPaperMode(mode)
@@ -96,7 +99,7 @@ import UIKit
                     .accessibilityIdentifier("labelPrinter.paperModeStatus")
             }
         } header: { Text("Paper type") } footer: {
-            Text("Choose Gap for standard labels separated by gaps, or Transparent for clear labels. The choice is applied when printing. Read Printer Setting reads the configured type; select label size separately.")
+            Text("Choose Gap for standard labels separated by gaps, or Transparent for clear labels. The choice is applied when printing. Read Printer Setting reads the configured type. Label size is remembered from label preparation; check it matches the loaded roll.")
         }
     }
 }
@@ -119,7 +122,8 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     @State private var selectedIDs: Set<UUID>
     @State private var drafts: [InventoryLabelDraft]
     @State private var style: InventoryLabelStyle = .cardDetails
-    @State private var paper: InventoryLabelSize = .small30x14
+    @State private var paper: InventoryLabelSize
+    @State private var paperPreferences: LabelPaperPreferences
     @State private var editing: InventoryLabelDraft?
     @State private var queue = LabelPrintQueue.shared
     @State private var printer = NiimbotPrinter.shared
@@ -136,16 +140,20 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     @State private var showingBatchPriceEditor = false
 
     init(inventory: [ShowInventoryItem], initialInventoryID: UUID? = nil,
-         marketQuotes: [UUID: TagMarketQuote] = [:], mode: InventoryLabelBatchMode = .custom) {
+         marketQuotes: [UUID: TagMarketQuote] = [:], mode: InventoryLabelBatchMode = .custom,
+         paperPreferences: LabelPaperPreferences = .shared) {
         self.inventory = inventory
         self.marketQuotes = marketQuotes
         self.mode = mode
+        _paperPreferences = State(initialValue: paperPreferences)
+        _paper = State(initialValue: paperPreferences.size)
         let initial = inventory.first { $0.id == initialInventoryID && $0.quantity > 0 }
         let batchDrafts = InventoryLabelBatch.drafts(mode: mode, inventory: inventory,
             marketQuotes: marketQuotes, store: .shared)
-        let initialDrafts = initial.map {
+        var initialDrafts = initial.map {
             [InventoryLabelBatch.draft(for: $0, mode: .custom, marketQuotes: marketQuotes, store: .shared)]
         } ?? batchDrafts
+        for index in initialDrafts.indices { initialDrafts[index].paperSize = paperPreferences.size }
         _selectedIDs = State(initialValue: Set(initialDrafts.map(\.id)))
         _drafts = State(initialValue: initialDrafts)
         _path = State(initialValue: initialDrafts.isEmpty ? [] : [.configure])
@@ -248,6 +256,8 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { stopPrinting() }
         }
+        .onAppear { updatePaperSize(paperPreferences.size) }
+        .onChange(of: paperPreferences.size) { _, size in updatePaperSize(size) }
         .onDisappear {
             stopPrinting()
             if printer.isConfiguringPaper || !printer.isConnected { printer.stop() }
@@ -357,12 +367,15 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                         Text(value.title).tag(value).accessibilityIdentifier("labels.style." + value.rawValue)
                     }
                 }.accessibilityIdentifier("labels.style")
-                Picker("Physical paper", selection: $paper) {
+                Picker("Physical paper", selection: Binding(get: { paper }, set: { size in
+                    updatePaperSize(size)
+                    paperPreferences.select(size)
+                })) {
                     ForEach(InventoryLabelSize.allCases) { value in
                         Text(value.title).tag(value).accessibilityIdentifier("labels.paper." + value.rawValue)
                     }
                 }.accessibilityIdentifier("labels.paper")
-                Text("Choose the size printed on your label roll. The printable area is 12 mm wide.")
+                Text("Your last label size is remembered. Check it matches the loaded roll. The printable area is 12 mm wide.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             if let draft = printableDrafts.first {
@@ -426,7 +439,6 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         }
         .navigationTitle("Label Details").navigationBarTitleDisplayMode(.inline)
         .onChange(of: style) { _, value in for index in drafts.indices { drafts[index].style = value } }
-        .onChange(of: paper) { _, value in for index in drafts.indices { drafts[index].paperSize = value } }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             LabelActionBar {
                 Text("\(labelCount.formatted()) labels").font(.subheadline).monospacedDigit()
@@ -437,6 +449,11 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
             }
         }
         .accessibilityIdentifier("labels.configuration")
+    }
+
+    private func updatePaperSize(_ size: InventoryLabelSize) {
+        paper = size
+        for index in drafts.indices { drafts[index].paperSize = size }
     }
 
     private var review: some View {

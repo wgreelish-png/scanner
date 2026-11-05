@@ -1,7 +1,7 @@
 import XCTest
 
-/// These tests never search for a printer or send Bluetooth data. Queue files
-/// use the same isolated fixture token as inventory and financial records.
+/// Automatic printer discovery is disabled for these offline UI fixtures.
+/// Queue files use the same isolated token as inventory and financial records.
 @MainActor final class InventoryLabelsUITests: XCTestCase {
     func testSingleCardDraftIsIsolatedAndAcceptsZeroWithoutClampingCopies() {
         continueAfterFailure = false
@@ -344,6 +344,70 @@ import XCTest
         assertNoBluetoothPrompt(app: app)
     }
 
+    func testRememberedLabelSizeIsSharedAcrossPreparationAndKeepsSavedQueueDimensions() {
+        continueAfterFailure = false
+        let app = launch()
+        defer { app.terminate() }
+        tap(app.buttons["show.priceTags"], app: app)
+        tap(app.buttons["priceTags.custom"], app: app)
+        tap(app.buttons["customLabels.paper"], app: app)
+        tap(app.buttons["40 × 12 mm"], app: app)
+        enter("5", field: app.textFields["customLabels.price"], app: app)
+        enter("3", field: app.textFields["customLabels.copies"], app: app)
+        tap(app.buttons["customLabels.keyboardDone"], app: app)
+        tap(app.buttons["customLabels.prepare"], app: app)
+        XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
+        assertContains("40 × 12 mm", element: app.descendants(matching: .any)["labelQueue.paper"])
+        assertContains("0/3 completed", element: app.staticTexts["labelQueue.progress"])
+        let queued = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "labelQueue.entry.")).firstMatch
+        reveal(queued, app: app)
+        XCTAssertTrue(queued.exists)
+        let queuedID = queued.identifier, queuedDescription = queued.label
+
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        XCTAssertTrue(app.navigationBars["Custom Price Tag"].waitForExistence(timeout: 5))
+        tap(app.buttons["customLabels.paper"], app: app)
+        tap(app.buttons["50 × 14 mm"], app: app)
+        assertContains("50 × 14 mm", element: app.descendants(matching: .any)["customLabels.paper"])
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        XCTAssertTrue(app.navigationBars["Price Tags"].waitForExistence(timeout: 5))
+        assertContains("Last used: 50 × 14 mm", element: app.staticTexts["priceTags.paperSize"])
+        tap(app.buttons["priceTags.queue"], app: app)
+        XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
+        assertContains("40 × 12 mm", element: app.descendants(matching: .any)["labelQueue.paper"])
+        assertContains("0/3 completed", element: app.staticTexts["labelQueue.progress"])
+        let unchangedEntry = app.buttons[queuedID]
+        reveal(unchangedEntry, app: app)
+        XCTAssertEqual(unchangedEntry.label, queuedDescription,
+                       "A new paper preference cannot resize, complete or reprint saved labels")
+        XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled)
+        XCTAssertFalse(app.buttons["labelQueue.pause"].exists)
+        assertNoBluetoothPrompt(app: app)
+
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 10))
+        tap(app.buttons["show.priceTags"], app: app)
+        assertContains("Last used: 50 × 14 mm", element: app.staticTexts["priceTags.paperSize"])
+        tap(app.buttons["priceTags.custom"], app: app)
+        XCTAssertTrue(app.navigationBars["Custom Price Tag"].waitForExistence(timeout: 5))
+        assertContains("50 × 14 mm", element: app.descendants(matching: .any)["customLabels.paper"])
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        tap(app.buttons["priceTags.all"], app: app)
+        XCTAssertTrue(app.navigationBars["Label Details"].waitForExistence(timeout: 5))
+        assertContains("50 × 14 mm", element: app.descendants(matching: .any)["labels.paper"])
+        let preview = app.images["labels.bitmapPreview"].firstMatch
+        reveal(preview, app: app)
+        XCTAssertTrue((preview.value as? String ?? "").contains("50 × 14 mm"),
+                      "Inventory drafts and their initial preview use the remembered physical size")
+        tap(app.buttons["labels.close"], app: app)
+        XCTAssertTrue(app.navigationBars["Price Tags"].waitForExistence(timeout: 5))
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        assertBalances(app: app)
+        tap(app.buttons["show.inventory"], app: app)
+        assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
+        assertNoBluetoothPrompt(app: app)
+    }
+
     func testPaperModeCanBeChosenOfflineAndPersistsWithoutChangingTheSavedQueue() {
         continueAfterFailure = false
         let app = launch()
@@ -446,7 +510,8 @@ import XCTest
         if let path = ProcessInfo.processInfo.environment["DYLD_FALLBACK_LIBRARY_PATH"] {
             app.launchEnvironment["DYLD_FALLBACK_LIBRARY_PATH"] = path
         }
-        app.launchArguments = ["--show-transactions-ui-fixture", "--show-transactions-fixture-id=" + UUID().uuidString]
+        app.launchArguments = ["--show-transactions-ui-fixture", "--show-transactions-fixture-id=" + UUID().uuidString,
+                               "--uitest-disable-printer-auto-connect"]
         app.launch()
         XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 10))
         return app
