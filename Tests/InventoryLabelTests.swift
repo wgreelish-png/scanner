@@ -81,19 +81,16 @@ import UIKit
         }
     }
 
-    func testKnownMarketsBelowSeventyFiveCentsUseBulkWithoutAnIndividualLabelPrice() throws {
+    func testKnownMarketsBelowSeventyFiveCentsUsePrintableBulkDealTags() throws {
         for price in [Decimal.zero, Decimal(string: "0.49")!, Decimal(string: "0.50")!, Decimal(string: "0.74")!] {
             let draft = InventoryLabelDraft(item: stock(price: price))
             XCTAssertTrue(draft.isBulk)
             XCTAssertNil(draft.priceCents)
             XCTAssertEqual(draft.tag, .twoForOne)
             XCTAssertEqual(draft.priceText, "2 for $1")
-            XCTAssertThrowsError(try draft.validate()) {
-                XCTAssertEqual($0 as? InventoryLabelFailure, .bulkCategory)
-            }
-            XCTAssertThrowsError(try InventoryLabelRenderer.render(draft)) {
-                XCTAssertEqual($0 as? InventoryLabelFailure, .bulkCategory)
-            }
+            XCTAssertNoThrow(try draft.validate())
+            let raster = try InventoryLabelRenderer.renderRaster(draft)
+            XCTAssertTrue(raster.data.contains { $0 != 0 })
         }
     }
 
@@ -127,7 +124,7 @@ import UIKit
         }
     }
 
-    func testStoredBulkCategorySurvivesHigherMarketValuesWithoutBecomingAnIndividualTag() throws {
+    func testStoredBulkCategorySurvivesMarketMovementAndStillPrintsItsSavedDeal() throws {
         let markets: [Decimal?] = [Decimal(string: "0.50"), 10, 150, nil]
         for market in markets {
             for manual in [false, true] {
@@ -139,11 +136,59 @@ import UIKit
                 XCTAssertNil(draft.priceCents)
                 XCTAssertEqual(draft.priceText, StickerPrice.twoForOne.displayText)
                 XCTAssertEqual(draft.isManualOverride, manual)
-                XCTAssertThrowsError(try draft.validate()) {
-                    XCTAssertEqual($0 as? InventoryLabelFailure, .bulkCategory)
-                }
+                XCTAssertNoThrow(try draft.validate())
+                XCTAssertTrue(try InventoryLabelRenderer.renderRaster(draft).data.contains { $0 != 0 })
                 XCTAssertEqual(item, original)
             }
+        }
+    }
+
+    func testInventoryBulkTagsUseTheDealDesignForManualAndDetectedPaperOnEitherSide() throws {
+        let product = try XCTUnwrap(NiimbotLabelCatalog.shared.product(code: "120425109"))
+        let papers = InventoryLabelSize.allCases + [try InventoryLabelSize(product: product)]
+        let item = stock(price: 10), original = item
+        let approval = savedTag(.twoForOne, for: item)
+        for paper in papers {
+            for position in LabelPricePosition.allCases {
+                var draft = InventoryLabelDraft(item: item, approval: approval)
+                draft.paperSize = paper; draft.pricePosition = position; draft.copies = 3
+                let deal = CustomPriceTagDraft(priceCents: 0, copies: 3, paperSize: paper,
+                    isBulk: true, pricePosition: position)
+                let zero = CustomPriceTagDraft(priceCents: 0, copies: 3, paperSize: paper,
+                    pricePosition: position)
+                let raster = try InventoryLabelRenderer.renderRaster(draft)
+                XCTAssertEqual(raster, try InventoryLabelRenderer.renderRaster(deal),
+                    "Inventory deal tags use the same complete 2-for-$1 artwork as standalone deal tags")
+                XCTAssertNotEqual(raster, try InventoryLabelRenderer.renderRaster(zero),
+                    "A bulk category must never print an ordinary $0 price")
+                XCTAssertEqual(draft.copies, 3)
+                XCTAssertEqual(draft.tag, .twoForOne)
+                XCTAssertNil(draft.priceCents)
+                XCTAssertEqual(item, original)
+            }
+        }
+    }
+
+    func testInventoryBulkCardDetailsRenderAndInvalidCopyCountsRemainRejected() throws {
+        let product = try XCTUnwrap(NiimbotLabelCatalog.shared.product(code: "120425109"))
+        for paper in InventoryLabelSize.allCases + [try InventoryLabelSize(product: product)] {
+            var draft = InventoryLabelDraft(item: stock(price: Decimal(string: "0.50")))
+            draft.paperSize = paper; draft.style = .cardDetails
+            let bitmap = try InventoryLabelRenderer.render(draft)
+            XCTAssertTrue(bitmap.raster.data.contains { $0 != 0 })
+            XCTAssertEqual(bitmap.raster.height, paper.feedDots)
+            XCTAssertEqual(bitmap.previewImage.pngData(),
+                try InventoryLabelRenderer.image(raster: bitmap.raster, paper: paper).pngData())
+            for count in [0, -1, 101, Int.max] {
+                draft.copies = count
+                XCTAssertThrowsError(try InventoryLabelRenderer.renderRaster(draft)) {
+                    XCTAssertEqual($0 as? InventoryLabelFailure, .invalidCopies)
+                }
+                XCTAssertEqual(draft.copies, count)
+            }
+            draft.copies = InventoryLabelDraft.maximumCopies
+            XCTAssertEqual(try InventoryLabelRenderer.renderRaster(draft), bitmap.raster,
+                "Copy count controls queue quantity rather than changing or duplicating the drawn price")
         }
     }
 

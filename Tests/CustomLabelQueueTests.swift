@@ -196,6 +196,7 @@ import XCTest
     func testBulkFlagCannotDisguiseAnIndividualPriceOrInventoryIdentity() throws {
         let bulk = try custom(price: 0, isBulk: true)
         let mutations: [(inout [String: Any]) -> Void] = [
+            { $0["inventoryBulk"] = true },
             { $0["priceCents"] = 50 },
             { $0["priceCents"] = 100 },
             { $0["source"] = "inventory"; $0["inventoryID"] = UUID().uuidString },

@@ -27,7 +27,7 @@ import SwiftUI
                     Text("2 for $1").tag(true)
                 }.pickerStyle(.segmented).accessibilityIdentifier("customLabels.tag")
                 if model.isBulk {
-                    Text("A PokéDen logo and 2 for $1 sticker for your bulk bins. Individual bulk cards do not need separate tags.")
+                    Text("Print extra PokéDen 2 for $1 tags for cards or bins. Inventory batches also label each selected 2 for $1 card.")
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
                     HStack {
@@ -72,7 +72,7 @@ import SwiftUI
                         .accessibilityIdentifier("customLabels.preview")
                 } else {
                     Text(previewError ?? (model.isBulk
-                        ? "Enter 1–100 copies to preview your bulk-bin sticker."
+                        ? "Enter 1–100 copies to preview your 2 for $1 sticker."
                         : "Enter a whole-dollar price and copy count to preview your sticker."))
                         .font(.footnote).foregroundStyle(.secondary)
                 }

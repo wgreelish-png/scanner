@@ -83,7 +83,7 @@ struct TagSaleSuggestion: Equatable {
         guard let record = store.record(for: inventoryID) else {
             return entry.pricingRevisionID == nil ? nil : "This label's saved price is unavailable. Prepare a new label from inventory."
         }
-        guard record.approvedTag.integerPriceCents == entry.priceCents,
+        guard record.approvedTag == entry.stickerTag,
               entry.pricingRevisionID == nil || entry.pricingRevisionID == record.priceRevisionID else {
             return "The sticker price changed after this label was queued. Clear the outdated label and prepare a new one."
         }

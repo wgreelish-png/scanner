@@ -98,11 +98,11 @@ import XCTest
         XCTAssertFalse(reset.reasons.contains(.marketIncrease))
     }
 
-    func testOnlyIndividualTagsDifferentFromLastPrintedTagNeedLabels() throws {
+    func testAllApprovedTagsDifferentFromLastPrintedTagNeedLabels() throws {
         let storage = TagApprovalTestStorage(), store = store(storage), id = UUID(), bulk = UUID()
         try store.approve([request(id), .init(id: bulk, approvedTag: .twoForOne, currentMarket: 0.5)])
         XCTAssertTrue(try XCTUnwrap(store.record(for: id)).needsLabels)
-        XCTAssertFalse(try XCTUnwrap(store.record(for: bulk)).needsLabels)
+        XCTAssertTrue(try XCTUnwrap(store.record(for: bulk)).needsLabels)
         try store.markLabeled(ids: [id])
         let printed = try XCTUnwrap(store.record(for: id))
         XCTAssertFalse(printed.needsLabels)
@@ -237,7 +237,7 @@ import XCTest
         XCTAssertEqual(store.record(for: untouched), oldUntouched)
         XCTAssertEqual(store.record(for: added)?.lastPrintedTag, .individual(0))
         XCTAssertFalse(try XCTUnwrap(store.record(for: added)).needsLabels)
-        XCTAssertFalse(try XCTUnwrap(store.record(for: bulk)).needsLabels)
+        XCTAssertTrue(try XCTUnwrap(store.record(for: bulk)).needsLabels)
         XCTAssertNil(store.record(for: bulk)?.lastPrintedTag)
         XCTAssertEqual(self.store(storage).records, store.records)
     }
@@ -262,18 +262,18 @@ import XCTest
         }
     }
 
-    func testCombinedApprovalCannotConfirmBulkCategoryAsAnIndividualSticker() throws {
+    func testCombinedApprovalConfirmsBulkCategoryWithoutChangingItToAnIndividualZeroSticker() throws {
         let storage = TagApprovalTestStorage(), store = store(storage), id = UUID(), bulk = UUID()
         try store.approve([request(id)])
-        let before = storage.bytes, records = store.records, writes = storage.writes
-        XCTAssertThrowsError(try store.approve([
+        let writes = storage.writes
+        XCTAssertNoThrow(try store.approve([
             request(id, cents: 1_100), .init(id: bulk, approvedTag: .twoForOne, currentMarket: 0.5)
-        ], keepingExistingStickerIDs: [id, bulk])) {
-            XCTAssertEqual($0 as? TagApprovalStoreFailure, .invalidSelection)
-        }
-        XCTAssertEqual(store.records, records)
-        XCTAssertEqual(storage.bytes, before)
-        XCTAssertEqual(storage.writes, writes)
+        ], keepingExistingStickerIDs: [id, bulk]))
+        XCTAssertEqual(store.record(for: bulk)?.approvedTag, .twoForOne)
+        XCTAssertEqual(store.record(for: bulk)?.lastPrintedTag, .twoForOne)
+        XCTAssertFalse(try XCTUnwrap(store.record(for: bulk)).needsLabels)
+        XCTAssertEqual(store.record(for: id)?.lastPrintedTag, .individual(1_100))
+        XCTAssertEqual(storage.writes, writes + 1)
         XCTAssertTrue(store.isLoaded)
     }
 
@@ -686,11 +686,6 @@ import XCTest
             XCTAssertThrowsError(try store.prepareForPrinting([request(existing, cents: 1_200)], keepingExistingStickerIDs: keep)) {
                 XCTAssertEqual($0 as? TagApprovalStoreFailure, .invalidSelection)
             }
-        }
-        let bulk = UUID()
-        XCTAssertThrowsError(try store.prepareForPrinting([request(existing, cents: 1_200),
-            .init(id: bulk, approvedTag: .twoForOne, currentMarket: 0.5)], keepingExistingStickerIDs: [existing, bulk])) {
-            XCTAssertEqual($0 as? TagApprovalStoreFailure, .invalidSelection)
         }
         XCTAssertThrowsError(try store.prepareForPrinting([], keepingExistingStickerIDs: [existing])) {
             XCTAssertEqual($0 as? TagApprovalStoreFailure, .invalidSelection)

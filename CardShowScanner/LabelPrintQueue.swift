@@ -39,30 +39,39 @@ struct LabelQueueEntry: Codable, Equatable, Identifiable, Sendable {
     /// Explicit standalone discount category. Missing/false remains an ordinary
     /// custom price, including a known $0 price; inventory entries never use it.
     let customBulk: Bool?
+    /// A saved inventory deal is distinct from an ordinary zero-dollar sticker.
+    /// Missing/false preserves the interpretation of all older queue entries.
+    let inventoryBulk: Bool?
     var state: LabelQueueState
     var lastIssue: LabelPrinterIssue?
 
     var priceText: String {
-        source == .custom && customBulk == true ? StickerPrice.twoForOne.displayText : ShowBudgetMoney.decimal(priceCents).money
+        stickerTag == .twoForOne ? StickerPrice.twoForOne.displayText : ShowBudgetMoney.decimal(priceCents).money
+    }
+
+    var stickerTag: StickerPrice {
+        let isDeal = source == .custom ? customBulk == true : inventoryBulk == true
+        return isDeal ? .twoForOne : .individual(priceCents)
     }
 
     init(draft: InventoryLabelDraft, raster: LabelRaster, copyNumber: Int, pricingRevisionID: UUID? = nil) throws {
         try draft.validate()
         try raster.validate()
-        guard let cents = draft.priceCents, (1...draft.copies).contains(copyNumber) else {
+        guard let tag = draft.tag, (1...draft.copies).contains(copyNumber) else {
             throw LabelPrintQueueFailure.invalidEntry
         }
         self.id = UUID()
         self.source = .inventory
         self.inventoryID = draft.id
         self.cardName = draft.cardName
-        self.priceCents = cents
+        self.priceCents = tag.integerPriceCents ?? 0
         self.copyNumber = copyNumber
         self.paperSize = draft.paperSize
         self.style = draft.style
         self.raster = raster
         self.pricingRevisionID = pricingRevisionID
         self.customBulk = nil
+        self.inventoryBulk = draft.isBulk ? true : nil
         self.state = .pending
         self.lastIssue = nil
         try validate()
@@ -81,6 +90,7 @@ struct LabelQueueEntry: Codable, Equatable, Identifiable, Sendable {
         self.raster = raster
         self.pricingRevisionID = nil
         self.customBulk = isBulk ? true : nil
+        self.inventoryBulk = nil
         self.state = .pending
         self.lastIssue = nil
         try validate()
@@ -96,13 +106,17 @@ struct LabelQueueEntry: Codable, Equatable, Identifiable, Sendable {
         if source == .custom {
             guard inventoryID == nil, pricingRevisionID == nil,
                   style == .priceOnly, priceCents % 100 == 0,
+                  inventoryBulk != true,
                   customBulk != true || priceCents == 0 else {
                 throw LabelPrintQueueFailure.invalidEntry
             }
         } else {
             // Keep cents-priced legacy inventory snapshots readable. Their
             // existing approval checks still apply before transport starts.
-            guard inventoryID != nil, customBulk != true else { throw LabelPrintQueueFailure.invalidEntry }
+            guard inventoryID != nil, customBulk != true,
+                  inventoryBulk != true || (source == .inventory && priceCents == 0) else {
+                throw LabelPrintQueueFailure.invalidEntry
+            }
         }
         try raster.validate()
         switch state {

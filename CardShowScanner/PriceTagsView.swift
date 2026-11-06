@@ -78,7 +78,7 @@ import SwiftUI
                 }
                 .font(.subheadline.weight(.semibold)).padding(18)
                 .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
-                Text("Saved sticker prices are used without repricing. Bulk cards stay in the 2 for $1 category; use bulk-bin tags above. Opening a batch never starts printing.")
+                Text("Saved sticker prices are used without repricing. Every selected inventory copy receives a tag, including 2 for $1 cards. Opening a batch never starts printing.")
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(16)
         }

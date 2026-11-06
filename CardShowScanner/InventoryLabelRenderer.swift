@@ -19,7 +19,8 @@ import UIKit
         try draft.validate()
         guard let price = draft.priceText else { throw InventoryLabelFailure.invalidPrice }
         return try Self.raster(price: price, name: draft.cardName, number: draft.cardNumber,
-            condition: draft.condition, style: draft.style, paper: draft.paperSize, pricePosition: draft.pricePosition)
+            condition: draft.condition, style: draft.style, paper: draft.paperSize,
+            isBulk: draft.isBulk, pricePosition: draft.pricePosition)
     }
 
     static func render(_ draft: CustomPriceTagDraft) throws -> InventoryLabelBitmap {

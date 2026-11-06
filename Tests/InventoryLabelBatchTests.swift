@@ -19,7 +19,7 @@ import XCTest
                          tag: StickerPrice = .individual(1_000), baseline: Decimal? = 10,
                          manual: Bool = false, labeled: Bool = true) throws {
         try store.approve([.init(id: item.id, approvedTag: tag, currentMarket: baseline, isManualOverride: manual)])
-        if labeled, tag.integerPriceCents != nil { try store.markLabeled(ids: [item.id]) }
+        if labeled { try store.markLabeled(ids: [item.id]) }
     }
 
     func testAllUsesAvailableStockQuantitiesInDeterministicOrderWithoutChangingSource() {
@@ -89,7 +89,7 @@ import XCTest
         XCTAssertFalse(InventoryLabelBatch.shouldPrint(missing, approval: nil, reprintAll: true))
         let zero = try XCTUnwrap(drafts.first { $0.id == knownZero.id })
         XCTAssertEqual(zero.tag, .twoForOne)
-        XCTAssertFalse(InventoryLabelBatch.shouldPrint(zero, approval: nil, reprintAll: true))
+        XCTAssertTrue(InventoryLabelBatch.shouldPrint(zero, approval: nil, reprintAll: true))
         let fallback = try XCTUnwrap(drafts.first { $0.id == unapproved.id })
         XCTAssertEqual(fallback.marketValue, Decimal(string: "10.99"))
         XCTAssertEqual(fallback.priceCents, 1_000)
@@ -162,7 +162,7 @@ import XCTest
         XCTAssertEqual(store.record(for: card.id), saved, "Selecting replacements cannot change approval history")
     }
 
-    func testEveryModeStillHonorsExplicitStickerRetentionAndExcludesBulkOrMissingPrices() throws {
+    func testEveryModeStillHonorsExplicitStickerRetentionAndIncludesBulkButNotMissingPrices() throws {
         let store = store(), card = item(1), bulk = item(2, market: 0.5), missing = item(3, market: nil)
         try approve(card, in: store)
         let saved = try XCTUnwrap(store.record(for: card.id))
@@ -172,7 +172,7 @@ import XCTest
         for mode in InventoryLabelBatchMode.allCases {
             XCTAssertFalse(InventoryLabelBatch.shouldPrint(individual, approval: saved, mode: mode, keepExisting: true))
             XCTAssertFalse(InventoryLabelBatch.shouldPrint(individual, approval: nil, mode: mode, keepExisting: true))
-            XCTAssertFalse(InventoryLabelBatch.shouldPrint(bulkDraft, approval: nil, mode: mode))
+            XCTAssertTrue(InventoryLabelBatch.shouldPrint(bulkDraft, approval: nil, mode: mode))
             XCTAssertFalse(InventoryLabelBatch.shouldPrint(missingDraft, approval: nil, mode: mode))
         }
     }

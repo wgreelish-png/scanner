@@ -26,6 +26,10 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 81 gives [every selected inventory copy a tag](docs/AllInventoryCardTags.md),
+including the saved 2-for-$1 category. Counts, previews, preparation and print
+history include these cards without changing their prices.
+
 Build 80 makes Select Individual Inventory a full-size action beside Print All
 in Price Tags, retaining the existing card-selection flow.
 

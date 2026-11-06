@@ -13,9 +13,10 @@ never change inventory, market values, costs, sales or budgets.
 Changed selection uses the existing approval baseline and repricing thresholds,
 includes new/unprinted stock, and preserves manual prices. Reviews still save a
 new baseline only after explicit approval. Known zero and missing market prices
-remain distinct. The bulk 2 for $1 category receives no individual tags.
+remain distinct. Every selected inventory copy receives a tag, including cards
+in the 2 for $1 category, which print that saved deal.
 
-Print All explicitly includes unchanged approved individual stickers. Other
+Print All explicitly includes unchanged approved stickers in every category. Other
 modes suppress those reprints. The label count and actual queue generation share
 one eligibility rule. Saved approval revisions still protect against printing
 an outdated queue. Existing queue review/discard, interrupted-label recovery,

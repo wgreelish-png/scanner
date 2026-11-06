@@ -240,9 +240,10 @@ struct InventoryLabelDraft: Codable, Equatable, Identifiable, Sendable {
     func validate() throws {
         guard !cardName.isEmpty, cardName.count <= 500, cardNumber.count <= 100,
               condition.count <= 100, askingPriceText.count <= 40 else { throw InventoryLabelFailure.invalidText }
-        guard !isBulk else { throw InventoryLabelFailure.bulkCategory }
-        guard let priceCents else { throw InventoryLabelFailure.invalidPrice }
-        guard priceCents % 100 == 0 else { throw InventoryLabelFailure.wholeDollarRequired }
+        if !isBulk {
+            guard let priceCents else { throw InventoryLabelFailure.invalidPrice }
+            guard priceCents % 100 == 0 else { throw InventoryLabelFailure.wholeDollarRequired }
+        }
         guard (1...Self.maximumCopies).contains(copies) else { throw InventoryLabelFailure.invalidCopies }
     }
 
@@ -279,7 +280,7 @@ struct LabelRaster: Codable, Equatable, Sendable {
 }
 
 enum InventoryLabelFailure: Error, LocalizedError, Equatable {
-    case invalidPrice, invalidCopies, invalidRaster, invalidText, wholeDollarRequired, bulkCategory
+    case invalidPrice, invalidCopies, invalidRaster, invalidText, wholeDollarRequired
     var errorDescription: String? {
         switch self {
         case .invalidPrice: return "Enter a valid asking price before preparing this label."
@@ -287,7 +288,6 @@ enum InventoryLabelFailure: Error, LocalizedError, Equatable {
         case .invalidRaster: return "This label could not be prepared for the selected paper."
         case .invalidText: return "Review the card information before preparing its label."
         case .wholeDollarRequired: return "Individual price tags use whole dollars. Review this price before printing."
-        case .bulkCategory: return "Cards below $0.75 belong in the 2 for $1 category and do not receive individual price tags."
         }
     }
 }
