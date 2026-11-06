@@ -26,6 +26,9 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 80 makes Select Individual Inventory a full-size action beside Print All
+in Price Tags, retaining the existing card-selection flow.
+
 Build 79 adds [offline RFID paper detection and generated label layouts](docs/OfflineLabelCatalog.md).
 The bundled 13 KB catalog matches roll product codes to dimensions and media,
 then fits the existing vector design to the available printable region. Saved
