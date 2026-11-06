@@ -6,6 +6,7 @@ SCANNER_TEST_SELECTION=(-only-testing:"$SCANNER_TEST_TARGET")
 SCANNER_UI_RUN=false
 for SCANNER_ALLOWED_TARGET in "$@"; do
   case "$SCANNER_ALLOWED_TARGET" in
+    CardShowScannerTests/NiimbotImageTransportTests|CardShowScannerTests/NiimbotProtocolTests|CardShowScannerTests/ScannerDiagnosticsTests) ;;
     CardShowScannerTests|CardShowScannerUITests|CardShowScannerUITests/ResearchUITests|CardShowScannerUITests/MarketEvidenceUITests|CardShowScannerUITests/AppNavigationUITests|CardShowScannerUITests/ShowBudgetUITests|CardShowScannerUITests/ShowTransactionsUITests|CardShowScannerUITests/CardShowInventoryUITests|CardShowScannerUITests/ReviewPresentationUITests|CardShowScannerUITests/ListBulkDeletionUITests) ;;
     *) echo "Unknown test target" >&2; exit 2 ;;
   esac

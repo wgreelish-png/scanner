@@ -188,9 +188,26 @@ There are 21 added native tests: 11 configuration/gate/actual pacing-wakeup test
 8 protocol/selection/required-reply/measurement tests and 2 diagnostic privacy
 tests. The asynchronous tests use the production pacing scheduler with a
 controllable sleeper; CoreBluetooth integration and the printer's internal
-buffer still require the hardware comparison. Native XCTest and unsigned iPhone
-Release compilation are dispatched through the existing iOS GitHub workflow on
-this experiment branch; their results must be checked before hardware use.
+buffer still require the hardware comparison.
+
+Unsigned iPhone Release compilation passed on `c4271df`. The full native run
+built and launched, then passed 357 tests with zero failures before its 20-minute
+limit interrupted an existing exhaustive inventory-label rendering test. It had
+not reached the new printer tests. Two UI jobs were blocked by simulator-selection
+timeouts, and the broad and Research UI jobs timed out during compilation.
+
+The existing workflow now offers a manual `printer_transport` scope to run the
+complete transport, protocol and diagnostic test classes directly. Normal
+push/PR runs and the default manual scope still run the full selection. This
+test scope does not enable the device's experimental transport preference.
+
+```sh
+gh workflow run ios.yml \
+  --ref experiment/niimbot-d110m-write-without-response \
+  -f test_scope=printer_transport
+```
+
+The focused native result is pending validation before hardware use.
 
 ## References
 
