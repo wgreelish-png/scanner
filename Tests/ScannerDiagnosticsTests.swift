@@ -300,6 +300,71 @@ import UniformTypeIdentifiers
         }
     }
 
+    func testExperimentalImageTransportMeasurementsKeepOnlyBoundedFieldsAndRespectOptOut() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = "ExperimentalImageTransportDiagnostics." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let log = DiagnosticLog(directory: directory, defaults: defaults)
+        var expected = Dictionary(uniqueKeysWithValues: DiagnosticPrinterFields.experimentBounds.map { ($0.key, String($0.value)) })
+        expected.merge(["transport_requested": "paced_without_response", "transport_selected": "acknowledged",
+            "transport_fallback": "unsupported_characteristic", "job_outcome": "failed", "image_transfer_ms": "1234",
+            "wor_readiness_wait_ms": "98", "wor_pacing_wait_ms": "76", "job_wall_ms": "1345",
+            "page_completion_wait_ms": "321", "expected_labels": "10", "confirmed_labels": "8",
+            "uncertain_labels": "2"]) { _, value in value }
+        log.record("label.transfer_summary", expected.merging(["firmware_raw": "PRIVATE_FIRMWARE", "serial": "PRIVATE_SERIAL",
+            "packet_hex": "PRIVATE_PACKET", "image_data": "PRIVATE_IMAGE", "printer_name": "PRIVATE_PRINTER"]) { _, value in value })
+        let command = ["request_code": "227", "response_code": "228", "last_response_code": "228", "request_count": "8",
+            "elapsed_ms": "492", "att_ack_wait_ms": "391", "printer_reply_wait_ms": "61"]
+        log.record("label.command_summary", command)
+        defaults.set(false, forKey: "diagnosticsEnabled")
+        log.record("label.transfer_summary", expected)
+        let file = try log.exportForCopy()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let text = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertFalse(text.contains("PRIVATE_"))
+        let rows = try diagnosticRows(text).filter { ($0["event"] as? String)?.hasPrefix("label.") == true }
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows[0]["fields"] as? [String: String], expected)
+        XCTAssertEqual(rows[1]["fields"] as? [String: String], command)
+    }
+
+    func testExperimentalImageTransportRejectsNoncanonicalValuesAndUnknownModesAtStorage() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = "RejectedImageTransportDiagnostics." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let log = DiagnosticLog(directory: directory, defaults: defaults)
+        let modes: [String: [String]] = [
+            "transport_requested": ["acknowledged", "paced_without_response"],
+            "transport_selected": ["acknowledged", "paced_without_response"],
+            "transport_fallback": ["none", "unsupported_model", "unsupported_characteristic", "invalid_write_size"],
+            "job_outcome": ["completed", "failed"]
+        ]
+        for (key, values) in modes {
+            for value in values { XCTAssertTrue(DiagnosticPrinterFields.accepts(key, value)) }
+        }
+        let invalid = ["-1", "+1", "01", "1e3", "1.5", "NaN", "PRIVATE_VALUE", ""]
+        for value in invalid {
+            var fields = Dictionary(uniqueKeysWithValues: DiagnosticPrinterFields.experimentBounds.keys.map { ($0, value) })
+            for key in modes.keys { fields[key] = "PRIVATE_VALUE" }
+            log.record("label.transfer_summary", fields)
+        }
+        for (key, maximum) in DiagnosticPrinterFields.experimentBounds {
+            XCTAssertTrue(DiagnosticPrinterFields.accepts(key, String(maximum)))
+            log.record("label.transfer_summary", [key: String(maximum + 1)])
+        }
+        let file = try log.exportForCopy()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let text = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertFalse(text.contains("PRIVATE_"))
+        let rows = try diagnosticRows(text).filter { $0["event"] as? String == "label.transfer_summary" }
+        XCTAssertEqual(rows.count, invalid.count + DiagnosticPrinterFields.experimentBounds.count)
+        XCTAssertTrue(rows.allSatisfy { ($0["fields"] as? [String: String]) == [:] })
+    }
+
     func testBetaIndexLimitDiagnosticsPersistOnlyBoundedCounts() throws {
         let failure = BetaAPIIndexValidationFailure(stage: .categories, reason: .tooManyEntries,
             observedCount: 257, entryLimit: 256)
