@@ -246,15 +246,17 @@ gh workflow run ios.yml \
   -f test_scope=label_preview
 ```
 
-Build 90's [focused native and Release validation](https://github.com/wgreelish-png/scanner/actions/runs/42299037161)
-passed on `89003cb`: **125 native tests, zero failures**, including all 25 added
-tests (14 transport, 83 protocol and 28 diagnostic tests across the complete
-focused classes), and unsigned iPhone Release compilation. The UI checks assert
-the preview, label count and enabled Prepare button before any extra tap or
-scroll. Their final harness verification is pending: the first completed retry
-confirmed the selected-card initial preview and Prepare action, then exposed
-navigation/queue selector issues and a short preview assertion deadline. These
-are being corrected without adding an interaction before the readiness checks.
+Build 90's [focused validation](https://github.com/wgreelish-png/scanner/actions/runs/42305265828)
+passed on `40e977c`: **125 native tests and three UI tests, zero failures**, plus
+unsigned iPhone Release compilation. All 25 added native tests executed; the
+complete focused classes contain 14 transport, 83 protocol and 28 diagnostic
+tests. The UI cases cover initial card selection, returning to change the
+selection, and Print All. Each asserts the current preview, label count and
+enabled Prepare button before any extra tap or scroll. The selected-card case
+also verifies that the first Prepare tap queues the correct card and price.
+
+This is software validation. The physical D110-M readiness behavior, output
+reliability and speed still require the hardware comparison above.
 
 ## References
 
