@@ -207,7 +207,13 @@ gh workflow run ios.yml \
   -f test_scope=printer_transport
 ```
 
-The focused native result is pending validation before hardware use.
+The [focused native run](https://github.com/wgreelish-png/scanner/actions/runs/42280340186)
+passed on `1830019`: **121 tests, zero failures**, including all 21 added tests.
+The class totals were 11 transport, 82 protocol and 28 diagnostic tests. The
+[unsigned iPhone Release build](https://github.com/wgreelish-png/scanner/actions/runs/42275977584/job/128094858044)
+passed on `c4271df`; subsequent changes affect only CI selection and this guide.
+The full native/UI limitations above remain separate from the successful focused
+result. Hardware reliability and speed remain pending the physical A/B procedure.
 
 ## References
 
