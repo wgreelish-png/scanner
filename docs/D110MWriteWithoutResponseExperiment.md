@@ -205,7 +205,7 @@ The Linux workspace has no Xcode or Swift compiler. Available checks passed:
 Xcode source membership, all 212 Swift files' grammar, 47 pinned runtime assets,
 both scalar/SIMD recognition smoke checks and `git diff --check`.
 
-There are 21 added native tests: 11 configuration/gate/actual pacing-wakeup tests,
+Build 88 introduced 21 native tests: 11 configuration/gate/actual pacing-wakeup tests,
 8 protocol/selection/required-reply/measurement tests and 2 diagnostic privacy
 tests. The asynchronous tests use the production pacing scheduler with a
 controllable sleeper; CoreBluetooth integration and the printer's internal
@@ -246,8 +246,15 @@ gh workflow run ios.yml \
   -f test_scope=label_preview
 ```
 
-Build 90's combined validation is pending. The UI checks assert the preview,
-label count and enabled Prepare button before any extra tap or scroll.
+Build 90's [focused native and Release validation](https://github.com/wgreelish-png/scanner/actions/runs/42299037161)
+passed on `89003cb`: **125 native tests, zero failures**, including all 25 added
+tests (14 transport, 83 protocol and 28 diagnostic tests across the complete
+focused classes), and unsigned iPhone Release compilation. The UI checks assert
+the preview, label count and enabled Prepare button before any extra tap or
+scroll. Their final harness verification is pending: the first completed retry
+confirmed the selected-card initial preview and Prepare action, then exposed
+navigation/queue selector issues and a short preview assertion deadline. These
+are being corrected without adding an interaction before the readiness checks.
 
 ## References
 

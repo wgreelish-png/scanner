@@ -17,8 +17,14 @@ import XCTest
         app.buttons["labels.prepare"].tap()
         XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
         assertContains("0/1 completed", element: app.staticTexts["labelQueue.progress"])
-        let queued = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "labelQueue.entry.")).firstMatch
-        reveal(queued, app: app)
+        let queue = app.collectionViews["labelQueue.screen"]
+        XCTAssertTrue(queue.waitForExistence(timeout: 10))
+        let queued = queue.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "labelQueue.entry.")).firstMatch
+        for _ in 0..<12 {
+            if queued.exists && queued.isHittable { break }
+            queue.swipeUp()
+        }
+        XCTAssertTrue(queued.exists && queued.isHittable, "The prepared label must be available in the foreground queue")
         assertContains("Stock A", element: queued)
         assertContains("$35", element: queued)
         XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled, "Preparation cannot start a hardware print")
@@ -37,7 +43,8 @@ import XCTest
         tap(app.buttons["labels.continueSelection"], app: app)
         assertInventoryReadyWithoutInteraction(price: "$35", labels: 1, app: app)
 
-        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        UITestInteraction.tapToolbar(app.navigationBars["Label Details"].buttons.element(boundBy: 0),
+                                     in: app, identifier: "navigation.back")
         XCTAssertTrue(app.navigationBars["Select Label Cards"].waitForExistence(timeout: 5))
         tap(app.buttons["labels.select." + stockAID], app: app)
         tap(app.buttons["labels.select." + stockBID], app: app)
@@ -1217,13 +1224,17 @@ import XCTest
             predicate: NSPredicate(format: "exists == true AND isEnabled == true AND isHittable == true"), object: prepare)
         XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 5), .completed,
                        "Prepare must work before touching a layout control or scrolling", file: file, line: line)
-        let preview = app.images["labels.bitmapPreview"].firstMatch
-        XCTAssertTrue(preview.waitForExistence(timeout: 5),
+        let configuration = app.collectionViews["labels.configuration"]
+        XCTAssertTrue(configuration.waitForExistence(timeout: 10), file: file, line: line)
+        let preview = configuration.images["labels.bitmapPreview"]
+        XCTAssertTrue(preview.waitForExistence(timeout: 15),
                       "The initial preview must appear without a refresh gesture", file: file, line: line)
-        let rendered = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value CONTAINS %@ AND value CONTAINS %@", "PokéDen price", price), object: preview)
-        XCTAssertEqual(XCTWaiter.wait(for: [rendered], timeout: 5), .completed,
-                       "Expected the current selection's initial \(price) preview", file: file, line: line)
+        // The image and its draft description are published together. Read one
+        // scoped snapshot instead of repeatedly resolving a global Image query
+        // through a short Foundation predicate deadline on a slow simulator.
+        let shown = preview.value as? String ?? ""
+        XCTAssertTrue(shown.contains("PokéDen price") && shown.contains(price),
+                      "Expected the current selection's initial \(price) preview, received \(shown)", file: file, line: line)
     }
 
     private func assertInitialInventoryPreview(_ price: String, app: XCUIApplication,
