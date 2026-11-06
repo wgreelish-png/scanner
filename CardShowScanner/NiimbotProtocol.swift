@@ -402,18 +402,21 @@ struct NiimbotPrintTransferMetrics {
     }
 
     func diagnosticFields(elapsedMilliseconds: Int, uncertainLabels: Int = 0) -> [String: String] {
-        var fields = ["print_task": task, "total": String(total), "native_groups": String(groups),
+        var fields: [String: String] = ["print_task": task, "total": String(total), "native_groups": String(groups),
          "native_copies": String(nativeCopies), "image_packets": String(imagePackets),
          "request_count": String(requests), "wire_bytes": String(wireBytes),
          "transfer_elapsed_ms": String(max(0, min(3_600_000, elapsedMilliseconds))),
          "status_polls": String(statusPolls), "print_start_count": String(printStarts), "print_end_count": String(printEnds),
-         "printer_model": String(identity.modelID), "protocol_version": String(identity.protocolVersion),
-         "response_write_count": String(responseWriteCount), "without_response_write_count": String(withoutResponseWriteCount),
-         "image_response_bytes": String(imageResponseBytes), "image_without_response_bytes": String(imageWithoutResponseBytes),
-         "image_response_write_count": String(imageResponseWriteCount),
-         "image_without_response_write_count": String(imageWithoutResponseWriteCount),
-         "expected_labels": String(total), "confirmed_labels": String(confirmedPages.count),
-         "uncertain_labels": String(min(max(0, uncertainLabels), max(0, total - confirmedPages.count)))]
+         "printer_model": String(identity.modelID), "protocol_version": String(identity.protocolVersion)]
+        fields["response_write_count"] = String(responseWriteCount)
+        fields["without_response_write_count"] = String(withoutResponseWriteCount)
+        fields["image_response_bytes"] = String(imageResponseBytes)
+        fields["image_without_response_bytes"] = String(imageWithoutResponseBytes)
+        fields["image_response_write_count"] = String(imageResponseWriteCount)
+        fields["image_without_response_write_count"] = String(imageWithoutResponseWriteCount)
+        fields["expected_labels"] = String(total)
+        fields["confirmed_labels"] = String(confirmedPages.count)
+        fields["uncertain_labels"] = String(min(max(0, uncertainLabels), max(0, total - confirmedPages.count)))
         if identity.firmwareBytes.count == 2 {
             fields["firmware_byte_0"] = String(identity.firmwareBytes[0])
             fields["firmware_byte_1"] = String(identity.firmwareBytes[1])
