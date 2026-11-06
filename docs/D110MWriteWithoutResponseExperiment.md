@@ -1,11 +1,12 @@
-# D110-M image-write experiment — build 89
+# D110-M image-write experiment — build 90
 
 Branch: `experiment/niimbot-d110m-write-without-response`.
 Base: `facaae2`, the current build 87 app. Development uses the isolated
 `/workspace/scanner-d110m-experiment` worktree; the daily branch is unchanged.
-The diagnostic revision is `experiment-d110m-label-ready`. Build 89 also fixes
+The diagnostic revision is `experiment-d110m-readiness-recheck`. Build 89 fixes
 initial inventory-label navigation so the preview and Prepare button use the
-current selection immediately. The transport experiment itself is unchanged.
+current selection immediately. That preparation fix applies equally to both A/B
+modes and preserves the selected artwork and saved queue behavior.
 
 This experiment changes eligible image-data transport only. Existing rendering,
 row compression, native identical-copy grouping, card order, page pipelining,
@@ -77,7 +78,12 @@ Before each experimental fragment, the pump checks
 `canSendWriteWithoutResponse`. If false, it waits for
 `peripheralIsReady(toSendWriteWithoutResponse:)`. A pacing deadline can also wake
 the pump; readiness arriving before pacing, or pacing expiring before readiness,
-cannot bypass the other condition. Timer identity, transfer, connection and job
+cannot bypass the other condition. If readiness is false, build 90 also schedules
+a deferred readiness recheck every 250 ms, up to eight checks per transfer. This
+can resume a ready pump when a delegate wake is absent; it never submits bytes
+while `canSendWriteWithoutResponse` is false. The existing five-second transfer
+deadline still fails the transfer if readiness never arrives. These rechecks are
+readiness waits, not additional intentional pacing. Timer identity, transfer, connection and job
 fences prevent a canceled or replaced wake from sending retired data. There is
 one drain at a time. Experimental image writes do not wait for
 `didWriteValueFor`; acknowledged writes retain their own acknowledgement path.
@@ -117,6 +123,8 @@ available numeric version bytes without assuming a human-readable version format
 | `image_transfer_ms` | Accumulated image-request spans, including their frame pacing and any transport waits. |
 | `label.group_transfer.elapsed_ms` | Wall span for one prepared page/image group; includes its setup/end exchanges as documented in the existing timing guide. |
 | `wor_readiness_wait_ms`, `wor_pacing_wait_ms` | Observed CoreBluetooth backpressure wait and experimental cooldown wait. These may overlap. |
+| `wor_readiness_rechecks`, `wor_readiness_callbacks`, `wor_readiness_blocked_checks` | Deferred readiness checks that elapsed, delegate wakes during an image transfer, and false readiness observations. |
+| `readiness_recheck_ms`, `readiness_recheck_limit` | Fixed 250 ms interval and eight-check bound per transfer. |
 | `packet_pacing_ms`, `att_ack_wait_ms`, `printer_reply_wait_ms` | Existing frame pacing, remaining write-response waits and additional NIIMBOT reply-only waits after ATT acknowledgement. |
 | `label.command_summary` | Bounded job aggregates by request/expected-response opcode: count, transfer span, ATT acknowledgement wait and additional NIIMBOT reply wait. Alternative/actual response identifiers remain in the existing control trace. |
 | `status_poll_ms`, `status_backoff_ms` | Accumulated completion-check exchanges and pauses, not the entire physical feed duration. |
@@ -181,6 +189,17 @@ pending until these comparisons are performed on the D110-M.
 
 ## Software validation
 
+Hardware feedback from build 88: the five-label acknowledged baseline completed
+in 62.450 seconds, including 48.791 seconds of accumulated ATT acknowledgement
+waiting. Both experimental attempts stopped before the first image write:
+zero image bytes/writes, about five seconds of observed readiness waiting, and
+zero experimental pacing wait. Setup commands and matching replies succeeded.
+Earlier optional RFID reads also succeeded using the existing without-response
+path. The logs establish a print-image readiness/wakeup stall; they do not prove
+continuous false readiness, printer image rejection or buffer overrun. Build 90
+adds the bounded recheck path and counters above without changing the initial
+10 ms / 1 write / 64 byte settings. Hardware retesting is pending.
+
 The Linux workspace has no Xcode or Swift compiler. Available checks passed:
 322 existing portable tests (172 JavaScript, 59 server, 49 Postman and 42 Python),
 Xcode source membership, all 212 Swift files' grammar, 47 pinned runtime assets,
@@ -216,6 +235,19 @@ The class totals were 11 transport, 82 protocol and 28 diagnostic tests. The
 passed on `c4271df`; subsequent changes affect only CI selection and this guide.
 The full native/UI limitations above remain separate from the successful focused
 result. Hardware reliability and speed remain pending the physical A/B procedure.
+
+Build 90 adds four native readiness/measurement regressions and three UI checks
+for initial inventory-label preparation. The manual `label_preview` scope runs
+the focused native suites, those three UI methods and the Release build together:
+
+```sh
+gh workflow run ios.yml \
+  --ref experiment/niimbot-d110m-write-without-response \
+  -f test_scope=label_preview
+```
+
+Build 90's combined validation is pending. The UI checks assert the preview,
+label count and enabled Prepare button before any extra tap or scroll.
 
 ## References
 

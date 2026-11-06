@@ -36,6 +36,8 @@ enum DiagnosticPrinterFields {
         "response_write_count": 1_000_000, "without_response_write_count": 1_000_000,
         "image_response_bytes": 100_000_000, "image_without_response_bytes": 100_000_000,
         "image_response_write_count": 1_000_000, "image_without_response_write_count": 1_000_000,
+        "wor_readiness_rechecks": 1_000_000, "wor_readiness_callbacks": 1_000_000,
+        "wor_readiness_blocked_checks": 1_000_000, "readiness_recheck_ms": 250, "readiness_recheck_limit": 8,
         "expected_labels": 250, "confirmed_labels": 250, "uncertain_labels": 250
     ]
     static let experimentKeys = Set(experimentBounds.keys)

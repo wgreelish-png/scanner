@@ -1425,6 +1425,38 @@ final class NiimbotProtocolTests: XCTestCase {
                      "Mixed alternative replies must not be misreported as one exact observed opcode")
     }
 
+    func testExperimentalReadinessRechecksDoNotCountAsPacingOrImageSubmission() {
+        let selection = NiimbotImageTransportSelection(requested: .init(mode: .pacedWithoutResponse),
+            identity: d110MIdentity(), supportsWithoutResponse: true,
+            maximumResponseWrite: 512, maximumWithoutResponseWrite: 241)
+        var metrics = NiimbotPrintTransferMetrics(identity: d110MIdentity(), continuous: true, total: 5, transport: selection)
+        metrics.recordReadinessCheck(rechecks: 0, blocked: true)
+        metrics.recordReadinessCallback()
+        metrics.recordReadinessCheck(rechecks: 1, blocked: true)
+        metrics.recordReadinessCheck(rechecks: 1, blocked: false)
+        let fields = metrics.diagnosticFields(elapsedMilliseconds: 600, uncertainLabels: 1)
+        XCTAssertEqual(fields["wor_readiness_rechecks"], "2")
+        XCTAssertEqual(fields["wor_readiness_callbacks"], "1")
+        XCTAssertEqual(fields["wor_readiness_blocked_checks"], "2")
+        XCTAssertEqual(fields["readiness_recheck_ms"], "250")
+        XCTAssertEqual(fields["readiness_recheck_limit"], "8")
+        XCTAssertEqual(fields["image_without_response_bytes"], "0")
+        XCTAssertEqual(fields["without_response_write_count"], "0")
+        XCTAssertEqual(fields["wor_pacing_wait_ms"], "0")
+        XCTAssertEqual(fields["att_ack_wait_ms"], "0")
+        XCTAssertEqual(fields["confirmed_labels"], "0")
+        XCTAssertEqual(fields["uncertain_labels"], "1")
+
+        metrics.recordReadinessCheck(rechecks: Int.max, blocked: false)
+        XCTAssertEqual(metrics.diagnosticFields(elapsedMilliseconds: 600)["wor_readiness_rechecks"], "1000000")
+        metrics.recordReadinessCheck(rechecks: -1, blocked: false)
+        XCTAssertEqual(metrics.diagnosticFields(elapsedMilliseconds: 600)["wor_readiness_rechecks"], "1000000")
+        let legacy = NiimbotPrintTransferMetrics(identity: d110MIdentity(), continuous: true, total: 5)
+            .diagnosticFields(elapsedMilliseconds: 0)
+        XCTAssertEqual(legacy["wor_readiness_rechecks"], "0")
+        XCTAssertNil(legacy["readiness_recheck_ms"], "Configured bounds only belong to a captured transport selection")
+    }
+
     func testExperimentalReadinessAndPacingTimersOverlapAndFlushInterruptionOnlyOnce() {
         let origin = ContinuousClock().now
         var wait = NiimbotImagePumpWaitTiming()
@@ -1466,6 +1498,7 @@ final class NiimbotProtocolTests: XCTestCase {
             "firmware_byte_0": "4", "firmware_byte_1": "23", "response_write_count": "8", "without_response_write_count": "0",
             "image_response_bytes": "36", "image_without_response_bytes": "0", "image_response_write_count": "3",
             "image_without_response_write_count": "0", "expected_labels": "9", "confirmed_labels": "0", "uncertain_labels": "0",
+            "wor_readiness_rechecks": "0", "wor_readiness_callbacks": "0", "wor_readiness_blocked_checks": "0",
             "plan_encode_ms": "0", "packet_encode_ms": "0", "packet_pacing_ms": "0", "att_ack_wait_ms": "0",
             "printer_reply_wait_ms": "0", "status_poll_ms": "0", "status_backoff_ms": "0", "print_start_ms": "0", "print_end_ms": "0",
             "image_transfer_ms": "0", "wor_readiness_wait_ms": "0", "wor_pacing_wait_ms": "0", "page_completion_wait_ms": "0"])

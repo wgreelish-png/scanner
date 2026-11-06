@@ -155,7 +155,9 @@ struct NiimbotImageTransportSelection: Equatable, Sendable {
          "transport_fallback": fallback.rawValue, "max_write_response_bytes": String(maximumResponseWrite),
          "max_write_without_response_bytes": String(maximumWithoutResponseWrite),
          "image_pacing_ms": String(requested.pacingMilliseconds), "image_burst_writes": String(requested.burstWriteLimit),
-         "image_burst_bytes": String(requested.burstByteLimit), "pending_packet_limit": "1"]
+         "image_burst_bytes": String(requested.burstByteLimit), "pending_packet_limit": "1",
+         "readiness_recheck_ms": String(NiimbotImageReadinessRecheck.intervalMilliseconds),
+         "readiness_recheck_limit": String(NiimbotImageReadinessRecheck.maximumChecks)]
     }
 }
 
@@ -288,6 +290,9 @@ struct NiimbotPrintTransferMetrics {
     private(set) var imageWithoutResponseBytes = 0
     private(set) var imageResponseWriteCount = 0
     private(set) var imageWithoutResponseWriteCount = 0
+    private(set) var worReadinessRechecks = 0
+    private(set) var worReadinessCallbacks = 0
+    private(set) var worReadinessBlockedChecks = 0
     private var confirmedPages: Set<Int> = []
     private var timings: [NiimbotPrintTiming: Duration] = [:]
     private struct Command: Hashable { let request: UInt8; let response: UInt8 }
@@ -343,6 +348,15 @@ struct NiimbotPrintTransferMetrics {
 
     mutating func add(_ timing: NiimbotPrintTiming, duration: Duration) {
         timings[timing, default: .zero] += max(.zero, duration)
+    }
+
+    mutating func recordReadinessCheck(rechecks: Int, blocked: Bool) {
+        worReadinessRechecks = min(1_000_000, worReadinessRechecks + min(1_000_000, max(0, rechecks)))
+        if blocked { worReadinessBlockedChecks = min(1_000_000, worReadinessBlockedChecks + 1) }
+    }
+
+    mutating func recordReadinessCallback() {
+        worReadinessCallbacks = min(1_000_000, worReadinessCallbacks + 1)
     }
 
     mutating func recordRequestSpan(command: UInt8, response: UInt8?, duration: Duration) {
@@ -414,6 +428,9 @@ struct NiimbotPrintTransferMetrics {
         fields["image_without_response_bytes"] = String(imageWithoutResponseBytes)
         fields["image_response_write_count"] = String(imageResponseWriteCount)
         fields["image_without_response_write_count"] = String(imageWithoutResponseWriteCount)
+        fields["wor_readiness_rechecks"] = String(worReadinessRechecks)
+        fields["wor_readiness_callbacks"] = String(worReadinessCallbacks)
+        fields["wor_readiness_blocked_checks"] = String(worReadinessBlockedChecks)
         fields["expected_labels"] = String(total)
         fields["confirmed_labels"] = String(confirmedPages.count)
         fields["uncertain_labels"] = String(min(max(0, uncertainLabels), max(0, total - confirmedPages.count)))

@@ -312,7 +312,8 @@ import UniformTypeIdentifiers
             "transport_fallback": "unsupported_characteristic", "job_outcome": "failed", "image_transfer_ms": "1234",
             "wor_readiness_wait_ms": "98", "wor_pacing_wait_ms": "76", "job_wall_ms": "1345",
             "page_completion_wait_ms": "321", "expected_labels": "10", "confirmed_labels": "8",
-            "uncertain_labels": "2"]) { _, value in value }
+            "uncertain_labels": "2", "wor_readiness_rechecks": "2", "wor_readiness_callbacks": "1",
+            "wor_readiness_blocked_checks": "3"]) { _, value in value }
         log.record("label.transfer_summary", expected.merging(["firmware_raw": "PRIVATE_FIRMWARE", "serial": "PRIVATE_SERIAL",
             "packet_hex": "PRIVATE_PACKET", "image_data": "PRIVATE_IMAGE", "printer_name": "PRIVATE_PRINTER"]) { _, value in value })
         let command = ["request_code": "227", "response_code": "228", "last_response_code": "228", "request_count": "8",

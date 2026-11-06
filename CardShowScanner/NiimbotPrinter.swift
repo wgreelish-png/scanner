@@ -141,6 +141,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         var lastResponseCode: UInt8?
         var waitTiming = NiimbotTransferWaitTiming()
         var pumpWaitTiming = NiimbotImagePumpWaitTiming()
+        var readinessRecheck = NiimbotImageReadinessRecheck()
 
         init(id: UUID, command: UInt8, bytes: Data, expectedResponse: UInt8?, responseAlternatives: Set<UInt8>, beginsPrint: Bool,
              optionalRollRead: Bool, pageCopies: Int, cleanupHeartbeat: Bool, writeType: CBCharacteristicWriteType,
@@ -884,7 +885,20 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                 imageWriteGate = gate
                 transaction.pumpWaitTiming.update(readiness: decision.waitingForReadiness,
                                                  pacing: decision.resumeAt != nil, at: now)
-                if let deadline = decision.resumeAt {
+                // A mode transition can leave readiness false without another
+                // delegate edge. Bounded deferred checks only re-read the bit;
+                // they never authorize a write while it remains false.
+                let previousRechecks = transaction.readinessRecheck.checkCount
+                let readinessDeadline = transaction.readinessRecheck.nextDeadline(
+                    isWaiting: decision.waitingForReadiness, at: now)
+                activePrintMetrics?.recordReadinessCheck(
+                    rechecks: transaction.readinessRecheck.checkCount - previousRechecks,
+                    blocked: decision.waitingForReadiness)
+                let deadline: ContinuousClock.Instant?
+                if let pacing = decision.resumeAt, let readiness = readinessDeadline {
+                    deadline = min(pacing, readiness)
+                } else { deadline = decision.resumeAt ?? readinessDeadline }
+                if let deadline {
                     scheduleImagePacingWake(deadline: deadline, transaction: transaction)
                 }
                 guard decision.allowedBytes > 0 else { return }
@@ -1382,6 +1396,7 @@ extension NiimbotPrinter: @preconcurrency CBPeripheralDelegate {
 
     func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
         guard peripheral === self.peripheral else { return }
+        if pending?.experimentalImage == true { activePrintMetrics?.recordReadinessCallback() }
         driveWrite()
     }
 }

@@ -20,7 +20,6 @@ concurrency:
   cancel-in-progress: true
 jobs:
   native:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.test_scope != 'label_preview' }}
     runs-on: macos-15-intel
     timeout-minutes: 20
     steps:
@@ -39,7 +38,7 @@ jobs:
         env:
           SCANNER_TEST_SCOPE: ${{ inputs.test_scope || 'all' }}
         run: |
-          if [ "$SCANNER_TEST_SCOPE" = printer_transport ]; then
+          if [ "$SCANNER_TEST_SCOPE" = printer_transport ] || [ "$SCANNER_TEST_SCOPE" = label_preview ]; then
             bash scripts/run_ios_tests.sh CardShowScannerTests/NiimbotImageTransportTests CardShowScannerTests/NiimbotProtocolTests CardShowScannerTests/ScannerDiagnosticsTests
           else
             bash scripts/run_ios_tests.sh CardShowScannerTests

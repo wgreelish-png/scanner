@@ -282,6 +282,82 @@ import XCTest
         XCTAssertNil(wake.scheduledDeadline)
     }
 
+    func testDeferredReadinessWakeResumesFirstImageWithoutADelegateCallback() async throws {
+        let sleeper = ImagePacingSleeper()
+        let wake = NiimbotImagePacingWake(sleep: sleeper.sleep)
+        defer { wake.cancel(); sleeper.releaseAll() }
+        let start = ContinuousClock().now
+        var now = start
+        var ready = false
+        var gate = NiimbotImageWriteGate(configuration: .init(mode: .pacedWithoutResponse))
+        var checks = NiimbotImageReadinessRecheck()
+        let blocked = gate.decision(remainingBytes: 10, maximumWriteLength: 241, isReady: ready, at: now)
+        XCTAssertEqual(blocked.allowedBytes, 0)
+        XCTAssertNil(blocked.resumeAt, "A readiness fallback must not masquerade as intentional pacing")
+        let deadline = try XCTUnwrap(checks.nextDeadline(isWaiting: blocked.waitingForReadiness, at: now))
+        XCTAssertEqual(deadline, start.advanced(by: .milliseconds(250)))
+        var submittedBytes = 0
+        wake.schedule(transferID: UUID(), deadline: deadline) {
+            let decision = gate.decision(remainingBytes: 10, maximumWriteLength: 241, isReady: ready, at: now)
+            XCTAssertNil(checks.nextDeadline(isWaiting: decision.waitingForReadiness, at: now))
+            submittedBytes = decision.allowedBytes
+        }
+        await waitForSleepCount(1, sleeper: sleeper)
+        ready = true // CoreBluetooth state changes, but no delegate callback is delivered.
+        now = deadline
+        XCTAssertEqual(submittedBytes, 0)
+        sleeper.release(0)
+        for _ in 0..<100 where submittedBytes == 0 { await Task.yield() }
+        XCTAssertEqual(submittedBytes, 10)
+        XCTAssertEqual(checks.checkCount, 1)
+        XCTAssertNil(wake.scheduledDeadline)
+    }
+
+    func testPersistentBackpressureExhaustsBoundedRechecksWithoutAuthorizingAnyWrite() throws {
+        let start = ContinuousClock().now
+        var now = start
+        var gate = NiimbotImageWriteGate(configuration: .init(mode: .pacedWithoutResponse))
+        var checks = NiimbotImageReadinessRecheck()
+        var deadline = checks.nextDeadline(isWaiting: true, at: now)
+        for attempt in 1...NiimbotImageReadinessRecheck.maximumChecks {
+            XCTAssertEqual(checks.nextDeadline(isWaiting: true, at: now), deadline,
+                           "An early callback must reuse the pending deadline")
+            XCTAssertEqual(checks.checkCount, attempt - 1)
+            now = try XCTUnwrap(deadline)
+            let decision = gate.decision(remainingBytes: 10, maximumWriteLength: 241, isReady: false, at: now)
+            XCTAssertEqual(decision.allowedBytes, 0, "A timer cannot override actual Bluetooth backpressure")
+            deadline = checks.nextDeadline(isWaiting: decision.waitingForReadiness, at: now)
+            XCTAssertEqual(checks.checkCount, attempt)
+        }
+        XCTAssertEqual(now, start.advanced(by: .seconds(2)))
+        XCTAssertNil(deadline)
+        XCTAssertNil(checks.nextDeadline(isWaiting: true, at: now.advanced(by: .seconds(3))))
+        XCTAssertEqual(checks.checkCount, 8)
+        XCTAssertNil(checks.nextDeadline(isWaiting: false, at: now))
+        XCTAssertNil(checks.nextDeadline(isWaiting: true, at: now), "Readiness does not renew a transfer's spent budget")
+    }
+
+    func testEarlyReadinessCancelsDeferredProbeWithoutConsumingItsBudget() async throws {
+        let sleeper = ImagePacingSleeper()
+        let wake = NiimbotImagePacingWake(sleep: sleeper.sleep)
+        defer { wake.cancel(); sleeper.releaseAll() }
+        let start = ContinuousClock().now
+        var checks = NiimbotImageReadinessRecheck()
+        let deadline = try XCTUnwrap(checks.nextDeadline(isWaiting: true, at: start))
+        var calls = 0
+        wake.schedule(transferID: UUID(), deadline: deadline) { calls += 1 }
+        await waitForSleepCount(1, sleeper: sleeper)
+        XCTAssertNil(checks.nextDeadline(isWaiting: false, at: start.advanced(by: .milliseconds(10))))
+        wake.cancel()
+        sleeper.release(0) // Even a sleeper ignoring cancellation must not invoke the retired probe.
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(calls, 0)
+        XCTAssertEqual(checks.checkCount, 0)
+        XCTAssertNil(wake.scheduledDeadline)
+        XCTAssertEqual(checks.nextDeadline(isWaiting: true, at: start.advanced(by: .milliseconds(20))),
+                       start.advanced(by: .milliseconds(270)))
+    }
+
     private func waitForSleepCount(_ count: Int, sleeper: ImagePacingSleeper) async {
         for _ in 0..<100 where sleeper.count < count { await Task.yield() }
         XCTAssertEqual(sleeper.count, count)

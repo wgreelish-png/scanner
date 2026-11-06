@@ -165,8 +165,31 @@ struct NiimbotImageWriteGate {
     }
 }
 
-/// One cancelable pacing wake for the current transfer. The callback is only a
-/// wake hint: the driver must recheck readiness, pacing and connection/job IDs.
+/// A bounded fallback for a missing readiness notification. A deadline only
+/// prompts another readiness read; it never grants permission to submit data.
+/// One instance belongs to one transfer, including all of its fragments.
+struct NiimbotImageReadinessRecheck {
+    static let intervalMilliseconds = 250
+    static let maximumChecks = 8
+    private(set) var checkCount = 0
+    private var nextCheckAt: ContinuousClock.Instant?
+
+    mutating func nextDeadline(isWaiting: Bool, at now: ContinuousClock.Instant) -> ContinuousClock.Instant? {
+        if let nextCheckAt, now >= nextCheckAt {
+            checkCount += 1
+            self.nextCheckAt = nil
+        }
+        guard isWaiting else { nextCheckAt = nil; return nil }
+        guard checkCount < Self.maximumChecks else { return nil }
+        if nextCheckAt == nil {
+            nextCheckAt = now.advanced(by: .milliseconds(Self.intervalMilliseconds))
+        }
+        return nextCheckAt
+    }
+}
+
+/// One cancelable pacing/readiness wake for the current transfer. The callback
+/// is only a wake hint: the driver must recheck readiness, pacing and job IDs.
 @MainActor final class NiimbotImagePacingWake {
     typealias Sleep = @MainActor (ContinuousClock.Instant) async throws -> Void
     private let sleep: Sleep

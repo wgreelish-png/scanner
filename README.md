@@ -26,6 +26,10 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Experiment build 90 adds bounded Bluetooth-readiness rechecks after a hardware
+test stalled before its first image write. Every image write still requires
+CoreBluetooth readiness; pacing defaults and printer completion checks are unchanged.
+
 Experiment build 89 fixes initial inventory-label preparation: the preview and
 Prepare button read the current selected drafts on the first navigation, without
 requiring another layout-control tap. Layout, saved prices and print transport
