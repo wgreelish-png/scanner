@@ -1252,6 +1252,100 @@ final class NiimbotProtocolTests: XCTestCase {
         XCTAssertFalse(baseline.usesWithoutResponse(for: NiimbotRequest(0x83)))
     }
 
+    func testExperimentalReadinessUnavailableSelectsAcknowledgedBeforeAnyPrintRequests() throws {
+        let readiness = NiimbotImageReadinessPreflight.Result(initiallyReady: false, ready: false,
+            rechecks: 8, elapsed: .seconds(2))
+        let selection = NiimbotImageTransportSelection(requested: .init(mode: .pacedWithoutResponse),
+            identity: d110MIdentity(), supportsWithoutResponse: true,
+            maximumResponseWrite: 512, maximumWithoutResponseWrite: 241, readiness: readiness)
+        XCTAssertEqual(selection.mode, .acknowledged)
+        XCTAssertEqual(selection.fallback, .readinessUnavailable)
+        XCTAssertEqual(selection.readiness?.ready, false)
+        let plan = try NiimbotProtocol.continuousRequests(for: [denseRaster, variantRaster(0x7f)], identity: d110MIdentity())
+        XCTAssertTrue(plan.initialization.allSatisfy { !selection.usesWithoutResponse(for: $0) })
+        XCTAssertTrue(plan.groups.flatMap(\.requests).allSatisfy { !selection.usesWithoutResponse(for: $0) },
+                      "Fallback is fixed before setup, image submission or physical output can begin")
+    }
+
+    func testExperimentalReadinessPreservesCapabilityFallbackPriorityAndAcknowledgedDefault() {
+        let unavailable = NiimbotImageReadinessPreflight.Result(initiallyReady: false, ready: false,
+            rechecks: 8, elapsed: .seconds(2))
+        let legacy = NiimbotD110Identity(modelID: 2304, protocolVersion: 1, firmwareBytes: Data([5, 34]))
+        let cases: [(NiimbotD110Identity, Bool, Int, NiimbotImageTransportSelection.Fallback)] = [
+            (legacy, false, 0, .unsupportedModel),
+            (d110MIdentity(), false, 241, .unsupportedCharacteristic),
+            (d110MIdentity(), true, 0, .invalidWriteSize),
+            (d110MIdentity(), true, 241, .readinessUnavailable)
+        ]
+        for (identity, supportsWithoutResponse, maximum, reason) in cases {
+            let selection = NiimbotImageTransportSelection(requested: .init(mode: .pacedWithoutResponse),
+                identity: identity, supportsWithoutResponse: supportsWithoutResponse,
+                maximumResponseWrite: 512, maximumWithoutResponseWrite: maximum, readiness: unavailable)
+            XCTAssertEqual(selection.mode, .acknowledged)
+            XCTAssertEqual(selection.fallback, reason)
+        }
+        let standard = NiimbotImageTransportSelection(requested: .init(), identity: d110MIdentity(),
+            supportsWithoutResponse: true, maximumResponseWrite: 512,
+            maximumWithoutResponseWrite: 241, readiness: unavailable)
+        XCTAssertEqual(standard.mode, .acknowledged)
+        XCTAssertEqual(standard.fallback, .none, "The standard mode does not require without-response readiness")
+        let absent = NiimbotImageTransportSelection(requested: .init(mode: .pacedWithoutResponse),
+            identity: d110MIdentity(), supportsWithoutResponse: true,
+            maximumResponseWrite: 512, maximumWithoutResponseWrite: 241)
+        XCTAssertNil(absent.readiness)
+        XCTAssertNil(absent.diagnosticFields["wor_ready_before_print"])
+        XCTAssertNil(absent.diagnosticFields["wor_preflight_wait_ms"])
+    }
+
+    func testExperimentalInitiallyReadyAndRecoveredReadinessRemainImmutableJobSelections() {
+        for initiallyReady in [true, false] {
+            let elapsed: Duration = initiallyReady ? .zero : .milliseconds(500)
+            var readiness = NiimbotImageReadinessPreflight.Result(initiallyReady: initiallyReady, ready: true,
+                rechecks: initiallyReady ? 0 : 2, elapsed: elapsed)
+            var configuration = NiimbotImageTransportConfiguration(mode: .pacedWithoutResponse,
+                pacingMilliseconds: 20, burstWriteLimit: 2, burstByteLimit: 80)
+            let selection = NiimbotImageTransportSelection(requested: configuration, identity: d110MIdentity(),
+                supportsWithoutResponse: true, maximumResponseWrite: 512,
+                maximumWithoutResponseWrite: 241, readiness: readiness)
+            readiness = .init(initiallyReady: false, ready: false, rechecks: 8, elapsed: .seconds(2))
+            configuration = .init()
+            XCTAssertEqual(selection.mode, .pacedWithoutResponse)
+            XCTAssertEqual(selection.fallback, .none)
+            XCTAssertTrue(selection.usesWithoutResponse(for: NiimbotRequest(0x85)))
+            XCTAssertEqual(selection.requested.pacingMilliseconds, 20)
+            XCTAssertEqual(selection.requested.burstWriteLimit, 2)
+            XCTAssertEqual(selection.requested.burstByteLimit, 80)
+            XCTAssertEqual(selection.readiness?.initiallyReady, initiallyReady)
+            XCTAssertEqual(selection.readiness?.ready, true)
+            XCTAssertEqual(selection.readiness?.rechecks, initiallyReady ? 0 : 2)
+            XCTAssertEqual(selection.readiness?.elapsed, elapsed)
+            XCTAssertFalse(readiness.ready)
+            XCTAssertEqual(configuration.mode, .acknowledged)
+        }
+    }
+
+    func testExperimentalPreflightDiagnosticsStaySeparateFromImageWaitsAndSubmissionCounts() {
+        let selection = NiimbotImageTransportSelection(requested: .init(mode: .pacedWithoutResponse),
+            identity: d110MIdentity(), supportsWithoutResponse: true, maximumResponseWrite: 512,
+            maximumWithoutResponseWrite: 241,
+            readiness: .init(initiallyReady: false, ready: true, rechecks: 2, elapsed: .milliseconds(501)))
+        var metrics = NiimbotPrintTransferMetrics(identity: d110MIdentity(), continuous: true, total: 2, transport: selection)
+        metrics.recordReadinessCheck(rechecks: 3, blocked: true)
+        metrics.add(.withoutResponseReadiness, duration: .milliseconds(300))
+        let fields = metrics.diagnosticFields(elapsedMilliseconds: 400)
+        XCTAssertEqual(fields["wor_ready_at_preflight_start"], "false")
+        XCTAssertEqual(fields["wor_ready_before_print"], "true")
+        XCTAssertEqual(fields["wor_preflight_checks"], "2")
+        XCTAssertEqual(fields["wor_preflight_wait_ms"], "501")
+        XCTAssertEqual(fields["wor_readiness_rechecks"], "3")
+        XCTAssertEqual(fields["wor_readiness_wait_ms"], "300")
+        XCTAssertEqual(fields["wor_pacing_wait_ms"], "0")
+        XCTAssertEqual(fields["att_ack_wait_ms"], "0")
+        XCTAssertEqual(fields["image_without_response_bytes"], "0")
+        XCTAssertEqual(fields["without_response_write_count"], "0")
+        XCTAssertEqual(fields["confirmed_labels"], "0")
+    }
+
     func testExperimentalClassificationPreservesCompleteFramesAndPageControlBoundaries() throws {
         var bytes = Data(repeating: 0, count: 12 * 240)
         bytes[12] = 0x80

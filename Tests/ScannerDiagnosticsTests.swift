@@ -313,7 +313,9 @@ import UniformTypeIdentifiers
             "wor_readiness_wait_ms": "98", "wor_pacing_wait_ms": "76", "job_wall_ms": "1345",
             "page_completion_wait_ms": "321", "expected_labels": "10", "confirmed_labels": "8",
             "uncertain_labels": "2", "wor_readiness_rechecks": "2", "wor_readiness_callbacks": "1",
-            "wor_readiness_blocked_checks": "3"]) { _, value in value }
+            "wor_readiness_blocked_checks": "3", "wor_ready_at_preflight_start": "false",
+            "wor_ready_before_print": "true", "wor_preflight_checks": "2",
+            "wor_preflight_wait_ms": "501"]) { _, value in value }
         log.record("label.transfer_summary", expected.merging(["firmware_raw": "PRIVATE_FIRMWARE", "serial": "PRIVATE_SERIAL",
             "packet_hex": "PRIVATE_PACKET", "image_data": "PRIVATE_IMAGE", "printer_name": "PRIVATE_PRINTER"]) { _, value in value })
         let command = ["request_code": "227", "response_code": "228", "last_response_code": "228", "request_count": "8",
@@ -341,8 +343,10 @@ import UniformTypeIdentifiers
         let modes: [String: [String]] = [
             "transport_requested": ["acknowledged", "paced_without_response"],
             "transport_selected": ["acknowledged", "paced_without_response"],
-            "transport_fallback": ["none", "unsupported_model", "unsupported_characteristic", "invalid_write_size"],
-            "job_outcome": ["completed", "failed"]
+            "transport_fallback": ["none", "unsupported_model", "unsupported_characteristic", "invalid_write_size", "readiness_unavailable"],
+            "job_outcome": ["completed", "failed"],
+            "wor_ready_at_preflight_start": ["true", "false"],
+            "wor_ready_before_print": ["true", "false"]
         ]
         for (key, values) in modes {
             for value in values { XCTAssertTrue(DiagnosticPrinterFields.accepts(key, value)) }
@@ -351,7 +355,17 @@ import UniformTypeIdentifiers
         for value in invalid {
             var fields = Dictionary(uniqueKeysWithValues: DiagnosticPrinterFields.experimentBounds.keys.map { ($0, value) })
             for key in modes.keys { fields[key] = "PRIVATE_VALUE" }
+            fields["wor_preflight_wait_ms"] = value
             log.record("label.transfer_summary", fields)
+        }
+        XCTAssertTrue(DiagnosticPrinterFields.accepts("wor_preflight_wait_ms", "3600000"))
+        let malformedReadiness = ["1", "0", "TRUE", "False", "true ", " false", ""]
+        for value in malformedReadiness {
+            for key in ["wor_ready_at_preflight_start", "wor_ready_before_print"] {
+                XCTAssertFalse(DiagnosticPrinterFields.accepts(key, value))
+            }
+            log.record("label.transfer_summary", ["wor_ready_at_preflight_start": value,
+                "wor_ready_before_print": value, "wor_preflight_wait_ms": "3600001"])
         }
         for (key, maximum) in DiagnosticPrinterFields.experimentBounds {
             XCTAssertTrue(DiagnosticPrinterFields.accepts(key, String(maximum)))
@@ -362,7 +376,7 @@ import UniformTypeIdentifiers
         let text = try String(contentsOf: file, encoding: .utf8)
         XCTAssertFalse(text.contains("PRIVATE_"))
         let rows = try diagnosticRows(text).filter { $0["event"] as? String == "label.transfer_summary" }
-        XCTAssertEqual(rows.count, invalid.count + DiagnosticPrinterFields.experimentBounds.count)
+        XCTAssertEqual(rows.count, invalid.count + malformedReadiness.count + DiagnosticPrinterFields.experimentBounds.count)
         XCTAssertTrue(rows.allSatisfy { ($0["fields"] as? [String: String]) == [:] })
     }
 

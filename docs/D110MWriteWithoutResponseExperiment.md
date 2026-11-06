@@ -1,9 +1,13 @@
-# D110-M image-write experiment — build 90
+# D110-M image-write experiment — build 92
 
 Branch: `experiment/niimbot-d110m-write-without-response`.
 Base: `facaae2`, the current build 87 app. Development uses the isolated
 `/workspace/scanner-d110m-experiment` worktree; the daily branch is unchanged.
-The diagnostic revision is `experiment-d110m-readiness-recheck`. Build 89 fixes
+The diagnostic revision is `d110m-transport-readiness-preflight`. Build 92 checks
+readiness before any print command and uses acknowledged writes for the whole
+job if that preflight cannot establish readiness on a dual-mode channel. Build
+91 clears abandoned unprinted queues; confirmed and uncertain output remains
+available for review. Build 89 fixes
 initial inventory-label navigation so the preview and Prepare button use the
 current selection immediately. That preparation fix applies equally to both A/B
 modes and preserves the selected artwork and saved queue behavior.
@@ -49,10 +53,19 @@ These initial limits are conservative experimental choices, not a measured
 printer-buffer capacity. Do not reduce pacing or raise budgets until the initial
 comparison prints correctly.
 
-Controls lock while printing or configuring paper. The driver additionally
-captures an immutable mode/settings/capability selection at job start, so an
-external preference change cannot alter an active job. Settings persist for the
-next job; no Xcode launch arguments are required.
+Controls lock while printing or configuring paper. The driver captures the
+settings and capabilities at job entry, waits for optional RFID work and stock
+validation, then checks readiness for the experimental path before sending any
+print command. An already-ready channel adds no wait. Otherwise it waits 250 ms
+between at most eight checks. If readiness remains false and acknowledged writes
+are available, the job selects Acknowledged with `readiness_unavailable`. A
+channel without that fallback fails before printing starts. This performs no
+probe writes or dummy commands. The selected mode stays fixed for the entire
+job, and the saved preference is unchanged. No Xcode launch arguments are required.
+
+Preflight readiness does not guarantee readiness after later setup commands.
+If it disappears after a job starts, the existing bounded wait, failure and
+uncertain-label handling still apply. There is no automatic mid-job fallback.
 
 ## What uses the experimental path
 
@@ -125,6 +138,7 @@ available numeric version bytes without assuming a human-readable version format
 | `wor_readiness_wait_ms`, `wor_pacing_wait_ms` | Observed CoreBluetooth backpressure wait and experimental cooldown wait. These may overlap. |
 | `wor_readiness_rechecks`, `wor_readiness_callbacks`, `wor_readiness_blocked_checks` | Deferred readiness checks that elapsed, delegate wakes during an image transfer, and false readiness observations. |
 | `readiness_recheck_ms`, `readiness_recheck_limit` | Fixed 250 ms interval and eight-check bound per transfer. |
+| `wor_ready_at_preflight_start`, `wor_ready_before_print`, `wor_preflight_checks`, `wor_preflight_wait_ms` | Initial/final readiness, bounded checks and monotonic wait before any print commands. These fields appear only when the experimental readiness preflight ran. This wait is outside the sending-stage/image-upload spans, and inside job wall time. |
 | `packet_pacing_ms`, `att_ack_wait_ms`, `printer_reply_wait_ms` | Existing frame pacing, remaining write-response waits and additional NIIMBOT reply-only waits after ATT acknowledgement. |
 | `label.command_summary` | Bounded job aggregates by request/expected-response opcode: count, transfer span, ATT acknowledgement wait and additional NIIMBOT reply wait. Alternative/actual response identifiers remain in the existing control trace. |
 | `status_poll_ms`, `status_backoff_ms` | Accumulated completion-check exchanges and pauses, not the entire physical feed duration. |
@@ -189,6 +203,16 @@ pending until these comparisons are performed on the D110-M.
 
 ## Software validation
 
+The build 91 diagnostic 16 export contains one new four-label attempt: zero
+image bytes submitted, eight elapsed rechecks, nine false readiness observations
+and no readiness callbacks, followed by the first-image timeout. All setup
+replies succeeded; the earlier optional RFID read worked on the same connection.
+This did not validate experimental upload speed or reliability. Build 92 adds
+the preflight selection and separate measurements above. Use Acknowledged for
+routine printing; the new preflight and any faster-mode output need hardware
+validation. Focused native and Release checks are started after pushing; their
+results are reported separately without waiting for CI to finish.
+
 Hardware feedback from build 88: the five-label acknowledged baseline completed
 in 62.450 seconds, including 48.791 seconds of accumulated ATT acknowledgement
 waiting. Both experimental attempts stopped before the first image write:
@@ -218,7 +242,7 @@ not reached the new printer tests. Two UI jobs were blocked by simulator-selecti
 timeouts, and the broad and Research UI jobs timed out during compilation.
 
 The existing workflow now offers a manual `printer_transport` scope to run the
-complete transport, protocol and diagnostic test classes directly. Normal
+complete transport, protocol and diagnostic test classes plus Release directly. Normal
 push/PR runs and the default manual scope still run the full selection. This
 test scope does not enable the device's experimental transport preference.
 
