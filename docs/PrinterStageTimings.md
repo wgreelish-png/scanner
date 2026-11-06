@@ -1,5 +1,10 @@
 # Printer stage timings and reuse — build 85
 
+Build 93 restores the working acknowledged transport. The unsuccessful
+without-response experiment remains in its separate Git branch/history; its
+picker, preflight and image pump are removed from the main app. Preview,
+progress and abandoned-queue cleanup fixes remain.
+
 The next diagnostic export can distinguish artwork preparation, command
 encoding, Bluetooth acknowledgement waits, printer replies and completion
 polling. Events now include fractional-second ISO 8601 timestamps. Durations
@@ -60,6 +65,28 @@ them. The interval between attempts is not an automatic-delay measurement:
 it can include user interaction and time outside the app. Physical-counter
 confirmation may arrive after a label finishes while the next complete image
 uploads. Neither PageEnd nor a full upload is counted as physical completion.
+
+## Acknowledged transfer opportunities
+
+The supplied five-label baseline submitted 23,696 image bytes through 968 image
+writes. It took 62.450 seconds, including 48.791 seconds of accumulated ATT
+acknowledgement waiting and 11.420 seconds of inter-packet pacing. This is mainly
+per-write scheduling overhead, not a large artwork file or slow rendering.
+
+A separate hardware experiment could combine adjacent complete, one-way image
+frames into fewer acknowledged writes. Start with two frames and at most 64
+bytes, respect the negotiated payload limits, and flush before any control or
+reply-requiring command. The 512-byte acknowledged API limit does not prove a
+512-byte ordinary ATT payload; the same connection reports 241 bytes for
+without-response writes. Firmware acceptance of concatenated frames is unproven.
+NiimBlue's existing serialized per-frame transport does not establish it either.
+Card order and printer-confirmed completion must remain unchanged.
+
+Pacing could also be measured separately. Removing every observed pacing delay
+could recover at most about 11.4 seconds in this baseline, while acknowledgement
+waits would remain. Firmware may need processing time after an ATT receipt, so
+the rollback retains the working 10 ms spacing. Neither optimization is enabled
+in build 93, and neither has a measured hardware speed or reliability result.
 
 ## Avoiding repeated work
 

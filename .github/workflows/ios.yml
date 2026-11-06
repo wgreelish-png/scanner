@@ -40,7 +40,7 @@ jobs:
           SCANNER_TEST_SCOPE: ${{ inputs.test_scope || 'all' }}
         run: |
           if [ "$SCANNER_TEST_SCOPE" = printer_transport ] || [ "$SCANNER_TEST_SCOPE" = label_preview ]; then
-            bash scripts/run_ios_tests.sh CardShowScannerTests/NiimbotImageTransportTests CardShowScannerTests/NiimbotProtocolTests CardShowScannerTests/ScannerDiagnosticsTests
+            bash scripts/run_ios_tests.sh CardShowScannerTests/NiimbotProtocolTests CardShowScannerTests/ScannerDiagnosticsTests CardShowScannerTests/LabelPrintQueueTests
           elif [ "$SCANNER_TEST_SCOPE" = label_queue ]; then
             bash scripts/run_ios_tests.sh CardShowScannerTests/LabelPrintQueueTests CardShowScannerTests/LabelPrintRunOutcomeTests CardShowScannerTests/CustomPriceTagTests
           else

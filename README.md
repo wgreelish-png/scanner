@@ -26,30 +26,20 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
-Build 92 checks experimental Bluetooth readiness before starting a label. If
-readiness remains unavailable, a dual-mode printer uses the existing acknowledged
-transport for the entire job. Diagnostics separate this preflight from image
-upload; an already-started page is never replayed or switched automatically.
+Build 93 restores the working acknowledged printer transport and removes the
+failed image-transport experiment from the app. Existing preview, progress,
+unprinted-queue cleanup, label preferences and inventory behavior are retained.
+The stage timings from build 85 remain available for future transfer comparisons.
 
 Build 91 automatically clears an unprinted label queue when leaving its print
 screen or sending the app to the background. Previews retain the queue; active,
 printed and uncertain jobs retain their existing review handling. Label
 preferences, inventory and financial records are unchanged.
 
-Experiment build 90 adds bounded Bluetooth-readiness rechecks after a hardware
-test stalled before its first image write. Every image write still requires
-CoreBluetooth readiness; pacing defaults and printer completion checks are unchanged.
-
-Experiment build 89 fixes initial inventory-label preparation: the preview and
+Build 89 fixes initial inventory-label preparation: the preview and
 Prepare button read the current selected drafts on the first navigation, without
 requiring another layout-control tap. Layout, saved prices and print transport
 settings are preserved.
-
-Experiment build 88 adds an opt-in [D110-M image transport experiment](docs/D110MWriteWithoutResponseExperiment.md).
-Acknowledged writes remain the default. The isolated experiment branch changes
-only eligible image-data transport and its diagnostics; card order, artwork,
-copy grouping and printer-confirmed completion are preserved. Hardware speed
-and reliability remain pending the documented A/B procedure.
 
 Build 87 separates live sending progress from the printer-confirmed label count.
 Upload activity updates from completed transfers while physical counts continue

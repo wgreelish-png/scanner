@@ -27,27 +27,10 @@ enum DiagnosticPrinterFields {
     static let timingKeys: Set<String> = ["transfer_elapsed_ms", "plan_encode_ms", "packet_encode_ms", "packet_pacing_ms",
         "att_ack_wait_ms", "printer_reply_wait_ms", "status_poll_ms", "status_backoff_ms", "print_start_ms",
         "print_end_ms", "previous_job_gap_ms", "roll_read_ms", "preparation_elapsed_ms", "render_elapsed_ms",
-        "approval_save_ms", "queue_save_ms", "image_transfer_ms", "wor_readiness_wait_ms", "wor_pacing_wait_ms",
-        "job_wall_ms", "page_completion_wait_ms", "wor_preflight_wait_ms"]
-    static let experimentBounds: [String: UInt64] = [
-        "max_write_response_bytes": 65_535, "max_write_without_response_bytes": 65_535,
-        "image_pacing_ms": 1_000, "image_burst_writes": 4, "image_burst_bytes": 256, "pending_packet_limit": 1,
-        "firmware_byte_0": 255, "firmware_byte_1": 255,
-        "response_write_count": 1_000_000, "without_response_write_count": 1_000_000,
-        "image_response_bytes": 100_000_000, "image_without_response_bytes": 100_000_000,
-        "image_response_write_count": 1_000_000, "image_without_response_write_count": 1_000_000,
-        "wor_readiness_rechecks": 1_000_000, "wor_readiness_callbacks": 1_000_000,
-        "wor_readiness_blocked_checks": 1_000_000, "readiness_recheck_ms": 250, "readiness_recheck_limit": 8,
-        "wor_preflight_checks": 8,
-        "expected_labels": 250, "confirmed_labels": 250, "uncertain_labels": 250
-    ]
-    static let experimentKeys = Set(experimentBounds.keys)
-        .union(["transport_requested", "transport_selected", "transport_fallback", "job_outcome",
-                "wor_ready_at_preflight_start", "wor_ready_before_print"])
+        "approval_save_ms", "queue_save_ms"]
 
     static func accepts(_ key: String, _ value: String, event: String? = nil) -> Bool {
         if timingKeys.contains(key) { return acceptsInteger(value, maximum: 3_600_000) }
-        if let maximum = experimentBounds[key] { return acceptsInteger(value, maximum: maximum) }
         if key == "elapsed_ms", event?.hasPrefix("label.") == true {
             return acceptsInteger(value, maximum: 3_600_000)
         }
@@ -74,14 +57,6 @@ enum DiagnosticPrinterFields {
             return acceptsInteger(value, maximum: 100_000_000)
         case "write_mode":
             return ["acknowledged", "unacknowledged"].contains(value)
-        case "transport_requested", "transport_selected":
-            return ["acknowledged", "paced_without_response"].contains(value)
-        case "transport_fallback":
-            return ["none", "unsupported_model", "unsupported_characteristic", "invalid_write_size", "readiness_unavailable"].contains(value)
-        case "wor_ready_at_preflight_start", "wor_ready_before_print":
-            return value == "true" || value == "false"
-        case "job_outcome":
-            return ["completed", "failed"].contains(value)
         case "print_task":
             return ["legacy_serial", "declared_serial", "buffered_copies"].contains(value)
         case "command_path":
@@ -291,7 +266,6 @@ enum ServiceDiagnosticFields {
         "group_image_packets", "group_requests", "group_wire_bytes", "preparation_kind", "preparation_stage",
         "render_count", "raster_reuse_count", "roll_read_source", "connection_end_source"])
         .union(DiagnosticPrinterFields.timingKeys)
-        .union(DiagnosticPrinterFields.experimentKeys)
     private var current: URL { directory.appendingPathComponent("current.jsonl") }
     private var previous: URL { directory.appendingPathComponent("previous.jsonl") }
     var enabled: Bool { defaults.object(forKey: "diagnosticsEnabled") as? Bool ?? true }

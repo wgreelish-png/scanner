@@ -245,8 +245,6 @@ private struct ScannerDatabaseSettingsView: View {
 
 @MainActor private struct DiagnosticsSettingsView: View {
     @AppStorage("diagnosticsEnabled") private var diagnosticsEnabled = true
-    @State private var imageTransport = NiimbotImageTransportPreferences.shared
-    @State private var printer = NiimbotPrinter.shared
     @State private var diagnosticURL: URL?
     @State private var error: String?
     @State private var confirmClear = false
@@ -282,7 +280,6 @@ private struct ScannerDatabaseSettingsView: View {
             } footer: {
                 Text("Keeps about 512 KB of recent local events, including scanner timings, save errors, device heat and memory warnings. While the app is active, health summaries include app memory/CPU, battery state and responsiveness. Available iOS crash/hang report counts are included. Card contents, credentials, camera images and call stacks are excluded. Copy puts the diagnostic file on the clipboard; Export opens file sharing.")
             }
-            printerTransportExperiment
             Section {
                 Button("Clear Diagnostic Log", role: .destructive) { confirmClear = true }
                     .accessibilityIdentifier("settings.clearDiagnostics")
@@ -299,35 +296,6 @@ private struct ScannerDatabaseSettingsView: View {
             }
         }
         .failureAlert($error)
-    }
-
-    private var printerTransportExperiment: some View {
-        Section {
-            Picker("Image transport", selection: $imageTransport.mode) {
-                Text(NiimbotImageTransportMode.acknowledged.title)
-                    .tag(NiimbotImageTransportMode.acknowledged)
-                Text(NiimbotImageTransportMode.pacedWithoutResponse.title)
-                    .tag(NiimbotImageTransportMode.pacedWithoutResponse)
-            }.accessibilityIdentifier("settings.printerTransport.mode")
-            if imageTransport.mode == .pacedWithoutResponse {
-                Stepper(value: $imageTransport.pacingMilliseconds, in: 10...1000, step: 10) {
-                    LabeledContent("Image write pacing", value: "\(imageTransport.pacingMilliseconds) ms")
-                }.accessibilityIdentifier("settings.printerTransport.pacing")
-                Stepper(value: $imageTransport.burstWriteLimit, in: 1...4) {
-                    LabeledContent("Writes per burst", value: imageTransport.burstWriteLimit.formatted())
-                }.accessibilityIdentifier("settings.printerTransport.burstWrites")
-                Stepper(value: $imageTransport.burstByteLimit, in: 20...256, step: 4) {
-                    LabeledContent("Bytes per burst", value: imageTransport.burstByteLimit.formatted())
-                }.accessibilityIdentifier("settings.printerTransport.burstBytes")
-            }
-            Button("Reset to Standard Defaults") { imageTransport.reset() }
-                .accessibilityIdentifier("settings.printerTransport.reset")
-        } header: {
-            Text("D110-M transport experiment")
-        } footer: {
-            Text("For A/B testing on a supported D110-M. Start with 10 ms pacing, 1 write and 64 bytes per burst. If Bluetooth is not ready before printing, the job uses Acknowledged. Hardware reliability and speed are pending verification. Settings are captured when a print job starts.")
-        }
-        .disabled(printer.isPrinting || printer.isConfiguringPaper)
     }
 
     private func cleanupDiagnostics() {
