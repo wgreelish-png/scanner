@@ -1690,8 +1690,13 @@ final class NiimbotProtocolTests: XCTestCase {
         }
         let status = NiimbotRequest(0xa3, response: 0xb3)
         let readiness = NiimbotRequest(0xdc, [4], response: 0xd9, responseAlternatives: [0xdd, 0xd9])
-        let expected = [readiness] + plan.initialization + plan.groups[0].requests + plan.groups[1].requests
-            + [status] + plan.groups[2].requests + [status, NiimbotRequest(0xf3, response: 0xf4, requiresTrue: true), NiimbotRequest(0xdc, [1])]
+        var expected: [NiimbotRequest] = [readiness]
+        expected.append(contentsOf: plan.initialization)
+        expected.append(contentsOf: plan.groups[0].requests)
+        expected.append(contentsOf: plan.groups[1].requests)
+        expected.append(status)
+        expected.append(contentsOf: plan.groups[2].requests)
+        expected.append(contentsOf: [status, NiimbotRequest(0xf3, response: 0xf4, requiresTrue: true), NiimbotRequest(0xdc, [1])])
         XCTAssertEqual(requests, expected, "Progress introduces no new commands, waits, regrouping or reordered artwork")
     }
 
