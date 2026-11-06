@@ -281,9 +281,9 @@ private struct TagApprovalFile: Codable {
     /// completes in its current price cycle. Legacy queues and older cycles
     /// cannot acknowledge a newer approval, even at the same numeric price.
     func observeCompletedQueue(_ entries: [LabelQueueEntry]) throws {
-        let inventoryEntries = entries.filter { $0.source != .custom }
-        // Standalone labels have no acquisition or sticker approval history.
-        // They must also work when the unrelated approval file is unavailable.
+        let inventoryEntries = entries.filter { $0.source != .custom && $0.stickerTag != nil }
+        // Standalone and write-in labels carry no priced-sticker proof. They
+        // also work when the unrelated approval file is unavailable.
         guard !inventoryEntries.isEmpty else { return }
         try requireWritable()
         var grouped: [UUID: [LabelQueueEntry]] = [:]

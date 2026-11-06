@@ -71,18 +71,21 @@ import UIKit
         XCTAssertEqual(item.card.marketPrice, 10.49)
     }
 
-    func testMissingAndInvalidMarketsRemainUnavailableInsteadOfBecomingBulkOrZero() throws {
+    func testMissingAndInvalidMarketsProduceWriteInLabelsWithoutInventingAPrice() throws {
         for price in [nil, Decimal(-1), Decimal.nan] {
             let draft = InventoryLabelDraft(item: stock(price: price))
             XCTAssertFalse(draft.isBulk)
             XCTAssertNil(draft.priceCents)
             XCTAssertNil(draft.tag)
-            XCTAssertThrowsError(try draft.validate())
+            XCTAssertTrue(draft.isBlankPrice)
+            XCTAssertEqual(draft.priceText, "")
+            XCTAssertNoThrow(try draft.validate())
+            XCTAssertTrue(try InventoryLabelRenderer.renderRaster(draft).data.contains { $0 != 0 })
         }
     }
 
     func testKnownMarketsBelowSeventyFiveCentsUsePrintableBulkDealTags() throws {
-        for price in [Decimal.zero, Decimal(string: "0.49")!, Decimal(string: "0.50")!, Decimal(string: "0.74")!] {
+        for price in [Decimal(string: "0.49")!, Decimal(string: "0.50")!, Decimal(string: "0.74")!] {
             let draft = InventoryLabelDraft(item: stock(price: price))
             XCTAssertTrue(draft.isBulk)
             XCTAssertNil(draft.priceCents)
@@ -117,6 +120,8 @@ import UIKit
                 XCTAssertEqual(draft.priceCents, cents)
                 XCTAssertFalse(draft.isBulk)
                 XCTAssertFalse(draft.isManualOverride, "Stored final prices do not need a manual-override flag to survive")
+                XCTAssertEqual(draft.isBlankPrice, cents == 0)
+                XCTAssertEqual(draft.priceText, cents == 0 ? "" : StickerPrice.individual(cents).displayText)
                 XCTAssertNoThrow(try draft.validate())
                 XCTAssertEqual(item, original)
                 XCTAssertEqual(draft.marketValue, market)
@@ -125,13 +130,14 @@ import UIKit
     }
 
     func testStoredBulkCategorySurvivesMarketMovementAndStillPrintsItsSavedDeal() throws {
-        let markets: [Decimal?] = [Decimal(string: "0.50"), 10, 150, nil]
+        let markets: [Decimal?] = [0, Decimal(string: "0.50"), 10, 150, nil]
         for market in markets {
             for manual in [false, true] {
                 let item = stock(price: market), original = item
                 let saved = savedTag(.twoForOne, for: item, manual: manual)
                 let draft = InventoryLabelDraft(item: item, approval: saved)
                 XCTAssertTrue(draft.isBulk)
+                XCTAssertFalse(draft.isBlankPrice)
                 XCTAssertEqual(draft.tag, .twoForOne)
                 XCTAssertNil(draft.priceCents)
                 XCTAssertEqual(draft.priceText, StickerPrice.twoForOne.displayText)
@@ -160,7 +166,7 @@ import UIKit
                 XCTAssertEqual(raster, try InventoryLabelRenderer.renderRaster(deal),
                     "Inventory deal tags use the same complete 2-for-$1 artwork as standalone deal tags")
                 XCTAssertNotEqual(raster, try InventoryLabelRenderer.renderRaster(zero),
-                    "A bulk category must never print an ordinary $0 price")
+                    "A saved deal must remain distinct from a zero-price write-in tag")
                 XCTAssertEqual(draft.copies, 3)
                 XCTAssertEqual(draft.tag, .twoForOne)
                 XCTAssertNil(draft.priceCents)
@@ -214,10 +220,16 @@ import UIKit
         }
         draft.copies = 100
         XCTAssertNoThrow(try draft.validate())
-        for value in ["", "-1", "1.001", "abc"] {
+        for value in ["-1", "1.001", "abc"] {
             draft.askingPriceText = value
             XCTAssertNil(draft.priceCents)
             XCTAssertThrowsError(try draft.validate())
+        }
+        for value in ["", "  ", "0", "0.00"] {
+            draft.askingPriceText = value
+            XCTAssertTrue(draft.isBlankPrice)
+            XCTAssertEqual(draft.priceText, "")
+            XCTAssertNoThrow(try draft.validate())
         }
     }
 
@@ -317,6 +329,59 @@ import UIKit
     private func black(_ raster: LabelRaster, x: Int, y: Int) -> Bool {
         let head = raster.width - 1 - y
         return raster.data[x * 12 + head / 8] & (0x80 >> (head % 8)) != 0
+    }
+
+    func testUnavailableAndZeroPriceTagsKeepTheBrandAndLeaveTheWholePricePanelWhite() throws {
+        let zeroItem = stock(price: 20), original = zeroItem
+        let sources = [InventoryLabelDraft(item: stock(price: nil)),
+                       InventoryLabelDraft(item: stock(price: 0)),
+                       InventoryLabelDraft(item: zeroItem, approval: savedTag(.individual(0), for: zeroItem))]
+        for paper in InventoryLabelSize.allCases {
+            for position in LabelPricePosition.allCases {
+                let layout = InventoryLabelRenderer.brandedPriceLayout(width: paper.feedDots, height: 96, pricePosition: position)
+                let positive = try InventoryLabelRenderer.renderRaster(CustomPriceTagDraft(priceCents: 100,
+                    copies: 1, paperSize: paper, pricePosition: position))
+                let customBlank = try InventoryLabelRenderer.renderRaster(CustomPriceTagDraft(priceCents: 0,
+                    copies: 1, paperSize: paper, pricePosition: position))
+                XCTAssertTrue(pixels(customBlank, in: layout.priceArea).allSatisfy { !$0 })
+                XCTAssertGreaterThan(pixels(customBlank, in: layout.logoArea).filter { $0 }.count, 150)
+                var changedOutsidePrice = 0
+                for x in 0..<paper.feedDots {
+                    for y in 0..<96 where !layout.priceArea.contains(CGPoint(x: CGFloat(x) + 0.5, y: CGFloat(y) + 0.5)) {
+                        if black(customBlank, x: x, y: y) != black(positive, x: x, y: y) { changedOutsidePrice += 1 }
+                    }
+                }
+                XCTAssertEqual(changedOutsidePrice, 0, "Only price glyphs are omitted; logo, divider and frame stay identical")
+                for source in sources {
+                    var draft = source
+                    draft.paperSize = paper; draft.pricePosition = position
+                    XCTAssertTrue(draft.isBlankPrice)
+                    let bitmap = try InventoryLabelRenderer.render(draft)
+                    XCTAssertEqual(bitmap.raster, customBlank)
+                    XCTAssertEqual(bitmap.previewImage.pngData(),
+                        try InventoryLabelRenderer.image(raster: bitmap.raster, paper: paper).pngData())
+                }
+            }
+        }
+        XCTAssertEqual(zeroItem, original, "Leaving a write-in space cannot change inventory prices or cost")
+    }
+
+    func testBlankCardDetailsKeepTheTitleAndConditionOutsideTheWriteInSpace() throws {
+        for paper in InventoryLabelSize.allCases {
+            var blank = InventoryLabelDraft(item: stock(price: nil))
+            blank.style = .cardDetails; blank.paperSize = paper
+            var priced = blank; priced.askingPriceText = "10"
+            let raster = try InventoryLabelRenderer.renderRaster(blank)
+            let reference = try InventoryLabelRenderer.renderRaster(priced)
+            let available = CGFloat(paper.feedDots - 16)
+            let writingArea = CGRect(x: 8, y: 31, width: available - min(66, available / 3) - 9, height: 56)
+            XCTAssertTrue(pixels(raster, in: writingArea).allSatisfy { !$0 }, "Condition text cannot move into the blank price area")
+            XCTAssertEqual(pixels(raster, in: CGRect(x: 8, y: 4, width: available, height: 24)),
+                           pixels(reference, in: CGRect(x: 8, y: 4, width: available, height: 24)))
+            XCTAssertGreaterThan(pixels(raster, in: CGRect(x: CGFloat(paper.feedDots - 74), y: 31, width: 66, height: 56)).filter { $0 }.count, 0)
+            blank.askingPriceText = "0"
+            XCTAssertEqual(try InventoryLabelRenderer.renderRaster(blank), raster)
+        }
     }
 
     func testBrandedPriceLayoutKeepsWhitePaperMarginsRoundedFrameDividerAndWordmarkAcrossEveryRoll() throws {

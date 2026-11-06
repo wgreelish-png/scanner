@@ -60,7 +60,8 @@ enum InventoryLabelBatchMode: String, CaseIterable, Identifiable, Sendable {
 
     static func shouldPrint(_ draft: InventoryLabelDraft, approval: TagApprovalRecord?,
                             reprintAll: Bool, keepExisting: Bool = false) -> Bool {
-        guard !keepExisting, draft.tag != nil else { return false }
+        guard !keepExisting, draft.isBlankPrice || draft.tag != nil else { return false }
+        if draft.isBlankPrice { return true }
         if reprintAll { return true }
         guard let approval else { return true }
         return approval.approvedTag != draft.tag || approval.needsLabels

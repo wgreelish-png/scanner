@@ -8,8 +8,10 @@ Approve & Prepare Labels. **Review Details** remains optional.
 An existing saved sticker price/category takes precedence, including a manual
 price, individual $0, or bulk category. Printing does not apply new quote
 snapshots or turn an existing individual tag into bulk when market changes.
-For a new inventory lot with no saved sticker, its saved inventory value uses
-the existing rounding and bulk rules; unavailable values still require input.
+For a new inventory lot with no saved sticker, its positive saved inventory
+value uses the existing rounding and bulk rules. Unavailable or zero values
+prepare a write-in label with an empty price area. A saved individual $0 also
+prints an empty price area without changing its stored value.
 **Print Price Changed** selects new cards and saved tags that still need labels,
 not market-only proposals. It does not silently replace saved sticker prices.
 
@@ -26,7 +28,7 @@ receipts untouched and does not rewrite the price file. New/changed choices
 save atomically before the queue is created. Only printer completion or explicit
 Keep Existing Sticker records physical labeling.
 
-Missing/invalid prices, non-whole-dollar tags, invalid copy counts, oversized
+Invalid nonempty prices, non-whole-dollar tags, invalid copy counts, oversized
 batches, unavailable saved data and unfinished queues still need correction.
 These are operational validation checks, not profit or market warning approvals.
 The Print button, continuous D110-M batching, Clear Print Queue and interrupted
@@ -38,9 +40,9 @@ costs, show balances or transaction history.
 1. Choose inventory cards with known prices and an unknown or unfavorable cost.
    Confirm Prepare Labels works without a warning checkbox or suggested-price
    action. Check the preview and pending queue prices/copies.
-2. Edit a price or copy count explicitly and prepare a new label. Missing prices,
-   cents on individual tags and out-of-range copies must remain visible for
-   correction.
+2. Leave the price empty or enter 0 and prepare a write-in label. Confirm the
+   logo and frame remain, with no price printed. Nonempty malformed prices,
+   cents on individual tags and out-of-range copies still require correction.
 3. Prepare the same price again after a completed job. Saved label history must
    remain intact until the replacement physically completes.
 4. With an unfinished saved queue, review or clear it explicitly before

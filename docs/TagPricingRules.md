@@ -11,6 +11,11 @@ The existing label selection, editor, review, renderer and print queue now share
 | $1–$99.99 | Round down to a whole dollar |
 | $100+ | Round down to a multiple of $5 |
 
+Printing has a separate write-in rule: unavailable or zero prices leave the
+price area empty on the label. Existing positive stickers and saved 2-for-$1
+deals remain printable as saved. This does not change pricing proposals,
+inventory values or checkout calculations.
+
 Examples: $0.74 → bulk; $0.75 → $1; $1.85 → $1; $8.40 → $8; $48.50 → $48; $113 → $110; $199 → $195; $347 → $345; $589 → $585. Individual tag generation rejects cents, including manual cents entries. Unknown market is not zero. A low-priced card whose promotional price fails its profit check remains a review item; the app never raises its price automatically to cover costs.
 
 ## Approval and repricing

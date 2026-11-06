@@ -41,7 +41,7 @@ import XCTest
 
         tap(edit, app: app)
         enter("", field: app.textFields["labels.editor.price"], app: app)
-        XCTAssertFalse(app.buttons["labels.editor.save"].isEnabled, "An unknown asking price requires input")
+        XCTAssertTrue(app.buttons["labels.editor.save"].isEnabled, "An empty asking price leaves a write-in area")
         enter("0", field: app.textFields["labels.editor.price"], app: app)
         enter("101", field: app.textFields["labels.editor.copies"], app: app)
         XCTAssertEqual(app.textFields["labels.editor.copies"].value as? String, "101")
@@ -51,13 +51,13 @@ import XCTest
         tap(app.buttons["labels.editor.preview"], app: app)
         let preview = app.images["labels.bitmapPreview"].firstMatch
         reveal(preview, app: app)
-        XCTAssertTrue((preview.value as? String ?? "").contains("$0"))
+        XCTAssertTrue((preview.value as? String ?? "").contains("Blank price · write in"))
         XCTAssertTrue((preview.value as? String ?? "").contains("Card details"))
         tap(app.buttons["labels.editor.save"], app: app)
-        assertContains("$0", element: edit)
+        assertContains("Blank price · write in", element: edit)
         assertContains("2 labels", element: app.staticTexts["labels.totalCount"])
         tap(app.buttons["labels.continueReview"], app: app)
-        assertContains("$0", element: app.descendants(matching: .any)["labels.review.price." + inventoryID])
+        assertContains("Blank price · write in", element: app.descendants(matching: .any)["labels.review.price." + inventoryID])
         assertContains("2", element: app.descendants(matching: .any)["labels.review.copies." + inventoryID])
         tap(app.buttons["labels.close"], app: app)
 
@@ -371,6 +371,86 @@ import XCTest
         assertContains("Qty 2", element: inventory("Stock A", app: app))
         assertContains("$5.00", element: inventory("Stock B", app: app))
         assertContains("Qty 1", element: inventory("Stock B", app: app))
+        assertNoBluetoothPrompt(app: app)
+    }
+
+    func testUnavailableAndZeroInventoryPricesPrepareWriteInLabelsAlongsidePricedAndDealTags() {
+        continueAfterFailure = false
+        let app = launch(extraArguments: ["--inventory-write-in-labels-fixture", "--inventory-bulk-labels-fixture"])
+        defer { app.terminate() }
+        assertBalances(app: app)
+        tap(app.buttons["show.inventory"], app: app)
+        assertContains("6 cards available", element: app.staticTexts["showInventory.quantity"])
+        let names = ["Unavailable Stock", "Zero Stock"]
+        var ids: [String: String] = [:], descriptions: [String: String] = [:]
+        for name in names {
+            let row = inventory(name, app: app)
+            reveal(row, app: app)
+            ids[name] = inventoryID(of: row)
+            descriptions[name] = row.label
+        }
+        openPriceTags(app: app)
+        tap(app.buttons["priceTags.all"], app: app)
+        assertContains("6 labels", element: app.staticTexts["labels.totalCount"])
+        XCTAssertFalse(app.buttons["labels.skipUnpriced"].exists)
+        tap(app.buttons["labels.continueReview"], app: app)
+        assertContains("6", element: app.descendants(matching: .any)["labels.reviewCount"])
+        for name in names {
+            let id = ids[name]!
+            let amount = app.descendants(matching: .any)["labels.review.price." + id]
+            reveal(amount, app: app)
+            assertContains("Blank price · write in", element: amount)
+            XCTAssertFalse(app.switches["labels.keepExistingSticker." + id].exists)
+        }
+        tap(app.buttons["labels.expandReview." + ids["Unavailable Stock"]!], app: app)
+        let preview = app.images["labels.bitmapPreview"].firstMatch
+        reveal(preview, app: app)
+        XCTAssertTrue((preview.value as? String ?? "").contains("Blank price · write in"))
+        XCTAssertFalse((preview.value as? String ?? "").contains("$0"))
+        XCTAssertTrue(app.buttons["labels.prepare"].isEnabled)
+        tap(app.buttons["labels.prepare"], app: app)
+        assertContains("0/6 completed", element: app.staticTexts["labelQueue.progress"])
+        for name in names {
+            let receipt = app.buttons.matching(NSPredicate(format:
+                "identifier BEGINSWITH %@ AND label CONTAINS %@", "labelQueue.entry.", name)).firstMatch
+            reveal(receipt, app: app)
+            assertContains("Blank price · write in", element: receipt)
+            XCTAssertFalse(receipt.label.contains("$0"))
+        }
+        let deal = app.buttons.matching(NSPredicate(format:
+            "identifier BEGINSWITH %@ AND label CONTAINS %@", "labelQueue.entry.", "Bulk Stock")).firstMatch
+        reveal(deal, app: app)
+        assertContains("2 for $1", element: deal)
+        XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled)
+        clearQueue("labelQueue.clearQueue", app: app)
+        tap(app.buttons["labels.close"], app: app)
+
+        tap(app.buttons["priceTags.chooseCards"], app: app)
+        for name in names { tap(app.buttons["labels.select." + ids[name]!], app: app) }
+        tap(app.buttons["labels.continueSelection"], app: app)
+        assertContains("2 labels", element: app.staticTexts["labels.totalCount"])
+        tap(app.buttons["labels.individualEdits"], app: app)
+        tap(app.buttons["labels.edit." + ids["Zero Stock"]!], app: app)
+        enter("", field: app.textFields["labels.editor.price"], app: app)
+        XCTAssertTrue(app.buttons["labels.editor.save"].isEnabled, "A blank field is an intentional write-in label")
+        tap(app.buttons["labels.editor.keyboardDone"], app: app)
+        tap(app.buttons["labels.editor.preview"], app: app)
+        reveal(preview, app: app)
+        XCTAssertTrue((preview.value as? String ?? "").contains("Blank price · write in"))
+        tap(app.buttons["labels.editor.save"], app: app)
+        XCTAssertTrue(app.buttons["labels.prepare"].isEnabled, "A blank-only batch needs no fabricated zero-price approval")
+        tap(app.buttons["labels.prepare"], app: app)
+        assertContains("0/2 completed", element: app.staticTexts["labelQueue.progress"])
+        clearQueue("labelQueue.clearQueue", app: app)
+        closeBatchToInventory(app: app)
+        assertContains("6 cards available", element: app.staticTexts["showInventory.quantity"])
+        for name in names {
+            let row = inventory(name, app: app)
+            reveal(row, app: app)
+            XCTAssertEqual(row.label, descriptions[name], "Preparing blank labels cannot set an inventory price or change its category")
+        }
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        assertBalances(app: app)
         assertNoBluetoothPrompt(app: app)
     }
 

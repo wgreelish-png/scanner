@@ -86,9 +86,12 @@ import XCTest
         XCTAssertNil(missing.tag)
         XCTAssertNil(missing.marketValue)
         XCTAssertTrue(missing.pricing.reasons.contains(.missingMarket))
-        XCTAssertFalse(InventoryLabelBatch.shouldPrint(missing, approval: nil, reprintAll: true))
+        XCTAssertTrue(missing.isBlankPrice)
+        XCTAssertEqual(missing.priceText, "")
+        XCTAssertTrue(InventoryLabelBatch.shouldPrint(missing, approval: nil, reprintAll: true))
         let zero = try XCTUnwrap(drafts.first { $0.id == knownZero.id })
-        XCTAssertEqual(zero.tag, .twoForOne)
+        XCTAssertEqual(zero.tag, .individual(0))
+        XCTAssertTrue(zero.isBlankPrice)
         XCTAssertTrue(InventoryLabelBatch.shouldPrint(zero, approval: nil, reprintAll: true))
         let fallback = try XCTUnwrap(drafts.first { $0.id == unapproved.id })
         XCTAssertEqual(fallback.marketValue, Decimal(string: "10.99"))
@@ -162,7 +165,7 @@ import XCTest
         XCTAssertEqual(store.record(for: card.id), saved, "Selecting replacements cannot change approval history")
     }
 
-    func testEveryModeStillHonorsExplicitStickerRetentionAndIncludesBulkButNotMissingPrices() throws {
+    func testEveryModeHonorsExplicitStickerRetentionAndIncludesDealAndWriteInLabels() throws {
         let store = store(), card = item(1), bulk = item(2, market: 0.5), missing = item(3, market: nil)
         try approve(card, in: store)
         let saved = try XCTUnwrap(store.record(for: card.id))
@@ -173,7 +176,7 @@ import XCTest
             XCTAssertFalse(InventoryLabelBatch.shouldPrint(individual, approval: saved, mode: mode, keepExisting: true))
             XCTAssertFalse(InventoryLabelBatch.shouldPrint(individual, approval: nil, mode: mode, keepExisting: true))
             XCTAssertTrue(InventoryLabelBatch.shouldPrint(bulkDraft, approval: nil, mode: mode))
-            XCTAssertFalse(InventoryLabelBatch.shouldPrint(missingDraft, approval: nil, mode: mode))
+            XCTAssertTrue(InventoryLabelBatch.shouldPrint(missingDraft, approval: nil, mode: mode))
         }
     }
 

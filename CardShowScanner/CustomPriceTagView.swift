@@ -35,7 +35,7 @@ import SwiftUI
                         TextField("Whole-dollar price", text: $model.price).keyboardType(.numberPad)
                             .focused($focused, equals: .price).accessibilityIdentifier("customLabels.price")
                     }
-                    Text("PokéDen logo and price. Check each card's cost before using it; inventory prices stay unchanged.")
+                    Text("PokéDen logo and price. Enter 0 to leave the price area blank for writing in. Inventory prices stay unchanged.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -68,7 +68,7 @@ import SwiftUI
                         .frame(maxWidth: .infinity).padding(12).background(.white)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                         .accessibilityLabel("Price tag preview")
-                        .accessibilityValue("\(previewDraft.priceText) · \(previewDraft.paperSize.title) · \(previewDraft.pricePosition.title)")
+                        .accessibilityValue("\(previewDraft.priceDescription) · \(previewDraft.paperSize.title) · \(previewDraft.pricePosition.title)")
                         .accessibilityIdentifier("customLabels.preview")
                 } else {
                     Text(previewError ?? (model.isBulk

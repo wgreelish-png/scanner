@@ -153,7 +153,8 @@ import XCTest
         for price in [Int64(0), 100, 500, 11_000] {
             let draft = CustomPriceTagDraft(priceCents: price, copies: 3, paperSize: .small30x14)
             XCTAssertNoThrow(try draft.validate())
-            XCTAssertEqual(draft.priceText, StickerPrice.individual(price).displayText)
+            XCTAssertEqual(draft.priceText, price == 0 ? "" : StickerPrice.individual(price).displayText)
+            XCTAssertEqual(draft.isBlankPrice, price == 0)
         }
         for price in [Int64(-100), 50, 599] {
             XCTAssertThrowsError(try CustomPriceTagDraft(priceCents: price, copies: 1, paperSize: .small30x14).validate())
@@ -161,6 +162,33 @@ import XCTest
         for copies in [0, 101] {
             XCTAssertThrowsError(try CustomPriceTagDraft(priceCents: 500, copies: copies, paperSize: .small30x14).validate())
         }
+    }
+
+    func testExplicitCustomZeroPreparesWriteInLabelsWhileEmptyInputAndDealRemainDistinct() throws {
+        var bytes: Data?
+        let queue = LabelPrintQueue(read: { _ in bytes }, write: { data, _ in bytes = data })
+        let model = CustomPriceTagModel(queue: queue, render: raster)
+        XCTAssertNil(model.draft, "Opening an empty custom form does not silently select a write-in label")
+        model.price = "0"
+        let blank = try XCTUnwrap(model.draft)
+        XCTAssertTrue(blank.isBlankPrice)
+        XCTAssertEqual(blank.priceText, "")
+        XCTAssertEqual(blank.priceDescription, "Blank price · write in")
+        XCTAssertTrue(model.prepare())
+        let entry = try XCTUnwrap(queue.entries.first)
+        XCTAssertEqual(entry.blankPrice, true)
+        XCTAssertNil(entry.stickerTag)
+        XCTAssertNil(entry.pricingRevisionID)
+        XCTAssertEqual(entry.priceText, "Blank price · write in")
+        XCTAssertFalse(queue.isPrinting)
+
+        try queue.clear()
+        model.isBulk = true
+        XCTAssertFalse(try XCTUnwrap(model.draft).isBlankPrice)
+        XCTAssertEqual(model.draft?.priceText, StickerPrice.twoForOne.displayText)
+        XCTAssertTrue(model.prepare())
+        XCTAssertEqual(queue.entries.first?.stickerTag, .twoForOne)
+        XCTAssertNotEqual(queue.entries.first?.blankPrice, true)
     }
 
     func testPreparationIsIdempotentAndRestoresExactStandaloneCopiesWithoutPrinting() throws {

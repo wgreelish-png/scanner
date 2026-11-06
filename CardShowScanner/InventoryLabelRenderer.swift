@@ -68,6 +68,16 @@ import UIKit
             let line = fittedTitle(name: title.name, number: title.number, font: titleFont, width: available)
             drawCentered(line, font: titleFont, rect: CGRect(x: margin, y: 4, width: available, height: 24))
             let conditionFont = UIFont.systemFont(ofSize: 15, weight: .semibold)
+            if price.isEmpty {
+                // Keep a clear writing space instead of centering the condition
+                // where a price would normally be drawn.
+                let condition = truncated(conditionText, font: conditionFont, width: min(66, available / 3))
+                let conditionWidth = measured(condition, font: conditionFont)
+                drawCentered(condition, font: conditionFont,
+                    rect: CGRect(x: CGFloat(width) - margin - conditionWidth, y: 31,
+                                 width: conditionWidth, height: 56))
+                break
+            }
             let minimumPriceWidth = measured(price, font: .monospacedDigitSystemFont(ofSize: 14, weight: .bold))
             let condition = truncated(conditionText, font: conditionFont,
                 width: max(0, min(66, available / 3, available - minimumPriceWidth - 9)))
@@ -179,6 +189,7 @@ import UIKit
         context.translateBy(x: -pageBounds.minX, y: -pageBounds.minY)
         context.drawPDFPage(page)
         context.restoreGState()
+        guard !text.isEmpty else { return }
         let maximum: CGFloat = isBulk ? min(44, size.height * 0.6) : min(64, size.height * 0.75)
         let font = try fittedPriceFont(text, maximum: maximum, rect: layout.priceArea)
         drawCentered(text, font: font, rect: layout.priceArea)
@@ -204,8 +215,10 @@ import UIKit
         let conditionWidth = measured(conditionText, font: conditionFont)
         let gap = conditionText.isEmpty ? 0 : padding
         let priceArea = CGRect(x: row.minX, y: row.minY, width: row.width - conditionWidth - gap, height: row.height)
-        let font = try fittedPriceFont(price, maximum: min(42, size.height * 0.54), rect: priceArea, minimum: 5)
-        drawCentered(price, font: font, rect: priceArea)
+        if !price.isEmpty {
+            let font = try fittedPriceFont(price, maximum: min(42, size.height * 0.54), rect: priceArea, minimum: 5)
+            drawCentered(price, font: font, rect: priceArea)
+        }
         drawCentered(conditionText, font: conditionFont,
             rect: CGRect(x: priceArea.maxX + gap, y: row.minY, width: conditionWidth, height: row.height))
     }
@@ -277,6 +290,7 @@ import UIKit
         context.restoreGState()
 
         let priceArea = layout.priceArea
+        guard isBulk || !price.isEmpty else { return }
         if isBulk {
             let deal = width == 240 ? "2/$1" : "2 FOR $1"
             let font = try priceFont(deal, maximum: width == 240 ? 44 : 32, minimum: 9, width: priceArea.width)

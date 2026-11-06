@@ -34,10 +34,10 @@ import XCTest
             let printable = drafts.filter { InventoryLabelBatch.shouldPrint($0, approval: store.record(for: $0.id), mode: mode) }
             XCTAssertEqual(printable.count, 4)
             XCTAssertEqual(printable.reduce(0) { $0 + $1.copies }, 4)
-            XCTAssertEqual(printable.map(\.tag), tags)
+            XCTAssertEqual(printable.map(\.tag), tags.map(Optional.some))
             let queued = try printable.flatMap { try entries($0, revision: store.record(for: $0.id)?.priceRevisionID) }
             XCTAssertEqual(queued.count, 4)
-            XCTAssertEqual(queued.map(\.stickerTag), tags)
+            XCTAssertEqual(queued.map(\.stickerTag), tags.map(Optional.some))
             XCTAssertTrue(queued.allSatisfy { TagPricingContext.printingIssue(for: $0, store: store) == nil })
         }
         XCTAssertEqual(inventory, before)
@@ -89,7 +89,7 @@ import XCTest
         XCTAssertTrue(try XCTUnwrap(store.record(for: item.id)).needsLabels)
     }
 
-    func testBulkAndIndividualZeroCannotValidateOrCompleteEachOthersApproval() throws {
+    func testBulkAndWriteInZeroCannotCompleteEachOthersApproval() throws {
         let store = store(), item = stock()
         try store.prepareForPrinting([.init(id: item.id, approvedTag: .twoForOne, currentMarket: 0.5)])
         var draft = InventoryLabelBatch.draft(for: item, mode: .all, store: store)
@@ -104,11 +104,12 @@ import XCTest
 
         draft.isBulk = false; draft.askingPriceText = "0"
         var zero = try XCTUnwrap(entries(draft, revision: store.record(for: item.id)?.priceRevisionID).first)
-        XCTAssertEqual(zero.stickerTag, .individual(0))
+        XCTAssertNil(zero.stickerTag)
+        XCTAssertEqual(zero.blankPrice, true)
         XCTAssertNil(zero.inventoryBulk)
         XCTAssertNil(TagPricingContext.printingIssue(for: zero, store: store))
         try store.prepareForPrinting([.init(id: item.id, approvedTag: .twoForOne, currentMarket: 0.5)])
-        XCTAssertNotNil(TagPricingContext.printingIssue(for: zero, store: store))
+        XCTAssertNil(TagPricingContext.printingIssue(for: zero, store: store), "A write-in label carries no outdated printed price")
         zero.state = .completed
         try store.observeCompletedQueue([zero])
         XCTAssertTrue(try XCTUnwrap(store.record(for: item.id)).needsLabels)
@@ -131,7 +132,7 @@ import XCTest
         draft.isBulk = false; draft.askingPriceText = "0"; draft.copies = 1
         let zero = try XCTUnwrap(entries(draft).first)
         var row = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(zero)) as? [String: Any])
-        row.removeValue(forKey: "source"); row.removeValue(forKey: "inventoryBulk")
+        row.removeValue(forKey: "source"); row.removeValue(forKey: "inventoryBulk"); row.removeValue(forKey: "blankPrice")
         let legacy = try JSONDecoder().decode(LabelQueueEntry.self, from: JSONSerialization.data(withJSONObject: row))
         XCTAssertNoThrow(try legacy.validate())
         XCTAssertEqual(legacy.stickerTag, .individual(0))

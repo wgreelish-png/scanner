@@ -36,8 +36,9 @@ as a separate convenience.
    quantity is included in the total and printed once per requested copy.
 4. Complete those labels and check Print Price Changed. The completed matching
    deal should no longer need labels. Print All should still permit a reprint.
-5. Compare a known individual $0 label with a 2-for-$1 label. Their display and
-   saved categories must remain distinct after reopening the queue. Check the
+5. Compare a zero-valued write-in label with a 2-for-$1 label. The first leaves
+   its price area blank; the second prints the deal. Their saved categories
+   remain distinct after reopening the queue. Check the
    remembered Price Left/Right choice and detected paper on both.
 
 Native execution, UI interaction and physical printing require Xcode/the phone

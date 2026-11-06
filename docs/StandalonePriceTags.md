@@ -3,9 +3,10 @@
 Show → Price Tags → Custom Price Tag accepts a whole-dollar price, 1–100 copies
 and the loaded paper size. It previews a price-only sticker and saves it to the
 existing durable queue. There is no card picker, inventory prerequisite,
-pricing lookup, profit claim or approval write. A known $0 is allowed, and cents
-are rejected under the existing whole-dollar tag rule. Check a card's cost
-before applying a manually entered sticker.
+pricing lookup, profit claim or approval write. Entering 0 prepares a write-in
+label with an empty price area; cents are rejected under the existing
+whole-dollar tag rule. Check a card's cost before applying a manually entered
+sticker.
 
 Prepare never starts Bluetooth or prints. Print Queued Labels, interrupted-copy
 checks, foreground-only transport and saved-queue review/discard remain the
@@ -14,8 +15,9 @@ save retains the price and copies for retry after reloading the queue; existing
 queue progress is never overwritten automatically.
 
 Custom queue entries explicitly carry source=custom, no inventory identity and
-no approval revision. Inventory entries keep all current approval checks;
-missing source remains legacy inventory. Contradictory custom identity/revision,
+no approval revision. Priced inventory entries keep their approval checks;
+write-in inventory labels have no printed price to approve or acknowledge.
+Missing source remains legacy inventory. Contradictory custom identity/revision,
 non-price-only style, cents and unknown source values fail validation. Completed
 custom labels cannot mark an inventory sticker as printed. Existing queue files
 remain readable, including legacy cents-priced snapshots.

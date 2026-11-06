@@ -29,6 +29,7 @@ struct LabelQueueEntry: Codable, Equatable, Identifiable, Sendable {
     let source: LabelQueueSource?
     let inventoryID: UUID?
     let cardName: String
+    /// Zero is only a storage sentinel when blankPrice is true, not a price.
     let priceCents: Int64
     let copyNumber: Int
     let paperSize: InventoryLabelSize
@@ -36,20 +37,25 @@ struct LabelQueueEntry: Codable, Equatable, Identifiable, Sendable {
     let raster: LabelRaster
     /// Optional for saved queues from before durable pricing approvals existed.
     let pricingRevisionID: UUID?
-    /// Explicit standalone discount category. Missing/false remains an ordinary
-    /// custom price, including a known $0 price; inventory entries never use it.
+    /// Explicit standalone discount category. Without a write-in flag,
+    /// missing/false retains an ordinary price, including legacy $0 artwork.
     let customBulk: Bool?
     /// A saved inventory deal is distinct from an ordinary zero-dollar sticker.
     /// Missing/false preserves the interpretation of all older queue entries.
     let inventoryBulk: Bool?
+    /// New write-in labels contain no printed price. Missing/false preserves
+    /// the price and exact artwork of legacy zero-dollar queue snapshots.
+    let blankPrice: Bool?
     var state: LabelQueueState
     var lastIssue: LabelPrinterIssue?
 
     var priceText: String {
-        stickerTag == .twoForOne ? StickerPrice.twoForOne.displayText : ShowBudgetMoney.decimal(priceCents).money
+        if blankPrice == true { return InventoryLabelDraft.blankPriceDescription }
+        return stickerTag == .twoForOne ? StickerPrice.twoForOne.displayText : ShowBudgetMoney.decimal(priceCents).money
     }
 
-    var stickerTag: StickerPrice {
+    var stickerTag: StickerPrice? {
+        guard blankPrice != true else { return nil }
         let isDeal = source == .custom ? customBulk == true : inventoryBulk == true
         return isDeal ? .twoForOne : .individual(priceCents)
     }
@@ -57,21 +63,22 @@ struct LabelQueueEntry: Codable, Equatable, Identifiable, Sendable {
     init(draft: InventoryLabelDraft, raster: LabelRaster, copyNumber: Int, pricingRevisionID: UUID? = nil) throws {
         try draft.validate()
         try raster.validate()
-        guard let tag = draft.tag, (1...draft.copies).contains(copyNumber) else {
+        guard draft.isBlankPrice || draft.tag != nil, (1...draft.copies).contains(copyNumber) else {
             throw LabelPrintQueueFailure.invalidEntry
         }
         self.id = UUID()
         self.source = .inventory
         self.inventoryID = draft.id
         self.cardName = draft.cardName
-        self.priceCents = tag.integerPriceCents ?? 0
+        self.priceCents = draft.tag?.integerPriceCents ?? 0
         self.copyNumber = copyNumber
         self.paperSize = draft.paperSize
         self.style = draft.style
         self.raster = raster
-        self.pricingRevisionID = pricingRevisionID
+        self.pricingRevisionID = draft.isBlankPrice ? nil : pricingRevisionID
         self.customBulk = nil
         self.inventoryBulk = draft.isBulk ? true : nil
+        self.blankPrice = draft.isBlankPrice ? true : nil
         self.state = .pending
         self.lastIssue = nil
         try validate()
@@ -91,6 +98,7 @@ struct LabelQueueEntry: Codable, Equatable, Identifiable, Sendable {
         self.pricingRevisionID = nil
         self.customBulk = isBulk ? true : nil
         self.inventoryBulk = nil
+        self.blankPrice = !isBulk && customPriceCents == 0 ? true : nil
         self.state = .pending
         self.lastIssue = nil
         try validate()
@@ -103,6 +111,8 @@ struct LabelQueueEntry: Codable, Equatable, Identifiable, Sendable {
               (1...100).contains(copyNumber),
               raster.width == paperSize.headDots,
               raster.height == paperSize.feedDots else { throw LabelPrintQueueFailure.invalidEntry }
+        guard blankPrice != true || (source != nil && priceCents == 0 && pricingRevisionID == nil
+            && customBulk != true && inventoryBulk != true) else { throw LabelPrintQueueFailure.invalidEntry }
         if source == .custom {
             guard inventoryID == nil, pricingRevisionID == nil,
                   style == .priceOnly, priceCents % 100 == 0,

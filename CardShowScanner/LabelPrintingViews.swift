@@ -330,7 +330,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     private var printableDrafts: [InventoryLabelDraft] {
         drafts.filter { draft in
             InventoryLabelBatch.shouldPrint(draft, approval: approvals.record(for: draft.id),
-                mode: mode, keepExisting: keepExistingStickerIDs.contains(draft.id))
+                mode: mode, keepExisting: !draft.isBlankPrice && keepExistingStickerIDs.contains(draft.id))
         }
     }
     private var canPrepareNewQueue: Bool {
@@ -341,8 +341,8 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     private var validation: String? {
         guard !drafts.isEmpty else { return "Select at least one card." }
         guard approvals.isLoaded else { return approvals.error ?? "Reload saved label data before continuing." }
-        if let draft = drafts.first(where: { !$0.isBulk && $0.tag == nil }) {
-            return "Enter a whole-dollar asking price for \(draft.cardName). A known $0 price is valid; cents are not allowed."
+        if let draft = drafts.first(where: { !$0.isBulk && !$0.isBlankPrice && $0.tag == nil }) {
+            return "Use a whole-dollar asking price for \(draft.cardName), or leave it blank for a write-in price."
         }
         if drafts.contains(where: { !(1...InventoryLabelDraft.maximumCopies).contains($0.copies) }) {
             return "Choose 1–100 labels per card. Matched stock quantities have not been reduced automatically."
@@ -501,17 +501,11 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
             savedQueueSection
             labelDataSection
             preparationNoticeSection
-            if drafts.contains(where: { $0.tag == nil }) {
-                Section("Missing prices") {
-                    Text("\(drafts.filter { $0.tag == nil }.count.formatted()) cards need a price. Edit them individually, or leave them out of this batch.")
-                        .font(.footnote).foregroundStyle(.orange)
-                    Button("Skip Unpriced Cards") {
-                        let missing = Set(drafts.filter { $0.tag == nil }.map(\.id))
-                        drafts.removeAll { missing.contains($0.id) }
-                        selectedIDs.subtract(missing)
-                        keepExistingStickerIDs.subtract(missing)
-                        resetPreparationNotice()
-                    }.accessibilityIdentifier("labels.skipUnpriced")
+            if drafts.contains(where: \.isBlankPrice) {
+                Section("Write-in prices") {
+                    Text("Prices that are unavailable or $0 are left blank. Each selected copy still receives a label so you can write its price in.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("labels.writeInPrices")
                 }
             }
             Section("Label layout") {
@@ -703,9 +697,9 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                         Text("\(draft.condition) · \(draft.copies.formatted()) copies")
                             .font(.caption).foregroundStyle(.secondary)
                     }.frame(maxWidth: .infinity, alignment: .leading)
-                    Text(draft.priceText ?? "Enter price")
+                    Text(draft.priceDescription)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(draft.tag == nil ? Color.orange : Color.primary)
+                        .foregroundStyle(!draft.isBlankPrice && draft.tag == nil ? Color.orange : Color.primary)
                     Image(systemName: "pencil").font(.caption).foregroundStyle(.secondary)
                 }.contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityIdentifier("labels.edit." + draft.id.uuidString)
@@ -717,8 +711,8 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
             HStack(alignment: .firstTextBaseline) {
                 Text(draft.cardName).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
                 Spacer(minLength: 8)
-                Text(draft.priceText ?? "Needs input").font(.subheadline.bold())
-                    .foregroundStyle(draft.tag == nil ? Color.orange : Color.primary)
+                Text(draft.priceDescription).font(.subheadline.bold())
+                    .foregroundStyle(!draft.isBlankPrice && draft.tag == nil ? Color.orange : Color.primary)
                     .accessibilityIdentifier("labels.review.price." + draft.id.uuidString)
             }
             HStack {
@@ -733,7 +727,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     @ViewBuilder private func reviewDetails(_ draft: InventoryLabelDraft, summaryVisible: Bool = false) -> some View {
         InventoryLabelPreview(draft: draft)
         if !summaryVisible {
-            LabeledContent("Asking price", value: draft.priceText ?? "Needs input")
+            LabeledContent("Asking price", value: draft.priceDescription)
                 .accessibilityIdentifier("labels.review.price." + draft.id.uuidString)
             LabeledContent("Condition", value: draft.condition)
             LabeledContent("Copies", value: draft.copies.formatted())
@@ -742,7 +736,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         if mode == .all {
             Label("Print All includes this tag, even if already labeled.", systemImage: "printer")
                 .font(.footnote).foregroundStyle(.secondary)
-        } else if mode == .priceChanged, let saved = approvals.record(for: draft.id), saved.approvedTag == draft.tag, !saved.needsLabels {
+        } else if !draft.isBlankPrice, mode == .priceChanged, let saved = approvals.record(for: draft.id), saved.approvedTag == draft.tag, !saved.needsLabels {
             Label("Existing sticker retained · no reprint", systemImage: "checkmark.circle")
                 .font(.footnote).foregroundStyle(.secondary)
         } else if canKeepExistingSticker(for: draft) {
@@ -807,7 +801,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     }
     private func resetPreparationNotice() { preparationNotice = nil }
     private func canKeepExistingSticker(for draft: InventoryLabelDraft) -> Bool {
-        guard let tag = draft.tag else { return false }
+        guard !draft.isBlankPrice, let tag = draft.tag else { return false }
         return approvals.record(for: draft.id).map { $0.approvedTag == tag } ?? true
     }
     private func keepExistingStickerBinding(for id: UUID) -> Binding<Bool> {
@@ -825,13 +819,16 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         defer { preparing = false }
         var pricesSaved = false
         do {
-            let requests = try drafts.map { draft -> TagApprovalRequest in
+            let requests = try drafts.filter { !$0.isBlankPrice }.map { draft -> TagApprovalRequest in
                 guard let tag = draft.tag else { throw InventoryLabelFailure.invalidPrice }
                 return TagApprovalRequest(id: draft.id, approvedTag: tag, currentMarket: draft.marketValue,
                     isManualOverride: draft.isManualOverride)
             }
-            try approvals.prepareForPrinting(requests, keepingExistingStickerIDs: keepExistingStickerIDs)
-            pricesSaved = true
+            keepExistingStickerIDs.formIntersection(Set(requests.map(\.id)))
+            if !requests.isEmpty {
+                try approvals.prepareForPrinting(requests, keepingExistingStickerIDs: keepExistingStickerIDs)
+                pricesSaved = true
+            }
             let draftsToPrint = printableDrafts
             guard !draftsToPrint.isEmpty else {
                 preparationNotice = "Label choices saved. No labels need printing."
@@ -854,7 +851,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 } else { raster = try InventoryLabelRenderer.renderRaster(draft) }
                 for copy in 1...draft.copies {
                     entries.append(try LabelQueueEntry(draft: draft, raster: raster, copyNumber: copy,
-                        pricingRevisionID: approvals.record(for: draft.id)?.priceRevisionID))
+                        pricingRevisionID: draft.isBlankPrice ? nil : approvals.record(for: draft.id)?.priceRevisionID))
                 }
             }
             try queue.replace(with: entries)
@@ -905,8 +902,8 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         return value
     }
     private var issue: String? {
-        if !edited.isBulk {
-            guard edited.priceCents != nil else { return "Enter a whole-dollar asking price. $0 is valid." }
+        if !edited.isBulk && !edited.isBlankPrice {
+            guard edited.priceCents != nil else { return "Use whole dollars, or leave the price blank to write it in." }
             guard edited.tag != nil else { return "Individual tags use whole dollars. Remove cents before saving." }
         }
         guard (1...InventoryLabelDraft.maximumCopies).contains(edited.copies) else { return "Enter 1–100 copies. The requested count has not been reduced." }
@@ -931,10 +928,10 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                     } else {
                         HStack {
                             Text("$").foregroundStyle(.secondary)
-                            TextField("Required", text: $price).keyboardType(.decimalPad)
+                            TextField("Write-in price", text: $price).keyboardType(.decimalPad)
                                 .focused($focus, equals: .price).accessibilityIdentifier("labels.editor.price")
                         }
-                        Text("Use whole dollars. Inventory prices stay unchanged.")
+                        Text("Use whole dollars. Leave blank or enter 0 to keep the price area empty for writing in. Inventory prices stay unchanged.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
@@ -953,7 +950,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                         LabelBitmapImage(image: bitmap.previewImage,
                             description: previewDescription)
                     }
-                    else { Text(previewError ?? "Enter a price, then update the preview.").foregroundStyle(.secondary) }
+                    else { Text(previewError ?? "Update the preview to see this label.").foregroundStyle(.secondary) }
                     Button("Update Preview") { focus = nil; updatePreview() }
                         .disabled(issue != nil).accessibilityIdentifier("labels.editor.preview")
                     if previewPrice != price {
@@ -1003,7 +1000,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     }
     private var previewDescription: String {
         let shown = previewDraft ?? edited
-        let amount = shown.priceText ?? "Price required"
+        let amount = shown.priceDescription
         return "\(shown.style.title), \(amount), \(shown.paperSize.title)"
             + (shown.style == .priceOnly ? ", \(shown.pricePosition.title)" : "")
     }
@@ -1018,7 +1015,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         Group {
             if let image {
                 LabelBitmapImage(image: image,
-                    description: "\(draft.style.title), \(draft.priceText ?? "Price required"), \(draft.paperSize.title)"
+                    description: "\(draft.style.title), \(draft.priceDescription), \(draft.paperSize.title)"
                         + (draft.style == .priceOnly ? ", \(draft.pricePosition.title)" : ""))
             }
             else { Text(error ?? "Preparing preview…").font(.footnote).foregroundStyle(.secondary) }

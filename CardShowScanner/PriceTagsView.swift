@@ -78,7 +78,7 @@ import SwiftUI
                 }
                 .font(.subheadline.weight(.semibold)).padding(18)
                 .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
-                Text("Saved sticker prices are used without repricing. Every selected inventory copy receives a tag, including 2 for $1 cards. Opening a batch never starts printing.")
+                Text("Every selected inventory copy receives a tag. Saved prices and 2 for $1 deals stay unchanged; unavailable and $0 prices leave space to write in. Opening a batch never starts printing.")
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(16)
         }

@@ -47,6 +47,10 @@ import SwiftData
                 inventory.append(.init(sourceInventoryID: 3,
                     card: Self.card("Bulk Stock", price: Decimal(string: "0.50")!), quantity: 1))
             }
+            if ProcessInfo.processInfo.arguments.contains("--inventory-write-in-labels-fixture") {
+                inventory.append(.init(sourceInventoryID: 4, card: Self.card("Unavailable Stock", price: nil), quantity: 1))
+                inventory.append(.init(sourceInventoryID: 5, card: Self.card("Zero Stock", price: 0), quantity: 1))
+            }
             try! store.seedInventory(inventory, sourceLocationID: 9001)
         }
         let context = container.mainContext
@@ -77,7 +81,7 @@ import SwiftData
             try! context.save()
         }
     }
-    private static func card(_ name: String, price: Decimal) -> CardCandidate {
+    private static func card(_ name: String, price: Decimal?) -> CardCandidate {
         CardCandidate(identity: .init(game: "Pokémon", productID: "mock:" + name, printing: "Normal"),
             name: name, set: "Synthetic set", number: "1", marketPrice: price,
             confidence: 100, printings: ["Normal"])
