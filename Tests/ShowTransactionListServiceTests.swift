@@ -262,7 +262,7 @@ import SwiftData
             .init(inventoryID: 10, card: card("source", price: 200), quantity: 8),
             .init(inventoryID: 20, card: card("new-remote"), quantity: 4)
         ], fetchedAt: fixture.disk.now.addingTimeInterval(60))
-        try CardShowInventoryService.apply(refreshed, context: fixture.context)
+        try CardShowInventoryService.apply(refreshed, context: fixture.context, workingImportMode: .replace)
         try fixture.context.save()
         XCTAssertEqual(imported.quantity, 12)
         try ShowInventoryBridge.seedFromImportedList(context: fixture.context, store: fixture.store)
