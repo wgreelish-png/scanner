@@ -189,6 +189,75 @@ struct NiimbotContinuousPrintRequests: Sendable {
     let usesCumulativePageCounter: Bool
 }
 
+/// Error replies describe printer state, not a CoreBluetooth link failure.
+/// Keep failures fatal throughout required work. Optional metadata and a
+/// positively acknowledged PrintEnd cannot invalidate a completed print job.
+enum NiimbotErrorReplyDisposition: Equatable {
+    enum Request: Equatable { case none, required, optionalRoll, cleanupHeartbeat }
+    case disconnect, rejectOptionalRoll, warnConnected
+
+    static func resolve(verified: Bool, settingUp: Bool, printing: Bool, configuring: Bool,
+                        printEndAcknowledged: Bool, request: Request) -> Self {
+        guard verified, !settingUp else { return .disconnect }
+        if request == .optionalRoll { return .rejectOptionalRoll }
+        guard !configuring else { return .disconnect }
+        if printing {
+            return printEndAcknowledged && (request == .none || request == .cleanupHeartbeat)
+                ? .warnConnected : .disconnect
+        }
+        return request == .none ? .warnConnected : .disconnect
+    }
+}
+
+/// Aggregate transport work only: no artwork, card text or printer identity.
+/// Counts begin when the first ATT chunk is handed to CoreBluetooth, not when
+/// a request is merely planned; they do not claim that the radio delivered it.
+struct NiimbotPrintTransferMetrics {
+    let task: String
+    let total: Int
+    private(set) var groups = 0
+    private(set) var nativeCopies = 0
+    private(set) var imagePackets = 0
+    private(set) var requests = 0
+    private(set) var wireBytes = 0
+    private(set) var statusPolls = 0
+
+    init(identity: NiimbotD110Identity, continuous: Bool, total: Int) {
+        task = identity.modelID != 2320 ? "legacy_serial" : continuous ? "buffered_copies" : "declared_serial"
+        self.total = total
+    }
+
+    static func pageCopies(command: UInt8, data: Data) -> Int {
+        // Both M page-size variants include quantity at bytes 4–5. Legacy
+        // page sizes contain only dimensions and always represent one copy.
+        guard command == 0x13, data.count >= 6 else { return 1 }
+        return max(1, Int(data[4]) << 8 | Int(data[5]))
+    }
+
+    mutating func recordWrite(command: UInt8, response: UInt8?, copies: Int,
+                              byteCount: Int, startsRequest: Bool) {
+        wireBytes += max(0, byteCount)
+        guard startsRequest else { return }
+        requests += 1
+        if command == 0x13 {
+            groups += 1
+            // Extra physical copies that reuse an image upload.
+            nativeCopies += max(0, copies - 1)
+        }
+        if command == 0x83 || command == 0x84 || command == 0x85 { imagePackets += 1 }
+        // M-v4 also emits a one-way A3 page preamble; it is not a status poll.
+        if command == 0xa3 && response == 0xb3 { statusPolls += 1 }
+    }
+
+    func diagnosticFields(elapsedMilliseconds: Int) -> [String: String] {
+        ["print_task": task, "total": String(total), "native_groups": String(groups),
+         "native_copies": String(nativeCopies), "image_packets": String(imagePackets),
+         "request_count": String(requests), "wire_bytes": String(wireBytes),
+         "transfer_elapsed_ms": String(max(0, min(3_600_000, elapsedMilliseconds))),
+         "status_polls": String(statusPolls)]
+    }
+}
+
 /// Native Swift subset of niimbluelib's documented D110 and D110-M workflows.
 /// Model and negotiated protocol choose the task; unknown hardware has no
 /// fallback print algorithm.
@@ -848,8 +917,6 @@ enum NiimbotProtocol {
             }
 
             try Task.checkCancellation()
-            try await pause()
-            try Task.checkCancellation()
             guard let packet = try await exchange(NiimbotRequest(0xa3, response: 0xb3)) else {
                 throw LabelPrinterIssue.unsupportedResponse
             }
@@ -868,6 +935,11 @@ enum NiimbotProtocol {
             } else {
                 pollsWithoutProgress += 1
                 guard pollsWithoutProgress < 100 else { throw LabelPrinterIssue.responseTimeout }
+                // Uploading the window may already have taken longer than a
+                // label needs to print. Poll immediately after a refill and
+                // wait only when the physical counter still reports busy.
+                try await pause()
+                try Task.checkCancellation()
             }
         }
 

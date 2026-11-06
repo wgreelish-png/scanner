@@ -3,15 +3,18 @@ import UIKit
 
 /// Printer settings also reflect the connection started from Price Tags.
 @MainActor struct LabelPrinterSettingsView: View {
+    private let onPrintingCompleted: (() -> Void)?
     @Environment(\.scenePhase) private var scenePhase
     @State private var queue = LabelPrintQueue.shared
     @State private var printer = NiimbotPrinter.shared
+
+    init(onPrintingCompleted: (() -> Void)? = nil) { self.onPrintingCompleted = onPrintingCompleted }
 
     var body: some View {
         Form {
             LabelPrinterConnectionSection(printer: printer)
             Section("Labels") {
-                NavigationLink { LabelPrintQueueView() } label: {
+                NavigationLink { LabelPrintQueueView(onPrintingCompleted: onPrintingCompleted) } label: {
                     LabeledContent("Saved print queue", value: queue.entries.count.formatted())
                 }.accessibilityIdentifier("labelPrinter.queue")
                 Text("Create labels from Show → Price Tags. Asking prices and label copies are local drafts; printing never changes stock, costs, sales, or budgets.")
@@ -264,6 +267,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     let inventory: [ShowInventoryItem]
     let marketQuotes: [UUID: TagMarketQuote]
     let mode: InventoryLabelBatchMode
+    private let onPrintingCompleted: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var path: [InventoryLabelStep]
@@ -289,10 +293,11 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
 
     init(inventory: [ShowInventoryItem], initialInventoryID: UUID? = nil,
          marketQuotes: [UUID: TagMarketQuote] = [:], mode: InventoryLabelBatchMode = .custom,
-         paperPreferences: LabelPaperPreferences = .shared) {
+         paperPreferences: LabelPaperPreferences = .shared, onPrintingCompleted: (() -> Void)? = nil) {
         self.inventory = inventory
         self.marketQuotes = marketQuotes
         self.mode = mode
+        self.onPrintingCompleted = onPrintingCompleted
         _paperPreferences = State(initialValue: paperPreferences)
         _paper = State(initialValue: paperPreferences.size)
         _pricePosition = State(initialValue: paperPreferences.pricePosition)
@@ -361,7 +366,11 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                         switch step {
                         case .configure: configuration
                         case .review: review
-                        case .queue: LabelPrintQueueView()
+                        case .queue:
+                            LabelPrintQueueView(onPrintingCompleted: {
+                                if let onPrintingCompleted { onPrintingCompleted() }
+                                else { dismiss() }
+                            })
                         }
                     }
                 }
@@ -1080,6 +1089,19 @@ private struct LabelActionBar<Content: View>: View {
     @State private var showingDiscard = false
     @State private var actionError: String?
     @State private var previewEntry: LabelQueueEntry?
+    @State private var progress = LabelPrintProgressSession()
+    @State private var showingPriceTagsAfterPrint = false
+    private let onPrintingCompleted: (() -> Void)?
+    #if DEBUG
+    @State private var fixture: LabelPrintProgressFixture?
+    #endif
+
+    init(onPrintingCompleted: (() -> Void)? = nil) {
+        self.onPrintingCompleted = onPrintingCompleted
+        #if DEBUG
+        _fixture = State(initialValue: LabelPrintProgressFixture.configured())
+        #endif
+    }
 
     private var selectedUncertain: Bool {
         queue.entries.contains { selected.contains($0.id) && $0.state == .uncertain }
@@ -1151,6 +1173,10 @@ private struct LabelActionBar<Content: View>: View {
         .navigationTitle("Label Print Queue").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .topBarTrailing) { ClearLabelPrintQueueButton(identifier: "labelQueue.clearQueue") } }
         .safeAreaInset(edge: .bottom, spacing: 0) { printControls }
+        .sheet(isPresented: Binding(get: { progress.isPresented }, set: { visible in
+            if !visible { progress.close() }
+        }), onDismiss: finishProgressPresentation) { progressScreen }
+        .navigationDestination(isPresented: $showingPriceTagsAfterPrint) { PriceTagsView() }
         .sheet(isPresented: $showingRetry) { retryConfirmation }
         .sheet(item: $previewEntry) { entry in
             NavigationStack {
@@ -1185,7 +1211,10 @@ private struct LabelActionBar<Content: View>: View {
             Button("OK", role: .cancel) { actionError = nil }
         } message: { Text(actionError ?? "") }
         .onChange(of: scenePhase) { _, phase in
-            if phase != .active { queue.stop(using: printer) }
+            if phase != .active {
+                progress.stop(queue: queue, using: printer)
+                queue.stop(using: printer)
+            }
         }
         .onChange(of: queue.entries.map(\.id)) { _, ids in
             selected.formIntersection(ids)
@@ -1193,7 +1222,7 @@ private struct LabelActionBar<Content: View>: View {
             if let previewEntry, !ids.contains(previewEntry.id) { self.previewEntry = nil }
         }
         .onDisappear {
-            queue.stop(using: printer)
+            if !progress.isPresented { queue.stop(using: printer) }
             if !printer.isConnected { printer.stop() }
         }
         .accessibilityIdentifier("labelQueue.screen")
@@ -1269,13 +1298,10 @@ private struct LabelActionBar<Content: View>: View {
                     } else {
                         Button("Print Queued Labels") {
                             guard !printer.isConfiguringPaper, stockIssue == nil else { return }
-                            let sender = printer.senderForCurrentPaperMode()
-                            Task {
-                                guard !printer.isConfiguringPaper, stockIssue == nil else { return }
-                                await queue.start(using: sender)
-                            }
+                            progress.start(queue: queue, using: printSender(), deferUntilPresented: true,
+                                canFinish: { UIApplication.shared.applicationState == .active })
                         }.buttonStyle(.borderedProminent)
-                            .disabled(!queue.canStart || !printer.isConnected || printer.isConfiguringPaper
+                            .disabled(!queue.canStart || progress.isRunning || (!printer.isConnected && !usesFixturePrinter) || printer.isConfiguringPaper
                                       || stockIssue != nil || scenePhase != .active)
                             .accessibilityIdentifier("labelQueue.print")
                     }
@@ -1287,6 +1313,84 @@ private struct LabelActionBar<Content: View>: View {
                 }
             }
         }
+    }
+
+    private var usesFixturePrinter: Bool {
+        #if DEBUG
+        fixture != nil
+        #else
+        false
+        #endif
+    }
+
+    private func printSender() -> any LabelPrinterSending {
+        #if DEBUG
+        if let fixture { return fixture }
+        #endif
+        return printer.senderForCurrentPaperMode()
+    }
+
+    private func finishProgressPresentation() {
+        guard progress.didSucceed, !queue.isPrinting else { return }
+        if let onPrintingCompleted { onPrintingCompleted() }
+        else { showingPriceTagsAfterPrint = true }
+    }
+
+    private var progressScreen: some View {
+        NavigationStack {
+            VStack(spacing: 24) {
+                Spacer(minLength: 12)
+                Image(systemName: progress.isRunning ? "printer.fill" : "pause.circle")
+                    .font(.system(size: 48)).foregroundStyle(.tint).accessibilityHidden(true)
+                Text(progress.isRunning ? "Printing Labels" : "Review Printing")
+                    .font(.title2.bold())
+                Text("\(progress.completed(in: queue.entries).formatted()) of \(progress.total.formatted()) labels printed")
+                    .font(.title3.monospacedDigit())
+                    .accessibilityIdentifier("labelProgress.count")
+                ProgressView(value: Double(progress.completed(in: queue.entries)), total: Double(max(1, progress.total)))
+                    .accessibilityLabel("Label printing progress")
+                    .accessibilityIdentifier("labelProgress.bar")
+                Text(progress.status(in: queue.entries, printerStatus: printer.status))
+                    .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    .accessibilityIdentifier("labelProgress.status")
+                if progress.isRunning {
+                    Text("Keep the app open until the printer finishes.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                #if DEBUG
+                if let fixture, progress.isRunning, fixture.stage != .idle {
+                    Button(fixture.stage == .finishing ? "Finish Test Print" : "Confirm Test Labels") { fixture.confirm() }
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier(fixture.stage == .finishing
+                            ? "labelProgress.fixtureFinish" : "labelProgress.fixtureConfirm")
+                }
+                #endif
+                Spacer(minLength: 12)
+            }.padding(24).frame(maxWidth: 560)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(uiColor: .systemGroupedBackground))
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    LabelActionBar {
+                        if progress.isRunning {
+                            Button(progress.didRequestStop ? "Stopping…" : "Pause Printing", role: .destructive) {
+                                progress.stop(queue: queue, using: printer)
+                            }.buttonStyle(.borderedProminent).disabled(progress.didRequestStop)
+                                .accessibilityIdentifier("labelProgress.pause")
+                        } else {
+                            Button("Review Queue") { progress.close() }.buttonStyle(.borderedProminent)
+                                .accessibilityIdentifier("labelProgress.reviewQueue")
+                        }
+                    }
+                }
+        }
+        .interactiveDismissDisabled(progress.isRunning)
+        .presentationDetents([.large])
+        .presentationDragIndicator(.hidden)
+        .onAppear { progress.presentationDidAppear() }
+        .onDisappear {
+            if progress.isRunning { progress.stop(queue: queue, using: printer) }
+        }
+        .accessibilityIdentifier("labelProgress.screen")
     }
 
     private var printHelp: String {

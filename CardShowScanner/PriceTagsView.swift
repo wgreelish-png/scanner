@@ -9,6 +9,9 @@ import SwiftUI
     @State private var printer = NiimbotPrinter.shared
     @State private var paperPreferences: LabelPaperPreferences
     @State private var batch: InventoryLabelBatchMode?
+    @State private var destination: Destination?
+
+    private enum Destination: Hashable { case custom, bulk, queue, printer }
 
     init(store: ShowBudgetStore = .shared, paperPreferences: LabelPaperPreferences = .shared) {
         _store = State(initialValue: store)
@@ -39,11 +42,11 @@ import SwiftUI
                         symbol: "rectangle.stack", count: nil, identifier: "priceTags.chooseCards")
                     batchButton(.priceChanged, title: "Print Price Changed", subtitle: "New cards and saved sticker prices that still need labels.",
                         symbol: "arrow.triangle.2.circlepath", count: approvals.isLoaded ? changedIDs.count : nil)
-                    NavigationLink { CustomPriceTagView(paperPreferences: paperPreferences) } label: {
+                    Button { destination = .custom } label: {
                         routeLabel(title: "Custom Price Tag", subtitle: "PokéDen logo, price and copies. No inventory needed.",
                             symbol: "square.and.pencil", count: nil)
                     }.buttonStyle(.plain).accessibilityIdentifier("priceTags.custom")
-                    NavigationLink { CustomPriceTagView(isBulk: true, paperPreferences: paperPreferences) } label: {
+                    Button { destination = .bulk } label: {
                         routeLabel(title: "2 for $1 Bulk Tags", subtitle: "PokéDen stickers for bulk bins. Choose copies and paper.",
                             symbol: "tray.2", count: nil)
                     }.buttonStyle(.plain).accessibilityIdentifier("priceTags.bulk")
@@ -59,7 +62,7 @@ import SwiftUI
                         description: Text("Create a custom sticker above, or import inventory to prepare card labels."))
                 }
                 VStack(spacing: 0) {
-                    NavigationLink { LabelPrintQueueView() } label: {
+                    Button { destination = .queue } label: {
                         HStack {
                             Label("Saved Print Queue", systemImage: "tray.full")
                             Spacer()
@@ -68,7 +71,7 @@ import SwiftUI
                         }
                     }.accessibilityIdentifier("priceTags.queue")
                     Divider().padding(.vertical, 14)
-                    NavigationLink { LabelPrinterSettingsView() } label: {
+                    Button { destination = .printer } label: {
                         HStack {
                             Label("Printer Settings", systemImage: "printer")
                             Spacer()
@@ -91,12 +94,29 @@ import SwiftUI
         }
         .sheet(item: $batch) { mode in
             InventoryLabelFlowView(inventory: store.inventory, mode: mode,
-                                   paperPreferences: paperPreferences)
+                                   paperPreferences: paperPreferences, onPrintingCompleted: finishPrinting)
+        }
+        .navigationDestination(item: $destination) { route in
+            switch route {
+            case .custom:
+                CustomPriceTagView(paperPreferences: paperPreferences, onPrintingCompleted: finishPrinting)
+            case .bulk:
+                CustomPriceTagView(isBulk: true, paperPreferences: paperPreferences, onPrintingCompleted: finishPrinting)
+            case .queue:
+                LabelPrintQueueView(onPrintingCompleted: finishPrinting)
+            case .printer:
+                LabelPrinterSettingsView(onPrintingCompleted: finishPrinting)
+            }
         }
         .onAppear { printer.startPriceTagsConnection() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { printer.startPriceTagsConnection() }
         }
+    }
+
+    private func finishPrinting() {
+        batch = nil
+        destination = nil
     }
 
     private var printerStatus: some View {

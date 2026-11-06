@@ -2,6 +2,7 @@ import SwiftUI
 
 /// Standalone stickers work without stock, a saved show or tag approvals.
 @MainActor struct CustomPriceTagView: View {
+    private let onPrintingCompleted: (() -> Void)?
     @State private var model: CustomPriceTagModel
     @State private var paperPreferences: LabelPaperPreferences
     @State private var queue = LabelPrintQueue.shared
@@ -12,7 +13,9 @@ import SwiftUI
     @FocusState private var focused: Field?
     private enum Field { case price, copies }
 
-    init(isBulk: Bool = false, paperPreferences: LabelPaperPreferences = .shared) {
+    init(isBulk: Bool = false, paperPreferences: LabelPaperPreferences = .shared,
+         onPrintingCompleted: (() -> Void)? = nil) {
+        self.onPrintingCompleted = onPrintingCompleted
         _paperPreferences = State(initialValue: paperPreferences)
         let model = CustomPriceTagModel(paperSize: paperPreferences.size, pricePosition: paperPreferences.pricePosition)
         model.isBulk = isBulk
@@ -96,7 +99,9 @@ import SwiftUI
         }
         .navigationTitle("Custom Price Tag").navigationBarTitleDisplayMode(.inline)
         .scrollDismissesKeyboard(.interactively)
-        .navigationDestination(isPresented: $showingQueue) { LabelPrintQueueView() }
+        .navigationDestination(isPresented: $showingQueue) {
+            LabelPrintQueueView(onPrintingCompleted: onPrintingCompleted)
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             HStack {
                 Text("\(model.copies) labels").font(.subheadline).monospacedDigit()
