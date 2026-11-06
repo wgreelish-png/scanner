@@ -70,6 +70,17 @@ struct NiimbotRequest: Equatable, Sendable {
     let beginsPrint: Bool
     let requiresTrue: Bool
 
+    /// Only existing one-way image rows may use the experimental transport.
+    /// Any opcode with a reply/checkpoint retains the established write path.
+    var allowsExperimentalImageWrite: Bool {
+        Self.isImageDataCommand(command) && response == nil && responseAlternatives.isEmpty
+            && !requiresTrue && !beginsPrint
+    }
+
+    static func isImageDataCommand(_ command: UInt8) -> Bool {
+        command == 0x83 || command == 0x84 || command == 0x85
+    }
+
     init(_ command: UInt8, _ data: [UInt8] = [1], response: UInt8? = nil,
          responseAlternatives: Set<UInt8> = [], beginsPrint: Bool = false, requiresTrue: Bool = false) {
         self.command = command
@@ -101,6 +112,53 @@ struct NiimbotD110Identity: Equatable, Sendable {
     let firmwareBytes: Data
 
     var modelName: String { modelID == 2320 ? "D110-M" : "D110" }
+}
+
+/// Selected once before a job can transmit. Unsupported requests use the
+/// existing transport from the start; a partial page is never replayed.
+struct NiimbotImageTransportSelection: Equatable, Sendable {
+    enum Fallback: String, Sendable {
+        case none, unsupportedModel = "unsupported_model", unsupportedCharacteristic = "unsupported_characteristic"
+        case invalidWriteSize = "invalid_write_size"
+    }
+
+    let requested: NiimbotImageTransportConfiguration
+    let mode: NiimbotImageTransportMode
+    let fallback: Fallback
+    let maximumResponseWrite: Int
+    let maximumWithoutResponseWrite: Int
+
+    init(requested: NiimbotImageTransportConfiguration, identity: NiimbotD110Identity,
+         supportsWithoutResponse: Bool, maximumResponseWrite: Int, maximumWithoutResponseWrite: Int) {
+        self.requested = requested
+        self.maximumResponseWrite = max(0, maximumResponseWrite)
+        self.maximumWithoutResponseWrite = max(0, maximumWithoutResponseWrite)
+        if requested.mode == .acknowledged {
+            mode = .acknowledged; fallback = .none
+        } else if identity.modelID != 2320 || NiimbotProtocol.diagnosticCommandPath(for: identity) == nil {
+            mode = .acknowledged; fallback = .unsupportedModel
+        } else if !supportsWithoutResponse {
+            mode = .acknowledged; fallback = .unsupportedCharacteristic
+        } else if maximumWithoutResponseWrite <= 0 {
+            mode = .acknowledged; fallback = .invalidWriteSize
+        } else {
+            mode = .pacedWithoutResponse; fallback = .none
+        }
+    }
+
+    func usesWithoutResponse(for request: NiimbotRequest) -> Bool {
+        mode == .pacedWithoutResponse && request.allowsExperimentalImageWrite
+    }
+
+    var diagnosticFields: [String: String] {
+        ["transport_requested": requested.mode.rawValue, "transport_selected": mode.rawValue,
+         "transport_fallback": fallback.rawValue, "max_write_response_bytes": String(maximumResponseWrite),
+         "max_write_without_response_bytes": String(maximumWithoutResponseWrite),
+         "image_pacing_ms": String(requested.pacingMilliseconds), "image_burst_writes": String(requested.burstWriteLimit),
+         "image_burst_bytes": String(requested.burstByteLimit), "pending_packet_limit": "1",
+         "readiness_recheck_ms": String(NiimbotImageReadinessRecheck.intervalMilliseconds),
+         "readiness_recheck_limit": String(NiimbotImageReadinessRecheck.maximumChecks)]
+    }
 }
 
 /// A read-only estimate from a discrete-label RFID counter. It is deliberately
@@ -217,6 +275,7 @@ struct NiimbotPrintTransferMetrics {
     let total: Int
     let identity: NiimbotD110Identity
     let previousJobGap: Duration?
+    let transport: NiimbotImageTransportSelection?
     private(set) var groups = 0
     private(set) var nativeCopies = 0
     private(set) var imagePackets = 0
@@ -225,13 +284,34 @@ struct NiimbotPrintTransferMetrics {
     private(set) var statusPolls = 0
     private(set) var printStarts = 0
     private(set) var printEnds = 0
+    private(set) var responseWriteCount = 0
+    private(set) var withoutResponseWriteCount = 0
+    private(set) var imageResponseBytes = 0
+    private(set) var imageWithoutResponseBytes = 0
+    private(set) var imageResponseWriteCount = 0
+    private(set) var imageWithoutResponseWriteCount = 0
+    private(set) var worReadinessRechecks = 0
+    private(set) var worReadinessCallbacks = 0
+    private(set) var worReadinessBlockedChecks = 0
+    private var confirmedPages: Set<Int> = []
     private var timings: [NiimbotPrintTiming: Duration] = [:]
+    private struct Command: Hashable { let request: UInt8; let response: UInt8 }
+    private struct CommandTiming {
+        var count = 0
+        var elapsed: Duration = .zero
+        var acknowledgement: Duration = .zero
+        var reply: Duration = .zero
+        var actualResponses: Set<UInt8> = []
+    }
+    private var commands: [Command: CommandTiming] = [:]
 
-    init(identity: NiimbotD110Identity, continuous: Bool, total: Int, previousJobGap: Duration? = nil) {
+    init(identity: NiimbotD110Identity, continuous: Bool, total: Int, previousJobGap: Duration? = nil,
+         transport: NiimbotImageTransportSelection? = nil) {
         task = identity.modelID != 2320 ? "legacy_serial" : continuous ? "buffered_copies" : "declared_serial"
         self.total = total
         self.identity = identity
         self.previousJobGap = previousJobGap
+        self.transport = transport
     }
 
     static func pageCopies(command: UInt8, data: Data) -> Int {
@@ -242,8 +322,16 @@ struct NiimbotPrintTransferMetrics {
     }
 
     mutating func recordWrite(command: UInt8, response: UInt8?, copies: Int,
-                              byteCount: Int, startsRequest: Bool) {
+                              byteCount: Int, startsRequest: Bool, acknowledged: Bool = true) {
         wireBytes += max(0, byteCount)
+        if acknowledged { responseWriteCount += 1 } else { withoutResponseWriteCount += 1 }
+        if NiimbotRequest.isImageDataCommand(command) {
+            if acknowledged {
+                imageResponseBytes += max(0, byteCount); imageResponseWriteCount += 1
+            } else {
+                imageWithoutResponseBytes += max(0, byteCount); imageWithoutResponseWriteCount += 1
+            }
+        }
         guard startsRequest else { return }
         requests += 1
         if command == 0x01 { printStarts += 1 }
@@ -262,10 +350,56 @@ struct NiimbotPrintTransferMetrics {
         timings[timing, default: .zero] += max(.zero, duration)
     }
 
+    mutating func recordReadinessCheck(rechecks: Int, blocked: Bool) {
+        worReadinessRechecks = min(1_000_000, worReadinessRechecks + min(1_000_000, max(0, rechecks)))
+        if blocked { worReadinessBlockedChecks = min(1_000_000, worReadinessBlockedChecks + 1) }
+    }
+
+    mutating func recordReadinessCallback() {
+        worReadinessCallbacks = min(1_000_000, worReadinessCallbacks + 1)
+    }
+
     mutating func recordRequestSpan(command: UInt8, response: UInt8?, duration: Duration) {
+        if NiimbotRequest.isImageDataCommand(command) { add(.imageTransfer, duration: duration) }
         if command == 0x01 { add(.printStart, duration: duration) }
         if command == 0xf3 { add(.printEnd, duration: duration) }
         if command == 0xa3 && response == 0xb3 { add(.statusPoll, duration: duration) }
+        if let response {
+            let key = Command(request: command, response: response)
+            var timing = commands[key] ?? CommandTiming()
+            timing.count += 1; timing.elapsed += max(.zero, duration)
+            commands[key] = timing
+        }
+    }
+
+    mutating func recordCommandWait(command: UInt8, response: UInt8?, actualResponse: UInt8?,
+                                    acknowledgement: Duration, reply: Duration) {
+        guard let response else { return }
+        let key = Command(request: command, response: response)
+        var timing = commands[key] ?? CommandTiming()
+        timing.acknowledgement += max(.zero, acknowledgement)
+        timing.reply += max(.zero, reply)
+        if let actualResponse { timing.actualResponses.insert(actualResponse) }
+        commands[key] = timing
+    }
+
+    mutating func recordPhysicalProof(_ pages: [Int]) {
+        guard pages.allSatisfy({ (0..<total).contains($0) }) else { return }
+        confirmedPages.formUnion(pages)
+    }
+
+    var commandDiagnosticFields: [[String: String]] {
+        commands.keys.sorted { ($0.request, $0.response) < ($1.request, $1.response) }.map { key in
+            let timing = commands[key]!
+            var fields = ["request_code": String(key.request), "response_code": String(key.response),
+                "request_count": String(timing.count), "elapsed_ms": String(Self.milliseconds(timing.elapsed)),
+                "att_ack_wait_ms": String(Self.milliseconds(timing.acknowledgement)),
+                "printer_reply_wait_ms": String(Self.milliseconds(timing.reply))]
+            if timing.actualResponses.count == 1, let actual = timing.actualResponses.first {
+                fields["last_response_code"] = String(actual)
+            }
+            return fields
+        }
     }
 
     static func milliseconds(_ duration: Duration) -> Int {
@@ -281,15 +415,37 @@ struct NiimbotPrintTransferMetrics {
          "group_requests": String(requests - before.requests), "group_wire_bytes": String(wireBytes - before.wireBytes)]
     }
 
-    func diagnosticFields(elapsedMilliseconds: Int) -> [String: String] {
-        var fields = ["print_task": task, "total": String(total), "native_groups": String(groups),
+    func diagnosticFields(elapsedMilliseconds: Int, uncertainLabels: Int = 0) -> [String: String] {
+        var fields: [String: String] = ["print_task": task, "total": String(total), "native_groups": String(groups),
          "native_copies": String(nativeCopies), "image_packets": String(imagePackets),
          "request_count": String(requests), "wire_bytes": String(wireBytes),
          "transfer_elapsed_ms": String(max(0, min(3_600_000, elapsedMilliseconds))),
          "status_polls": String(statusPolls), "print_start_count": String(printStarts), "print_end_count": String(printEnds),
          "printer_model": String(identity.modelID), "protocol_version": String(identity.protocolVersion)]
+        fields["response_write_count"] = String(responseWriteCount)
+        fields["without_response_write_count"] = String(withoutResponseWriteCount)
+        fields["image_response_bytes"] = String(imageResponseBytes)
+        fields["image_without_response_bytes"] = String(imageWithoutResponseBytes)
+        fields["image_response_write_count"] = String(imageResponseWriteCount)
+        fields["image_without_response_write_count"] = String(imageWithoutResponseWriteCount)
+        fields["wor_readiness_rechecks"] = String(worReadinessRechecks)
+        fields["wor_readiness_callbacks"] = String(worReadinessCallbacks)
+        fields["wor_readiness_blocked_checks"] = String(worReadinessBlockedChecks)
+        fields["expected_labels"] = String(total)
+        fields["confirmed_labels"] = String(confirmedPages.count)
+        fields["uncertain_labels"] = String(min(max(0, uncertainLabels), max(0, total - confirmedPages.count)))
+        if identity.firmwareBytes.count == 2 {
+            fields["firmware_byte_0"] = String(identity.firmwareBytes[0])
+            fields["firmware_byte_1"] = String(identity.firmwareBytes[1])
+        }
+        if let transport { fields.merge(transport.diagnosticFields) { _, value in value } }
         fields["command_path"] = NiimbotProtocol.diagnosticCommandPath(for: identity)
         for timing in NiimbotPrintTiming.allCases { fields[timing.rawValue] = String(Self.milliseconds(timings[timing] ?? .zero)) }
+        // Time the app explicitly spends querying/waiting for a completion
+        // counter. Uploading can overlap the printer's physical feed, so it is
+        // deliberately excluded from this accumulated wait measurement.
+        fields["page_completion_wait_ms"] = String(Self.milliseconds(
+            (timings[.statusPoll] ?? .zero) + (timings[.statusBackoff] ?? .zero)))
         if let previousJobGap { fields["previous_job_gap_ms"] = String(Self.milliseconds(previousJobGap)) }
         return fields
     }
@@ -300,6 +456,32 @@ enum NiimbotPrintTiming: String, CaseIterable {
     case attAcknowledgement = "att_ack_wait_ms"
     case printerReply = "printer_reply_wait_ms", statusPoll = "status_poll_ms", statusBackoff = "status_backoff_ms"
     case printStart = "print_start_ms", printEnd = "print_end_ms"
+    case imageTransfer = "image_transfer_ms", withoutResponseReadiness = "wor_readiness_wait_ms"
+    case withoutResponsePacing = "wor_pacing_wait_ms"
+}
+
+/// Readiness and configured pacing can block simultaneously. These are
+/// independent accumulated waits, not additive parts of job wall time.
+struct NiimbotImagePumpWaitTiming {
+    private var readinessStarted: ContinuousClock.Instant?
+    private var pacingStarted: ContinuousClock.Instant?
+    private(set) var readiness: Duration = .zero
+    private(set) var pacing: Duration = .zero
+
+    mutating func update(readiness: Bool, pacing: Bool, at now: ContinuousClock.Instant) {
+        if readiness {
+            if readinessStarted == nil { readinessStarted = now }
+        } else if let started = readinessStarted {
+            self.readiness += started.duration(to: now); readinessStarted = nil
+        }
+        if pacing {
+            if pacingStarted == nil { pacingStarted = now }
+        } else if let started = pacingStarted {
+            self.pacing += started.duration(to: now); pacingStarted = nil
+        }
+    }
+
+    mutating func finish(at now: ContinuousClock.Instant) { update(readiness: false, pacing: false, at: now) }
 }
 
 /// ATT write acknowledgements and printer replies can arrive in either order.

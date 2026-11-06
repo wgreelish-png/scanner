@@ -67,12 +67,18 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     @ObservationIgnored private var printOperation: UUID?
     @ObservationIgnored private var printEndAcknowledged = false
     @ObservationIgnored private var activePrintMetrics: NiimbotPrintTransferMetrics?
+    @ObservationIgnored private var activeImageTransport: NiimbotImageTransportSelection?
+    @ObservationIgnored private var imageWriteGate: NiimbotImageWriteGate?
+    @ObservationIgnored private let imagePacingWake = NiimbotImagePacingWake()
+    @ObservationIgnored private var isDrainingWrites = false
+    @ObservationIgnored private var writeDrainRequested = false
     @ObservationIgnored private var uploadProgressThrottle = NiimbotUploadProgressThrottle()
     @ObservationIgnored private var lastPrintAttemptEnded: ContinuousClock.Instant?
     @ObservationIgnored private var activePrintStock: PreparedStockValidation?
     @ObservationIgnored private var printWasDispatched = false
     @ObservationIgnored private var sendingPages: [Int] = []
     @ObservationIgnored private var dispatchedPages: Set<Int> = []
+    @ObservationIgnored private var confirmedPrintPages: Set<Int> = []
     @ObservationIgnored private var printCancellation: LabelPrinterIssue?
     @ObservationIgnored private var identity: NiimbotD110Identity?
     @ObservationIgnored private var paperTask: Task<Void, Never>?
@@ -119,6 +125,9 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         let pageCopies: Int
         let cleanupHeartbeat: Bool
         let writeType: CBCharacteristicWriteType
+        let experimentalImage: Bool
+        let connection: UUID
+        let operation: UUID?
         let continuation: CheckedContinuation<NiimbotPacket?, Error>
         var offset = 0
         var awaitingWriteResponse = false
@@ -131,9 +140,12 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         var packetCount = 0
         var lastResponseCode: UInt8?
         var waitTiming = NiimbotTransferWaitTiming()
+        var pumpWaitTiming = NiimbotImagePumpWaitTiming()
+        var readinessRecheck = NiimbotImageReadinessRecheck()
 
         init(id: UUID, command: UInt8, bytes: Data, expectedResponse: UInt8?, responseAlternatives: Set<UInt8>, beginsPrint: Bool,
              optionalRollRead: Bool, pageCopies: Int, cleanupHeartbeat: Bool, writeType: CBCharacteristicWriteType,
+             experimentalImage: Bool, connection: UUID, operation: UUID?,
              continuation: CheckedContinuation<NiimbotPacket?, Error>) {
             self.id = id
             self.command = command
@@ -144,6 +156,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             self.pageCopies = pageCopies
             self.cleanupHeartbeat = cleanupHeartbeat
             self.optionalRollRead = optionalRollRead; self.writeType = writeType
+            self.experimentalImage = experimentalImage; self.connection = connection; self.operation = operation
             self.continuation = continuation
         }
     }
@@ -359,31 +372,52 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                                  stockValidation: PreparedStockValidation? = nil) async -> LabelSendOutcome {
         guard UIApplication.shared.applicationState == .active else { return .notSent(.notActive) }
         guard isConnected else { return .notSent(.notConnected) }
+        guard let peripheral, let writeCharacteristic, let identity else { return .notSent(.notConnected) }
         guard !isPrinting, !isConfiguringPaper, pending == nil || pending?.optionalRollRead == true else { return .notSent(.printerBusy) }
         guard !rasters.isEmpty, rasters.count <= 250 else { return .notSent(.invalidLabel) }
         do { for raster in rasters { try raster.validate() } } catch { return .notSent(.invalidLabel) }
 
+        let jobClock = ContinuousClock(), jobStarted = ContinuousClock().now
+        var jobSucceeded = false
         let operation = UUID()
+        let configuration = NiimbotImageTransportPreferences.shared.snapshot
+        activeImageTransport = NiimbotImageTransportSelection(requested: configuration, identity: identity,
+            supportsWithoutResponse: writeCharacteristic.properties.contains(.writeWithoutResponse),
+            maximumResponseWrite: writeCharacteristic.properties.contains(.write)
+                ? peripheral.maximumWriteValueLength(for: .withResponse) : 0,
+            maximumWithoutResponseWrite: writeCharacteristic.properties.contains(.writeWithoutResponse)
+                ? peripheral.maximumWriteValueLength(for: .withoutResponse) : 0)
+        imageWriteGate = activeImageTransport?.mode == .pacedWithoutResponse
+            ? NiimbotImageWriteGate(configuration: configuration) : nil
+        cancelImagePacingWake()
         printOperation = operation
         clearUploadProgress()
         printEndAcknowledged = false
         printWasDispatched = false
         sendingPages = []
         dispatchedPages = []
+        confirmedPrintPages = []
         printCancellation = nil
         isPrinting = true
         error = nil
         status = "Checking \(modelName)…"
         defer {
             if printOperation == operation {
+                DiagnosticLog.shared.record("label.job_summary", [
+                    "job_wall_ms": String(NiimbotPrintTransferMetrics.milliseconds(jobStarted.duration(to: jobClock.now))),
+                    "job_outcome": jobSucceeded ? "completed" : "failed", "expected_labels": String(rasters.count),
+                    "confirmed_labels": String(confirmedPrintPages.count), "uncertain_labels": String(dispatchedPages.count)])
                 printOperation = nil
                 printEndAcknowledged = false
                 activePrintStock = nil
+                activeImageTransport = nil; imageWriteGate = nil
+                cancelImagePacingWake()
                 isPrinting = false
                 clearUploadProgress()
                 printCancellation = nil
                 sendingPages = []
                 dispatchedPages = []
+                confirmedPrintPages = []
                 refreshRollEstimate(force: false)
             }
         }
@@ -411,6 +445,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                 try checkPrintOperation(operation)
                 status = rasters.count == 1 ? "Label printed." : "\(rasters.count) labels printed."
                 diagnostic(.complete)
+                jobSucceeded = true
                 return .completed
             } catch {
                 let issue = printCancellation ?? (error as? LabelPrinterIssue)
@@ -634,6 +669,9 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     }
 
     private func endConnection(issue: LabelPrinterIssue, source: ConnectionEndSource) {
+        cancelImagePacingWake()
+        imageWriteGate = nil
+        writeDrainRequested = false
         clearUploadProgress()
         if peripheral != nil || pending != nil || isConnected {
             let phase = UIApplication.shared.applicationState
@@ -697,7 +735,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             fields["stage"] = identificationStep?.rawValue ?? connectionStage.rawValue
         }
         if isPrinting || connectionStage != nil {
-            fields["write_mode"] = writeType == .withResponse ? "acknowledged" : "unacknowledged"
+            fields["write_mode"] = (pending?.writeType ?? writeType) == .withResponse ? "acknowledged" : "unacknowledged"
         }
         if let transaction = pending {
             fields["request_code"] = String(transaction.command)
@@ -742,6 +780,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     private func transfer(command: UInt8, data: Data, response: UInt8?, responseAlternatives: Set<UInt8> = [],
                           beginsPrint: Bool = false,
                           optionalRollRead: Bool = false,
+                          allowsExperimentalImageWrite: Bool = false,
                           timeout: Duration = .seconds(5)) async throws -> NiimbotPacket? {
         try Task.checkCancellation()
         guard UIApplication.shared.applicationState == .active else { throw LabelPrinterIssue.notActive }
@@ -757,6 +796,11 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             }
         }
         let bytes = try encodePacket(command: command, data: data)
+        let experimentalImage = !optionalRollRead && allowsExperimentalImageWrite
+            && activeImageTransport?.mode == .pacedWithoutResponse && printOperation != nil
+        if experimentalImage, bytes.count > NiimbotImageTransportConfiguration.maximumPendingPacketBytes {
+            throw LabelPrinterIssue.invalidLabel
+        }
         let id = UUID()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
@@ -769,7 +813,9 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                                            optionalRollRead: optionalRollRead,
                                            pageCopies: NiimbotPrintTransferMetrics.pageCopies(command: command, data: data),
                                            cleanupHeartbeat: cleanupHeartbeat,
-                                           writeType: optionalRollRead ? .withoutResponse : writeType,
+                                           writeType: optionalRollRead || experimentalImage ? .withoutResponse : writeType,
+                                           experimentalImage: experimentalImage, connection: connectionGeneration,
+                                           operation: printOperation,
                                            continuation: continuation)
                 pending = transaction
                 if tracesPendingTransfer { diagnostic(.requestStarted) }
@@ -792,7 +838,23 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     }
 
     private func driveWrite() {
+        guard !isDrainingWrites else { writeDrainRequested = true; return }
+        isDrainingWrites = true
+        defer {
+            isDrainingWrites = false
+            if writeDrainRequested {
+                writeDrainRequested = false
+                if let transferID = pending?.id {
+                    let generation = connectionGeneration
+                    Task { @MainActor [weak self] in
+                        guard let self, self.connectionGeneration == generation, self.pending?.id == transferID else { return }
+                        self.driveWrite()
+                    }
+                }
+            }
+        }
         guard let transaction = pending, !transaction.awaitingWriteResponse else { return }
+        guard transaction.connection == connectionGeneration else { connectionFailed(.connectionLost); return }
         guard UIApplication.shared.applicationState == .active else { connectionFailed(.notActive); return }
         if isPrinting && !transaction.optionalRollRead && !transaction.cleanupHeartbeat,
            !activePrintStockMatches { connectionFailed(.paperMismatch); return }
@@ -809,16 +871,46 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         // CoreBluetooth reports the negotiated payload limit for this write
         // type. No ATT size is assumed; without-response writes additionally
         // observe the peripheral's transmit backpressure.
-        let chunkLength = maximumLength
-
         while transaction.offset < transaction.bytes.count {
-            if transaction.writeType == .withoutResponse && !peripheral.canSendWriteWithoutResponse {
+            guard pending?.id == transaction.id, transaction.connection == connectionGeneration else { return }
+            let chunkLength: Int
+            if transaction.experimentalImage {
+                guard transaction.operation == printOperation, printCancellation == nil,
+                      activeImageTransport?.mode == .pacedWithoutResponse,
+                      writeCharacteristic.properties.contains(.writeWithoutResponse),
+                      var gate = imageWriteGate else { connectionFailed(.cancelled); return }
+                let now = ContinuousClock().now
+                let decision = gate.decision(remainingBytes: transaction.bytes.count - transaction.offset,
+                    maximumWriteLength: maximumLength, isReady: peripheral.canSendWriteWithoutResponse, at: now)
+                imageWriteGate = gate
+                transaction.pumpWaitTiming.update(readiness: decision.waitingForReadiness,
+                                                 pacing: decision.resumeAt != nil, at: now)
+                // A mode transition can leave readiness false without another
+                // delegate edge. Bounded deferred checks only re-read the bit;
+                // they never authorize a write while it remains false.
+                let previousRechecks = transaction.readinessRecheck.checkCount
+                let readinessDeadline = transaction.readinessRecheck.nextDeadline(
+                    isWaiting: decision.waitingForReadiness, at: now)
+                activePrintMetrics?.recordReadinessCheck(
+                    rechecks: transaction.readinessRecheck.checkCount - previousRechecks,
+                    blocked: decision.waitingForReadiness)
+                let deadline: ContinuousClock.Instant?
+                if let pacing = decision.resumeAt, let readiness = readinessDeadline {
+                    deadline = min(pacing, readiness)
+                } else { deadline = decision.resumeAt ?? readinessDeadline }
+                if let deadline {
+                    scheduleImagePacingWake(deadline: deadline, transaction: transaction)
+                }
+                guard decision.allowedBytes > 0 else { return }
+                cancelImagePacingWake()
+                chunkLength = decision.allowedBytes
+            } else if transaction.writeType == .withoutResponse && !peripheral.canSendWriteWithoutResponse {
                 if !transaction.reportedWriteBlocked {
                     transaction.reportedWriteBlocked = true
                     diagnostic(.writeBlocked)
                 }
                 return
-            }
+            } else { chunkLength = maximumLength }
             let end = min(transaction.offset + chunkLength, transaction.bytes.count)
             let chunk = transaction.bytes.subdata(in: transaction.offset..<end)
             let startsRequest = transaction.offset == 0
@@ -831,10 +923,17 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                 transaction.awaitingWriteResponse = true
                 transaction.waitTiming.startAcknowledgement(at: ContinuousClock().now)
             }
+            let submittedAt = ContinuousClock().now
             peripheral.writeValue(chunk, for: writeCharacteristic, type: transaction.writeType)
+            if transaction.experimentalImage, pending?.id == transaction.id,
+               transaction.connection == connectionGeneration, var gate = imageWriteGate {
+                gate.recordSubmission(byteCount: chunk.count, at: submittedAt)
+                imageWriteGate = gate
+            }
             if !transaction.optionalRollRead {
                 activePrintMetrics?.recordWrite(command: transaction.command, response: transaction.expectedResponse,
-                    copies: transaction.pageCopies, byteCount: chunk.count, startsRequest: startsRequest)
+                    copies: transaction.pageCopies, byteCount: chunk.count, startsRequest: startsRequest,
+                    acknowledged: transaction.writeType == .withResponse)
             }
             if transaction.writeType == .withResponse { return }
         }
@@ -848,6 +947,17 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         finishTransferIfReady()
     }
 
+    private func scheduleImagePacingWake(deadline: ContinuousClock.Instant, transaction: Transfer) {
+        let generation = transaction.connection, operation = transaction.operation, id = transaction.id
+        imagePacingWake.schedule(transferID: id, deadline: deadline) { [weak self] in
+            guard let self, self.connectionGeneration == generation, self.printOperation == operation,
+                  self.pending?.id == id, self.pending?.experimentalImage == true else { return }
+            self.driveWrite()
+        }
+    }
+
+    private func cancelImagePacingWake() { imagePacingWake.cancel() }
+
     private func encodePacket(command: UInt8, data: Data) throws -> Data {
         let clock = ContinuousClock()
         let started = clock.now
@@ -856,10 +966,17 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     }
 
     private func finishTransferTiming(_ transaction: Transfer) {
-        transaction.waitTiming.finish(at: ContinuousClock().now)
+        let now = ContinuousClock().now
+        transaction.waitTiming.finish(at: now)
+        transaction.pumpWaitTiming.finish(at: now)
         guard !transaction.optionalRollRead else { return }
         activePrintMetrics?.add(.attAcknowledgement, duration: transaction.waitTiming.acknowledgement)
         activePrintMetrics?.add(.printerReply, duration: transaction.waitTiming.reply)
+        activePrintMetrics?.add(.withoutResponseReadiness, duration: transaction.pumpWaitTiming.readiness)
+        activePrintMetrics?.add(.withoutResponsePacing, duration: transaction.pumpWaitTiming.pacing)
+        activePrintMetrics?.recordCommandWait(command: transaction.command, response: transaction.expectedResponse,
+            actualResponse: transaction.response?.command, acknowledgement: transaction.waitTiming.acknowledgement,
+            reply: transaction.waitTiming.reply)
     }
 
     private func finishTransferIfReady() {
@@ -867,6 +984,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
               transaction.offset == transaction.bytes.count,
               transaction.expectedResponse == nil || transaction.response != nil else { return }
         finishTransferTiming(transaction)
+        cancelImagePacingWake()
         pending = nil
         transaction.timeout?.cancel()
         if isPrinting, transaction.command == 0xf3, transaction.expectedResponse == 0xf4 {
@@ -882,6 +1000,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     private func failTransfer(_ issue: LabelPrinterIssue) {
         guard let transaction = pending else { return }
         finishTransferTiming(transaction)
+        cancelImagePacingWake()
         pending = nil
         transaction.timeout?.cancel()
         transaction.continuation.resume(throwing: issue)
@@ -1025,6 +1144,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         return try await transfer(command: request.command, data: request.data, response: request.response,
                                   responseAlternatives: request.responseAlternatives, beginsPrint: request.beginsPrint,
                                   optionalRollRead: optionalRollRead,
+                                  allowsExperimentalImageWrite: request.allowsExperimentalImageWrite,
                                   timeout: timeout)
     }
 
@@ -1042,12 +1162,15 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         let clock = ContinuousClock()
         let started = clock.now
         activePrintMetrics = NiimbotPrintTransferMetrics(identity: identity, continuous: continuous, total: rasters.count,
-            previousJobGap: lastPrintAttemptEnded.map { $0.duration(to: started) })
+            previousJobGap: lastPrintAttemptEnded.map { $0.duration(to: started) }, transport: activeImageTransport)
         defer {
             let ended = clock.now
             let elapsed = NiimbotPrintTransferMetrics.milliseconds(started.duration(to: ended))
             if let metrics = activePrintMetrics {
-                DiagnosticLog.shared.record("label.transfer_summary", metrics.diagnosticFields(elapsedMilliseconds: elapsed))
+                var fields = metrics.diagnosticFields(elapsedMilliseconds: elapsed, uncertainLabels: dispatchedPages.count)
+                fields["write_mode"] = writeType == .withResponse ? "acknowledged" : "unacknowledged"
+                DiagnosticLog.shared.record("label.transfer_summary", fields)
+                for command in metrics.commandDiagnosticFields { DiagnosticLog.shared.record("label.command_summary", command) }
             }
             activePrintMetrics = nil
             lastPrintAttemptEnded = ended
@@ -1103,6 +1226,8 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             // Persist the whole physical counter proof, including when Stop
             // arrived with it. Later buffered pages remain unconfirmed.
             self.dispatchedPages.subtract(pages)
+            self.confirmedPrintPages.formUnion(pages)
+            self.activePrintMetrics?.recordPhysicalProof(pages)
             self.printWasDispatched = !self.dispatchedPages.isEmpty
             let started = pageStarts[first] ?? clock.now
             try await afterPages(pages)
@@ -1221,10 +1346,13 @@ extension NiimbotPrinter: @preconcurrency CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         guard peripheral === self.peripheral else { return }
-        guard error == nil,
-              let channel = service.characteristics?.first(where: {
+        let channels = service.characteristics ?? []
+        // Preserve the working UART-channel preference, but permit the
+        // acknowledged baseline when a notify/write-only channel is offered.
+        let selected = channels.first(where: {
                   $0.properties.contains(.notify) && $0.properties.contains(.writeWithoutResponse)
-              }) else {
+              }) ?? channels.first(where: { $0.properties.contains(.notify) && $0.properties.contains(.write) })
+        guard error == nil, let channel = selected else {
             connectionFailed(.unsupportedPrinter)
             return
         }
@@ -1254,7 +1382,8 @@ extension NiimbotPrinter: @preconcurrency CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         guard peripheral === self.peripheral, matchesChannel(characteristic, writeCharacteristic),
-              let transaction = pending, transaction.awaitingWriteResponse else { return }
+              let transaction = pending, transaction.writeType == .withResponse,
+              transaction.awaitingWriteResponse else { return }
         let acknowledged = ContinuousClock().now
         transaction.waitTiming.finishAcknowledgement(at: acknowledged)
         guard error == nil else { connectionFailed(.writeFailed); return }
@@ -1267,6 +1396,7 @@ extension NiimbotPrinter: @preconcurrency CBPeripheralDelegate {
 
     func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
         guard peripheral === self.peripheral else { return }
+        if pending?.experimentalImage == true { activePrintMetrics?.recordReadinessCallback() }
         driveWrite()
     }
 }

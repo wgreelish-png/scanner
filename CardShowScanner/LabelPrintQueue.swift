@@ -206,6 +206,7 @@ private struct LabelQueueFile: Codable {
     @ObservationIgnored private let approvalIssue: @MainActor (LabelQueueEntry) -> String?
     private var stopRequested = false
     private var activeSessionID: UUID?
+    private var clearUnprintedAfterSession: UUID?
     @ObservationIgnored private weak var activePrinter: (any LabelPrinterSending)?
 
     init(url: URL? = nil, read: Reader? = nil, write: Writer? = nil,
@@ -276,17 +277,21 @@ private struct LabelQueueFile: Codable {
         stopRequested = false
         let sessionID = UUID()
         activeSessionID = sessionID
+        clearUnprintedAfterSession = nil
         activePrinter = printer
         error = nil
         defer {
+            let clearUnprintedOnExit = clearUnprintedAfterSession == sessionID
             let completedIDs = Set(entries.filter { $0.state == .completed }.map(\.id))
             lastRunCompletedSuccessfully = activeSessionID == sessionID && isLoaded && error == nil
                 && !stopRequested && !Task.isCancelled && !requestedIDs.isEmpty
                 && requestedIDs.isSubset(of: completedIDs) && entries.allSatisfy { $0.state == .completed }
             activePrinter = nil
             activeSessionID = nil
+            clearUnprintedAfterSession = nil
             isPrinting = false
             stopRequested = false
+            if clearUnprintedOnExit { try? clearIfUnprinted() }
         }
 
         if let validator = printer as? any LabelStockValidating {
@@ -615,6 +620,20 @@ private struct LabelQueueFile: Codable {
     func clear() throws {
         try requireWritable()
         try commit([])
+    }
+
+    /// Leaving preparation discards work that has no physical output to review.
+    /// Keep active sends, confirmed receipts, uncertain output and unreadable
+    /// storage under the existing explicit review/recovery handling.
+    @discardableResult func clearIfUnprinted() throws -> Bool {
+        if isPrinting {
+            clearUnprintedAfterSession = activeSessionID
+            return false
+        }
+        guard isLoaded, !entries.isEmpty,
+              entries.allSatisfy({ $0.state == .pending || $0.state == .failed }) else { return false }
+        try clear()
+        return true
     }
 
     /// Explicit destructive recovery, including an unreadable queue. Ordinary

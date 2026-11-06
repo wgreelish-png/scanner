@@ -57,11 +57,18 @@ Tap **Print Queued Labels** to process pending labels in one declared-count task
 
 ## Interrupted jobs
 
+Build 91 clears a prepared queue automatically when leaving the print screen
+with Back, Close or a sheet dismissal, or when sending the app to the background,
+if no labels were printed or may have printed. This includes labels confirmed
+not sent after a failed attempt. Opening a queued-label preview keeps the batch
+available. Returning to preparation can immediately prepare a fresh batch; paper
+and price-position preferences stay saved.
+
 The queue is a separate versioned file in Application Support: `CardShowScanner/label-print-queue.json`, bounded to 250 copies and 8 MiB. Copies in a buffered group are marked **Printing** and saved together before bytes can be sent. Cumulative physical completion is saved before refilling the bounded printer buffer.
 
 An interrupted or uncertain in-flight copy becomes **Check label** after relaunch. Other copies retain their status; reopening never starts printing. Select only failed/uncertain copies to retry. Uncertain copies require explicit confirmation that the physical output was checked and another copy is needed. Completed copies cannot be accidentally included in Retry Selected. A separate Start action is still required.
 
-Failed queue writes block further printing. Unreadable, corrupt, oversized or unsupported queue files are retained until you explicitly discard them. Replacement of an unfinished queue requires review/discard; preparing a new batch cannot silently erase its progress. Paper size, template, price and raster snapshots survive relaunch. Clearing the queue changes no inventory or financial record.
+Failed queue writes block further printing. Unreadable, corrupt, oversized or unsupported queue files are retained until you explicitly discard them. Active jobs and queues containing completed or uncertain output retain their receipts and require the existing review/discard before replacement. Their paper size, template, price and raster snapshots survive relaunch. Clearing the queue changes no inventory or financial record.
 
 ## Protocol reference and diagnostics
 
@@ -71,7 +78,7 @@ Diagnostic breadcrumbs contain fixed connection/queue phases and bounded status 
 
 ## Validation and iPhone acceptance
 
-All implementation completes before checks run. Native cases cover label rounding, missing versus zero, bounded copies/text, exact raster orientation and previews, protocol framing/streaming, saved queue ordering, failed writes, interrupted recovery, manual retry acknowledgement, cancellation, duplicate Start and fixture isolation. UI cases cover individual and batch preparation, local price/copy changes, both templates/paper and saved queue relaunch without requesting Bluetooth.
+All implementation completes before checks run. Native cases cover label rounding, missing versus zero, bounded copies/text, exact raster orientation and previews, protocol framing/streaming, saved queue ordering, failed writes, interrupted recovery, manual retry acknowledgement, cancellation, duplicate Start and fixture isolation. UI cases cover individual and batch preparation, local price/copy changes, both templates/paper, unprinted queue cleanup and retained interrupted jobs without requesting Bluetooth.
 
 Earlier build-52 checks passed grammar parsing of all **157 Swift files**, Xcode source/target membership (**89 app / 55 native-test / 13 UI-test files**) and bundled-resource membership, all **47 pinned scanner assets**, Bluetooth purpose/privacy metadata, portrait-only and foreground-only configuration, and absence of the removed printer code. Current build-69 results are in [continuous label printing](ContinuousLabelPrinting.md). Native/UI test cases are authored and registered, but this Linux workspace has no Swift/Xcode installation; these portable checks are not native test execution. JavaScript and Python implementations are unchanged and their suites were not rerun locally. On the phone:
 

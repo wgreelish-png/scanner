@@ -26,6 +26,26 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 91 automatically clears an unprinted label queue when leaving its print
+screen or sending the app to the background. Previews retain the queue; active,
+printed and uncertain jobs retain their existing review handling. Label
+preferences, inventory and financial records are unchanged.
+
+Experiment build 90 adds bounded Bluetooth-readiness rechecks after a hardware
+test stalled before its first image write. Every image write still requires
+CoreBluetooth readiness; pacing defaults and printer completion checks are unchanged.
+
+Experiment build 89 fixes initial inventory-label preparation: the preview and
+Prepare button read the current selected drafts on the first navigation, without
+requiring another layout-control tap. Layout, saved prices and print transport
+settings are preserved.
+
+Experiment build 88 adds an opt-in [D110-M image transport experiment](docs/D110MWriteWithoutResponseExperiment.md).
+Acknowledged writes remain the default. The isolated experiment branch changes
+only eligible image-data transport and its diagnostics; card order, artwork,
+copy grouping and printer-confirmed completion are preserved. Hardware speed
+and reliability remain pending the documented A/B procedure.
+
 Build 87 separates live sending progress from the printer-confirmed label count.
 Upload activity updates from completed transfers while physical counts continue
 to use saved printer receipts. Card order and the existing transfer sequence

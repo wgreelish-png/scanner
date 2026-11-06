@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Observation
 
 /// Printer settings also reflect the connection started from Price Tags.
 @MainActor struct LabelPrinterSettingsView: View {
@@ -262,6 +263,14 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View { configuration.label }
 }
 
+/// Navigation destinations can outlive the view value that created them. Keep
+/// selected drafts in one observable owner so a first push reads the current
+/// selection, including before any layout control causes another body update.
+@MainActor @Observable private final class InventoryLabelFlowDrafts {
+    var values: [InventoryLabelDraft]
+    init(_ values: [InventoryLabelDraft]) { self.values = values }
+}
+
 /// The sheet owns navigation. All values copied here remain independent of stock.
 @MainActor struct InventoryLabelFlowView: View {
     let inventory: [ShowInventoryItem]
@@ -273,7 +282,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     @State private var path: [InventoryLabelStep]
     @State private var search = ""
     @State private var selectedIDs: Set<UUID>
-    @State private var drafts: [InventoryLabelDraft]
+    @State private var draftState: InventoryLabelFlowDrafts
     @State private var style: InventoryLabelStyle = .priceOnly
     @State private var paper: InventoryLabelSize
     @State private var pricePosition: LabelPricePosition
@@ -312,8 +321,13 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
             initialDrafts[index].pricePosition = paperPreferences.pricePosition
         }
         _selectedIDs = State(initialValue: Set(initialDrafts.map(\.id)))
-        _drafts = State(initialValue: initialDrafts)
+        _draftState = State(initialValue: InventoryLabelFlowDrafts(initialDrafts))
         _path = State(initialValue: initialDrafts.isEmpty ? [] : [.configure])
+    }
+
+    private var drafts: [InventoryLabelDraft] {
+        get { draftState.values }
+        nonmutating set { draftState.values = newValue }
     }
 
     private var available: [ShowInventoryItem] {
@@ -471,6 +485,8 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                     .accessibilityIdentifier("labels.select." + item.id.uuidString)
             }
         }
+        // Scope the list identifier before adding independent footer controls.
+        .accessibilityIdentifier("labels.selection")
         .navigationTitle("Select Label Cards").navigationBarTitleDisplayMode(.inline)
         .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Name, set, or card number")
         .scrollDismissesKeyboard(.interactively)
@@ -502,7 +518,6 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                     .accessibilityIdentifier("labels.continueSelection")
             }
         }
-        .accessibilityIdentifier("labels.selection")
     }
 
     private var configuration: some View {
@@ -598,6 +613,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
+        .accessibilityIdentifier("labels.configuration")
         .navigationTitle("Label Details").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .topBarLeading) { ClearLabelPrintQueueButton() } }
         .onChange(of: style) { _, value in for index in drafts.indices { drafts[index].style = value } }
@@ -616,7 +632,6 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 }
             }
         }
-        .accessibilityIdentifier("labels.configuration")
     }
 
     private func updatePaperSize(_ size: InventoryLabelSize) {
@@ -686,6 +701,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 Section { Text(validation).font(.footnote).foregroundStyle(.orange) }
             }
         }
+        .accessibilityIdentifier("labels.review")
         .navigationTitle("Review Labels").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .topBarLeading) { ClearLabelPrintQueueButton() } }
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -694,7 +710,6 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 prepareButton
             }
         }
-        .accessibilityIdentifier("labels.review")
     }
 
     private var configurationRows: some View {
@@ -1194,6 +1209,7 @@ private struct LabelActionBar<Content: View>: View {
                 }
             }
         }
+        .accessibilityIdentifier("labelQueue.screen")
         .navigationTitle("Label Print Queue").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .topBarTrailing) { ClearLabelPrintQueueButton(identifier: "labelQueue.clearQueue") } }
         .safeAreaInset(edge: .bottom, spacing: 0) { printControls }
@@ -1239,6 +1255,7 @@ private struct LabelActionBar<Content: View>: View {
                 progress.stop(queue: queue, using: printer)
                 queue.stop(using: printer)
             }
+            if phase == .background { try? queue.clearIfUnprinted() }
         }
         .onChange(of: queue.entries.map(\.id)) { _, ids in
             selected.formIntersection(ids)
@@ -1246,10 +1263,14 @@ private struct LabelActionBar<Content: View>: View {
             if let previewEntry, !ids.contains(previewEntry.id) { self.previewEntry = nil }
         }
         .onDisappear {
-            if !progress.isPresented { queue.stop(using: printer) }
+            if !progress.isPresented {
+                queue.stop(using: printer)
+                // A preview, retry sheet or progress presentation still belongs
+                // to this print screen; ordinary Back/Close discards unsent work.
+                if previewEntry == nil && !showingRetry { try? queue.clearIfUnprinted() }
+            }
             if !printer.isConnected { printer.stop() }
         }
-        .accessibilityIdentifier("labelQueue.screen")
     }
 
     private var summary: some View {

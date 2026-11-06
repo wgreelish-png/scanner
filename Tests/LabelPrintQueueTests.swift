@@ -991,6 +991,198 @@ import XCTest
         XCTAssertEqual(queue.entries, entries)
     }
 
+    func testClearIfUnprintedDurablyClearsPendingAndKnownUnsentFailures() throws {
+        let clearable: [[LabelQueueState]] = [[.pending, .pending], [.failed, .failed], [.pending, .failed]]
+        for states in clearable {
+            var entries = try labels(copies: states.count)
+            for index in entries.indices {
+                entries[index].state = states[index]
+                entries[index].lastIssue = states[index] == .failed ? .notConnected : nil
+            }
+            let storage = LabelQueueTestStorage(entries: entries), queue = queue(storage)
+            XCTAssertTrue(try queue.clearIfUnprinted())
+            XCTAssertTrue(queue.entries.isEmpty)
+            XCTAssertTrue(queue.isLoaded)
+            XCTAssertFalse(queue.canStart)
+            XCTAssertEqual(try storage.entries(), [])
+            XCTAssertEqual(self.queue(storage).entries, [], "Leaving the screen must clear the durable queue too")
+            XCTAssertEqual(storage.writeAttempts, 1)
+            XCTAssertFalse(try queue.clearIfUnprinted())
+            XCTAssertEqual(storage.writeAttempts, 1, "Repeated disappearance callbacks must not rewrite the empty queue")
+        }
+    }
+
+    func testClearIfUnprintedDoesNotCreateOrRewriteAnEmptyQueue() throws {
+        for persisted in [false, true] {
+            let storage = persisted ? LabelQueueTestStorage(entries: []) : LabelQueueTestStorage()
+            let queue = queue(storage), before = storage.bytes
+            for _ in 0..<3 { XCTAssertFalse(try queue.clearIfUnprinted()) }
+            XCTAssertTrue(queue.isLoaded)
+            XCTAssertTrue(queue.entries.isEmpty)
+            XCTAssertEqual(storage.bytes, before)
+            XCTAssertEqual(storage.writeAttempts, 0)
+        }
+    }
+
+    func testClearIfUnprintedPreservesCompletedUncertainAndRecoveredSendingReceipts() throws {
+        let protected: [[LabelQueueState]] = [
+            [.completed], [.uncertain], [.sending], [.completed, .pending],
+            [.pending, .uncertain], [.failed, .completed, .pending]
+        ]
+        for states in protected {
+            var entries = try labels(copies: states.count)
+            for index in entries.indices {
+                entries[index].state = states[index]
+                switch states[index] {
+                case .uncertain: entries[index].lastIssue = .connectionLost
+                case .failed: entries[index].lastIssue = .notConnected
+                default: entries[index].lastIssue = nil
+                }
+            }
+            let storage = LabelQueueTestStorage(entries: entries), queue = queue(storage)
+            // A restored sending marker is first durably recovered as uncertain.
+            let recovered = queue.entries, bytes = storage.bytes, writes = storage.writeAttempts
+            XCTAssertFalse(try queue.clearIfUnprinted())
+            XCTAssertEqual(queue.entries, recovered)
+            XCTAssertEqual(storage.bytes, bytes)
+            XCTAssertEqual(storage.writeAttempts, writes)
+            XCTAssertEqual(self.queue(storage).entries, recovered)
+            XCTAssertEqual(storage.writeAttempts, writes, "Recovery receipts survive reopening without another write")
+        }
+    }
+
+    func testClearIfUnprintedLeavesUnreadableAndFailedReloadStorageUntouched() throws {
+        let corrupt = Data("unreadable queue".utf8)
+        let corruptStorage = LabelQueueTestStorage(bytes: corrupt), unreadable = self.queue(corruptStorage)
+        XCTAssertFalse(unreadable.isLoaded)
+        XCTAssertFalse(try unreadable.clearIfUnprinted())
+        XCTAssertEqual(corruptStorage.bytes, corrupt)
+        XCTAssertEqual(corruptStorage.writeAttempts, 0)
+
+        let entries = try labels(copies: 1)
+        let storage = LabelQueueTestStorage(entries: entries), queue = queue(storage)
+        let before = storage.bytes
+        storage.failRead = true
+        queue.reload()
+        XCTAssertFalse(queue.isLoaded)
+        XCTAssertFalse(try queue.clearIfUnprinted())
+        XCTAssertEqual(queue.entries, entries)
+        XCTAssertEqual(storage.bytes, before)
+        XCTAssertEqual(storage.writeAttempts, 0)
+        storage.failRead = false
+        queue.reload()
+        XCTAssertEqual(queue.entries, entries)
+    }
+
+    func testClearIfUnprintedSaveFailureKeepsOriginalWorkAndRequiresReload() throws {
+        let entries = try labels(copies: 2)
+        let storage = LabelQueueTestStorage(entries: entries), queue = queue(storage)
+        let before = storage.bytes
+        storage.failOnWrite = 1
+        XCTAssertThrowsError(try queue.clearIfUnprinted()) {
+            XCTAssertEqual($0 as? LabelPrintQueueFailure, .saveFailed)
+        }
+        XCTAssertEqual(queue.entries, entries)
+        XCTAssertEqual(storage.bytes, before)
+        XCTAssertFalse(queue.isLoaded)
+        XCTAssertNotNil(queue.error)
+        XCTAssertFalse(try queue.clearIfUnprinted())
+        XCTAssertEqual(storage.writeAttempts, 1, "An automatic cleanup must not retry a failed save")
+        storage.failOnWrite = nil
+        queue.reload()
+        XCTAssertTrue(queue.isLoaded)
+        XCTAssertEqual(queue.entries, entries)
+        XCTAssertTrue(try queue.clearIfUnprinted())
+        XCTAssertEqual(try storage.entries(), [])
+        XCTAssertEqual(storage.writeAttempts, 2)
+    }
+
+    func testClearIfUnprintedWaitsForActiveTransportEvenBeforeAnyCopyIsDispatched() async throws {
+        let storage = LabelQueueTestStorage(), printer = LabelQueueTestContinuousPrinter()
+        let queue = queue(storage), entries = try labels(copies: 2)
+        try queue.replace(with: entries)
+        printer.steps = [.hold, .send([0, 1]), .confirm([0, 1])]
+        defer { printer.release() }
+        let job = Task { await queue.start(using: printer) }
+        try await printer.waitUntilHeld()
+        let bytes = storage.bytes, writes = storage.writeAttempts
+        XCTAssertTrue(queue.isPrinting)
+        XCTAssertEqual(queue.entries, entries, "The active driver has not yet journaled a sending marker")
+        XCTAssertFalse(try queue.clearIfUnprinted())
+        XCTAssertEqual(storage.bytes, bytes)
+        XCTAssertEqual(storage.writeAttempts, writes)
+        queue.stop(using: printer)
+        XCTAssertTrue(queue.isPrinting, "Stop still waits for the driver's result")
+        XCTAssertFalse(try queue.clearIfUnprinted())
+        printer.release()
+        await job.value
+        XCTAssertTrue(printer.dispatched.isEmpty)
+        XCTAssertFalse(queue.isPrinting)
+        XCTAssertTrue(queue.entries.isEmpty, "The pending clear runs only after the active driver has stopped")
+        XCTAssertEqual(try storage.entries(), [])
+        XCTAssertFalse(try queue.clearIfUnprinted(), "The settled cleanup is already durable")
+    }
+
+    func testDeferredClearIfUnprintedClearsKnownUnsentResultAfterTransportSettles() async throws {
+        let storage = LabelQueueTestStorage(), printer = LabelQueueTestPrinter()
+        let queue = queue(storage)
+        try queue.replace(with: labels(copies: 2))
+        printer.held = true
+        defer { printer.finish(0, with: .notSent(.notConnected)) }
+        let job = Task { await queue.start(using: printer) }
+        try await printer.waitForSends(1)
+        let bytes = storage.bytes, writes = storage.writeAttempts
+        XCTAssertEqual(queue.entries.map(\.state), [.sending, .pending])
+        XCTAssertFalse(try queue.clearIfUnprinted())
+        XCTAssertTrue(queue.isPrinting)
+        XCTAssertEqual(storage.bytes, bytes)
+        XCTAssertEqual(storage.writeAttempts, writes)
+        printer.finish(0, with: .notSent(.notConnected))
+        await job.value
+        XCTAssertFalse(queue.isPrinting)
+        XCTAssertTrue(queue.isLoaded)
+        XCTAssertTrue(queue.entries.isEmpty, "Known-unsent failed and pending copies are cleared after settlement")
+        XCTAssertFalse(queue.lastRunCompletedSuccessfully)
+        XCTAssertEqual(try storage.entries(), [])
+        XCTAssertEqual(self.queue(storage).entries, [])
+        XCTAssertEqual(printer.rasters.count, 1, "Cleanup never dispatches the next copy")
+        let replacement = try labels(copies: 1)
+        try queue.replace(with: replacement)
+        queue.reload()
+        XCTAssertEqual(queue.entries, replacement, "The old session's cleanup intent cannot erase a later batch")
+        XCTAssertEqual(printer.rasters.count, 1)
+    }
+
+    func testClearIfUnprintedPreservesLateCompletionOrUncertainOutcomeAfterStop() async throws {
+        for outcome in [LabelSendOutcome.completed, .uncertain(.cancelled)] {
+            let storage = LabelQueueTestStorage(), printer = LabelQueueTestPrinter()
+            let queue = queue(storage)
+            try queue.replace(with: labels(copies: 2))
+            printer.held = true
+            defer { printer.finish(0, with: .uncertain(.cancelled)) }
+            let job = Task { await queue.start(using: printer) }
+            try await printer.waitForSends(1)
+            let before = storage.bytes, writes = storage.writeAttempts
+            XCTAssertEqual(queue.entries.map(\.state), [.sending, .pending])
+            XCTAssertFalse(try queue.clearIfUnprinted())
+            queue.stop(using: printer)
+            XCTAssertFalse(try queue.clearIfUnprinted())
+            XCTAssertEqual(storage.bytes, before)
+            XCTAssertEqual(storage.writeAttempts, writes)
+            printer.finish(0, with: outcome)
+            await job.value
+            let state: LabelQueueState = outcome == .completed ? .completed : .uncertain
+            XCTAssertEqual(queue.entries.map(\.state), [state, .pending])
+            let finished = queue.entries, durable = storage.bytes, finishedWrites = storage.writeAttempts
+            XCTAssertFalse(try queue.clearIfUnprinted())
+            XCTAssertEqual(queue.entries, finished)
+            XCTAssertEqual(storage.bytes, durable)
+            XCTAssertEqual(storage.writeAttempts, finishedWrites)
+            XCTAssertEqual(self.queue(storage).entries, finished)
+            XCTAssertEqual(printer.rasters.count, 1, "Closing must not dispatch or replay the next label")
+        }
+    }
+
     func testUnfinishedBatchRequiresExplicitClearAndClearCompletedPreservesFailuresAndPending() throws {
         var entries = try labels()
         entries[0].state = .completed
