@@ -48,7 +48,7 @@ import SwiftUI
                         .focused($focused, equals: .copies).frame(minWidth: 60)
                         .accessibilityIdentifier("customLabels.copies")
                 }
-                Picker("Physical paper", selection: Binding(get: { model.paperSize }, set: { size in
+                Picker("Physical paper", selection: Binding(get: { paperPreferences.size }, set: { size in
                     paperPreferences.select(size)
                     model.paperSize = paperPreferences.size
                 })) {

@@ -523,7 +523,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                         Text(value.title).tag(value).accessibilityIdentifier("labels.style." + value.rawValue)
                     }
                 }.accessibilityIdentifier("labels.style")
-                Picker("Physical paper", selection: Binding(get: { paper }, set: { size in
+                Picker("Physical paper", selection: Binding(get: { paperPreferences.size }, set: { size in
                     paperPreferences.select(size)
                     updatePaperSize(paperPreferences.size)
                 })) {
