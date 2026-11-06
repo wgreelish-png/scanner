@@ -26,6 +26,17 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 82 leaves the [price area blank for unavailable or $0 prices](docs/WriteInPriceTags.md)
+while still printing the label, ready for a handwritten price. Known positive
+prices and saved 2-for-$1 deals keep their usual artwork.
+
+Build 81 gives [every selected inventory copy a tag](docs/AllInventoryCardTags.md),
+including the saved 2-for-$1 category. Counts, previews, preparation and print
+history include these cards without changing their prices.
+
+Build 80 makes Select Individual Inventory a full-size action beside Print All
+in Price Tags, retaining the existing card-selection flow.
+
 Build 79 adds [offline RFID paper detection and generated label layouts](docs/OfflineLabelCatalog.md).
 The bundled 13 KB catalog matches roll product codes to dimensions and media,
 then fits the existing vector design to the available printable region. Saved

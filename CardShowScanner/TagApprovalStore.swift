@@ -71,7 +71,7 @@ struct TagApprovalRecord: Codable, Equatable, Identifiable, Sendable {
     var lastPrintedAt: Date?
 
     var needsLabels: Bool {
-        approvedTag.integerPriceCents != nil && approvedTag != lastPrintedTag
+        approvedTag != lastPrintedTag
     }
 }
 
@@ -88,7 +88,7 @@ enum TagApprovalStoreFailure: LocalizedError, Equatable, Sendable {
         case .invalidPreferences:
             return "Enter valid nonnegative pricing costs and a payment percentage below 100%."
         case .invalidSelection:
-            return "Select approved individual tags before marking them labeled."
+            return "Select approved tags before marking them labeled."
         case .duplicateIdentity:
             return "Tag approvals contain a duplicate inventory identifier. Your saved file has been kept."
         case .tooManyRecords:
@@ -184,9 +184,6 @@ private struct TagApprovalFile: Codable {
         for request in requests {
             try Self.validate(tag: request.approvedTag)
             try Self.validate(market: request.currentMarket)
-            guard !keepingExistingStickerIDs.contains(request.id) || request.approvedTag.integerPriceCents != nil else {
-                throw TagApprovalStoreFailure.invalidSelection
-            }
         }
         guard !requests.isEmpty else { return [] }
         let timestamp = now()
@@ -237,9 +234,6 @@ private struct TagApprovalFile: Codable {
         for request in requests {
             try Self.validate(tag: request.approvedTag)
             try Self.validate(market: request.currentMarket)
-            guard !keepingExistingStickerIDs.contains(request.id) || request.approvedTag.integerPriceCents != nil else {
-                throw TagApprovalStoreFailure.invalidSelection
-            }
         }
         guard !requests.isEmpty else { return }
         let timestamp = now()
@@ -287,9 +281,9 @@ private struct TagApprovalFile: Codable {
     /// completes in its current price cycle. Legacy queues and older cycles
     /// cannot acknowledge a newer approval, even at the same numeric price.
     func observeCompletedQueue(_ entries: [LabelQueueEntry]) throws {
-        let inventoryEntries = entries.filter { $0.source != .custom }
-        // Standalone labels have no acquisition or sticker approval history.
-        // They must also work when the unrelated approval file is unavailable.
+        let inventoryEntries = entries.filter { $0.source != .custom && $0.stickerTag != nil }
+        // Standalone and write-in labels carry no priced-sticker proof. They
+        // also work when the unrelated approval file is unavailable.
         guard !inventoryEntries.isEmpty else { return }
         try requireWritable()
         var grouped: [UUID: [LabelQueueEntry]] = [:]
@@ -301,10 +295,9 @@ private struct TagApprovalFile: Codable {
         let timestamp = now()
         var changed = false
         for index in next.indices where next[index].needsLabels {
-            guard let cents = next[index].approvedTag.integerPriceCents,
-                  let lotEntries = grouped[next[index].id] else { continue }
+            guard let lotEntries = grouped[next[index].id] else { continue }
             let matching = lotEntries.filter {
-                $0.priceCents == cents && $0.pricingRevisionID == next[index].priceRevisionID
+                $0.stickerTag == next[index].approvedTag && $0.pricingRevisionID == next[index].priceRevisionID
             }
             guard !matching.isEmpty, matching.allSatisfy({ $0.state == .completed }) else { continue }
             next[index].lastPrintedTag = next[index].approvedTag
@@ -318,8 +311,7 @@ private struct TagApprovalFile: Codable {
     func markLabeled(ids: Set<UUID>) throws {
         try requireWritable()
         let indices = records.indices.filter { ids.contains(records[$0].id) }
-        guard !ids.isEmpty, indices.count == ids.count,
-              indices.allSatisfy({ records[$0].approvedTag.integerPriceCents != nil }) else {
+        guard !ids.isEmpty, indices.count == ids.count else {
             throw TagApprovalStoreFailure.invalidSelection
         }
         var next = records

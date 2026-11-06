@@ -106,7 +106,7 @@ import XCTest
         XCTAssertEqual(bulk.priceText, StickerPrice.twoForOne.displayText)
         let zero = CustomPriceTagDraft(priceCents: 0, copies: 1, paperSize: .small30x14)
         XCTAssertFalse(zero.isBulk)
-        XCTAssertEqual(zero.priceText, StickerPrice.individual(0).displayText)
+        XCTAssertEqual(zero.priceText, "")
         for price in [Int64(-100), 50, 100, 500] {
             XCTAssertThrowsError(try CustomPriceTagDraft(priceCents: price, copies: 1,
                 paperSize: .small30x14, isBulk: true).validate())
@@ -177,7 +177,10 @@ import XCTest
 
     func testLegacyCustomZeroWithoutBulkFlagRemainsAnIndividualZeroPrice() throws {
         let original = try custom(price: 0)
-        let bytes = try document(original) { $0.removeValue(forKey: "customBulk") }
+        let bytes = try document(original) {
+            $0.removeValue(forKey: "customBulk")
+            $0.removeValue(forKey: "blankPrice")
+        }
         let storage = CustomLabelQueueStorage(bytes: bytes), queue = queue(storage)
         let restored = try XCTUnwrap(queue.entries.first)
         XCTAssertTrue(queue.isLoaded)
@@ -186,9 +189,13 @@ import XCTest
         XCTAssertEqual(restored.priceCents, 0)
         XCTAssertEqual(restored.priceText, ShowBudgetMoney.decimal(0).money)
         XCTAssertNotEqual(restored.priceText, StickerPrice.twoForOne.displayText)
+        XCTAssertTrue(TagPricingContext.printingIssue(for: restored, store: approvalStore())?.contains("write-in") == true)
         XCTAssertEqual(storage.bytes, bytes)
         XCTAssertEqual(storage.writes, 0)
-        let explicitFalse = try decodedEntry(document(original) { $0["customBulk"] = false })
+        let explicitFalse = try decodedEntry(document(original) {
+            $0["customBulk"] = false
+            $0["blankPrice"] = false
+        })
         XCTAssertNoThrow(try explicitFalse.validate())
         XCTAssertEqual(explicitFalse.priceText, restored.priceText)
     }
@@ -196,6 +203,7 @@ import XCTest
     func testBulkFlagCannotDisguiseAnIndividualPriceOrInventoryIdentity() throws {
         let bulk = try custom(price: 0, isBulk: true)
         let mutations: [(inout [String: Any]) -> Void] = [
+            { $0["inventoryBulk"] = true },
             { $0["priceCents"] = 50 },
             { $0["priceCents"] = 100 },
             { $0["source"] = "inventory"; $0["inventoryID"] = UUID().uuidString },

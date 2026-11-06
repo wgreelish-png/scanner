@@ -9,7 +9,11 @@ struct CustomPriceTagDraft: Equatable, Sendable {
     var isBulk: Bool = false
     var pricePosition: LabelPricePosition = .right
 
-    var priceText: String { isBulk ? StickerPrice.twoForOne.displayText : StickerPrice.individual(priceCents).displayText }
+    var isBlankPrice: Bool { !isBulk && priceCents == 0 }
+    var priceText: String {
+        isBlankPrice ? "" : (isBulk ? StickerPrice.twoForOne.displayText : StickerPrice.individual(priceCents).displayText)
+    }
+    var priceDescription: String { isBlankPrice ? InventoryLabelDraft.blankPriceDescription : priceText }
 
     func validate() throws {
         guard ShowBudgetMoney.isValid(priceCents) else { throw InventoryLabelFailure.invalidPrice }

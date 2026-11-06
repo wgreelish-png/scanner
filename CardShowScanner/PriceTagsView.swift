@@ -35,6 +35,8 @@ import SwiftUI
                 VStack(spacing: 12) {
                     batchButton(.all, title: "Print All", subtitle: "One label per available copy, including reprints.",
                         symbol: "square.stack.3d.up.fill", count: available.count)
+                    batchButton(.custom, title: "Select Individual Inventory", subtitle: "Choose cards and copies from your inventory.",
+                        symbol: "rectangle.stack", count: nil, identifier: "priceTags.chooseCards")
                     batchButton(.priceChanged, title: "Print Price Changed", subtitle: "New cards and saved sticker prices that still need labels.",
                         symbol: "arrow.triangle.2.circlepath", count: approvals.isLoaded ? changedIDs.count : nil)
                     NavigationLink { CustomPriceTagView(paperPreferences: paperPreferences) } label: {
@@ -57,16 +59,6 @@ import SwiftUI
                         description: Text("Create a custom sticker above, or import inventory to prepare card labels."))
                 }
                 VStack(spacing: 0) {
-                    Button { batch = .custom } label: {
-                        HStack {
-                            Label("Choose Inventory Cards", systemImage: "rectangle.stack")
-                            Spacer()
-                            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    .disabled(!store.isLoaded || !approvals.isLoaded || available.isEmpty)
-                    .accessibilityIdentifier("priceTags.chooseCards")
-                    Divider().padding(.vertical, 14)
                     NavigationLink { LabelPrintQueueView() } label: {
                         HStack {
                             Label("Saved Print Queue", systemImage: "tray.full")
@@ -86,7 +78,7 @@ import SwiftUI
                 }
                 .font(.subheadline.weight(.semibold)).padding(18)
                 .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
-                Text("Saved sticker prices are used without repricing. Bulk cards stay in the 2 for $1 category; use bulk-bin tags above. Opening a batch never starts printing.")
+                Text("Every selected inventory copy receives a tag. Saved prices and 2 for $1 deals stay unchanged; unavailable and $0 prices leave space to write in. Opening a batch never starts printing.")
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(16)
         }
@@ -153,13 +145,13 @@ import SwiftUI
     }
 
     private func batchButton(_ mode: InventoryLabelBatchMode, title: String, subtitle: String,
-                             symbol: String, count: Int?) -> some View {
+                             symbol: String, count: Int?, identifier: String? = nil) -> some View {
         Button { batch = mode } label: {
             routeLabel(title: title, subtitle: subtitle, symbol: symbol, count: count)
         }
         .buttonStyle(.plain)
         .disabled(!store.isLoaded || !approvals.isLoaded || available.isEmpty || (mode == .priceChanged && count == 0))
-        .accessibilityIdentifier("priceTags." + (mode == .priceChanged ? "changed" : mode.rawValue))
+        .accessibilityIdentifier(identifier ?? "priceTags." + (mode == .priceChanged ? "changed" : mode.rawValue))
     }
 
     private func routeLabel(title: String, subtitle: String, symbol: String, count: Int?) -> some View {

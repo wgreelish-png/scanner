@@ -101,7 +101,7 @@ import XCTest
         }
     }
 
-    func testNewQueueEntryRejectsCardsInTheBulkCategory() throws {
+    func testNewQueueEntryKeepsInventoryIdentityAndBulkCategoryDistinctFromAnIndividualZeroPrice() throws {
         let card = CardCandidate(identity: .init(game: "Pokémon", productID: "p:42", printing: "Holofoil"),
             name: "Fixture card", set: "Fixture set", number: "42", marketPrice: Decimal(string: "0.50"),
             confidence: 100, printings: ["Holofoil"])
@@ -109,9 +109,15 @@ import XCTest
         let raster = try labels(copies: 1)[0].raster
         XCTAssertTrue(draft.isBulk)
         XCTAssertNil(draft.priceCents)
-        XCTAssertThrowsError(try LabelQueueEntry(draft: draft, raster: raster, copyNumber: 1)) {
-            XCTAssertEqual($0 as? InventoryLabelFailure, .bulkCategory)
-        }
+        let entry = try LabelQueueEntry(draft: draft, raster: raster, copyNumber: 1)
+        XCTAssertEqual(entry.source, .inventory)
+        XCTAssertEqual(entry.inventoryID, draft.id)
+        XCTAssertEqual(entry.inventoryBulk, true)
+        XCTAssertNil(entry.customBulk)
+        XCTAssertEqual(entry.priceCents, 0)
+        XCTAssertEqual(entry.stickerTag, .twoForOne)
+        XCTAssertEqual(entry.priceText, StickerPrice.twoForOne.displayText)
+        XCTAssertNoThrow(try entry.validate())
     }
 
     func testMismatchedSavedPaperAndRasterFailClosed() throws {

@@ -28,6 +28,24 @@ import UIKit
         return try XCTUnwrap(cgImage.dataProvider?.data) as Data
     }
 
+    private func physical(_ local: CGRect, geometry: LabelPrintGeometry) -> CGRect {
+        let area = geometry.printableArea
+        if geometry.contentRotation == 180 {
+            return CGRect(x: CGFloat(area.x + area.width) - local.maxX,
+                          y: CGFloat(area.y + area.height) - local.maxY,
+                          width: local.width, height: local.height)
+        }
+        return local.offsetBy(dx: CGFloat(area.x), dy: CGFloat(area.y))
+    }
+
+    private func ink(_ raster: LabelRaster, in area: CGRect) -> Int {
+        var count = 0
+        for x in Int(ceil(area.minX))..<Int(floor(area.maxX)) {
+            for y in Int(ceil(area.minY))..<Int(floor(area.maxY)) where black(raster, x: x, y: y) { count += 1 }
+        }
+        return count
+    }
+
     func testEveryCatalogProductGeneratesOneDesignInsideItsMeasuredPrintableRegion() throws {
         let catalog = NiimbotLabelCatalog.shared
         XCTAssertEqual(catalog.count, 130)
@@ -112,6 +130,67 @@ import UIKit
         XCTAssertEqual(upright, Data(raw.reversed()), "Presentation rotates the decoded printer bits without rewriting the queued raster")
         XCTAssertEqual(try InventoryLabelRenderer.renderRaster(draft), bitmap.raster)
         assertInkInside(bitmap.raster, product.geometry.printableArea)
+    }
+
+    func testDetectedPapersLeaveZeroAndUnavailablePricePanelsEmptyWithoutLosingTheBrand() throws {
+        let products = NiimbotLabelCatalog.shared.allProducts
+        let samples = [
+            try XCTUnwrap(products.first { $0.code == "120425109" }),
+            try XCTUnwrap(products.first { min($0.width, $0.height) == 10 }),
+            try XCTUnwrap(products.first { $0.geometry.feedDots == 176 }),
+            try XCTUnwrap(products.first { $0.geometry.feedDots == 600 }),
+            try XCTUnwrap(products.first { $0.paperType == 5 }),
+            try XCTUnwrap(products.first { $0.rotation == 0 }),
+            try XCTUnwrap(products.first { $0.rotation == 270 })
+        ]
+        for product in samples {
+            let paper = try InventoryLabelSize(product: product), geometry = product.geometry
+            for side in LabelPricePosition.allCases {
+                let layout = InventoryLabelRenderer.adaptiveBrandedPriceLayout(width: CGFloat(geometry.printableArea.width),
+                    height: CGFloat(geometry.printableArea.height), price: "", pricePosition: side)
+                let custom = CustomPriceTagDraft(priceCents: 0, copies: 1, paperSize: paper, pricePosition: side)
+                let bitmap = try InventoryLabelRenderer.render(custom)
+                XCTAssertEqual(custom.priceText, "")
+                XCTAssertEqual(ink(bitmap.raster, in: physical(layout.priceArea, geometry: geometry)), 0,
+                    "A zero price must leave room to write an amount without a currency symbol or zero")
+                XCTAssertGreaterThan(ink(bitmap.raster, in: physical(layout.logoArea, geometry: geometry)), 0)
+                assertInkInside(bitmap.raster, geometry.printableArea)
+                let card = CardCandidate(identity: .init(game: "Pokémon", productID: "blank-fixture", printing: "Normal"),
+                    name: "Write-in card", set: "Fixture", number: "42", marketPrice: nil, confidence: 100, printings: ["Normal"])
+                var draft = InventoryLabelDraft(item: ShowInventoryItem(card: card, quantity: 1))
+                draft.paperSize = paper; draft.pricePosition = side
+                XCTAssertEqual(try InventoryLabelRenderer.renderRaster(draft), bitmap.raster,
+                    "Missing inventory prices use the same write-in design as an explicit zero")
+                XCTAssertEqual(try pixels(bitmap.previewImage),
+                               try pixels(InventoryLabelRenderer.image(raster: bitmap.raster, paper: paper)))
+            }
+        }
+    }
+
+    func testDetectedCardDetailsKeepAWriteInPriceSpaceAndTheCardMetadata() throws {
+        for rotation in [0, 90, 270] {
+            let portrait = rotation == 0
+            let product = try NiimbotLabelProduct(code: "9900003", width: portrait ? 12 : 30,
+                height: portrait ? 30 : 12, rotation: rotation, paperType: 5,
+                inputAreas: [.init(x: 1, y: 1, width: portrait ? 10 : 28, height: portrait ? 28 : 10)])
+            let paper = try InventoryLabelSize(product: product), geometry = product.geometry
+            let card = CardCandidate(identity: .init(game: "Pokémon", productID: "blank-details", printing: "Normal", condition: "Near Mint"),
+                name: "Write-in card", set: "Fixture", number: "42", marketPrice: nil, confidence: 100, printings: ["Normal"])
+            var draft = InventoryLabelDraft(item: ShowInventoryItem(card: card, quantity: 1))
+            draft.paperSize = paper; draft.style = .cardDetails
+            let bitmap = try InventoryLabelRenderer.render(draft)
+            let width = CGFloat(geometry.printableArea.width), height = CGFloat(geometry.printableArea.height)
+            let padding = max(2, min(6, height * 0.07))
+            let writeInArea = CGRect(x: padding, y: height * 0.36, width: width * 0.6 - padding, height: height * 0.56)
+            XCTAssertEqual(ink(bitmap.raster, in: physical(writeInArea, geometry: geometry)), 0)
+            XCTAssertGreaterThan(ink(bitmap.raster, in: physical(CGRect(x: padding, y: padding,
+                width: width - padding * 2, height: height * 0.28), geometry: geometry)), 0)
+            XCTAssertGreaterThan(ink(bitmap.raster, in: physical(CGRect(x: width * 0.7, y: height * 0.36,
+                width: width * 0.3 - padding, height: height * 0.56), geometry: geometry)), 0)
+            assertInkInside(bitmap.raster, geometry.printableArea)
+            draft.askingPriceText = "0"
+            XCTAssertEqual(try InventoryLabelRenderer.renderRaster(draft), bitmap.raster)
+        }
     }
 
     func testPortraitSourceAreasAndCardDetailsUseTheSameBoundedGeneratedCanvas() throws {

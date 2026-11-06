@@ -6,10 +6,15 @@ The existing label selection, editor, review, renderer and print queue now share
 
 | Current saved market | Proposed sticker/category |
 | --- | --- |
-| Below $0.75, including a known $0 | **2 for $1** bulk category; no individual tag |
+| Below $0.75, including a known $0 | **2 for $1** category, printed on each selected copy's tag |
 | $0.75–$0.99 | **$1** |
 | $1–$99.99 | Round down to a whole dollar |
 | $100+ | Round down to a multiple of $5 |
+
+Printing has a separate write-in rule: unavailable or zero prices leave the
+price area empty on the label. Existing positive stickers and saved 2-for-$1
+deals remain printable as saved. This does not change pricing proposals,
+inventory values or checkout calculations.
 
 Examples: $0.74 → bulk; $0.75 → $1; $1.85 → $1; $8.40 → $8; $48.50 → $48; $113 → $110; $199 → $195; $347 → $345; $589 → $585. Individual tag generation rejects cents, including manual cents entries. Unknown market is not zero. A low-priced card whose promotional price fails its profit check remains a review item; the app never raises its price automatically to cover costs.
 
@@ -47,7 +52,7 @@ These previews do not record a sale. Existing checkout still records the actual 
 
 ## Labels and durability
 
-Approval and print history live in the separate bounded, versioned `tag-approvals.json` file, with atomic writes and fixture-isolated test storage. Only approved individual prices that still need labels enter the existing queue; bulk cards do not generate individual labels. **Keep Existing Sticker** explicitly records that the physical sticker already matches. Approving an unchanged retained tag resets its market baseline without reprinting it.
+Approval and print history live in the separate bounded, versioned `tag-approvals.json` file, with atomic writes and fixture-isolated test storage. Every selected category enters the queue, including 2-for-$1 labels. Print All and explicit card selections include requested reprints; Print Price Changed selects saved tags that still need labels. **Keep Existing Sticker** explicitly records that the physical sticker already matches. Approving an unchanged retained tag resets its market baseline without reprinting it.
 
 A price revision changes only when its approved tag changes. Completed labels must match that revision before clearing Needs Labels, so an old $10 queue cannot acknowledge a later $10 → $12 → $10 cycle. Before sending each queued copy, the app rejects an outdated price/revision rather than printing it. All matching copies in the queued group must complete. Clearing the queue does not erase approvals/history. Legacy queued rasters and manual prices remain immutable, including pre-update cents labels; new cents tags cannot be generated.
 
@@ -55,6 +60,6 @@ Failed approval writes preserve the saved baseline. Price review can be approved
 
 ## Verification
 
-All implementation completes before checks. Focused native tests cover every supplied sticker example, exact boundaries, asymmetrical/capped movement thresholds, competitiveness, cumulative baselines, whole-dollar/manual/bulk behavior, unknown versus zero costs, fee formulas, cent-safe floors, offer ranges, bundle fees/eligibility/stacking, approval failures/relaunch, revision-safe label acknowledgment, current import quote matching, immediate checkout prices and historical receipt/Undo preservation. UI tests cover whole-dollar edits, cents rejection, warning review, bulk exclusion and retaining a sticker without reprinting. Native/Xcode and physical-iPhone results remain separate from grammar/resource checks.
+All implementation completes before checks. Focused native tests cover every supplied sticker example, exact boundaries, asymmetrical/capped movement thresholds, competitiveness, cumulative baselines, whole-dollar/manual/bulk behavior, unknown versus zero costs, fee formulas, cent-safe floors, offer ranges, bundle fees/eligibility/stacking, approval failures/relaunch, revision-safe label acknowledgment, current import quote matching, immediate checkout prices and historical receipt/Undo preservation. UI tests cover whole-dollar edits, cents rejection, warning review, 2-for-$1 inventory labels and retaining a sticker without reprinting. Native/Xcode and physical-iPhone results remain separate from grammar/resource checks.
 
 Local verification passed grammar parsing of **168 Swift files**, Xcode membership for **95 app / 60 native-test / 13 UI-test sources**, bundled-resource membership, all **47 pinned scanner assets/dependencies**, build/permission/privacy metadata and whitespace checks. JavaScript and Python implementations are unchanged and their suites were not rerun locally. This Linux workspace has no Swift/Xcode installation; native/UI test execution and iPhone acceptance remain separate from these portable checks.

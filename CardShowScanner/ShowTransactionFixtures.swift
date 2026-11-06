@@ -39,10 +39,19 @@ import SwiftData
         store = ShowBudgetStore(url: directory.appendingPathComponent("budget.json"))
         if store.book.shows.isEmpty { _ = try! store.create(name: "Synthetic show", startingCents: 30_000) }
         if store.inventorySourceLocationID == nil {
-            try! store.seedInventory([
+            var inventory: [ShowInventorySeed] = [
                 .init(sourceInventoryID: 1, card: Self.card("Stock A", price: 35), quantity: 2),
                 .init(sourceInventoryID: 2, card: Self.card("Stock B", price: 5), quantity: 1)
-            ], sourceLocationID: 9001)
+            ]
+            if ProcessInfo.processInfo.arguments.contains("--inventory-bulk-labels-fixture") {
+                inventory.append(.init(sourceInventoryID: 3,
+                    card: Self.card("Bulk Stock", price: Decimal(string: "0.50")!), quantity: 1))
+            }
+            if ProcessInfo.processInfo.arguments.contains("--inventory-write-in-labels-fixture") {
+                inventory.append(.init(sourceInventoryID: 4, card: Self.card("Unavailable Stock", price: nil), quantity: 1))
+                inventory.append(.init(sourceInventoryID: 5, card: Self.card("Zero Stock", price: 0), quantity: 1))
+            }
+            try! store.seedInventory(inventory, sourceLocationID: 9001)
         }
         let context = container.mainContext
         if (try! context.fetchCount(FetchDescriptor<CardList>())) == 0 {
@@ -72,7 +81,7 @@ import SwiftData
             try! context.save()
         }
     }
-    private static func card(_ name: String, price: Decimal) -> CardCandidate {
+    private static func card(_ name: String, price: Decimal?) -> CardCandidate {
         CardCandidate(identity: .init(game: "Pokémon", productID: "mock:" + name, printing: "Normal"),
             name: name, set: "Synthetic set", number: "1", marketPrice: price,
             confidence: 100, printings: ["Normal"])

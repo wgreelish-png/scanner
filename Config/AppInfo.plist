@@ -8,7 +8,7 @@
 		<true/>
 	</dict>
 	<key>ScannerWorkflowRevision</key>
-	<string>offline-rfid-label-layout</string>
+	<string>write-in-price-tags</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Find the NIIMBOT printer you select and print inventory price labels while this app is open.</string>
 	<key>UIRequiresFullScreen</key>

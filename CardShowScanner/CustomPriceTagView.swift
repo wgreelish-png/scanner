@@ -27,7 +27,7 @@ import SwiftUI
                     Text("2 for $1").tag(true)
                 }.pickerStyle(.segmented).accessibilityIdentifier("customLabels.tag")
                 if model.isBulk {
-                    Text("A PokéDen logo and 2 for $1 sticker for your bulk bins. Individual bulk cards do not need separate tags.")
+                    Text("Print extra PokéDen 2 for $1 tags for cards or bins. Inventory batches also label each selected 2 for $1 card.")
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
                     HStack {
@@ -35,7 +35,7 @@ import SwiftUI
                         TextField("Whole-dollar price", text: $model.price).keyboardType(.numberPad)
                             .focused($focused, equals: .price).accessibilityIdentifier("customLabels.price")
                     }
-                    Text("PokéDen logo and price. Check each card's cost before using it; inventory prices stay unchanged.")
+                    Text("PokéDen logo and price. Enter 0 to leave the price area blank for writing in. Inventory prices stay unchanged.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -68,11 +68,11 @@ import SwiftUI
                         .frame(maxWidth: .infinity).padding(12).background(.white)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                         .accessibilityLabel("Price tag preview")
-                        .accessibilityValue("\(previewDraft.priceText) · \(previewDraft.paperSize.title) · \(previewDraft.pricePosition.title)")
+                        .accessibilityValue("\(previewDraft.priceDescription) · \(previewDraft.paperSize.title) · \(previewDraft.pricePosition.title)")
                         .accessibilityIdentifier("customLabels.preview")
                 } else {
                     Text(previewError ?? (model.isBulk
-                        ? "Enter 1–100 copies to preview your bulk-bin sticker."
+                        ? "Enter 1–100 copies to preview your 2 for $1 sticker."
                         : "Enter a whole-dollar price and copy count to preview your sticker."))
                         .font(.footnote).foregroundStyle(.secondary)
                 }

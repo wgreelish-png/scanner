@@ -167,6 +167,7 @@ struct InventoryLabelDraft: Codable, Equatable, Identifiable, Sendable {
     var isBulk = false
     var isManualOverride = false
     static let maximumCopies = 100
+    static let blankPriceDescription = "Blank price · write in"
 
     init(item: ShowInventoryItem, preferences: TagPricingPreferences = .init(), approval: TagApprovalRecord? = nil) {
         id = item.id
@@ -175,12 +176,15 @@ struct InventoryLabelDraft: Codable, Equatable, Identifiable, Sendable {
         condition = Self.shortCondition(item.card.identity.condition)
         marketValue = item.card.marketPrice
         profitInputs = preferences.profitInputs(for: item)
-        // Printing uses the stored final tag and category, including an
-        // individual $0 price. Market rounding is only a fallback for new lots.
-        let tag = approval?.approvedTag ?? TagPricing.evaluate(market: marketValue, inputs: profitInputs).tag
+        // A saved sticker takes precedence over a missing quote. Without one,
+        // zero or unavailable prices leave room for a handwritten amount.
+        let fallback = marketValue.map { $0 > 0 } == true
+            ? TagPricing.evaluate(market: marketValue, inputs: profitInputs).tag : nil
+        let tag = approval?.approvedTag ?? fallback
         isBulk = tag == .twoForOne
         isManualOverride = approval?.isManualOverride ?? false
-        askingPriceText = tag?.integerPriceCents.map(Self.inputText) ?? ""
+        askingPriceText = tag?.integerPriceCents.map(Self.inputText)
+            ?? (marketValue == 0 && approval == nil ? Self.inputText(0) : "")
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -208,12 +212,16 @@ struct InventoryLabelDraft: Codable, Equatable, Identifiable, Sendable {
     }
 
     var priceCents: Int64? { isBulk ? nil : ShowBudgetMoney.parse(askingPriceText) }
+    var isBlankPrice: Bool {
+        !isBulk && (askingPriceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || priceCents == 0)
+    }
     var tag: StickerPrice? {
         if isBulk { return .twoForOne }
         guard let cents = priceCents, cents % 100 == 0 else { return nil }
         return .individual(cents)
     }
-    var priceText: String? { tag?.displayText }
+    var priceText: String? { isBlankPrice ? "" : tag?.displayText }
+    var priceDescription: String { isBlankPrice ? Self.blankPriceDescription : (priceText ?? "Needs input") }
     var pricing: TagPriceEvaluation { TagPricing.evaluate(market: marketValue, inputs: profitInputs) }
     var pricingWarnings: [String] {
         if isBulk { return pricing.reasons.map(\.message) }
@@ -240,9 +248,10 @@ struct InventoryLabelDraft: Codable, Equatable, Identifiable, Sendable {
     func validate() throws {
         guard !cardName.isEmpty, cardName.count <= 500, cardNumber.count <= 100,
               condition.count <= 100, askingPriceText.count <= 40 else { throw InventoryLabelFailure.invalidText }
-        guard !isBulk else { throw InventoryLabelFailure.bulkCategory }
-        guard let priceCents else { throw InventoryLabelFailure.invalidPrice }
-        guard priceCents % 100 == 0 else { throw InventoryLabelFailure.wholeDollarRequired }
+        if !isBulk && !isBlankPrice {
+            guard let priceCents else { throw InventoryLabelFailure.invalidPrice }
+            guard priceCents % 100 == 0 else { throw InventoryLabelFailure.wholeDollarRequired }
+        }
         guard (1...Self.maximumCopies).contains(copies) else { throw InventoryLabelFailure.invalidCopies }
     }
 
@@ -279,7 +288,7 @@ struct LabelRaster: Codable, Equatable, Sendable {
 }
 
 enum InventoryLabelFailure: Error, LocalizedError, Equatable {
-    case invalidPrice, invalidCopies, invalidRaster, invalidText, wholeDollarRequired, bulkCategory
+    case invalidPrice, invalidCopies, invalidRaster, invalidText, wholeDollarRequired
     var errorDescription: String? {
         switch self {
         case .invalidPrice: return "Enter a valid asking price before preparing this label."
@@ -287,7 +296,6 @@ enum InventoryLabelFailure: Error, LocalizedError, Equatable {
         case .invalidRaster: return "This label could not be prepared for the selected paper."
         case .invalidText: return "Review the card information before preparing its label."
         case .wholeDollarRequired: return "Individual price tags use whole dollars. Review this price before printing."
-        case .bulkCategory: return "Cards below $0.75 belong in the 2 for $1 category and do not receive individual price tags."
         }
     }
 }

@@ -71,6 +71,14 @@ struct TagSaleSuggestion: Equatable {
     }
 
     static func printingIssue(for entry: LabelQueueEntry, store: TagApprovalStore = .shared) -> String? {
+        if entry.blankPrice == true {
+            do { try entry.validate() }
+            catch { return "This write-in label is invalid. Review its paper and copies before preparing it again." }
+            return nil
+        }
+        if entry.stickerTag == .individual(0) {
+            return "This saved label still prints $0. Clear the queue and prepare a write-in label with a blank price."
+        }
         if entry.source == .custom {
             do { try entry.validate() }
             catch { return "This custom label is invalid. Review its price, paper and copies before preparing it again." }
@@ -83,7 +91,7 @@ struct TagSaleSuggestion: Equatable {
         guard let record = store.record(for: inventoryID) else {
             return entry.pricingRevisionID == nil ? nil : "This label's saved price is unavailable. Prepare a new label from inventory."
         }
-        guard record.approvedTag.integerPriceCents == entry.priceCents,
+        guard record.approvedTag == entry.stickerTag,
               entry.pricingRevisionID == nil || entry.pricingRevisionID == record.priceRevisionID else {
             return "The sticker price changed after this label was queued. Clear the outdated label and prepare a new one."
         }
