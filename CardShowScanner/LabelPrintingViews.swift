@@ -485,6 +485,8 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                     .accessibilityIdentifier("labels.select." + item.id.uuidString)
             }
         }
+        // Scope the list identifier before adding independent footer controls.
+        .accessibilityIdentifier("labels.selection")
         .navigationTitle("Select Label Cards").navigationBarTitleDisplayMode(.inline)
         .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Name, set, or card number")
         .scrollDismissesKeyboard(.interactively)
@@ -516,7 +518,6 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                     .accessibilityIdentifier("labels.continueSelection")
             }
         }
-        .accessibilityIdentifier("labels.selection")
     }
 
     private var configuration: some View {
@@ -612,6 +613,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
+        .accessibilityIdentifier("labels.configuration")
         .navigationTitle("Label Details").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .topBarLeading) { ClearLabelPrintQueueButton() } }
         .onChange(of: style) { _, value in for index in drafts.indices { drafts[index].style = value } }
@@ -630,7 +632,6 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 }
             }
         }
-        .accessibilityIdentifier("labels.configuration")
     }
 
     private func updatePaperSize(_ size: InventoryLabelSize) {
@@ -700,6 +701,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 Section { Text(validation).font(.footnote).foregroundStyle(.orange) }
             }
         }
+        .accessibilityIdentifier("labels.review")
         .navigationTitle("Review Labels").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .topBarLeading) { ClearLabelPrintQueueButton() } }
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -708,7 +710,6 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 prepareButton
             }
         }
-        .accessibilityIdentifier("labels.review")
     }
 
     private var configurationRows: some View {
@@ -1208,6 +1209,7 @@ private struct LabelActionBar<Content: View>: View {
                 }
             }
         }
+        .accessibilityIdentifier("labelQueue.screen")
         .navigationTitle("Label Print Queue").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .topBarTrailing) { ClearLabelPrintQueueButton(identifier: "labelQueue.clearQueue") } }
         .safeAreaInset(edge: .bottom, spacing: 0) { printControls }
@@ -1263,7 +1265,6 @@ private struct LabelActionBar<Content: View>: View {
             if !progress.isPresented { queue.stop(using: printer) }
             if !printer.isConnected { printer.stop() }
         }
-        .accessibilityIdentifier("labelQueue.screen")
     }
 
     private var summary: some View {
