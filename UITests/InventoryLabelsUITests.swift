@@ -988,13 +988,19 @@ import XCTest
 
     func testCustomPrintingShowsProgressWaitsForFinalAcknowledgementAndReturnsToPriceTags() {
         continueAfterFailure = false
-        let app = launch(extraArguments: ["--label-print-progress-fixture=success"])
+        let app = launch(extraArguments: ["--label-print-progress-fixture=success-per-copy"])
         defer { app.terminate() }
         prepareProgressFixture(app: app, copies: "3")
         tap(app.buttons["labelQueue.print"], app: app)
-        assertContains("0 of 3 labels printed", element: app.staticTexts["labelProgress.count"])
+        assertLiveProgress("0 of 3 labels printed", app: app)
         tap(app.buttons["labelProgress.fixtureConfirm"], app: app)
-        assertContains("3 of 3 labels printed", element: app.staticTexts["labelProgress.count"])
+        assertLiveProgress("1 of 3 labels printed", app: app)
+        XCTAssertFalse(app.buttons["labelProgress.fixtureFinish"].exists,
+                       "The first receipt must update the sheet before the next label or final acknowledgement")
+        tap(app.buttons["labelProgress.fixtureConfirm"], app: app)
+        assertLiveProgress("2 of 3 labels printed", app: app)
+        tap(app.buttons["labelProgress.fixtureConfirm"], app: app)
+        assertLiveProgress("3 of 3 labels printed", app: app)
         assertContains("Finishing print job", element: app.staticTexts["labelProgress.status"])
         XCTAssertTrue(app.buttons["labelProgress.pause"].exists,
                       "The final printer acknowledgement still owns the active job after the counter reaches its total")
@@ -1072,6 +1078,15 @@ import XCTest
         XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["labelProgress.pause"].exists, "Preparation never starts a print job")
         XCTAssertTrue(app.buttons["labelQueue.print"].isEnabled)
+    }
+
+    private func assertLiveProgress(_ expected: String, app: XCUIApplication,
+                                    file: StaticString = #filePath, line: UInt = #line) {
+        let count = app.staticTexts["labelProgress.count"]
+        XCTAssertTrue(count.waitForExistence(timeout: 5), file: file, line: line)
+        let update = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", expected), object: count)
+        XCTAssertEqual(XCTWaiter.wait(for: [update], timeout: 5), .completed,
+                       "Expected live progress \(expected), received \(count.label)", file: file, line: line)
     }
 
     private func assertReturnedToPriceTags(app: XCUIApplication) {

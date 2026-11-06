@@ -26,6 +26,10 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 84 keeps the [printing progress counts](docs/PrintProgressAndConnection.md)
+live in the presented screen, starting with the requested batch total and
+updating from each saved physical completion receipt.
+
 Build 83 adds [printing progress and return to Price Tags](docs/PrintProgressAndConnection.md).
 The progress screen waits for the final job confirmation, then returns to Price
 Tags while retaining an idle foreground printer connection. Buffered mixed-label

@@ -19,6 +19,17 @@ last physical receipt but before the final job confirmation keeps those
 receipts and does not automatically navigate away or retry printed copies.
 Presenting the progress sheet itself does not cancel printing.
 
+Build 84 gives the presented progress screen its own SwiftUI view. Its body
+observes the session and queue directly, so the requested total appears on
+presentation and each saved completion updates the count without waiting for
+the parent queue screen or a later label to change. A three-copy job starts
+at 0 of 3. Counts still require the printer's physical-counter proof; submitting
+artwork never counts as a printed label, and the last receipt still waits for
+the final job acknowledgement before returning to Price Tags.
+The printer counter is queried between complete image uploads, so physical
+output can precede its confirmation. The display updates when that proof is
+saved, rather than estimating completion from an upload.
+
 The app keeps a verified idle Bluetooth connection while active after successful
 printing. Returning to Price Tags happens after the sending task has ended,
 so navigation cannot accidentally cancel an unfinished PrintEnd exchange.
@@ -80,7 +91,7 @@ distinguish upload time from printer pacing in the next phone diagnostic.
 Native execution and real feed/connection timing require Xcode, the phone and
 printer. Source review and portable checks cannot establish physical timing.
 
-## Validation receipt
+## Validation receipt — build 84
 
 - 322 portable tests passed: 172 JavaScript, 59 research-server, 49 Postman and
   42 Python tests.
@@ -90,5 +101,9 @@ printer. Source review and portable checks cannot establish physical timing.
 - Added 20 native regressions and four UI regressions for completion proof,
   progress routing, interruption, polling, status-error boundaries and diagnostic
   privacy. Independent source review found no remaining blockers.
+- Build 84 strengthens the custom-print UI regression with individually gated
+  receipts: 0/3, 1/3, 2/3 and 3/3 must render before the next confirmation is
+  released. The fixture stage and printer status stay unchanged between the
+  intermediate receipts, and final job acknowledgement remains separately held.
 - Native/UI execution and the unsigned iOS build were not available in the
   Linux workspace; those and the phone checks above remain unverified here.
