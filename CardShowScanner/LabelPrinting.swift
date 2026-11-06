@@ -13,6 +13,57 @@ enum LabelPricePosition: String, Codable, CaseIterable, Identifiable, Sendable {
     var title: String { self == .left ? "Price Left" : "Price Right" }
 }
 
+/// One bounded summary per preparation action; artwork and card details never
+/// enter diagnostics. Nested durations explain the total and are not additive
+/// to it. All timing uses the monotonic clock rather than wall-clock dates.
+@MainActor struct LabelPreparationMetrics {
+    enum Kind: String { case inventory, custom }
+    enum Stage: String { case preview, queue }
+    enum Phase: String { case completed, failed, reusedQueue = "reused_queue" }
+    enum Work { case render, approvalSave, queueSave }
+
+    private let clock = ContinuousClock()
+    private let started = ContinuousClock().now
+    private(set) var renderCount = 0
+    private(set) var rasterReuseCount = 0
+    private var renderMilliseconds = 0
+    private var approvalSaveMilliseconds = 0
+    private var queueSaveMilliseconds = 0
+
+    mutating func measure<T>(_ work: Work, _ action: () throws -> T) rethrows -> T {
+        let beginning = clock.now
+        if case .render = work { renderCount += 1 }
+        defer {
+            let elapsed = Self.milliseconds(beginning.duration(to: clock.now))
+            switch work {
+            case .render: renderMilliseconds = min(3_600_000, renderMilliseconds + elapsed)
+            case .approvalSave: approvalSaveMilliseconds = min(3_600_000, approvalSaveMilliseconds + elapsed)
+            case .queueSave: queueSaveMilliseconds = min(3_600_000, queueSaveMilliseconds + elapsed)
+            }
+        }
+        return try action()
+    }
+
+    mutating func reusedRaster() { rasterReuseCount = min(250, rasterReuseCount + 1) }
+
+    func record(kind: Kind, stage: Stage, phase: Phase, total: Int) {
+        DiagnosticLog.shared.record("label.preparation_summary", [
+            "preparation_kind": kind.rawValue, "preparation_stage": stage.rawValue, "phase": phase.rawValue,
+            "total": String(max(0, min(250, total))), "render_count": String(min(250, renderCount)),
+            "raster_reuse_count": String(rasterReuseCount),
+            "preparation_elapsed_ms": String(Self.milliseconds(started.duration(to: clock.now))),
+            "render_elapsed_ms": String(renderMilliseconds), "approval_save_ms": String(approvalSaveMilliseconds),
+            "queue_save_ms": String(queueSaveMilliseconds)
+        ])
+    }
+
+    private static func milliseconds(_ duration: Duration) -> Int {
+        let parts = duration.components
+        guard parts.seconds < 3_600 else { return 3_600_000 }
+        return max(0, Int(parts.seconds * 1_000 + parts.attoseconds / 1_000_000_000_000_000))
+    }
+}
+
 /// Manual presets retain their original JSON strings. Detected stock carries
 /// its own immutable measurements so saved queues never depend on a later
 /// catalog lookup or the currently connected roll.

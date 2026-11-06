@@ -215,16 +215,23 @@ enum NiimbotErrorReplyDisposition: Equatable {
 struct NiimbotPrintTransferMetrics {
     let task: String
     let total: Int
+    let identity: NiimbotD110Identity
+    let previousJobGap: Duration?
     private(set) var groups = 0
     private(set) var nativeCopies = 0
     private(set) var imagePackets = 0
     private(set) var requests = 0
     private(set) var wireBytes = 0
     private(set) var statusPolls = 0
+    private(set) var printStarts = 0
+    private(set) var printEnds = 0
+    private var timings: [NiimbotPrintTiming: Duration] = [:]
 
-    init(identity: NiimbotD110Identity, continuous: Bool, total: Int) {
+    init(identity: NiimbotD110Identity, continuous: Bool, total: Int, previousJobGap: Duration? = nil) {
         task = identity.modelID != 2320 ? "legacy_serial" : continuous ? "buffered_copies" : "declared_serial"
         self.total = total
+        self.identity = identity
+        self.previousJobGap = previousJobGap
     }
 
     static func pageCopies(command: UInt8, data: Data) -> Int {
@@ -239,6 +246,8 @@ struct NiimbotPrintTransferMetrics {
         wireBytes += max(0, byteCount)
         guard startsRequest else { return }
         requests += 1
+        if command == 0x01 { printStarts += 1 }
+        if command == 0xf3 { printEnds += 1 }
         if command == 0x13 {
             groups += 1
             // Extra physical copies that reuse an image upload.
@@ -249,13 +258,80 @@ struct NiimbotPrintTransferMetrics {
         if command == 0xa3 && response == 0xb3 { statusPolls += 1 }
     }
 
+    mutating func add(_ timing: NiimbotPrintTiming, duration: Duration) {
+        timings[timing, default: .zero] += max(.zero, duration)
+    }
+
+    mutating func recordRequestSpan(command: UInt8, response: UInt8?, duration: Duration) {
+        if command == 0x01 { add(.printStart, duration: duration) }
+        if command == 0xf3 { add(.printEnd, duration: duration) }
+        if command == 0xa3 && response == 0xb3 { add(.statusPoll, duration: duration) }
+    }
+
+    static func milliseconds(_ duration: Duration) -> Int {
+        let parts = max(.zero, duration).components
+        guard parts.seconds < 3_600 else { return 3_600_000 }
+        return Int(parts.seconds * 1_000 + parts.attoseconds / 1_000_000_000_000_000)
+    }
+
+    func groupFields(since before: Self, elapsed: Duration, pages: Range<Int>, accepted: Bool) -> [String: String] {
+        ["page": String(pages.lowerBound + 1), "quantity": String(pages.count), "total": String(total),
+         "accepted": String(accepted), "elapsed_ms": String(Self.milliseconds(elapsed)),
+         "group_image_packets": String(imagePackets - before.imagePackets),
+         "group_requests": String(requests - before.requests), "group_wire_bytes": String(wireBytes - before.wireBytes)]
+    }
+
     func diagnosticFields(elapsedMilliseconds: Int) -> [String: String] {
-        ["print_task": task, "total": String(total), "native_groups": String(groups),
+        var fields = ["print_task": task, "total": String(total), "native_groups": String(groups),
          "native_copies": String(nativeCopies), "image_packets": String(imagePackets),
          "request_count": String(requests), "wire_bytes": String(wireBytes),
          "transfer_elapsed_ms": String(max(0, min(3_600_000, elapsedMilliseconds))),
-         "status_polls": String(statusPolls)]
+         "status_polls": String(statusPolls), "print_start_count": String(printStarts), "print_end_count": String(printEnds),
+         "printer_model": String(identity.modelID), "protocol_version": String(identity.protocolVersion)]
+        fields["command_path"] = NiimbotProtocol.diagnosticCommandPath(for: identity)
+        for timing in NiimbotPrintTiming.allCases { fields[timing.rawValue] = String(Self.milliseconds(timings[timing] ?? .zero)) }
+        if let previousJobGap { fields["previous_job_gap_ms"] = String(Self.milliseconds(previousJobGap)) }
+        return fields
     }
+}
+
+enum NiimbotPrintTiming: String, CaseIterable {
+    case planEncode = "plan_encode_ms", packetEncode = "packet_encode_ms", packetPacing = "packet_pacing_ms"
+    case attAcknowledgement = "att_ack_wait_ms"
+    case printerReply = "printer_reply_wait_ms", statusPoll = "status_poll_ms", statusBackoff = "status_backoff_ms"
+    case printStart = "print_start_ms", printEnd = "print_end_ms"
+}
+
+/// ATT write acknowledgements and printer replies can arrive in either order.
+/// Only time after the last ATT acknowledgement belongs to reply-only waiting.
+struct NiimbotTransferWaitTiming {
+    private var acknowledgementStarted: ContinuousClock.Instant?
+    private var replyStarted: ContinuousClock.Instant?
+    private(set) var acknowledgement: Duration = .zero
+    private(set) var reply: Duration = .zero
+
+    mutating func startAcknowledgement(at now: ContinuousClock.Instant) { acknowledgementStarted = now }
+    mutating func finishAcknowledgement(at now: ContinuousClock.Instant) {
+        if let started = acknowledgementStarted { acknowledgement += started.duration(to: now) }
+        acknowledgementStarted = nil
+    }
+    mutating func startReply(at now: ContinuousClock.Instant) {
+        if acknowledgementStarted == nil && replyStarted == nil { replyStarted = now }
+    }
+    mutating func finishReply(at now: ContinuousClock.Instant) {
+        if let started = replyStarted { reply += started.duration(to: now) }
+        replyStarted = nil
+    }
+    mutating func finish(at now: ContinuousClock.Instant) {
+        finishAcknowledgement(at: now)
+        finishReply(at: now)
+    }
+}
+
+enum NiimbotPrintMeasurement {
+    case planEncoded(Duration)
+    case groupStarted(Range<Int>)
+    case groupSubmitted(Range<Int>, Duration, accepted: Bool)
 }
 
 /// Native Swift subset of niimbluelib's documented D110 and D110-M workflows.
@@ -446,6 +522,15 @@ enum NiimbotProtocol {
         // The pinned task table gives the version-4 match priority over the
         // general D110_M → B1 mapping. Do not apply the v4 task to v5 by guess.
         return identity.protocolVersion == 4 ? .d110MV4 : .b1
+    }
+
+    static func diagnosticCommandPath(for identity: NiimbotD110Identity) -> String? {
+        guard let task = try? printTask(for: identity) else { return nil }
+        switch task {
+        case .d110: return "d110"
+        case .b1: return "d110m_b1"
+        case .d110MV4: return "d110m_v4"
+        }
     }
 
     static func validateReadiness(_ packet: NiimbotPacket, identity: NiimbotD110Identity) throws {
@@ -650,6 +735,28 @@ enum NiimbotProtocol {
 /// tests can exercise native requests, responses and completion without a radio.
 @MainActor enum NiimbotD110Session {
     typealias Exchange = @MainActor (NiimbotRequest) async throws -> NiimbotPacket?
+    typealias Measurement = @MainActor (NiimbotPrintMeasurement) -> Void
+
+    private static func measuredPlan<T>(_ observe: Measurement, build: () throws -> T) rethrows -> T {
+        let clock = ContinuousClock()
+        let started = clock.now
+        defer { observe(.planEncoded(started.duration(to: clock.now))) }
+        return try build()
+    }
+
+    private static func sendGroup(_ requests: [NiimbotRequest], indices: Range<Int>,
+                                  exchange: Exchange, observe: Measurement) async throws {
+        observe(.groupStarted(indices))
+        let clock = ContinuousClock()
+        let started = clock.now
+        var accepted = false
+        defer { observe(.groupSubmitted(indices, started.duration(to: clock.now), accepted: accepted)) }
+        for request in requests {
+            try Task.checkCancellation()
+            try request.validateResponse(try await exchange(request))
+        }
+        accepted = true
+    }
 
     /// One optional read, with no retry, calibration, feed or setting command.
     static func readRollEstimate(exchange: Exchange) async throws -> NiimbotRollEstimate? {
@@ -737,18 +844,25 @@ enum NiimbotProtocol {
 
     static func printLabel(_ raster: LabelRaster, identity: NiimbotD110Identity,
                            paperMode: NiimbotPaperMode = .gap,
-                           exchange: Exchange, pause: @MainActor () async throws -> Void) async throws {
+                           exchange: Exchange, pause: @MainActor () async throws -> Void,
+                           onMeasurement: Measurement = { _ in }) async throws {
         // Validate the entire raster before sending the first print command.
-        let requests = try NiimbotProtocol.printRequests(for: raster, identity: identity, paperMode: paperMode)
+        let requests = try measuredPlan(onMeasurement) {
+            try NiimbotProtocol.printRequests(for: raster, identity: identity, paperMode: paperMode)
+        }
+        try await printPreparedLabel(requests, index: 0, identity: identity, exchange: exchange,
+                                     pause: pause, onMeasurement: onMeasurement)
+    }
+
+    private static func printPreparedLabel(_ requests: [NiimbotRequest], index: Int, identity: NiimbotD110Identity,
+                                          exchange: Exchange, pause: @MainActor () async throws -> Void,
+                                          onMeasurement: Measurement) async throws {
         let advanced = identity.protocolVersion >= 3
         let readiness = NiimbotRequest(0xdc, [advanced ? 4 : 1], response: advanced ? 0xd9 : 0xdd,
                                       responseAlternatives: [0xdd, 0xd9])
         guard let reply = try await exchange(readiness) else { throw LabelPrinterIssue.unsupportedResponse }
         try NiimbotProtocol.validateReadiness(reply, identity: identity)
-        for request in requests {
-            try Task.checkCancellation()
-            try request.validateResponse(try await exchange(request))
-        }
+        try await sendGroup(requests, indices: index..<(index + 1), exchange: exchange, observe: onMeasurement)
         // PageEnd only acknowledges receipt. The printer's completed-page
         // counter is the D110 reference's completion condition, polled at 300ms.
         // Bound total polling as well as each individual BLE request timeout.
@@ -783,20 +897,23 @@ enum NiimbotProtocol {
                            paperMode: NiimbotPaperMode = .gap,
                            exchange: Exchange, pause: @MainActor () async throws -> Void,
                            onPageWillSend: @MainActor (Int) async throws -> Void = { _ in },
-                           onPageCompleted: @MainActor (Int) async throws -> Void = { _ in }) async throws {
+                           onPageCompleted: @MainActor (Int) async throws -> Void = { _ in },
+                           onMeasurement: Measurement = { _ in }) async throws {
         // Every page and the negotiated profile must validate before touching
         // the radio, including a bad later page in an otherwise valid batch.
-        let batch = try NiimbotProtocol.batchRequests(for: rasters, identity: identity, paperMode: paperMode)
+        let batch = try measuredPlan(onMeasurement) {
+            try NiimbotProtocol.batchRequests(for: rasters, identity: identity, paperMode: paperMode)
+        }
         try Task.checkCancellation()
         guard batch.usesCumulativePageCounter else {
             // Legacy D110 has a one-byte PrintStart without a declared count.
             // Preserve the already supported one-label algorithm per copy.
-            for (index, raster) in rasters.enumerated() {
+            for (index, requests) in batch.pages.enumerated() {
                 try Task.checkCancellation()
                 try await onPageWillSend(index)
                 try Task.checkCancellation()
-                try await printLabel(raster, identity: identity, paperMode: paperMode,
-                                     exchange: exchange, pause: pause)
+                try await printPreparedLabel(requests, index: index, identity: identity,
+                                            exchange: exchange, pause: pause, onMeasurement: onMeasurement)
                 try await onPageCompleted(index)
             }
             return
@@ -821,10 +938,7 @@ enum NiimbotProtocol {
                 try Task.checkCancellation()
                 try await onPageWillSend(index)
             }
-            for request in requests {
-                try Task.checkCancellation()
-                try request.validateResponse(try await exchange(request))
-            }
+            try await sendGroup(requests, indices: index..<(index + 1), exchange: exchange, observe: onMeasurement)
 
             var completed = false
             for _ in 0..<100 {
@@ -869,14 +983,17 @@ enum NiimbotProtocol {
                                   paperMode: NiimbotPaperMode = .gap,
                                   exchange: Exchange, pause: @MainActor () async throws -> Void,
                                   onPagesWillSend: @MainActor ([Int]) async throws -> Void,
-                                  onPagesCompleted: @MainActor ([Int]) async throws -> Void) async throws {
-        let plan = try NiimbotProtocol.continuousRequests(for: rasters, identity: identity, paperMode: paperMode)
+                                  onPagesCompleted: @MainActor ([Int]) async throws -> Void,
+                                  onMeasurement: Measurement = { _ in }) async throws {
+        let plan = try measuredPlan(onMeasurement) {
+            try NiimbotProtocol.continuousRequests(for: rasters, identity: identity, paperMode: paperMode)
+        }
         try Task.checkCancellation()
         guard plan.usesCumulativePageCounter else {
             // No new legacy-D110 commands or buffering assumptions are added.
             try await printBatch(rasters, identity: identity, paperMode: paperMode, exchange: exchange, pause: pause,
                 onPageWillSend: { try await onPagesWillSend([$0]) },
-                onPageCompleted: { try await onPagesCompleted([$0]) })
+                onPageCompleted: { try await onPagesCompleted([$0]) }, onMeasurement: onMeasurement)
             return
         }
 
@@ -907,10 +1024,7 @@ enum NiimbotProtocol {
                     }
                     initialized = true
                 }
-                for request in group.requests {
-                    try Task.checkCancellation()
-                    try request.validateResponse(try await exchange(request))
-                }
+                try await sendGroup(group.requests, indices: group.indices, exchange: exchange, observe: onMeasurement)
                 submittedPages = group.indices.upperBound
                 inFlight.append(group.indices)
                 nextGroup += 1

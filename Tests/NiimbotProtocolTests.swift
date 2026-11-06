@@ -1213,7 +1213,10 @@ final class NiimbotProtocolTests: XCTestCase {
         metrics.recordWrite(command: 0x13, response: 0x14, copies: 1, byteCount: 20, startsRequest: true)
         XCTAssertEqual(metrics.diagnosticFields(elapsedMilliseconds: 4_000), ["print_task": "buffered_copies", "total": "9",
             "native_groups": "2", "native_copies": "7", "image_packets": "3", "request_count": "7",
-            "wire_bytes": "90", "transfer_elapsed_ms": "4000", "status_polls": "1"])
+            "wire_bytes": "90", "transfer_elapsed_ms": "4000", "status_polls": "1", "print_start_count": "0", "print_end_count": "0",
+            "printer_model": "2320", "protocol_version": "4", "command_path": "d110m_v4",
+            "plan_encode_ms": "0", "packet_encode_ms": "0", "packet_pacing_ms": "0", "att_ack_wait_ms": "0",
+            "printer_reply_wait_ms": "0", "status_poll_ms": "0", "status_backoff_ms": "0", "print_start_ms": "0", "print_end_ms": "0"])
         XCTAssertEqual(metrics.diagnosticFields(elapsedMilliseconds: -1)["transfer_elapsed_ms"], "0")
         XCTAssertEqual(metrics.diagnosticFields(elapsedMilliseconds: 3_600_001)["transfer_elapsed_ms"], "3600000")
         XCTAssertEqual(NiimbotPrintTransferMetrics.pageCopies(command: 0x13, data: Data([0, 96, 1, 64])), 1)
@@ -1221,6 +1224,149 @@ final class NiimbotProtocolTests: XCTestCase {
         XCTAssertEqual(NiimbotPrintTransferMetrics(identity: d110MIdentity(), continuous: false, total: 1).task, "declared_serial")
         let legacy = NiimbotD110Identity(modelID: 2304, protocolVersion: 1, firmwareBytes: Data([5, 34]))
         XCTAssertEqual(NiimbotPrintTransferMetrics(identity: legacy, continuous: true, total: 1).task, "legacy_serial")
+    }
+
+    func testTransferWaitTimersSeparateEarlyRepliesFromATTAndFlushInterruptedIntervalsOnce() {
+        let origin = ContinuousClock().now
+        var early = NiimbotTransferWaitTiming()
+        early.startAcknowledgement(at: origin)
+        early.startReply(at: origin.advanced(by: .milliseconds(10)))
+        early.finishReply(at: origin.advanced(by: .milliseconds(20)))
+        early.finishAcknowledgement(at: origin.advanced(by: .milliseconds(50)))
+        early.finish(at: origin.advanced(by: .milliseconds(60)))
+        XCTAssertEqual(early.acknowledgement, .milliseconds(50))
+        XCTAssertEqual(early.reply, .zero, "A reply arriving during ATT acknowledgement adds no overlapping reply wait")
+
+        var normal = NiimbotTransferWaitTiming()
+        normal.startAcknowledgement(at: origin)
+        normal.finishAcknowledgement(at: origin.advanced(by: .milliseconds(20)))
+        normal.startAcknowledgement(at: origin.advanced(by: .milliseconds(20)))
+        normal.finishAcknowledgement(at: origin.advanced(by: .milliseconds(50)))
+        normal.startReply(at: origin.advanced(by: .milliseconds(50)))
+        normal.finishReply(at: origin.advanced(by: .milliseconds(80)))
+        normal.finish(at: origin.advanced(by: .milliseconds(90)))
+        XCTAssertEqual(normal.acknowledgement, .milliseconds(50))
+        XCTAssertEqual(normal.reply, .milliseconds(30))
+
+        var failedWrite = NiimbotTransferWaitTiming()
+        failedWrite.startAcknowledgement(at: origin)
+        failedWrite.finish(at: origin.advanced(by: .milliseconds(120)))
+        failedWrite.finish(at: origin.advanced(by: .milliseconds(200)))
+        XCTAssertEqual(failedWrite.acknowledgement, .milliseconds(120))
+        XCTAssertEqual(failedWrite.reply, .zero)
+
+        var cancelledReply = NiimbotTransferWaitTiming()
+        cancelledReply.startReply(at: origin)
+        cancelledReply.finish(at: origin.advanced(by: .milliseconds(75)))
+        cancelledReply.finish(at: origin.advanced(by: .milliseconds(150)))
+        XCTAssertEqual(cancelledReply.reply, .milliseconds(75))
+    }
+
+    func testTimingSummaryKeepsCommandPathAndDispatchSpansSeparateFromComponentDurations() {
+        let legacy = NiimbotD110Identity(modelID: 2304, protocolVersion: 1, firmwareBytes: Data([5, 34]))
+        XCTAssertEqual(NiimbotProtocol.diagnosticCommandPath(for: legacy), "d110")
+        XCTAssertEqual(NiimbotProtocol.diagnosticCommandPath(for: d110MIdentity()), "d110m_v4")
+        for version in [0, 1, 3, 5] {
+            XCTAssertEqual(NiimbotProtocol.diagnosticCommandPath(for: d110MIdentity(version: version)), "d110m_b1")
+        }
+        var metrics = NiimbotPrintTransferMetrics(identity: d110MIdentity(), continuous: true, total: 1,
+                                                  previousJobGap: .milliseconds(1250))
+        metrics.add(.attAcknowledgement, duration: .microseconds(1500))
+        metrics.add(.attAcknowledgement, duration: .microseconds(1500))
+        metrics.add(.printerReply, duration: .milliseconds(4))
+        metrics.add(.packetPacing, duration: .milliseconds(10))
+        metrics.add(.statusBackoff, duration: .milliseconds(300))
+        metrics.add(.planEncode, duration: .milliseconds(2))
+        metrics.add(.packetEncode, duration: .milliseconds(1))
+        metrics.recordRequestSpan(command: 0xa3, response: nil, duration: .milliseconds(999))
+        metrics.recordRequestSpan(command: 0xa3, response: 0xb3, duration: .milliseconds(17))
+        metrics.recordRequestSpan(command: 0x01, response: 0x02, duration: .milliseconds(18))
+        metrics.recordRequestSpan(command: 0xf3, response: 0xf4, duration: .milliseconds(19))
+        metrics.recordWrite(command: 0x01, response: 0x02, copies: 1, byteCount: 16, startsRequest: true)
+        metrics.recordWrite(command: 0x01, response: 0x02, copies: 1, byteCount: 1, startsRequest: false)
+        metrics.recordWrite(command: 0xf3, response: 0xf4, copies: 1, byteCount: 8, startsRequest: true)
+        let fields = metrics.diagnosticFields(elapsedMilliseconds: 400)
+        XCTAssertEqual(fields["att_ack_wait_ms"], "3", "Sum precise durations before truncating to milliseconds")
+        XCTAssertEqual(fields["printer_reply_wait_ms"], "4")
+        XCTAssertEqual(fields["status_poll_ms"], "17", "The one-way v4 preamble is not a polled status request")
+        XCTAssertEqual(fields["print_start_count"], "1"); XCTAssertEqual(fields["print_end_count"], "1")
+        XCTAssertEqual(fields["print_start_ms"], "18"); XCTAssertEqual(fields["print_end_ms"], "19")
+        XCTAssertEqual(fields["previous_job_gap_ms"], "1250")
+        XCTAssertEqual(fields["plan_encode_ms"], "2"); XCTAssertEqual(fields["packet_encode_ms"], "1")
+        XCTAssertEqual(fields["packet_pacing_ms"], "10"); XCTAssertEqual(fields["status_backoff_ms"], "300")
+        XCTAssertNil(NiimbotPrintTransferMetrics(identity: legacy, continuous: false, total: 1)
+            .diagnosticFields(elapsedMilliseconds: 0)["previous_job_gap_ms"])
+        XCTAssertEqual(NiimbotPrintTransferMetrics.milliseconds(.seconds(7200)), 3_600_000)
+        XCTAssertEqual(NiimbotPrintTransferMetrics.milliseconds(.milliseconds(-1)), 0)
+    }
+
+    @MainActor func testTenRepeatedAndTenMixedDesignsKeepOneJobAndReportActualCopyReuse() async throws {
+        for identical in [true, false] {
+            let rasters = identical ? Array(repeating: denseRaster, count: 10) : (1...10).map { variantRaster(UInt8($0)) }
+            var metrics = NiimbotPrintTransferMetrics(identity: d110MIdentity(), continuous: true, total: 10)
+            var requests: [NiimbotRequest] = [], receipts: [Int] = [], groups: [[Int]] = []
+            var submitted = 0, copies = 0, plans = 0, measuredGroups = 0
+            var baseline: NiimbotPrintTransferMetrics?
+            try await NiimbotD110Session.printContinuously(rasters, identity: d110MIdentity(), exchange: { request in
+                requests.append(request)
+                metrics.recordWrite(command: request.command, response: request.response,
+                    copies: NiimbotPrintTransferMetrics.pageCopies(command: request.command, data: request.data),
+                    byteCount: try NiimbotProtocol.encode(command: request.command, data: request.data).count, startsRequest: true)
+                if request.command == 0xdc { return request.response == nil ? nil : self.d110MReadiness }
+                if request.command == 0x13 { copies = Int(request.data[4]) << 8 | Int(request.data[5]) }
+                if request.command == 0xe3 { submitted += copies }
+                if request.command == 0xa3 && request.response != nil {
+                    return .init(command: 0xb3, data: Data([0, UInt8(submitted), 100, 100]))
+                }
+                if request.command == 0xf3 { XCTAssertEqual(receipts, Array(0..<10)) }
+                return request.response.map { .init(command: $0, data: Data([1])) }
+            }, pause: {}, onPagesWillSend: { groups.append($0) }, onPagesCompleted: { receipts.append(contentsOf: $0) },
+            onMeasurement: { measurement in
+                switch measurement {
+                case let .planEncoded(duration):
+                    plans += 1; XCTAssertTrue(requests.isEmpty); XCTAssertGreaterThanOrEqual(duration, .zero)
+                case .groupStarted: baseline = metrics
+                case let .groupSubmitted(pages, duration, accepted):
+                    measuredGroups += 1
+                    XCTAssertTrue(accepted)
+                    let fields = metrics.groupFields(since: baseline!, elapsed: duration, pages: pages, accepted: accepted)
+                    XCTAssertGreaterThan(Int(fields["group_image_packets"]!)!, 0)
+                    XCTAssertEqual(fields["quantity"], String(pages.count))
+                }
+            })
+            XCTAssertEqual(plans, 1); XCTAssertEqual(receipts, Array(0..<10))
+            XCTAssertEqual(metrics.groups, identical ? 2 : 10)
+            XCTAssertEqual(metrics.nativeCopies, identical ? 8 : 0)
+            XCTAssertEqual(measuredGroups, identical ? 2 : 10)
+            XCTAssertEqual(groups.map(\.count), identical ? [8, 2] : Array(repeating: 1, count: 10))
+            XCTAssertEqual(requests.filter { $0.command == 0x01 }.count, 1)
+            XCTAssertEqual(requests.filter { $0.command == 0xf3 }.count, 1)
+            XCTAssertEqual(requests.first { $0.command == 0x01 }?.data.prefix(2), Data([0, 10]))
+        }
+    }
+
+    @MainActor func testPreparedLegacyBatchIsEncodedOnceAndMeasurementsRetainFailedGroup() async throws {
+        let identity = NiimbotD110Identity(modelID: 2304, protocolVersion: 1, firmwareBytes: Data([5, 34]))
+        var plans = 0, measured: [(Range<Int>, Bool)] = []
+        var page = 0
+        do {
+            try await NiimbotD110Session.printBatch([denseRaster, variantRaster(0x7f)], identity: identity, exchange: { request in
+                if request.command == 0xdc { return .init(command: 0xdd, data: Data([0, 0, 0, 0, 0, 0, 0, 0, 1, 4])) }
+                if request.command == 0x85 && page == 1 { throw LabelPrinterIssue.connectionLost }
+                if request.command == 0xa3 { return .init(command: 0xb3, data: Data([0, 1, 100, 100])) }
+                return request.response.map { .init(command: $0, data: Data([1])) }
+            }, pause: {}, onPageWillSend: { page = $0 }, onMeasurement: { measurement in
+                switch measurement {
+                case .planEncoded: plans += 1
+                case let .groupSubmitted(pages, _, accepted): measured.append((pages, accepted))
+                case .groupStarted: break
+                }
+            })
+            XCTFail("Failed upload must not be reported as accepted")
+        } catch { XCTAssertEqual(error as? LabelPrinterIssue, .connectionLost) }
+        XCTAssertEqual(plans, 1, "The validated legacy plan is reused instead of re-encoding during each print")
+        XCTAssertEqual(measured.map { Array($0.0) }, [[0], [1]])
+        XCTAssertEqual(measured.map { $0.1 }, [true, false])
     }
 
     func testErrorRepliesPreserveVerifiedIdleOrCompletedLinksWithoutWeakeningRequiredWork() {

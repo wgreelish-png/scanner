@@ -825,7 +825,13 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         updatePricePosition(paperPreferences.pricePosition)
         guard validation == nil, approvals.isLoaded, canPrepareNewQueue, !preparing else { return }
         preparing = true
-        defer { preparing = false }
+        var metrics = LabelPreparationMetrics()
+        var preparationPhase = LabelPreparationMetrics.Phase.failed
+        var requestedCopies = 0
+        defer {
+            preparing = false
+            metrics.record(kind: .inventory, stage: .queue, phase: preparationPhase, total: requestedCopies)
+        }
         var pricesSaved = false
         do {
             let requests = try drafts.filter { !$0.isBlankPrice }.map { draft -> TagApprovalRequest in
@@ -835,35 +841,42 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
             }
             keepExistingStickerIDs.formIntersection(Set(requests.map(\.id)))
             if !requests.isEmpty {
-                try approvals.prepareForPrinting(requests, keepingExistingStickerIDs: keepExistingStickerIDs)
+                try metrics.measure(.approvalSave) {
+                    try approvals.prepareForPrinting(requests, keepingExistingStickerIDs: keepExistingStickerIDs)
+                }
                 pricesSaved = true
             }
             let draftsToPrint = printableDrafts
+            requestedCopies = draftsToPrint.reduce(0) { $0 + $1.copies }
             guard !draftsToPrint.isEmpty else {
                 preparationNotice = "Label choices saved. No labels need printing."
+                preparationPhase = .completed
                 return
             }
             var entries: [LabelQueueEntry] = []
             var priceRasters: [LabelPriceRasterKey: LabelRaster] = [:]
             for draft in draftsToPrint {
                 let raster: LabelRaster
+                var reused = false
                 if draft.style == .priceOnly {
                     // The branded design depends only on the final price and
                     // roll. Reuse identical artwork across inventory entries.
                     let key = LabelPriceRasterKey(paperSize: draft.paperSize,
                         pricePosition: draft.pricePosition, priceText: draft.priceText ?? "")
-                    if let saved = priceRasters[key] { raster = saved }
+                    if let saved = priceRasters[key] { raster = saved; reused = true }
                     else {
-                        raster = try InventoryLabelRenderer.renderRaster(draft)
+                        raster = try metrics.measure(.render) { try InventoryLabelRenderer.renderRaster(draft) }
                         priceRasters[key] = raster
                     }
-                } else { raster = try InventoryLabelRenderer.renderRaster(draft) }
+                } else { raster = try metrics.measure(.render) { try InventoryLabelRenderer.renderRaster(draft) } }
                 for copy in 1...draft.copies {
                     entries.append(try LabelQueueEntry(draft: draft, raster: raster, copyNumber: copy,
                         pricingRevisionID: draft.isBlankPrice ? nil : approvals.record(for: draft.id)?.priceRevisionID))
+                    if reused || copy > 1 { metrics.reusedRaster() }
                 }
             }
-            try queue.replace(with: entries)
+            try metrics.measure(.queueSave) { try queue.replace(with: entries) }
+            preparationPhase = .completed
             path.append(.queue)
         } catch {
             self.error = pricesSaved

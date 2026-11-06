@@ -142,7 +142,9 @@ import SwiftUI
                 try await Task.sleep(for: .milliseconds(120))
                 try Task.checkCancellation()
                 guard model.draft == draft else { return }
-                bitmap = try InventoryLabelRenderer.render(draft)
+                let raster = try model.previewRaster(for: draft)
+                bitmap = InventoryLabelBitmap(raster: raster,
+                    previewImage: try InventoryLabelRenderer.image(raster: raster, paper: draft.paperSize))
                 previewDraft = draft
             } catch is CancellationError {} catch { previewError = error.localizedDescription }
         }

@@ -24,24 +24,52 @@ enum DiagnosticScanFields {
 /// never packet contents, Bluetooth names or device identifiers. Validate at
 /// storage as well as at the native caller so accidental free-form values drop.
 enum DiagnosticPrinterFields {
-    static func accepts(_ key: String, _ value: String) -> Bool {
+    static let timingKeys: Set<String> = ["transfer_elapsed_ms", "plan_encode_ms", "packet_encode_ms", "packet_pacing_ms",
+        "att_ack_wait_ms", "printer_reply_wait_ms", "status_poll_ms", "status_backoff_ms", "print_start_ms",
+        "print_end_ms", "previous_job_gap_ms", "roll_read_ms", "preparation_elapsed_ms", "render_elapsed_ms",
+        "approval_save_ms", "queue_save_ms"]
+
+    static func accepts(_ key: String, _ value: String, event: String? = nil) -> Bool {
+        if timingKeys.contains(key) { return acceptsInteger(value, maximum: 3_600_000) }
+        if key == "elapsed_ms", event?.hasPrefix("label.") == true {
+            return acceptsInteger(value, maximum: 3_600_000)
+        }
+        if ["label.preparation_summary", "label.group_transfer", "label.transfer_summary"].contains(event ?? ""),
+           ["page", "total", "quantity"].contains(key) {
+            return acceptsInteger(value, maximum: 250)
+        }
+        if event == "label.preparation_summary", key == "phase" {
+            return ["completed", "failed", "reused_queue"].contains(value)
+        }
+        if event == "label.group_transfer", key == "accepted" { return value == "true" || value == "false" }
         switch key {
-        case "request_code", "response_code", "last_response_code":
+        case "request_code", "response_code", "last_response_code", "protocol_version":
             return acceptsInteger(value, maximum: 255)
+        case "printer_model":
+            return acceptsInteger(value, maximum: 65_535)
         case "sent_bytes", "notification_bytes", "notification_count", "packet_count":
             return acceptsInteger(value, maximum: 1_000_000)
-        case "native_groups", "native_copies":
+        case "native_groups", "native_copies", "print_start_count", "print_end_count", "render_count", "raster_reuse_count":
             return acceptsInteger(value, maximum: 250)
-        case "image_packets", "request_count", "status_polls":
+        case "image_packets", "request_count", "status_polls", "group_image_packets", "group_requests":
             return acceptsInteger(value, maximum: 1_000_000)
-        case "wire_bytes":
+        case "wire_bytes", "group_wire_bytes":
             return acceptsInteger(value, maximum: 100_000_000)
-        case "transfer_elapsed_ms":
-            return acceptsInteger(value, maximum: 3_600_000)
         case "write_mode":
             return ["acknowledged", "unacknowledged"].contains(value)
         case "print_task":
             return ["legacy_serial", "declared_serial", "buffered_copies"].contains(value)
+        case "command_path":
+            return ["d110", "d110m_b1", "d110m_v4"].contains(value)
+        case "preparation_kind":
+            return ["inventory", "custom"].contains(value)
+        case "preparation_stage":
+            return ["preview", "queue"].contains(value)
+        case "roll_read_source":
+            return ["cache", "read", "in_flight", "forced", "unavailable"].contains(value)
+        case "connection_end_source":
+            return ["replace_connection", "manual_disconnect", "stop_requested", "print_cancelled",
+                    "required_failure", "request_cancelled"].contains(value)
         default:
             return true
         }
@@ -213,6 +241,11 @@ enum ServiceDiagnosticFields {
 /// Local, bounded JSON-lines diagnostics. Callers supply event codes, never user content.
 @MainActor @Observable final class DiagnosticLog {
     static let shared = DiagnosticLog()
+    private static let timestampFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
     #if DEBUG
     private static let console = Logger(subsystem: Bundle.main.bundleIdentifier ?? "CardShowScanner", category: "Diagnostics")
     #endif
@@ -222,13 +255,17 @@ enum ServiceDiagnosticFields {
     private let defaults: UserDefaults
     private let run = UUID().uuidString
     private var lastSamples: [String: Date] = [:]
-    private let keys: Set<String> = ["provider", "game", "episode", "same", "accepted", "confidence", "candidates",
+    private let keys: Set<String> = Set(["provider", "game", "episode", "same", "accepted", "confidence", "candidates",
         "printing_required", "priced", "merged", "automatic", "quantity", "reason", "stage", "backend", "elapsed_ms",
         "scan_ms", "capture_ms", "frames", "domain", "code", "records", "rejected_records", "phase", "candidate_index", "app_version", "build", "downloaded_bytes", "cached_shards", "cache", "source", "persisted", "cache_backend", "revision",
         "record_index", "page", "total", "shape", "priced_records", "unpriced_records", "invalid_price_records", "observed_count", "entry_limit", "method", "solid", "tracked", "border_retry", "border_retained", "scan_stage", "raw_quads", "rejected_quads", "candidate_quads", "selected_base", "quad_source",
         "quad_aspect", "quad_area", "quad_support", "mean_luma", "luma_std", "match_distance", "match_gap", "sample_age_ms",
         "request_code", "response_code", "last_response_code", "sent_bytes", "notification_bytes", "notification_count", "packet_count", "write_mode",
-        "print_task", "native_groups", "native_copies", "image_packets", "request_count", "wire_bytes", "transfer_elapsed_ms", "status_polls"]
+        "print_task", "native_groups", "native_copies", "image_packets", "request_count", "wire_bytes", "status_polls",
+        "command_path", "printer_model", "protocol_version", "print_start_count", "print_end_count",
+        "group_image_packets", "group_requests", "group_wire_bytes", "preparation_kind", "preparation_stage",
+        "render_count", "raster_reuse_count", "roll_read_source", "connection_end_source"])
+        .union(DiagnosticPrinterFields.timingKeys)
     private var current: URL { directory.appendingPathComponent("current.jsonl") }
     private var previous: URL { directory.appendingPathComponent("previous.jsonl") }
     var enabled: Bool { defaults.object(forKey: "diagnosticsEnabled") as? Bool ?? true }
@@ -250,10 +287,10 @@ enum ServiceDiagnosticFields {
             (keys.contains(key) || DiagnosticHealthFields.keys.contains(key)) &&
                 (!event.hasPrefix("health.") || DiagnosticHealthFields.keys.contains(key)) && value.count <= 80 &&
                 value.range(of: #"^[A-Za-z0-9_.-]{1,80}$"#, options: .regularExpression) != nil &&
-                DiagnosticScanFields.accepts(key, value) && DiagnosticPrinterFields.accepts(key, value) &&
+                DiagnosticScanFields.accepts(key, value) && DiagnosticPrinterFields.accepts(key, value, event: event) &&
                 DiagnosticHealthFields.accepts(key, value)
         }
-        let entry: [String: Any] = ["schema": 1, "time": ISO8601DateFormatter().string(from: now),
+        let entry: [String: Any] = ["schema": 1, "time": Self.timestampFormatter.string(from: now),
             "run": run, "event": event, "fields": safe]
         do {
             var data = try JSONSerialization.data(withJSONObject: entry, options: [.sortedKeys]); data.append(10)
@@ -312,7 +349,7 @@ enum ServiceDiagnosticFields {
 
     private func reportData() throws -> Data {
         let bundle = Bundle.main
-        let header: [String: Any] = ["schema": 1, "event": "diagnostics.environment", "time": ISO8601DateFormatter().string(from: .now),
+        let header: [String: Any] = ["schema": 1, "event": "diagnostics.environment", "time": Self.timestampFormatter.string(from: .now),
             "app_version": bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
             "build": bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
             "revision": bundle.object(forInfoDictionaryKey: "ScannerWorkflowRevision") as? String ?? "unknown",
