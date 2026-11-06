@@ -3,6 +3,84 @@ import XCTest
 /// Automatic printer discovery is disabled for these offline UI fixtures.
 /// Queue files use the same isolated token as inventory and financial records.
 @MainActor final class InventoryLabelsUITests: XCTestCase {
+    func testLeavingUnprintedInventoryQueueClearsItAndAllowsPreparingAgain() {
+        continueAfterFailure = false
+        let app = launch()
+        defer { app.terminate() }
+        tap(app.buttons["show.priceTags"], app: app)
+        tap(app.buttons["priceTags.all"], app: app)
+        app.buttons["labels.prepare"].tap()
+        assertContains("0/3 completed", element: app.staticTexts["labelQueue.progress"])
+        backFromPrintScreen("Label Print Queue", app: app)
+        assertInventoryReadyWithoutInteraction(price: "$35", labels: 3, app: app)
+        app.buttons["labels.prepare"].tap()
+        assertContains("0/3 completed", element: app.staticTexts["labelQueue.progress"])
+        dismissInventoryPrintSheet(app: app)
+        XCTAssertTrue(app.navigationBars["Price Tags"].waitForExistence(timeout: 5))
+        tap(app.buttons["priceTags.queue"], app: app)
+        assertEmptyPrintQueue(app: app)
+        assertNoBluetoothPrompt(app: app)
+    }
+
+    func testQueuedPreviewRetainsUnprintedLabelsUntilQueueIsLeft() {
+        continueAfterFailure = false
+        let app = launch()
+        defer { app.terminate() }
+        tap(app.buttons["show.priceTags"], app: app)
+        tap(app.buttons["priceTags.bulk"], app: app)
+        app.buttons["customLabels.prepare"].tap()
+        assertContains("0/1 completed", element: app.staticTexts["labelQueue.progress"])
+        let queued = firstEntryInForegroundQueue(app: app)
+        let entryID = queued.identifier
+        queued.tap()
+        XCTAssertTrue(app.navigationBars["Queued Label"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.images["labels.bitmapPreview"].waitForExistence(timeout: 10))
+        UITestInteraction.tapToolbar(app.navigationBars["Queued Label"].buttons["Done"], in: app)
+        assertContains("0/1 completed", element: app.staticTexts["labelQueue.progress"])
+        XCTAssertEqual(firstEntryInForegroundQueue(app: app).identifier, entryID,
+                       "Closing the internal preview must retain the same prepared label")
+        backFromPrintScreen("Label Print Queue", app: app)
+        XCTAssertTrue(app.navigationBars["Custom Price Tag"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["customLabels.prepare"].isEnabled)
+        XCTAssertFalse(app.buttons["customLabels.clearQueue"].isEnabled)
+        assertNoBluetoothPrompt(app: app)
+    }
+
+    func testLeavingCustomAndBulkPrintQueuesClearsThemAndPreservesPreferences() {
+        continueAfterFailure = false
+        let app = launch()
+        defer { app.terminate() }
+        tap(app.buttons["show.priceTags"], app: app)
+        tap(app.buttons["priceTags.custom"], app: app)
+        let position = app.segmentedControls["customLabels.pricePosition"]
+        tap(position.buttons["Price Left"], app: app)
+        enter("5", field: app.textFields["customLabels.price"], app: app)
+        tap(app.buttons["customLabels.keyboardDone"], app: app)
+        app.buttons["customLabels.prepare"].tap()
+        assertContains("0/1 completed", element: app.staticTexts["labelQueue.progress"])
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 3)
+                      || app.wait(for: .runningBackgroundSuspended, timeout: 3))
+        app.activate()
+        assertEmptyPrintQueue(app: app)
+        backFromPrintScreen("Label Print Queue", app: app)
+        XCTAssertTrue(app.buttons["customLabels.prepare"].isEnabled)
+        XCTAssertEqual(app.textFields["customLabels.price"].value as? String, "5")
+        XCTAssertEqual(app.textFields["customLabels.copies"].value as? String, "1")
+        XCTAssertTrue(position.buttons["Price Left"].isSelected)
+        assertContains("30 × 14 mm", element: app.descendants(matching: .any)["customLabels.paper"])
+        backFromPrintScreen("Custom Price Tag", app: app)
+        tap(app.buttons["priceTags.bulk"], app: app)
+        XCTAssertTrue(position.buttons["Price Left"].isSelected)
+        app.buttons["customLabels.prepare"].tap()
+        assertContains("0/1 completed", element: app.staticTexts["labelQueue.progress"])
+        backFromPrintScreen("Label Print Queue", app: app)
+        XCTAssertTrue(app.buttons["customLabels.prepare"].isEnabled)
+        XCTAssertFalse(app.buttons["customLabels.clearQueue"].isEnabled)
+        XCTAssertTrue(position.buttons["Price Left"].isSelected)
+        assertNoBluetoothPrompt(app: app)
+    }
+
     func testSelectedInventoryIsReadyImmediatelyOnFirstNavigation() {
         continueAfterFailure = false
         let app = launch()
@@ -135,7 +213,7 @@ import XCTest
         assertNoBluetoothPrompt(app: app)
     }
 
-    func testBatchSearchCopiesPreviewAndSavedQueueRequireManualPrintingAfterRelaunch() {
+    func testBatchSearchCopiesPreviewAndLeavingUnprintedQueueClearsBeforeRelaunch() {
         continueAfterFailure = false
         let app = launch()
         defer { app.terminate() }
@@ -221,11 +299,12 @@ import XCTest
         openBatch(app: app)
         tap(app.buttons["labels.select." + stockAID], app: app)
         tap(app.buttons["labels.continueSelection"], app: app)
-        XCTAssertFalse(app.buttons["labels.prepare"].isEnabled, "An unfinished saved queue must be cleared before preparing another batch")
-        tap(app.buttons["labels.reviewSavedQueue"], app: app)
-        assertUnstartedQueue(app: app)
-        let queued = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "labelQueue.entry.")).firstMatch
-        tap(queued, app: app)
+        XCTAssertTrue(app.buttons["labels.prepare"].isEnabled, "Leaving without printing clears the old batch")
+        XCTAssertFalse(app.buttons["labels.reviewSavedQueue"].exists)
+        app.buttons["labels.prepare"].tap()
+        assertContains("0/1 completed", element: app.staticTexts["labelQueue.progress"])
+        let queued = firstEntryInForegroundQueue(app: app)
+        queued.tap()
         XCTAssertTrue(app.navigationBars["Queued Label"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.images["labels.bitmapPreview"].waitForExistence(timeout: 5))
         assertNoBluetoothPrompt(app: app)
@@ -599,7 +678,7 @@ import XCTest
         assertBalances(app: app)
     }
 
-    func testBulkTagsPrepareWithoutPriceUsingThirtyByFifteenPaperAndPersistWithoutPrinting() {
+    func testBulkTagsPrepareWithoutPriceAndPreservePaperAfterUnprintedQueueCleanup() {
         continueAfterFailure = false
         let app = launch()
         defer { app.terminate() }
@@ -637,6 +716,8 @@ import XCTest
         XCTAssertFalse(app.buttons["labelQueue.pause"].exists)
         assertNoBluetoothPrompt(app: app)
 
+        backFromPrintScreen("Label Print Queue", app: app)
+        backFromPrintScreen("Custom Price Tag", app: app)
         app.terminate(); app.launch()
         XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 10))
         assertBalances(app: app)
@@ -649,12 +730,8 @@ import XCTest
         openPriceTags(app: app)
         assertContains("Last used: 30 × 15 mm", element: app.staticTexts["priceTags.paperSize"])
         tap(app.buttons["priceTags.queue"], app: app)
-        assertContains("0/3 completed", element: app.staticTexts["labelQueue.progress"])
-        assertContains("30 × 15 mm", element: app.descendants(matching: .any)["labelQueue.paper"])
-        let restored = app.buttons[entryID]
-        reveal(restored, app: app)
-        assertContains("2 for $1", element: restored)
-        XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled)
+        assertEmptyPrintQueue(app: app)
+        XCTAssertFalse(app.buttons[entryID].exists, "The abandoned bulk batch cannot return after relaunch")
         XCTAssertFalse(app.buttons["labelQueue.pause"].exists)
         assertNoBluetoothPrompt(app: app)
     }
@@ -693,7 +770,7 @@ import XCTest
 
     func testQueueCanBeClearedFromPriceTagsCustomAndQueueWithoutChangingInventory() {
         continueAfterFailure = false
-        let app = launch()
+        let app = launch(extraArguments: ["--label-print-progress-fixture=failure-upload"])
         defer { app.terminate() }
         assertBalances(app: app)
         tap(app.buttons["show.priceTags"], app: app)
@@ -706,22 +783,23 @@ import XCTest
         tap(app.buttons["customLabels.prepare"], app: app)
         XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
         assertContains("0/3 completed", element: app.staticTexts["labelQueue.progress"])
-        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
-        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        failFixtureUploadAndReviewQueue(app: app)
+        backFromPrintScreen("Label Print Queue", app: app)
+        backFromPrintScreen("Custom Price Tag", app: app)
         XCTAssertTrue(app.navigationBars["Price Tags"].waitForExistence(timeout: 5))
         tap(app.buttons["priceTags.clearQueue"], app: app)
         tap(app.buttons["priceTags.clearQueue.cancel"], app: app)
         XCTAssertTrue(app.buttons["priceTags.clearQueue"].isEnabled, "Cancel retains the saved queue")
         tap(app.buttons["priceTags.queue"], app: app)
         assertContains("0/3 completed", element: app.staticTexts["labelQueue.progress"])
-        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        backFromPrintScreen("Label Print Queue", app: app)
         clearQueue("priceTags.clearQueue", app: app)
         XCTAssertFalse(app.buttons["priceTags.clearQueue"].isEnabled)
         tap(app.buttons["priceTags.queue"], app: app)
         assertContains("0/0 completed", element: app.staticTexts["labelQueue.progress"])
         XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled)
         XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "labelQueue.entry.")).firstMatch.exists)
-        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        backFromPrintScreen("Label Print Queue", app: app)
 
         tap(app.buttons["priceTags.custom"], app: app)
         enter("9", field: app.textFields["customLabels.price"], app: app)
@@ -729,7 +807,8 @@ import XCTest
         tap(app.buttons["customLabels.keyboardDone"], app: app)
         tap(app.buttons["customLabels.prepare"], app: app)
         assertContains("0/2 completed", element: app.staticTexts["labelQueue.progress"])
-        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        failFixtureUploadAndReviewQueue(app: app)
+        backFromPrintScreen("Label Print Queue", app: app)
         clearQueue("customLabels.clearQueue", app: app)
         XCTAssertFalse(app.buttons["customLabels.clearQueue"].isEnabled)
         XCTAssertEqual(app.textFields["customLabels.price"].value as? String, "9")
@@ -759,7 +838,7 @@ import XCTest
         assertNoBluetoothPrompt(app: app)
     }
 
-    func testRememberedLabelSizeIsSharedAcrossPreparationAndKeepsSavedQueueDimensions() {
+    func testRememberedLabelSizeIsSharedAcrossPreparationAndSurvivesUnprintedQueueCleanup() {
         continueAfterFailure = false
         let app = launch()
         defer { app.terminate() }
@@ -774,28 +853,21 @@ import XCTest
         XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
         assertContains("40 × 12 mm", element: app.descendants(matching: .any)["labelQueue.paper"])
         assertContains("0/3 completed", element: app.staticTexts["labelQueue.progress"])
-        let queued = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "labelQueue.entry.")).firstMatch
-        reveal(queued, app: app)
-        XCTAssertTrue(queued.exists)
-        let queuedID = queued.identifier, queuedDescription = queued.label
+        let queued = firstEntryInForegroundQueue(app: app)
+        let queuedID = queued.identifier
 
-        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        backFromPrintScreen("Label Print Queue", app: app)
         XCTAssertTrue(app.navigationBars["Custom Price Tag"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["customLabels.prepare"].isEnabled)
         tap(app.buttons["customLabels.paper"], app: app)
         tap(app.buttons["50 × 14 mm"], app: app)
         assertContains("50 × 14 mm", element: app.descendants(matching: .any)["customLabels.paper"])
-        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        backFromPrintScreen("Custom Price Tag", app: app)
         XCTAssertTrue(app.navigationBars["Price Tags"].waitForExistence(timeout: 5))
         assertContains("Last used: 50 × 14 mm", element: app.staticTexts["priceTags.paperSize"])
         tap(app.buttons["priceTags.queue"], app: app)
-        XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
-        assertContains("40 × 12 mm", element: app.descendants(matching: .any)["labelQueue.paper"])
-        assertContains("0/3 completed", element: app.staticTexts["labelQueue.progress"])
-        let unchangedEntry = app.buttons[queuedID]
-        reveal(unchangedEntry, app: app)
-        XCTAssertEqual(unchangedEntry.label, queuedDescription,
-                       "A new paper preference cannot resize, complete or reprint saved labels")
-        XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled)
+        assertEmptyPrintQueue(app: app)
+        XCTAssertFalse(app.buttons[queuedID].exists, "The old unsent paper snapshot is removed when leaving its queue")
         XCTAssertFalse(app.buttons["labelQueue.pause"].exists)
         assertNoBluetoothPrompt(app: app)
 
@@ -856,23 +928,26 @@ import XCTest
         reveal(queuedPreview, app: app)
         let queuedArtwork = queuedPreview.screenshot().pngRepresentation
         UITestInteraction.tapToolbar(app.navigationBars["Queued Label"].buttons["Done"], in: app)
-        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
-        XCTAssertTrue(app.navigationBars["Custom Price Tag"].waitForExistence(timeout: 5))
-        tap(customPosition.buttons["Price Right"], app: app)
-        reveal(customPreview, app: app)
-        XCTAssertTrue((customPreview.value as? String ?? "").contains("Price Right"), "New previews follow the changed position")
-        XCTAssertFalse(app.buttons["customLabels.prepare"].isEnabled, "A new layout cannot overwrite a pending queue")
-        tap(app.buttons["customLabels.reviewQueue"], app: app)
-        assertContains("0/2 completed", element: app.staticTexts["labelQueue.progress"])
-        tap(app.buttons[queuedID], app: app)
+        let savedDefault = app.segmentedControls["labelPrinter.pricePosition"]
+        revealInForegroundQueue(savedDefault, towardTop: true, app: app)
+        savedDefault.buttons["Price Right"].tap()
+        let sameEntry = app.collectionViews["labelQueue.screen"].buttons[queuedID]
+        revealInForegroundQueue(sameEntry, app: app)
+        sameEntry.tap()
         XCTAssertTrue(app.navigationBars["Queued Label"].waitForExistence(timeout: 5))
         reveal(queuedPreview, app: app)
         XCTAssertEqual(queuedPreview.screenshot().pngRepresentation, queuedArtwork,
                        "Changing the default layout cannot redraw an already prepared label")
         UITestInteraction.tapToolbar(app.navigationBars["Queued Label"].buttons["Done"], in: app)
-        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        assertContains("0/2 completed", element: app.staticTexts["labelQueue.progress"])
+        backFromPrintScreen("Label Print Queue", app: app)
+        XCTAssertTrue(app.navigationBars["Custom Price Tag"].waitForExistence(timeout: 5))
+        reveal(customPreview, app: app)
+        XCTAssertTrue((customPreview.value as? String ?? "").contains("Price Right"), "New previews follow the changed position")
+        XCTAssertTrue(app.buttons["customLabels.prepare"].isEnabled, "Leaving an unprinted queue allows a fresh preparation")
+        XCTAssertFalse(app.buttons["customLabels.reviewQueue"].exists)
         tap(customPosition.buttons["Price Left"], app: app)
-        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        backFromPrintScreen("Custom Price Tag", app: app)
 
         app.terminate(); app.launch()
         XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 10))
@@ -918,7 +993,7 @@ import XCTest
         reveal(batchPreview, app: app)
         XCTAssertTrue((batchPreview.value as? String ?? "").contains("Price Left"))
         tap(app.buttons["labels.editor.save"], app: app)
-        clearQueue("labels.clearQueue", app: app)
+        XCTAssertFalse(app.buttons["labels.clearQueue"].isEnabled, "The abandoned custom queue was cleared")
         tap(app.buttons["labels.prepare"], app: app)
         assertContains("0/1 completed", element: app.staticTexts["labelQueue.progress"])
         XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled)
@@ -964,7 +1039,7 @@ import XCTest
         assertNoBluetoothPrompt(app: app)
     }
 
-    func testPaperModeCanBeChosenOfflineAndPersistsWithoutChangingTheSavedQueue() {
+    func testPaperModeCanBeChosenOfflineAndPersistsAfterUnprintedQueueCleanup() {
         continueAfterFailure = false
         let app = launch()
         defer {
@@ -984,14 +1059,12 @@ import XCTest
         assertContains("3", element: app.descendants(matching: .any)["labelQueue.totalCount"])
         XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled)
         XCTAssertFalse(app.buttons["labelQueue.pause"].exists)
-        let queued = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "labelQueue.entry.")).firstMatch
-        reveal(queued, app: app)
-        XCTAssertTrue(queued.exists)
+        let queued = firstEntryInForegroundQueue(app: app)
         let queuedID = queued.identifier, queuedDescription = queued.label
 
-        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        backFromPrintScreen("Label Print Queue", app: app)
         XCTAssertTrue(app.navigationBars["Custom Price Tag"].waitForExistence(timeout: 5))
-        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        backFromPrintScreen("Custom Price Tag", app: app)
         XCTAssertTrue(app.navigationBars["Price Tags"].waitForExistence(timeout: 5))
         tap(app.buttons["priceTags.printer"], app: app)
         XCTAssertTrue(app.navigationBars["Label Printer"].waitForExistence(timeout: 5))
@@ -1034,11 +1107,18 @@ import XCTest
         assertNoBluetoothPrompt(app: app)
         tap(mode.buttons["Gap"], app: app)
         XCTAssertTrue(mode.buttons["Gap"].isSelected)
-        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        backFromPrintScreen("Label Printer", app: app)
         XCTAssertTrue(app.navigationBars["Price Tags"].waitForExistence(timeout: 5))
         tap(app.buttons["priceTags.queue"], app: app)
-        XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
-        reveal(mode, app: app)
+        assertEmptyPrintQueue(app: app)
+        XCTAssertFalse(app.buttons[queuedID].exists, "The old batch was cleared when leaving without printing")
+        backFromPrintScreen("Label Print Queue", app: app)
+        tap(app.buttons["priceTags.custom"], app: app)
+        enter("5", field: app.textFields["customLabels.price"], app: app)
+        enter("3", field: app.textFields["customLabels.copies"], app: app)
+        tap(app.buttons["customLabels.keyboardDone"], app: app)
+        app.buttons["customLabels.prepare"].tap()
+        revealInForegroundQueue(mode, app: app)
         XCTAssertTrue(mode.buttons["Gap"].isSelected, "Settings and the saved queue use the same paper preference")
         XCTAssertEqual(connection.label, originalConnection)
         XCTAssertEqual(status.label, originalStatus)
@@ -1046,13 +1126,14 @@ import XCTest
         XCTAssertFalse(app.buttons["labelPrinter.readPaperMode"].isEnabled)
         assertContains("0/3 completed", element: app.staticTexts["labelQueue.progress"])
         assertContains("3", element: app.descendants(matching: .any)["labelQueue.totalCount"])
-        let unchangedEntry = app.buttons[queuedID]
-        reveal(unchangedEntry, app: app)
-        XCTAssertEqual(unchangedEntry.label, queuedDescription, "Paper preferences do not replace, complete or reprint saved labels")
+        let replacement = firstEntryInForegroundQueue(app: app)
+        XCTAssertNotEqual(replacement.identifier, queuedID, "A new batch requires an explicit preparation")
+        XCTAssertEqual(replacement.label, queuedDescription, "Paper mode does not change the selected price or copy")
         XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled)
         XCTAssertFalse(app.buttons["labelQueue.pause"].exists)
         assertNoBluetoothPrompt(app: app)
-        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        backFromPrintScreen("Label Print Queue", app: app)
+        backFromPrintScreen("Custom Price Tag", app: app)
         XCTAssertTrue(app.navigationBars["Price Tags"].waitForExistence(timeout: 5))
         UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
         XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 5))
@@ -1199,6 +1280,57 @@ import XCTest
         XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled)
         XCTAssertTrue(app.buttons["labelQueue.retrySelected"].exists)
         assertNoBluetoothPrompt(app: app)
+    }
+
+    private func backFromPrintScreen(_ title: String, app: XCUIApplication) {
+        let bar = app.navigationBars[title]
+        XCTAssertTrue(bar.waitForExistence(timeout: 5))
+        UITestInteraction.tapToolbar(bar.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+    }
+
+    private func dismissInventoryPrintSheet(app: XCUIApplication) {
+        let bar = app.navigationBars["Label Print Queue"]
+        XCTAssertTrue(bar.waitForExistence(timeout: 5))
+        let start = bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25))
+        let end = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9))
+        start.press(forDuration: 0.1, thenDragTo: end)
+    }
+
+    private func assertEmptyPrintQueue(app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5), file: file, line: line)
+        assertContains("0/0 completed", element: app.staticTexts["labelQueue.progress"], file: file, line: line)
+        XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled, file: file, line: line)
+        XCTAssertFalse(app.collectionViews["labelQueue.screen"].buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "labelQueue.entry.")).firstMatch.exists, file: file, line: line)
+    }
+
+    private func firstEntryInForegroundQueue(app: XCUIApplication) -> XCUIElement {
+        let queue = app.collectionViews["labelQueue.screen"]
+        XCTAssertTrue(queue.waitForExistence(timeout: 5))
+        let entry = queue.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "labelQueue.entry.")).firstMatch
+        revealInForegroundQueue(entry, app: app)
+        return entry
+    }
+
+    private func revealInForegroundQueue(_ element: XCUIElement, towardTop: Bool = false, app: XCUIApplication) {
+        let queue = app.collectionViews["labelQueue.screen"]
+        XCTAssertTrue(queue.waitForExistence(timeout: 5))
+        for _ in 0..<12 {
+            if element.exists && element.isHittable { break }
+            if towardTop { queue.swipeDown() } else { queue.swipeUp() }
+        }
+        XCTAssertTrue(element.exists && element.isHittable, "Expected a control in the foreground queue")
+    }
+
+    private func failFixtureUploadAndReviewQueue(app: XCUIApplication) {
+        app.buttons["labelQueue.print"].tap()
+        XCTAssertTrue(app.buttons["labelProgress.fixtureUpload"].waitForExistence(timeout: 5))
+        app.buttons["labelProgress.fixtureUpload"].tap()
+        assertUploadProgress("50%", app: app)
+        app.buttons["labelProgress.fixtureUpload"].tap()
+        XCTAssertTrue(app.buttons["labelProgress.reviewQueue"].waitForExistence(timeout: 5))
+        app.buttons["labelProgress.reviewQueue"].tap()
+        XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
     }
 
     private func prepareProgressFixture(app: XCUIApplication, copies: String) {

@@ -1255,6 +1255,7 @@ private struct LabelActionBar<Content: View>: View {
                 progress.stop(queue: queue, using: printer)
                 queue.stop(using: printer)
             }
+            if phase == .background { try? queue.clearIfUnprinted() }
         }
         .onChange(of: queue.entries.map(\.id)) { _, ids in
             selected.formIntersection(ids)
@@ -1262,7 +1263,12 @@ private struct LabelActionBar<Content: View>: View {
             if let previewEntry, !ids.contains(previewEntry.id) { self.previewEntry = nil }
         }
         .onDisappear {
-            if !progress.isPresented { queue.stop(using: printer) }
+            if !progress.isPresented {
+                queue.stop(using: printer)
+                // A preview, retry sheet or progress presentation still belongs
+                // to this print screen; ordinary Back/Close discards unsent work.
+                if previewEntry == nil && !showingRetry { try? queue.clearIfUnprinted() }
+            }
             if !printer.isConnected { printer.stop() }
         }
     }

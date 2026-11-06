@@ -26,6 +26,11 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 91 automatically clears an unprinted label queue when leaving its print
+screen or sending the app to the background. Previews retain the queue; active,
+printed and uncertain jobs retain their existing review handling. Label
+preferences, inventory and financial records are unchanged.
+
 Experiment build 90 adds bounded Bluetooth-readiness rechecks after a hardware
 test stalled before its first image write. Every image write still requires
 CoreBluetooth readiness; pacing defaults and printer completion checks are unchanged.
