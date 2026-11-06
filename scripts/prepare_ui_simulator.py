@@ -18,6 +18,13 @@ MODELS = (
     "iPhone 13 Pro", "iPhone 13",
 )
 
+# A cold hosted runner can spend more than 30 seconds starting CoreSimulator
+# before it returns its device list. Keep setup bounded without resetting any
+# existing device or hiding a stalled service behind unbounded retries.
+SIMULATOR_DISCOVERY_TIMEOUT = 90
+SIMULATOR_CREATION_TIMEOUT = 120
+SIMULATOR_BOOT_TIMEOUT = 90
+
 
 @dataclass(frozen=True)
 class Selection:
@@ -89,14 +96,17 @@ def main() -> int:
     try:
         if arguments.command == "create":
             selection = select_device(
-                json.loads(run("xcrun", "simctl", "list", "devices", "available", "-j")),
-                json.loads(run("xcrun", "simctl", "list", "runtimes", "-j")),
+                json.loads(run("xcrun", "simctl", "list", "devices", "available", "-j",
+                               timeout=SIMULATOR_DISCOVERY_TIMEOUT)),
+                json.loads(run("xcrun", "simctl", "list", "runtimes", "-j",
+                               timeout=SIMULATOR_DISCOVERY_TIMEOUT)),
                 run("xcrun", "--sdk", "iphonesimulator", "--show-sdk-version"),
             )
             stage = "device creation"
             name = "Scanner UI Tests " + uuid.uuid4().hex[:12]
             device_id = checked_id(run("xcrun", "simctl", "create", name,
-                                       selection.device_type, selection.runtime))
+                                       selection.device_type, selection.runtime,
+                                       timeout=SIMULATOR_CREATION_TIMEOUT))
             print(f"Dedicated UI simulator: {selection.name}, iOS {'.'.join(map(str, selection.version))}",
                   file=sys.stderr)
             print(device_id)
@@ -107,7 +117,7 @@ def main() -> int:
             if arguments.command == "boot":
                 stage = "boot"
                 print("Starting dedicated UI simulator alongside compilation.", file=sys.stderr)
-                run("xcrun", "simctl", "boot", device_id)
+                run("xcrun", "simctl", "boot", device_id, timeout=SIMULATOR_BOOT_TIMEOUT)
             elif arguments.command == "ready":
                 stage = "boot readiness"
                 run("xcrun", "simctl", "bootstatus", device_id, "-b", timeout=300)

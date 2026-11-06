@@ -103,6 +103,50 @@ struct NiimbotD110Identity: Equatable, Sendable {
     var modelName: String { modelID == 2320 ? "D110-M" : "D110" }
 }
 
+/// A read-only estimate from a discrete-label RFID counter. It is deliberately
+/// not Codable and excludes the tag UID, roll serial and optional second UID.
+struct NiimbotRollEstimate: Equatable, Sendable {
+    let productCode: String
+    let totalLabels: Int
+    let usedLabels: Int
+    let labelType: UInt8
+
+    var remainingLabels: Int { totalLabels - usedLabels }
+}
+
+/// A syntactically valid RFID report. Product identity remains useful when the
+/// optional counters are missing or inconsistent. Unique identifiers are never
+/// represented here, persisted or passed to the product catalog.
+struct NiimbotRollInfo: Equatable, Sendable {
+    let productCode: String
+    let totalLabels: Int
+    let usedLabels: Int
+    let labelType: UInt8
+
+    var estimate: NiimbotRollEstimate? {
+        guard totalLabels > 0, usedLabels >= 0, usedLabels <= totalLabels,
+              labelType == NiimbotPaperMode.gap.commandValue
+                || labelType == NiimbotPaperMode.transparent.commandValue else { return nil }
+        return NiimbotRollEstimate(productCode: productCode, totalLabels: totalLabels,
+                                   usedLabels: usedLabels, labelType: labelType)
+    }
+
+    init(productCode: String, totalLabels: Int, usedLabels: Int, labelType: UInt8) {
+        self.productCode = productCode; self.totalLabels = totalLabels
+        self.usedLabels = usedLabels; self.labelType = labelType
+    }
+
+    init(estimate: NiimbotRollEstimate) {
+        self.init(productCode: estimate.productCode, totalLabels: estimate.totalLabels,
+                  usedLabels: estimate.usedLabels, labelType: estimate.labelType)
+    }
+
+    func matchedProduct(in catalog: NiimbotLabelCatalog) -> NiimbotLabelProduct? {
+        guard let product = catalog.product(code: productCode), product.paperType == labelType else { return nil }
+        return product
+    }
+}
+
 /// The printer's configured media mode, separate from physical label size.
 /// These are the documented SetLabelType values supported by this app.
 enum NiimbotPaperMode: String, CaseIterable, Identifiable, Codable, Sendable {
@@ -207,6 +251,69 @@ enum NiimbotProtocol {
         // Connect is the only command with this leading wake-up byte.
         if command == 0xc1 { result.insert(0x03, at: result.startIndex) }
         return result
+    }
+
+    /// The reference uses an eight-byte UID, signed-byte-length ASCII strings,
+    /// big-endian counters and an optional two-byte capacity/eight-byte UID tail.
+    /// Invalid counters do not erase a structurally valid product identity.
+    static func rollInfo(_ packet: NiimbotPacket) throws -> NiimbotRollInfo? {
+        guard packet.command == 0x1b, packet.data.count <= 255 else {
+            throw LabelPrinterIssue.unsupportedResponse
+        }
+        // The documented one-byte response means that no tag was read; its
+        // byte is not a count and must never appear as zero remaining labels.
+        if packet.data.count == 1 { return nil }
+        guard packet.data.count >= 17 else { throw LabelPrinterIssue.unsupportedResponse }
+        let bytes = Array(packet.data)
+        var offset = 8 // Skip the unique tag identifier without retaining it.
+        func readASCII() throws -> String {
+            guard offset < bytes.count else { throw LabelPrinterIssue.unsupportedResponse }
+            let length = Int(bytes[offset])
+            offset += 1
+            guard (1...127).contains(length), length <= bytes.count - offset else {
+                throw LabelPrinterIssue.unsupportedResponse
+            }
+            let end = offset + length
+            let value = bytes[offset..<end]
+            guard value.allSatisfy({ (0x20...0x7e).contains($0) }),
+                  let text = String(bytes: value, encoding: .ascii) else {
+                throw LabelPrinterIssue.unsupportedResponse
+            }
+            offset = end
+            return text
+        }
+        func readU16() throws -> Int {
+            guard bytes.count - offset >= 2 else { throw LabelPrinterIssue.unsupportedResponse }
+            let value = Int(bytes[offset]) << 8 | Int(bytes[offset + 1])
+            offset += 2
+            return value
+        }
+        let productCode = try readASCII()
+        _ = try readASCII() // Validate and discard the unique roll serial.
+        let total = try readU16(), used = try readU16()
+        guard offset < bytes.count else { throw LabelPrinterIssue.unsupportedResponse }
+        let type = bytes[offset]
+        offset += 1
+        switch bytes.count - offset {
+        case 0: break
+        case 2:
+            _ = try readU16() // Capacity is not the remaining-label counter.
+        case 10:
+            _ = try readU16()
+            offset += 8 // Discard the optional unique identifier.
+        default:
+            throw LabelPrinterIssue.unsupportedResponse
+        }
+        guard offset == bytes.count else { throw LabelPrinterIssue.unsupportedResponse }
+        return NiimbotRollInfo(productCode: productCode, totalLabels: total, usedLabels: used, labelType: type)
+    }
+
+    /// Preserve the existing strict counter API. Unknown counters are never
+    /// converted into zero; metadata callers use rollInfo independently.
+    static func rollEstimate(_ packet: NiimbotPacket) throws -> NiimbotRollEstimate? {
+        guard let info = try rollInfo(packet) else { return nil }
+        guard let estimate = info.estimate else { throw LabelPrinterIssue.unsupportedResponse }
+        return estimate
     }
 
     static func modelID(_ packet: NiimbotPacket) throws -> Int {
@@ -380,7 +487,6 @@ enum NiimbotProtocol {
 
     private static func validateRaster(_ raster: LabelRaster) throws {
         do { try raster.validate() } catch { throw LabelPrinterIssue.invalidLabel }
-        guard [240, 320, 400].contains(raster.height) else { throw LabelPrinterIssue.invalidLabel }
     }
 
     private static func initializationRequests(task: PrintTask, totalPages: Int,
@@ -475,6 +581,25 @@ enum NiimbotProtocol {
 /// tests can exercise native requests, responses and completion without a radio.
 @MainActor enum NiimbotD110Session {
     typealias Exchange = @MainActor (NiimbotRequest) async throws -> NiimbotPacket?
+
+    /// One optional read, with no retry, calibration, feed or setting command.
+    static func readRollEstimate(exchange: Exchange) async throws -> NiimbotRollEstimate? {
+        try Task.checkCancellation()
+        guard let packet = try await exchange(NiimbotRequest(0x1a, [1], response: 0x1b)) else {
+            throw LabelPrinterIssue.unsupportedResponse
+        }
+        return try NiimbotProtocol.rollEstimate(packet)
+    }
+
+    /// Read identity and counters together without requiring valid counters
+    /// for offline product detection. This sends the same single RFID request.
+    static func readRollInfo(exchange: Exchange) async throws -> NiimbotRollInfo? {
+        try Task.checkCancellation()
+        guard let packet = try await exchange(NiimbotRequest(0x1a, [1], response: 0x1b)) else {
+            throw LabelPrinterIssue.unsupportedResponse
+        }
+        return try NiimbotProtocol.rollInfo(packet)
+    }
 
     /// Read the configured label-type property. This does not establish which
     /// roll is physically loaded, and it does not change printer settings.

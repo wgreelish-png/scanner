@@ -256,6 +256,14 @@ private struct LabelQueueFile: Codable {
             stopRequested = false
         }
 
+        if let validator = printer as? any LabelStockValidating {
+            let papers = entries.filter { $0.state == .pending }.map(\.paperSize)
+            let issue = await validator.queuedPaperIssue(papers)
+            guard isPrinting, activeSessionID == sessionID, isLoaded,
+                  !stopRequested, !Task.isCancelled else { return }
+            if let issue { error = issue; return }
+        }
+
         if let continuousPrinter = printer as? any LabelContinuousPrinterSending {
             await sendContinuously(using: continuousPrinter, sessionID: sessionID)
             return

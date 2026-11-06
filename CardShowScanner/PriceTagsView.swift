@@ -120,6 +120,7 @@ import SwiftUI
             }
             Text(printer.status).font(.footnote).foregroundStyle(.secondary)
                 .accessibilityIdentifier("priceTags.printerStatus")
+            LabelRollEstimateView(printer: printer, pendingLabels: queue.pendingCount, identifier: "priceTags.roll")
             if let error = printer.error {
                 Text(error).font(.footnote).foregroundStyle(.orange)
                     .accessibilityIdentifier("priceTags.printerError")
@@ -138,9 +139,14 @@ import SwiftUI
                         .accessibilityIdentifier("priceTags.printerSearch")
                 }
             }
-            Text("Last used: \(paperPreferences.size.title) · Check the loaded roll")
+            Text(paperPreferences.detectedProduct == nil
+                 ? "Last used: \(paperPreferences.size.title) · Check the loaded roll"
+                 : "Detected from roll: \(paperPreferences.size.title) · \(paperPreferences.detectedProduct?.paperType == 5 ? "Transparent" : "Gap")")
                 .font(.caption).foregroundStyle(.secondary)
                 .accessibilityIdentifier("priceTags.paperSize")
+            Text("New labels: \(paperPreferences.pricePosition.title)")
+                .font(.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier("priceTags.pricePosition")
         }
         .padding(16)
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))

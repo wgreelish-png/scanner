@@ -7,6 +7,16 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        22D55B1C66BF7B4D0FD19B8E /* NiimbotProducts.json in Resources */ = {isa = PBXBuildFile; fileRef = 2A74EFDD72932CA890314D9D; };
+        B58DB5DA34491176DF726858 /* LabelStockPrintPreflightTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D2AAC3279C73266C26EB331; };
+        D7C106B7F7143749A940C2B3 /* CatalogLabelSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5387BFAD4EBE99C3A187232; };
+        302D26C8DEA51E7B5B3A2596 /* AdaptiveLabelRenderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76C802430B6C8879CF00FCB5; };
+        14571B6DB383A5ACBDC274B3 /* NiimbotLabelCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 798C686230757235C70B2D8D; };
+        6C94415688824B85272A2A29 /* LabelStockPrintPreflight.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD6F39C4D263651B7A08E101; };
+        9F176B6392A6F2E1FBE82D10 /* NiimbotLabelCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75F7CEAEC328E250594488C4; };
+        DA5BC71EE87A6AF587727E42 /* LabelRollEstimatePresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54BD8C777A91B5F7EA0B6A1E; };
+        9E9D52660D0F413DE874FB7B /* NiimbotRollReadCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA250731AD518E479AE0DB; };
+        B8BB1589A38B571E5705A8B7 /* NiimbotRollReadCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 479B9F21CE613DD4BDA8DCB0; };
         A5E681491101111115D9534C /* TCGGameRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 923CB9EBF0BD3E9B131EF630; };
         C8CD793E1A97B91B823D41E0 /* TCGGamePricingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02DA35EC122736B6C7453AF9; };
         36CA8B180855D97510990222 /* ScannerGameCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9413C12E911BCCE893D7469E; };
@@ -232,6 +242,16 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        2A74EFDD72932CA890314D9D /* NiimbotProducts.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = Resources/NiimbotProducts.json; sourceTree = "<group>"; };
+        8D2AAC3279C73266C26EB331 /* LabelStockPrintPreflightTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabelStockPrintPreflightTests.swift; sourceTree = "<group>"; };
+        C5387BFAD4EBE99C3A187232 /* CatalogLabelSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CatalogLabelSelectionTests.swift; sourceTree = "<group>"; };
+        76C802430B6C8879CF00FCB5 /* AdaptiveLabelRenderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveLabelRenderingTests.swift; sourceTree = "<group>"; };
+        798C686230757235C70B2D8D /* NiimbotLabelCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NiimbotLabelCatalogTests.swift; sourceTree = "<group>"; };
+        AD6F39C4D263651B7A08E101 /* LabelStockPrintPreflight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabelStockPrintPreflight.swift; sourceTree = "<group>"; };
+        75F7CEAEC328E250594488C4 /* NiimbotLabelCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NiimbotLabelCatalog.swift; sourceTree = "<group>"; };
+        54BD8C777A91B5F7EA0B6A1E /* LabelRollEstimatePresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabelRollEstimatePresentationTests.swift; sourceTree = "<group>"; };
+        4CDA250731AD518E479AE0DB /* NiimbotRollReadCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NiimbotRollReadCoordinatorTests.swift; sourceTree = "<group>"; };
+        479B9F21CE613DD4BDA8DCB0 /* NiimbotRollReadCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NiimbotRollReadCoordinator.swift; sourceTree = "<group>"; };
         923CB9EBF0BD3E9B131EF630 /* TCGGameRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TCGGameRegistryTests.swift; sourceTree = "<group>"; };
         02DA35EC122736B6C7453AF9 /* TCGGamePricingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TCGGamePricingTests.swift; sourceTree = "<group>"; };
         9413C12E911BCCE893D7469E /* ScannerGameCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerGameCatalogTests.swift; sourceTree = "<group>"; };
@@ -516,6 +536,12 @@
                 7F1ED60734D18EB3991C1E03 /* TagApprovalStoreTests.swift */,
                 5FEA9BB5ECA6753145C08285 /* RepricingPolicyTests.swift */,
                 56D60BD16FDD19AF38CCD570 /* NiimbotProtocolTests.swift */,
+                8D2AAC3279C73266C26EB331 /* LabelStockPrintPreflightTests.swift */,
+                C5387BFAD4EBE99C3A187232 /* CatalogLabelSelectionTests.swift */,
+                76C802430B6C8879CF00FCB5 /* AdaptiveLabelRenderingTests.swift */,
+                798C686230757235C70B2D8D /* NiimbotLabelCatalogTests.swift */,
+                54BD8C777A91B5F7EA0B6A1E /* LabelRollEstimatePresentationTests.swift */,
+                4CDA250731AD518E479AE0DB /* NiimbotRollReadCoordinatorTests.swift */,
                 4C33015E72EC423950F0E61C /* LabelPrintQueueTests.swift */,
                 58527D29B178E9291E13EEB6 /* InventoryLabelTests.swift */,
                 2EA711B3EA33421026DBF608 /* ShowCostLedgerTests.swift */,
@@ -599,6 +625,9 @@
                 BB8C8715E353B862FB495D11 /* TagApprovalStore.swift */,
                 A94FD7F38C66C5FA086B4C6C /* RepricingPolicy.swift */,
                 C45F2902A14F50D9D5EC623B /* NiimbotProtocol.swift */,
+                AD6F39C4D263651B7A08E101 /* LabelStockPrintPreflight.swift */,
+                75F7CEAEC328E250594488C4 /* NiimbotLabelCatalog.swift */,
+                479B9F21CE613DD4BDA8DCB0 /* NiimbotRollReadCoordinator.swift */,
                 95CBAF8C5BE3E61C6D035D92 /* NiimbotPrinter.swift */,
                 FC7CB98C1ADF14B28350C401 /* LabelPrintingViews.swift */,
                 EE81B5E629AAE05B05FB7AD2 /* LabelPrinting.swift */,
@@ -674,6 +703,7 @@
                 8A740318FC078ACB15539F41 /* ScannerDatabaseCache.swift */,
                 A1B2C3D40000000000000002 /* LocalScannerServer.swift */,
                 A1B2C3D40000000000000004 /* ScannerRuntime */,
+                2A74EFDD72932CA890314D9D /* NiimbotProducts.json */,
                 197E712A7D5B4FAABBCC0002 /* PrivacyInfo.xcprivacy */,
 				640FC94546D69DD8166B6EA6 /* StorageSchema.swift */,
 				6A565D8AFD09E49E798ED2CF /* SessionReviewView.swift */,
@@ -826,6 +856,7 @@
 			files = (
                 90A3BA40BB38E806F412BF54 /* Assets.xcassets in Resources */,
                 A1B2C3D40000000000000003 /* ScannerRuntime in Resources */,
+                22D55B1C66BF7B4D0FD19B8E /* NiimbotProducts.json in Resources */,
                 197E712A7D5B4FAABBCC0001 /* PrivacyInfo.xcprivacy in Resources */,
                 197E712A7D5B4FAABBCC0010 /* PricingRequest.js in Resources */,
 				F2201FCA8583F235EFCD47BE /* Resources/TCGTrackingBridge.js in Resources */,
@@ -878,6 +909,12 @@
                 2EF371D80A5D78F322D8F5A3 /* TagApprovalStoreTests.swift in Sources */,
                 C98D4B97BC1DBAB8E048DEEC /* RepricingPolicyTests.swift in Sources */,
                 E8D243F21174DBD7E78ED9C2 /* NiimbotProtocolTests.swift in Sources */,
+                B58DB5DA34491176DF726858 /* LabelStockPrintPreflightTests.swift in Sources */,
+                D7C106B7F7143749A940C2B3 /* CatalogLabelSelectionTests.swift in Sources */,
+                302D26C8DEA51E7B5B3A2596 /* AdaptiveLabelRenderingTests.swift in Sources */,
+                14571B6DB383A5ACBDC274B3 /* NiimbotLabelCatalogTests.swift in Sources */,
+                DA5BC71EE87A6AF587727E42 /* LabelRollEstimatePresentationTests.swift in Sources */,
+                9E9D52660D0F413DE874FB7B /* NiimbotRollReadCoordinatorTests.swift in Sources */,
                 F9A62D43CC797A646D8C4017 /* LabelPrintQueueTests.swift in Sources */,
                 04CB15B40E469B9093E2B509 /* InventoryLabelTests.swift in Sources */,
                 8CBE0342160496BADCF753CD /* ShowCostLedgerTests.swift in Sources */,
@@ -960,6 +997,9 @@
                 0CCD61129E14827A956CF412 /* TagApprovalStore.swift in Sources */,
                 A010F88FDCBFC3852A75AC09 /* RepricingPolicy.swift in Sources */,
                 CDDA1A2E575809F0879AD797 /* NiimbotProtocol.swift in Sources */,
+                6C94415688824B85272A2A29 /* LabelStockPrintPreflight.swift in Sources */,
+                9F176B6392A6F2E1FBE82D10 /* NiimbotLabelCatalog.swift in Sources */,
+                B8BB1589A38B571E5705A8B7 /* NiimbotRollReadCoordinator.swift in Sources */,
                 9738F6B29A8DBA6A9C494C6D /* NiimbotPrinter.swift in Sources */,
                 4EECBFDB71BD85E3B4F84ED1 /* LabelPrintingViews.swift in Sources */,
                 A336FEE67ABB04C00980B15C /* LabelPrinting.swift in Sources */,
@@ -1113,7 +1153,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 76;
+				CURRENT_PROJECT_VERSION = 79;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -1150,7 +1190,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 76;
+				CURRENT_PROJECT_VERSION = 79;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";

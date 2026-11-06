@@ -1,5 +1,12 @@
+import contextlib
+import io
+import json
+import subprocess
+import sys
 import unittest
+from unittest.mock import patch
 
+import prepare_ui_simulator
 from prepare_ui_simulator import select_device
 
 
@@ -71,6 +78,58 @@ class SelectUISimulatorTests(unittest.TestCase):
         del device["deviceTypeIdentifier"]
         selected = self.select({runtime["identifier"]: [device]}, [runtime])
         self.assertEqual(selected.device_type, "com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro")
+
+    def test_cold_discovery_and_device_creation_have_bounded_startup_budgets(self):
+        runtime = self.runtime()
+        device_id = "10000000-0000-0000-0000-000000000002"
+        calls = []
+
+        def cold_command(arguments, *, timeout, **options):
+            calls.append((arguments, timeout))
+            operation = arguments[1:3]
+            if operation == ("simctl", "list"):
+                # Simulate a cold CoreSimulator service that would exceed the
+                # old 30-second deadline, without sleeping in a portable test.
+                required = 45
+                value = ({"devices": {runtime["identifier"]: [self.device()]}}
+                         if arguments[3] == "devices" else {"runtimes": [runtime]})
+                output = json.dumps(value)
+            elif operation == ("simctl", "create"):
+                required, output = 75, device_id
+            else:
+                required, output = 0, "18.5"
+            if timeout < required:
+                raise subprocess.TimeoutExpired(arguments, timeout)
+            self.assertLessEqual(timeout, 120, "Cold setup must remain bounded")
+            return subprocess.CompletedProcess(arguments, 0, stdout=output)
+
+        with patch.object(sys, "argv", ["prepare_ui_simulator.py", "create"]), \
+             patch.object(prepare_ui_simulator.subprocess, "run", side_effect=cold_command), \
+             contextlib.redirect_stdout(io.StringIO()) as output, \
+             contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(prepare_ui_simulator.main(), 0)
+        self.assertEqual(output.getvalue().strip(), device_id)
+        self.assertEqual([timeout for arguments, timeout in calls if arguments[1:3] == ("simctl", "list")],
+                         [90, 90])
+        self.assertEqual(calls[-1][0][1:3], ("simctl", "create"))
+        self.assertEqual(calls[-1][1], 120)
+
+    def test_cold_boot_request_has_a_bounded_budget_and_does_not_reset_the_device(self):
+        device_id = "10000000-0000-0000-0000-000000000002"
+        calls = []
+
+        def cold_boot(arguments, *, timeout, **options):
+            calls.append((arguments, timeout))
+            if timeout < 45:
+                raise subprocess.TimeoutExpired(arguments, timeout)
+            self.assertLessEqual(timeout, 120)
+            return subprocess.CompletedProcess(arguments, 0, stdout="")
+
+        with patch.object(sys, "argv", ["prepare_ui_simulator.py", "boot", device_id]), \
+             patch.object(prepare_ui_simulator.subprocess, "run", side_effect=cold_boot), \
+             contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(prepare_ui_simulator.main(), 0)
+        self.assertEqual(calls, [(("xcrun", "simctl", "boot", device_id), 90)])
 
 
 if __name__ == "__main__":

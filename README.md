@@ -26,6 +26,20 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 79 adds [offline RFID paper detection and generated label layouts](docs/OfflineLabelCatalog.md).
+The bundled 13 KB catalog matches roll product codes to dimensions and media,
+then fits the existing vector design to the available printable region. Saved
+price-side and manual-paper preferences remain available; queued artwork stays
+an immutable snapshot.
+
+Build 78 adds an [estimated labels-remaining display](docs/EstimatedLabelCount.md)
+from the printer's RFID counters. Reads happen on connection, after printing,
+or through Refresh Roll. Unknown or stale counts never block printing.
+
+Build 77 adds a remembered [Price Left / Price Right label option](docs/LabelPricePosition.md).
+It swaps the price and PokéDen logo without mirroring their text, shares the
+choice across inventory/custom/bulk labels, and preserves already queued art.
+
 Build 76 adds [device health diagnostics and camera heat protection](docs/DeviceHealthMonitoring.md):
 foreground-only health summaries, memory/thermal warnings, available iOS crash
 and hang report counts, and reduced scanner work in Low Power Mode or elevated

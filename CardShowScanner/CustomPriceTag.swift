@@ -7,6 +7,7 @@ struct CustomPriceTagDraft: Equatable, Sendable {
     let copies: Int
     let paperSize: InventoryLabelSize
     var isBulk: Bool = false
+    var pricePosition: LabelPricePosition = .right
 
     var priceText: String { isBulk ? StickerPrice.twoForOne.displayText : StickerPrice.individual(priceCents).displayText }
 
@@ -24,6 +25,7 @@ struct CustomPriceTagDraft: Equatable, Sendable {
     var isBulk = false
     var copies = "1"
     var paperSize: InventoryLabelSize
+    var pricePosition: LabelPricePosition
     private(set) var error: String?
     private(set) var preparing = false
     @ObservationIgnored private let queue: LabelPrintQueue
@@ -32,16 +34,19 @@ struct CustomPriceTagDraft: Equatable, Sendable {
     private var preparedIDs: Set<UUID> = []
 
     init(queue: LabelPrintQueue = .shared, paperSize: InventoryLabelSize = .small30x14,
+         pricePosition: LabelPricePosition = .right,
          render: @escaping Render = { try InventoryLabelRenderer.renderRaster($0) }) {
         self.queue = queue
         self.paperSize = paperSize
+        self.pricePosition = pricePosition
         self.render = render
     }
 
     var draft: CustomPriceTagDraft? {
         let amount: Int64? = isBulk ? 0 : ShowBudgetMoney.parse(price)
         guard let cents = amount, let count = Int(copies) else { return nil }
-        let draft = CustomPriceTagDraft(priceCents: cents, copies: count, paperSize: paperSize, isBulk: isBulk)
+        let draft = CustomPriceTagDraft(priceCents: cents, copies: count, paperSize: paperSize,
+                                       isBulk: isBulk, pricePosition: pricePosition)
         return (try? draft.validate()) != nil ? draft : nil
     }
 

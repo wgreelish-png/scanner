@@ -45,6 +45,7 @@ import UIKit
 
 @MainActor private struct LabelPrinterConnectionSection: View {
     let printer: NiimbotPrinter
+    var rollIdentifier = "labelPrinter.roll"
     @State private var queue = LabelPrintQueue.shared
     @State private var paperPreferences = LabelPaperPreferences.shared
     private var paperBusy: Bool { queue.isPrinting || printer.isPrinting || printer.isConfiguringPaper }
@@ -57,6 +58,7 @@ import UIKit
                 .accessibilityIdentifier("labelPrinter.connection")
             Text(printer.status).font(.footnote).foregroundStyle(.secondary)
                 .accessibilityIdentifier("labelPrinter.status")
+            LabelRollEstimateView(printer: printer, pendingLabels: queue.pendingCount, identifier: rollIdentifier)
             if let error = printer.error {
                 Text(error).font(.footnote).foregroundStyle(.orange)
                     .accessibilityIdentifier("labelPrinter.error")
@@ -88,14 +90,15 @@ import UIKit
             }
         }
         Section {
-            LabeledContent("Last used label size", value: paperPreferences.size.title)
+            LabeledContent(paperPreferences.detectedProduct == nil ? "Last used label size" : "Detected from roll",
+                           value: paperPreferences.size.title)
                 .accessibilityIdentifier("labelPrinter.paperSize")
             Picker("Paper type", selection: Binding(get: { printer.paperMode }, set: { mode in
                 guard !paperBusy else { return }
                 printer.selectPaperMode(mode)
             })) {
                 ForEach(NiimbotPaperMode.allCases) { mode in Text(mode.title).tag(mode) }
-            }.pickerStyle(.segmented).disabled(paperBusy)
+            }.pickerStyle(.segmented).disabled(paperBusy || paperPreferences.detectedProduct != nil)
                 .accessibilityIdentifier("labelPrinter.paperMode")
             Button("Apply Paper Type") {
                 guard !paperBusy else { return }
@@ -113,8 +116,140 @@ import UIKit
                     .accessibilityIdentifier("labelPrinter.paperModeStatus")
             }
         } header: { Text("Paper type") } footer: {
-            Text("Choose Gap for standard labels separated by gaps, or Transparent for clear labels. The choice is applied when printing. Read Printer Setting reads the configured type. Label size is remembered from label preparation; check it matches the loaded roll.")
+            Text(paperPreferences.detectedProduct == nil
+                 ? "Choose Gap for standard labels separated by gaps, or Transparent for clear labels. The choice is applied when printing. Read Printer Setting reads the configured type. A recognized roll sets the label measurements automatically; otherwise check the remembered size matches the loaded roll."
+                 : "The roll chip sets the label size and paper type. New designs use those measurements within the printer's 12 mm head. Saved labels keep their prepared measurements.")
         }
+        Section {
+            LabelPricePositionPicker(selection: Binding(get: { paperPreferences.pricePosition }, set: {
+                paperPreferences.selectPricePosition($0)
+            }), identifier: "labelPrinter.pricePosition")
+                .disabled(paperBusy)
+        } header: { Text("PokéDen label layout") } footer: {
+            Text("Applies to newly prepared PokéDen price labels. The saved print queue stays unchanged.")
+        }
+    }
+}
+
+/// The estimate changes presentation only; it never decides whether a queue can print.
+struct LabelRollEstimatePresentation {
+    let estimate: NiimbotRollEstimate?
+    let freshness: NiimbotRollEstimateFreshness
+    let isReading: Bool
+    let pendingLabels: Int
+    let status: String?
+
+    init(estimate: NiimbotRollEstimate?, freshness: NiimbotRollEstimateFreshness, isReading: Bool,
+         pendingLabels: Int, status: String? = nil) {
+        self.estimate = estimate; self.freshness = freshness; self.isReading = isReading
+        self.pendingLabels = pendingLabels; self.status = status
+    }
+
+    private var displayedEstimate: NiimbotRollEstimate? {
+        switch freshness {
+        case .fresh, .stale: return estimate
+        case .unknown, .unavailable: return nil
+        }
+    }
+
+    var title: String {
+        if isReading { return "Estimated labels remaining: Checking…" }
+        guard let displayedEstimate else { return "Estimated labels remaining: Unknown" }
+        let value = displayedEstimate.remainingLabels.formatted()
+        if case .stale = freshness { return "Estimated labels remaining: \(value) (stale)" }
+        return "Estimated labels remaining: \(value)"
+    }
+
+    var detail: String? {
+        if isReading { return status ?? "Reading the printer's roll counter…" }
+        guard let displayedEstimate else { return status }
+        let counts = "\(displayedEstimate.usedLabels.formatted()) used of \(displayedEstimate.totalLabels.formatted()) reported."
+        if case .stale = freshness {
+            return [status, "Last report: \(counts)"].compactMap { $0 }.joined(separator: " ")
+        }
+        return "\(counts) Counter estimate; actual labels can differ."
+    }
+
+    var warning: String? {
+        guard !isReading, case .fresh = freshness, let estimate,
+              pendingLabels > estimate.remainingLabels else { return nil }
+        return "The \(pendingLabels.formatted()) queued labels may exceed this roll estimate."
+    }
+}
+
+@MainActor struct LabelRollEstimateView: View {
+    let printer: NiimbotPrinter
+    var pendingLabels = 0
+    let identifier: String
+    @State private var queue = LabelPrintQueue.shared
+    @State private var paperPreferences = LabelPaperPreferences.shared
+
+    init(printer: NiimbotPrinter, pendingLabels: Int = 0, identifier: String) {
+        self.printer = printer; self.pendingLabels = pendingLabels; self.identifier = identifier
+    }
+
+    var body: some View {
+        let presentation = LabelRollEstimatePresentation(estimate: printer.rollEstimate,
+            freshness: printer.rollEstimateFreshness, isReading: printer.isReadingRoll,
+            pendingLabels: pendingLabels, status: printer.rollEstimateStatus)
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Text(presentation.title).font(.footnote.weight(.semibold))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier(identifier + ".estimate")
+                Button {
+                    guard printer.canRefreshRollEstimate, !queue.isPrinting else { return }
+                    printer.refreshRollEstimate()
+                } label: {
+                    Group {
+                        if printer.isReadingRoll { ProgressView().controlSize(.small) }
+                        else { Image(systemName: "arrow.clockwise") }
+                    }.frame(minWidth: 44, minHeight: 44)
+                }.buttonStyle(.borderless)
+                    .disabled(!printer.canRefreshRollEstimate || queue.isPrinting)
+                    .accessibilityLabel("Refresh roll")
+                    .accessibilityIdentifier(identifier + ".refresh")
+            }
+            Text(presentation.detail ?? "Connect the printer to read its roll counter.")
+                .font(.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier(identifier + ".context")
+            if paperPreferences.detectedProduct == nil, let status = printer.rollProductStatus {
+                Text(status).font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier(identifier + ".productStatus")
+            }
+            if let warning = presentation.warning {
+                Text(warning).font(.caption).foregroundStyle(.orange)
+                    .accessibilityIdentifier(identifier + ".warning")
+            }
+        }
+    }
+}
+
+@MainActor struct LabelPricePositionPicker: View {
+    @Binding var selection: LabelPricePosition
+    let identifier: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Price position").font(.subheadline)
+            Picker("Price position", selection: $selection) {
+                ForEach(LabelPricePosition.allCases) { position in Text(position.title).tag(position) }
+            }.pickerStyle(.segmented).labelsHidden().accessibilityIdentifier(identifier)
+        }
+    }
+}
+
+/// The complete paper snapshot belongs in the key: a product code alone cannot
+/// distinguish corrected printable regions from an older catalog entry.
+struct LabelPriceRasterKey: Hashable {
+    let paperSize: InventoryLabelSize
+    let pricePosition: String
+    let priceText: String
+
+    init(paperSize: InventoryLabelSize, pricePosition: LabelPricePosition, priceText: String) {
+        self.paperSize = paperSize
+        self.pricePosition = pricePosition.rawValue
+        self.priceText = priceText
     }
 }
 
@@ -137,6 +272,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     @State private var drafts: [InventoryLabelDraft]
     @State private var style: InventoryLabelStyle = .priceOnly
     @State private var paper: InventoryLabelSize
+    @State private var pricePosition: LabelPricePosition
     @State private var paperPreferences: LabelPaperPreferences
     @State private var editing: InventoryLabelDraft?
     @State private var queue = LabelPrintQueue.shared
@@ -159,13 +295,17 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         self.mode = mode
         _paperPreferences = State(initialValue: paperPreferences)
         _paper = State(initialValue: paperPreferences.size)
+        _pricePosition = State(initialValue: paperPreferences.pricePosition)
         let initial = inventory.first { $0.id == initialInventoryID && $0.quantity > 0 }
         let batchDrafts = InventoryLabelBatch.drafts(mode: mode, inventory: inventory,
             marketQuotes: marketQuotes, store: .shared)
         var initialDrafts = initial.map {
             [InventoryLabelBatch.draft(for: $0, mode: .custom, marketQuotes: marketQuotes, store: .shared)]
         } ?? batchDrafts
-        for index in initialDrafts.indices { initialDrafts[index].paperSize = paperPreferences.size }
+        for index in initialDrafts.indices {
+            initialDrafts[index].paperSize = paperPreferences.size
+            initialDrafts[index].pricePosition = paperPreferences.pricePosition
+        }
         _selectedIDs = State(initialValue: Set(initialDrafts.map(\.id)))
         _drafts = State(initialValue: initialDrafts)
         _path = State(initialValue: initialDrafts.isEmpty ? [] : [.configure])
@@ -228,9 +368,13 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         }
         .toolbar { closeToolbar }
         .sheet(item: $editing) { draft in
-            InventoryLabelEditor(draft: draft) { updated in
+            InventoryLabelEditor(draft: draft, paperPreferences: paperPreferences) { updated in
                 if let index = drafts.firstIndex(where: { $0.id == updated.id }) {
-                    drafts[index] = updated
+                    var current = updated
+                    current.style = style
+                    current.paperSize = paperPreferences.size
+                    current.pricePosition = paperPreferences.pricePosition
+                    drafts[index] = current
                     keepExistingStickerIDs.remove(updated.id)
                     resetPreparationNotice()
                 }
@@ -262,8 +406,12 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { stopPrinting() }
         }
-        .onAppear { updatePaperSize(paperPreferences.size) }
+        .onAppear {
+            updatePaperSize(paperPreferences.size)
+            updatePricePosition(paperPreferences.pricePosition)
+        }
         .onChange(of: paperPreferences.size) { _, size in updatePaperSize(size) }
+        .onChange(of: paperPreferences.pricePosition) { _, position in updatePricePosition(position) }
         .onDisappear {
             stopPrinting()
             if printer.isConfiguringPaper || !printer.isConnected { printer.stop() }
@@ -373,15 +521,27 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                     }
                 }.accessibilityIdentifier("labels.style")
                 Picker("Physical paper", selection: Binding(get: { paper }, set: { size in
-                    updatePaperSize(size)
                     paperPreferences.select(size)
+                    updatePaperSize(paperPreferences.size)
                 })) {
-                    ForEach(InventoryLabelSize.allCases) { value in
+                    ForEach(paperPreferences.availableSizes) { value in
                         Text(value.title).tag(value).accessibilityIdentifier("labels.paper." + value.rawValue)
                     }
-                }.accessibilityIdentifier("labels.paper")
-                Text("Your last label size is remembered. Check it matches the loaded roll. Artwork is centered in the printer's 12 mm printable strip.")
+                }.disabled(paperPreferences.detectedProduct != nil)
+                    .accessibilityIdentifier("labels.paper")
+                if style == .priceOnly {
+                    LabelPricePositionPicker(selection: Binding(get: { pricePosition }, set: { position in
+                        updatePricePosition(position)
+                        paperPreferences.selectPricePosition(position)
+                    }), identifier: "labels.pricePosition")
+                }
+                Text(paperPreferences.detectedProduct != nil
+                     ? "Detected from roll. The design uses these measurements within the printer's 12 mm head. Your price-side preference is remembered."
+                     : (style == .priceOnly
+                        ? "Label size and price position are remembered. Check the size matches the loaded roll. Artwork is centered in the printer's 12 mm printable strip."
+                        : "Your last label size is remembered. Check it matches the loaded roll. Artwork is centered in the printer's 12 mm printable strip."))
                     .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("labels.paperSource")
             }
             if let draft = printableDrafts.first {
                 Section("Print preview") {
@@ -461,6 +621,11 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         for index in drafts.indices { drafts[index].paperSize = size }
     }
 
+    private func updatePricePosition(_ position: LabelPricePosition) {
+        pricePosition = position
+        for index in drafts.indices { drafts[index].pricePosition = position }
+    }
+
     @ViewBuilder private var preparationNoticeSection: some View {
         if let preparationNotice {
             Section {
@@ -496,6 +661,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 }
                 LabeledContent("Paper", value: paper.title)
                 LabeledContent("Style", value: style.title)
+                if style == .priceOnly { LabeledContent("Price position", value: pricePosition.title) }
                 Text(mode == .priceChanged
                      ? "Prepare labels for changed prices. Unchanged, already-labeled stickers are skipped. Printing starts when you tap Print Queued Labels."
                      : "Prepare the requested labels, including replacements for cards labeled before. Printing starts when you tap Print Queued Labels.")
@@ -634,7 +800,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         drafts = available.filter { selectedIDs.contains($0.id) }.map { item in
             var draft = previous[item.id] ?? InventoryLabelBatch.draft(for: item, mode: mode,
                 marketQuotes: marketQuotes, store: approvals)
-            draft.style = style; draft.paperSize = paper
+            draft.style = style; draft.paperSize = paper; draft.pricePosition = pricePosition
             return draft
         }
         keepExistingStickerIDs.formIntersection(selectedIDs)
@@ -658,6 +824,8 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         })
     }
     private func prepareQueue() {
+        updatePaperSize(paperPreferences.size)
+        updatePricePosition(paperPreferences.pricePosition)
         guard validation == nil, approvals.isLoaded, canPrepareNewQueue, !preparing else { return }
         preparing = true
         defer { preparing = false }
@@ -676,13 +844,14 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 return
             }
             var entries: [LabelQueueEntry] = []
-            var priceRasters: [String: LabelRaster] = [:]
+            var priceRasters: [LabelPriceRasterKey: LabelRaster] = [:]
             for draft in draftsToPrint {
                 let raster: LabelRaster
                 if draft.style == .priceOnly {
                     // The branded design depends only on the final price and
                     // roll. Reuse identical artwork across inventory entries.
-                    let key = draft.paperSize.rawValue + ":" + (draft.priceText ?? "")
+                    let key = LabelPriceRasterKey(paperSize: draft.paperSize,
+                        pricePosition: draft.pricePosition, priceText: draft.priceText ?? "")
                     if let saved = priceRasters[key] { raster = saved }
                     else {
                         raster = try InventoryLabelRenderer.renderRaster(draft)
@@ -718,11 +887,15 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     @State private var bitmap: InventoryLabelBitmap?
     @State private var previewError: String?
     @State private var previewPrice: String?
+    @State private var previewDraft: InventoryLabelDraft?
+    @State private var paperPreferences: LabelPaperPreferences
     @FocusState private var focus: Field?
     private enum Field { case price, copies }
 
-    init(draft: InventoryLabelDraft, onSave: @escaping (InventoryLabelDraft) -> Void) {
+    init(draft: InventoryLabelDraft, paperPreferences: LabelPaperPreferences,
+         onSave: @escaping (InventoryLabelDraft) -> Void) {
         self.draft = draft; self.onSave = onSave
+        _paperPreferences = State(initialValue: paperPreferences)
         _price = State(initialValue: draft.priceCents.map { String($0 / 100) } ?? draft.askingPriceText)
         _copies = State(initialValue: String(draft.copies))
     }
@@ -730,6 +903,8 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         var value = draft
         value.askingPriceText = price
         value.copies = Int(copies) ?? 0
+        value.paperSize = paperPreferences.size
+        value.pricePosition = paperPreferences.pricePosition
         if !value.isBulk, ShowBudgetMoney.parse(price) != draft.priceCents {
             value.isManualOverride = true
         }
@@ -751,7 +926,8 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                     Text(draft.cardName).font(.headline)
                     Text([draft.cardNumber, draft.condition].filter { !$0.isEmpty }.joined(separator: " · "))
                         .font(.subheadline).foregroundStyle(.secondary)
-                    LabeledContent("Paper", value: draft.paperSize.title)
+                    LabeledContent("Paper", value: edited.paperSize.title)
+                    if draft.style == .priceOnly { LabeledContent("Price position", value: edited.pricePosition.title) }
                 }
                 Section("Label price") {
                     if edited.isBulk {
@@ -778,7 +954,9 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 }
                 if !edited.isBulk {
                     Section("Actual print preview") {
-                        if let bitmap {
+                        if let bitmap, let previewDraft,
+                           previewDraft.paperSize == edited.paperSize,
+                           previewDraft.pricePosition == edited.pricePosition {
                             LabelBitmapImage(image: bitmap.previewImage,
                                 description: previewDescription)
                         }
@@ -804,7 +982,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 LabelActionBar {
-                    Text(draft.paperSize.title).font(.caption)
+                    Text(edited.paperSize.title).font(.caption)
                     Button("Save Label") {
                         focus = nil
                         do {
@@ -819,6 +997,8 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 }
             }
             .onAppear { updatePreview() }
+            .onChange(of: paperPreferences.size) { _, _ in updatePreview() }
+            .onChange(of: paperPreferences.pricePosition) { _, _ in updatePreview() }
             .onChange(of: price) { _, text in if text.count > 40 { price = String(text.prefix(40)) } }
             .onChange(of: copies) { _, text in if text.count > 10 { copies = String(text.prefix(10)) } }
         }
@@ -829,12 +1009,14 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         guard !edited.isBulk else { bitmap = nil; previewError = nil; return }
         do {
             bitmap = try InventoryLabelRenderer.render(edited)
-            previewError = nil; previewPrice = price
+            previewError = nil; previewPrice = price; previewDraft = edited
         } catch { bitmap = nil; previewError = error.localizedDescription }
     }
     private var previewDescription: String {
         let amount = previewPrice.flatMap(ShowBudgetMoney.parse).map { StickerPrice.individual($0).displayText } ?? "Price required"
-        return "\(draft.style.title), \(amount), \(draft.paperSize.title)"
+        let shown = previewDraft ?? edited
+        return "\(shown.style.title), \(amount), \(shown.paperSize.title)"
+            + (shown.style == .priceOnly ? ", \(shown.pricePosition.title)" : "")
     }
 }
 
@@ -847,7 +1029,8 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         Group {
             if let image {
                 LabelBitmapImage(image: image,
-                    description: "\(draft.style.title), \(draft.priceText ?? "Price required"), \(draft.paperSize.title)")
+                    description: "\(draft.style.title), \(draft.priceText ?? "Price required"), \(draft.paperSize.title)"
+                        + (draft.style == .priceOnly ? ", \(draft.pricePosition.title)" : ""))
             }
             else { Text(error ?? "Preparing preview…").font(.footnote).foregroundStyle(.secondary) }
         }.onAppear { render() }.onChange(of: draft) { _, _ in render() }
@@ -904,6 +1087,7 @@ private struct LabelActionBar<Content: View>: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var queue = LabelPrintQueue.shared
     @State private var printer = NiimbotPrinter.shared
+    @State private var paperPreferences = LabelPaperPreferences.shared
     @State private var selected: Set<UUID> = []
     @State private var showingRetry = false
     @State private var acknowledged = false
@@ -921,6 +1105,10 @@ private struct LabelActionBar<Content: View>: View {
     private var styleTitles: String {
         Set(queue.entries.map { $0.style.title }).sorted().joined(separator: ", ")
     }
+    private var stockIssue: String? {
+        LabelStockCompatibility.issue(for: queue.entries.filter { $0.state == .pending }.map(\.paperSize),
+                                      detected: paperPreferences.detectedProduct)
+    }
 
     var body: some View {
         List {
@@ -934,12 +1122,15 @@ private struct LabelActionBar<Content: View>: View {
             } else {
                 summary
                 if queue.entries.isEmpty {
+                    Section("Label roll") {
+                        LabelRollEstimateView(printer: printer, identifier: "labelQueue.roll")
+                    }
                     Section {
                         ContentUnavailableView("No queued labels", systemImage: "printer",
                             description: Text("Select cards in Show Inventory to prepare a label batch."))
                     }
                 } else {
-                    LabelPrinterConnectionSection(printer: printer)
+                    LabelPrinterConnectionSection(printer: printer, rollIdentifier: "labelQueue.roll")
                     if let error = queue.error {
                         Section { Text(error).font(.footnote).foregroundStyle(.orange) }
                             .accessibilityIdentifier("labelQueue.error")
@@ -979,7 +1170,7 @@ private struct LabelActionBar<Content: View>: View {
             NavigationStack {
                 List {
                     Section(entry.cardName) {
-                        QueuedLabelPreview(raster: entry.raster)
+                        QueuedLabelPreview(raster: entry.raster, paper: entry.paperSize)
                         LabeledContent("Asking price", value: entry.priceText)
                         LabeledContent("Copy", value: entry.copyNumber.formatted())
                         LabeledContent("Status", value: entry.state.title)
@@ -1091,14 +1282,15 @@ private struct LabelActionBar<Content: View>: View {
                             .buttonStyle(.borderedProminent).accessibilityIdentifier("labelQueue.pause")
                     } else {
                         Button("Print Queued Labels") {
-                            guard !printer.isConfiguringPaper else { return }
+                            guard !printer.isConfiguringPaper, stockIssue == nil else { return }
                             let sender = printer.senderForCurrentPaperMode()
                             Task {
-                                guard !printer.isConfiguringPaper else { return }
+                                guard !printer.isConfiguringPaper, stockIssue == nil else { return }
                                 await queue.start(using: sender)
                             }
                         }.buttonStyle(.borderedProminent)
-                            .disabled(!queue.canStart || !printer.isConnected || printer.isConfiguringPaper || scenePhase != .active)
+                            .disabled(!queue.canStart || !printer.isConnected || printer.isConfiguringPaper
+                                      || stockIssue != nil || scenePhase != .active)
                             .accessibilityIdentifier("labelQueue.print")
                     }
                 }
@@ -1115,6 +1307,7 @@ private struct LabelActionBar<Content: View>: View {
         if queue.isPrinting {
             return "Pausing stops new labels. The printer may finish labels already buffered. Check uncertain labels before retrying."
         }
+        if let stockIssue { return stockIssue }
         if printer.supportsContinuousPrinting {
             return "D110-M batches keep the printer supplied; identical consecutive labels use the printer’s copy count."
         }
@@ -1155,11 +1348,12 @@ private struct LabelActionBar<Content: View>: View {
 
 @MainActor private struct QueuedLabelPreview: View {
     let raster: LabelRaster
+    let paper: InventoryLabelSize
     @State private var image: UIImage?
     var body: some View {
         Group {
             if let image { LabelBitmapImage(image: image) }
             else { Text("Preview unavailable").foregroundStyle(.secondary) }
-        }.onAppear { image = try? InventoryLabelRenderer.image(raster: raster) }
+        }.onAppear { image = try? InventoryLabelRenderer.image(raster: raster, paper: paper) }
     }
 }

@@ -15,11 +15,11 @@ function skus(setID = 10) { return { set_id: setID, updated: '2026-10-31T09:35:0
   100: { 9001: { cnd: 'NM', var: 'Normal', var_a: 'N', vid: 1, lng: 'EN', mkt: 0 }, 9002: { cnd: 'LP', var: 'Normal', lng: 'EN', mkt: null } },
   200: { 9003: { cnd: 'NM', var: 'Holofoil', lng: 'EN', mkt: '1.25' } },
 } }; }
-function harness(config = {}, { fallbackBytes = false } = {}) {
+function harness(config = {}, { fallbackBytes = false, initialNow = Date.now() } = {}) {
   const values = new Map(collection.variable.map(item => [item.key, item.value]));
   for (const [key, value] of Object.entries(config)) values.set(key, String(value));
   const history = [];
-  let now = Date.now();
+  let now = initialNow;
   class MockDate extends Date {
     constructor(...args) { super(...(args.length ? args : [now])); }
     static now() { return now; }
@@ -58,7 +58,7 @@ function harness(config = {}, { fallbackBytes = false } = {}) {
     history.push(output);
     return output;
   }
-  return { values, run, history, advance: seconds => { now += seconds * 1000; } };
+  return { values, run, history, now: () => now, advance: seconds => { now += seconds * 1000; } };
 }
 function discover(config = {}, ids = [10, 20], options) { const h = harness(config, options); h.run(1, categories); h.run(2, sets(ids)); return h; }
 function complete(h, ids) { for (const id of ids) { h.run(3, cards(id)); h.run(4, skus(id)); } return h.history.at(-1); }
@@ -230,9 +230,11 @@ test('long Retry-After pauses without sleeping and early or implicit resume is b
 });
 
 test('Retry-After HTTP dates and malformed headers have bounded explicit waits; discovery exhaustion halts', () => {
-  const h = harness(); h.run(1, categories);
-  const retry = h.run(2, {}, { code: 503, headers: { 'Retry-After': new Date(Date.now() + 120000).toUTCString() } });
-  assert.equal(retry.summary.status, 'retry_waiting'); assert.ok(retry.summary.retry_after_seconds >= 119);
+  const h = harness({}, { initialNow: Date.UTC(2026, 10, 5, 19, 22, 28, 999) }); h.run(1, categories);
+  // HTTP dates have whole-second precision; keep their source on the same
+  // fractional-second mock clock used by the collection, even across CI delays.
+  const retry = h.run(2, {}, { code: 503, headers: { 'Retry-After': new Date(h.now() + 120000).toUTCString() } });
+  assert.equal(retry.summary.status, 'retry_waiting'); assert.equal(retry.summary.retry_after_seconds, 120);
   h.advance(120); const resumed = resume(h, 2, sets([10])); assert.equal(resumed.next, names[2]); noScriptErrors(h);
   const missing = harness(); const fallback = missing.run(1, {}, { code: 429, headers: { 'Retry-After': 'not a date' } });
   assert.equal(fallback.summary.retry_after_seconds, 5);
