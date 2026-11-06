@@ -26,6 +26,10 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 86 renders inventory-label previews on their initial presentation and
+whenever the selected draft changes, without requiring a style toggle. A
+preview is displayed only while it matches the current draft.
+
 Build 85 adds [printer stage timings and cache checks](docs/PrinterStageTimings.md):
 preparation, encoding, Bluetooth acknowledgement and printer-response waits,
 polling, exact model/command path and intervals between print attempts. Current

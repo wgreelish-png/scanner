@@ -1032,20 +1032,31 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     let draft: InventoryLabelDraft
     @State private var image: UIImage?
     @State private var error: String?
+    @State private var renderedDraft: InventoryLabelDraft?
 
     var body: some View {
-        Group {
-            if let image {
+        VStack(alignment: .leading, spacing: 0) {
+            if let image, renderedDraft == draft {
                 LabelBitmapImage(image: image,
                     description: "\(draft.style.title), \(draft.priceDescription), \(draft.paperSize.title)"
                         + (draft.style == .priceOnly ? ", \(draft.pricePosition.title)" : ""))
             }
-            else { Text(error ?? "Preparing preview…").font(.footnote).foregroundStyle(.secondary) }
-        }.onAppear { render() }.onChange(of: draft) { _, _ in render() }
+            else {
+                Text(renderedDraft == draft ? (error ?? "Preparing preview…") : "Preparing preview…")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .task(id: draft) {
+            guard !Task.isCancelled, renderedDraft != draft || image == nil else { return }
+            render(draft)
+        }
     }
-    private func render() {
-        do { image = try InventoryLabelRenderer.render(draft).previewImage; error = nil }
+
+    private func render(_ requestedDraft: InventoryLabelDraft) {
+        do { image = try InventoryLabelRenderer.render(requestedDraft).previewImage; error = nil }
         catch { image = nil; self.error = error.localizedDescription }
+        renderedDraft = requestedDraft
     }
 }
 

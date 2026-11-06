@@ -97,6 +97,21 @@ import XCTest
         assertContains("2 cards selected", element: app.staticTexts["labels.selectedCount"])
         tap(app.buttons["labels.continueSelection"], app: app)
         assertContains("2 labels", element: app.staticTexts["labels.totalCount"])
+        assertInitialInventoryPreview("$35", app: app)
+
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        XCTAssertTrue(app.navigationBars["Select Label Cards"].waitForExistence(timeout: 5))
+        tap(app.buttons["labels.select." + stockAID], app: app)
+        tap(app.buttons["labels.continueSelection"], app: app)
+        assertContains("1 labels", element: app.staticTexts["labels.totalCount"])
+        assertInitialInventoryPreview("$5", app: app)
+
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        XCTAssertTrue(app.navigationBars["Select Label Cards"].waitForExistence(timeout: 5))
+        tap(app.buttons["labels.select." + stockAID], app: app)
+        tap(app.buttons["labels.continueSelection"], app: app)
+        assertContains("2 labels", element: app.staticTexts["labels.totalCount"])
+        assertInitialInventoryPreview("$35", app: app)
         tap(app.buttons["labels.matchQuantities"], app: app)
         assertContains("3 labels", element: app.staticTexts["labels.totalCount"])
         tap(app.buttons["labels.oneEach"], app: app)
@@ -1078,6 +1093,18 @@ import XCTest
         XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["labelProgress.pause"].exists, "Preparation never starts a print job")
         XCTAssertTrue(app.buttons["labelQueue.print"].isEnabled)
+    }
+
+    private func assertInitialInventoryPreview(_ price: String, app: XCUIApplication,
+                                               file: StaticString = #filePath, line: UInt = #line) {
+        let preview = app.images["labels.bitmapPreview"].firstMatch
+        reveal(preview, app: app, file: file, line: line)
+        XCTAssertTrue(preview.waitForExistence(timeout: 5),
+                      "Selected cards must show their default preview before any layout control is changed", file: file, line: line)
+        let rendered = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value CONTAINS %@ AND value CONTAINS %@", "PokéDen price", price), object: preview)
+        XCTAssertEqual(XCTWaiter.wait(for: [rendered], timeout: 5), .completed,
+                       "Expected the selected card's initial PokéDen \(price) preview", file: file, line: line)
     }
 
     private func assertLiveProgress(_ expected: String, app: XCUIApplication,
