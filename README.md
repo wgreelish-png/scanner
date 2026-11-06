@@ -26,6 +26,16 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 85 adds [printer stage timings and cache checks](docs/PrinterStageTimings.md):
+preparation, encoding, Bluetooth acknowledgement and printer-response waits,
+polling, exact model/command path and intervals between print attempts. Current
+custom previews and fresh automatic RFID reads can be reused without changing
+saved artwork, stock, settings or the print command pacing.
+
+Build 84 keeps the [printing progress counts](docs/PrintProgressAndConnection.md)
+live in the presented screen, starting with the requested batch total and
+updating from each saved physical completion receipt.
+
 Build 83 adds [printing progress and return to Price Tags](docs/PrintProgressAndConnection.md).
 The progress screen waits for the final job confirmation, then returns to Price
 Tags while retaining an idle foreground printer connection. Buffered mixed-label

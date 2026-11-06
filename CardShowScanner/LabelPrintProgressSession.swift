@@ -120,9 +120,13 @@ import Observation
     enum Stage: Equatable { case idle, labels, finishing }
     private(set) var stage = Stage.idle
     private let fails: Bool
+    private let confirmsEachCopy: Bool
     @ObservationIgnored private var continuation: CheckedContinuation<Bool, Never>?
 
-    private init(fails: Bool) { self.fails = fails }
+    private init(fails: Bool, confirmsEachCopy: Bool) {
+        self.fails = fails
+        self.confirmsEachCopy = confirmsEachCopy
+    }
 
     static func configured() -> LabelPrintProgressFixture? {
         let arguments = ProcessInfo.processInfo.arguments
@@ -131,8 +135,8 @@ import Observation
               UUID(uuidString: String(token.dropFirst("--show-transactions-fixture-id=".count))) != nil,
               let mode = arguments.first(where: { $0.hasPrefix("--label-print-progress-fixture=") })
                 .map({ String($0.dropFirst("--label-print-progress-fixture=".count)) }),
-              ["success", "failure"].contains(mode) else { return nil }
-        return LabelPrintProgressFixture(fails: mode == "failure")
+              ["success", "failure", "success-per-copy"].contains(mode) else { return nil }
+        return LabelPrintProgressFixture(fails: mode == "failure", confirmsEachCopy: mode == "success-per-copy")
     }
 
     func confirm() {
@@ -154,10 +158,14 @@ import Observation
         do {
             try await beforePages(pages)
             stage = .labels
-            let confirmed = await withCheckedContinuation { continuation = $0 }
-            guard confirmed, !Task.isCancelled else { return .uncertain(.cancelled) }
-            guard !fails else { return .uncertain(.writeFailed) }
-            try await afterPages(pages)
+            for receipt in confirmsEachCopy ? pages.map({ [$0] }) : [pages] {
+                let confirmed = await withCheckedContinuation { continuation = $0 }
+                guard confirmed, !Task.isCancelled else { return .uncertain(.cancelled) }
+                guard !fails else { return .uncertain(.writeFailed) }
+                // Per-copy gates change only the queue receipt, without a new
+                // upload, printer status or stage to refresh a stale screen.
+                try await afterPages(receipt)
+            }
             stage = .finishing
             let ended = await withCheckedContinuation { continuation = $0 }
             return ended && !Task.isCancelled ? .completed : .uncertain(.cancelled)

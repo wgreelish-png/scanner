@@ -151,7 +151,10 @@ import UIKit
                 let custom = CustomPriceTagDraft(priceCents: 0, copies: 1, paperSize: paper, pricePosition: side)
                 let bitmap = try InventoryLabelRenderer.render(custom)
                 XCTAssertEqual(custom.priceText, "")
-                XCTAssertEqual(ink(bitmap.raster, in: physical(layout.priceArea, geometry: geometry)), 0,
+                // The rounded frame can touch the panel's outer corner dots.
+                // Inspect its writing interior without counting that border.
+                let writingArea = layout.priceArea.insetBy(dx: 2, dy: 2)
+                XCTAssertEqual(ink(bitmap.raster, in: physical(writingArea, geometry: geometry)), 0,
                     "A zero price must leave room to write an amount without a currency symbol or zero")
                 XCTAssertGreaterThan(ink(bitmap.raster, in: physical(layout.logoArea, geometry: geometry)), 0)
                 assertInkInside(bitmap.raster, geometry.printableArea)

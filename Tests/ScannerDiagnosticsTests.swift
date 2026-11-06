@@ -31,6 +31,13 @@ import UniformTypeIdentifiers
         for key in ["app_version", "build", "revision", "os", "time"] {
             XCTAssertFalse(try XCTUnwrap(header[key] as? String).isEmpty, "Missing environment field: \(key)")
         }
+        let timestamp = ISO8601DateFormatter()
+        timestamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        for row in rows {
+            let value = try XCTUnwrap(row["time"] as? String)
+            XCTAssertNotNil(value.range(of: #"\.[0-9]{3}Z$"#, options: .regularExpression))
+            XCTAssertNotNil(timestamp.date(from: value), "Diagnostic timestamps include milliseconds for stage correlation")
+        }
         XCTAssertEqual(rows[1]["fields"] as? [String: String], safe)
         XCTAssertEqual(rows[2]["fields"] as? [String: String], [:])
     }
@@ -207,6 +214,89 @@ import UniformTypeIdentifiers
             for invalid in ["-1", "+1", "1.5", "1e3", "01", " 1", "1\n", "PRIVATE_VALUE", ""] {
                 XCTAssertFalse(DiagnosticPrinterFields.accepts(key, invalid), "\(key) must reject noncanonical values")
             }
+        }
+    }
+
+    func testPrinterStageTimingsPreparationAndCacheExportStayPrivateAndRespectOptOut() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = "PrinterStageDiagnostics." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let log = DiagnosticLog(directory: directory, defaults: defaults)
+        let timings = Dictionary(uniqueKeysWithValues: DiagnosticPrinterFields.timingKeys.map { ($0, "3600000") })
+        let transfer = timings.merging(["printer_model": "2320", "protocol_version": "4", "command_path": "d110m_v4",
+            "print_task": "buffered_copies", "print_start_count": "1", "print_end_count": "1", "total": "3"]) { _, value in value }
+        let expected: [(String, [String: String])] = [
+            ("label.transfer_summary", transfer),
+            ("label.group_transfer", ["page": "1", "quantity": "1", "total": "3", "elapsed_ms": "12345", "accepted": "true",
+                "group_image_packets": "200", "group_requests": "203", "group_wire_bytes": "8000"]),
+            ("label.preparation_summary", ["preparation_kind": "custom", "preparation_stage": "queue", "phase": "completed",
+                "total": "3", "render_count": "0", "raster_reuse_count": "3", "preparation_elapsed_ms": "14",
+                "render_elapsed_ms": "0", "approval_save_ms": "0", "queue_save_ms": "12"]),
+            ("label.roll_read", ["roll_read_source": "cache", "roll_read_ms": "0"]),
+            ("label.connection_ended", ["connection_end_source": "manual_disconnect", "phase": "active"])
+        ]
+        for (event, fields) in expected {
+            log.record(event, fields.merging(["device_name": "PRIVATE_PRINTER", "roll_barcode": "PRIVATE_ROLL",
+                "serial": "PRIVATE_SERIAL", "label_price": "PRIVATE_PRICE", "raw_packet": "PRIVATE_PACKET",
+                "card_name": "PRIVATE_CARD", "raster": "PRIVATE_IMAGE"]) { _, value in value })
+        }
+        defaults.set(false, forKey: "diagnosticsEnabled")
+        log.record("label.transfer_summary", transfer)
+        let file = try log.exportForCopy()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let text = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertFalse(text.contains("PRIVATE_"))
+        let rows = try diagnosticRows(text).filter { ($0["event"] as? String)?.hasPrefix("label.") == true }
+        XCTAssertEqual(rows.compactMap { $0["event"] as? String }, expected.map(\.0))
+        XCTAssertEqual(rows.compactMap { $0["fields"] as? [String: String] }, expected.map(\.1),
+                       "Only bounded timing/count fields and fixed classifications may enter a diagnostic file")
+    }
+
+    func testPrinterStageExportRejectsInvalidTimingsModelsCountsAndClassifications() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = "RejectedPrinterStageDiagnostics." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let log = DiagnosticLog(directory: directory, defaults: defaults)
+        var maxima = Dictionary(uniqueKeysWithValues: DiagnosticPrinterFields.timingKeys.map { ($0, 3_600_000) })
+        maxima.merge(["printer_model": 65_535, "protocol_version": 255, "print_start_count": 250, "print_end_count": 250,
+            "render_count": 250, "raster_reuse_count": 250, "group_image_packets": 1_000_000, "group_requests": 1_000_000,
+            "group_wire_bytes": 100_000_000, "elapsed_ms": 3_600_000, "page": 250, "total": 250, "quantity": 250]) { _, value in value }
+        let classifications = ["command_path", "preparation_kind", "preparation_stage", "roll_read_source", "connection_end_source"]
+        for invalid in ["-1", "+1", "01", "1e3", "1.5", "NaN", "inf", "PRIVATE_VALUE", ""] {
+            var fields = Dictionary(uniqueKeysWithValues: maxima.keys.map { ($0, invalid) })
+            for key in classifications { fields[key] = "PRIVATE_VALUE" }
+            log.record("label.transfer_summary", fields)
+        }
+        for (key, maximum) in maxima {
+            XCTAssertTrue(DiagnosticPrinterFields.accepts(key, "0", event: "label.transfer_summary"))
+            XCTAssertTrue(DiagnosticPrinterFields.accepts(key, String(maximum), event: "label.transfer_summary"))
+            log.record("label.transfer_summary", [key: String(maximum + 1)])
+        }
+        log.record("label.preparation_summary", ["phase": "PRIVATE_VALUE", "elapsed_ms": "PRIVATE_VALUE"])
+        log.record("label.group_transfer", ["accepted": "PRIVATE_VALUE"])
+        let file = try log.exportForCopy()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let text = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertFalse(text.contains("PRIVATE_"))
+        let rows = try diagnosticRows(text).filter { ($0["event"] as? String)?.hasPrefix("label.") == true }
+        XCTAssertEqual(rows.count, 9 + maxima.count + 2)
+        XCTAssertTrue(rows.allSatisfy { ($0["fields"] as? [String: String]) == [:] })
+    }
+
+    func testPrinterStageClassificationsAcceptAllSupportedPathsAndCacheDecisions() {
+        let values: [String: [String]] = [
+            "command_path": ["d110", "d110m_b1", "d110m_v4"],
+            "preparation_kind": ["inventory", "custom"], "preparation_stage": ["preview", "queue"],
+            "roll_read_source": ["cache", "read", "in_flight", "forced", "unavailable"],
+            "connection_end_source": ["replace_connection", "manual_disconnect", "stop_requested", "print_cancelled",
+                "required_failure", "request_cancelled"]
+        ]
+        for (key, allowed) in values {
+            for value in allowed { XCTAssertTrue(DiagnosticPrinterFields.accepts(key, value), "\(key)=\(value)") }
         }
     }
 

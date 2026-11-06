@@ -23,6 +23,93 @@ import XCTest
         XCTAssertEqual(reader.estimate?.remainingLabels, 75)
     }
 
+    func testAutomaticRefreshReusesRecentMetadataWithoutAnotherReadOrPublication() async {
+        let reader = NiimbotRollReadCoordinator()
+        let info = NiimbotRollInfo(estimate: estimate())
+        var reads = 0, publications = 0
+        XCTAssertEqual(reader.refreshInfoIfNeeded(load: { reads += 1; return info },
+            onUpdate: { _ in publications += 1 }), .read)
+        await reader.waitUntilIdle()
+        XCTAssertEqual(reader.refreshInfoIfNeeded(load: {
+            XCTFail("A recent successful read must satisfy automatic consumers"); return nil
+        }, onUpdate: { _ in publications += 1 }), .cache)
+        XCTAssertEqual(reads, 1); XCTAssertEqual(publications, 1)
+        XCTAssertEqual(reader.info, info); XCTAssertEqual(reader.freshness, .fresh)
+    }
+
+    func testExplicitRefreshStillReadsWhenAutomaticMetadataCacheIsFresh() async {
+        let reader = NiimbotRollReadCoordinator()
+        let first = NiimbotRollInfo(estimate: estimate())
+        let latest = NiimbotRollInfo(estimate: estimate(used: 12))
+        reader.refreshInfoIfNeeded(load: { first }); await reader.waitUntilIdle()
+        var reads = 0
+        XCTAssertTrue(reader.refreshInfo(load: { reads += 1; return latest }))
+        await reader.waitUntilIdle()
+        XCTAssertEqual(reads, 1); XCTAssertEqual(reader.info, latest)
+        XCTAssertEqual(reader.estimate?.remainingLabels, 72)
+        XCTAssertEqual(reader.refreshInfoIfNeeded(load: { XCTFail("The forced result is now cached"); return nil }), .cache)
+    }
+
+    func testAutomaticRefreshSharesThePendingReadInsteadOfUsingEarlierMetadata() async {
+        let reader = NiimbotRollReadCoordinator(), gate = RollInfoReadGate()
+        let first = NiimbotRollInfo(estimate: estimate())
+        let latest = NiimbotRollInfo(estimate: estimate(used: 12))
+        reader.refreshInfo(load: { first }); await reader.waitUntilIdle()
+        reader.refreshInfo(load: { try await gate.read() }); await waitForInfoRead(gate)
+        XCTAssertEqual(reader.refreshInfoIfNeeded(load: { XCTFail("Only one metadata command may own the channel"); return nil }), .inFlight)
+        gate.finish(latest)
+        await reader.waitUntilIdle()
+        XCTAssertEqual(reader.info, latest)
+        XCTAssertEqual(reader.refreshInfoIfNeeded(load: { XCTFail("The pending result should be cached"); return nil }), .cache)
+    }
+
+    func testAutomaticMetadataCacheExpiresAtThirtySecondsAndRejectsClockRollback() async {
+        let clock = RollReadClock(), reader = NiimbotRollReadCoordinator(now: { clock.uptime })
+        let info = NiimbotRollInfo(estimate: estimate())
+        var reads = 0
+        reader.refreshInfoIfNeeded(load: { reads += 1; return info }); await reader.waitUntilIdle()
+        clock.uptime = 129.999
+        XCTAssertEqual(reader.refreshInfoIfNeeded(load: { reads += 1; return info }), .cache)
+        clock.uptime = 130
+        XCTAssertEqual(reader.refreshInfoIfNeeded(load: { reads += 1; return info }), .read)
+        await reader.waitUntilIdle()
+        clock.uptime = 129
+        XCTAssertEqual(reader.refreshInfoIfNeeded(load: { reads += 1; return info }), .read)
+        await reader.waitUntilIdle()
+        XCTAssertEqual(reads, 3)
+    }
+
+    func testPrintingPhysicalChangesAndDisconnectImmediatelyInvalidateAutomaticCache() async {
+        let reader = NiimbotRollReadCoordinator()
+        let first = NiimbotRollInfo(estimate: estimate())
+        let latest = NiimbotRollInfo(estimate: estimate(used: 12))
+        reader.refreshInfoIfNeeded(load: { first }); await reader.waitUntilIdle()
+        reader.markStale()
+        XCTAssertEqual(reader.refreshInfoIfNeeded(load: { latest }), .read)
+        await reader.waitUntilIdle()
+        XCTAssertEqual(reader.estimate?.remainingLabels, 72)
+        reader.reset()
+        XCTAssertNil(reader.info)
+        XCTAssertEqual(reader.refreshInfoIfNeeded(load: { first }), .read)
+        await reader.waitUntilIdle()
+        XCTAssertEqual(reader.estimate?.remainingLabels, 75)
+    }
+
+    func testMetadataWithoutRemainingCountersCachesButFailedAndMissingReadsDoNot() async {
+        let reader = NiimbotRollReadCoordinator()
+        let info = NiimbotRollInfo(productCode: "120425109", totalLabels: 0, usedLabels: 0, labelType: 1)
+        reader.refreshInfoIfNeeded(load: { info }); await reader.waitUntilIdle()
+        XCTAssertEqual(reader.freshness, .unavailable); XCTAssertNil(reader.estimate)
+        XCTAssertEqual(reader.refreshInfoIfNeeded(load: { XCTFail("Valid geometry can be cached without a remaining count"); return nil }), .cache)
+        reader.refreshInfo(load: { throw LabelPrinterIssue.responseTimeout }); await reader.waitUntilIdle()
+        XCTAssertNil(reader.info, "An unsuccessful fresh read cannot keep a stale physical stock identity")
+        XCTAssertEqual(reader.refreshInfoIfNeeded(load: { nil }), .read)
+        await reader.waitUntilIdle()
+        XCTAssertEqual(reader.refreshInfoIfNeeded(load: { info }), .read)
+        await reader.waitUntilIdle()
+        XCTAssertEqual(reader.info, info)
+    }
+
     func testPrintOrPaperChangeInvalidatesAnEarlierReadAndDrainsItBeforeNewWork() async {
         let reader = NiimbotRollReadCoordinator(), gate = RollReadGate()
         reader.refresh { self.estimate() }; await reader.waitUntilIdle()
@@ -184,6 +271,8 @@ import XCTest
         XCTAssertTrue(guardState.isQuarantined); XCTAssertFalse(guardState.consumeLateResponse(0x00))
     }
 }
+
+@MainActor private final class RollReadClock { var uptime: TimeInterval = 100 }
 
 @MainActor private final class RollReadGate {
     private var continuation: CheckedContinuation<NiimbotRollEstimate?, Error>?

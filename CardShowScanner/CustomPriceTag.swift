@@ -34,6 +34,7 @@ struct CustomPriceTagDraft: Equatable, Sendable {
     private(set) var preparing = false
     @ObservationIgnored private let queue: LabelPrintQueue
     @ObservationIgnored private let render: Render
+    @ObservationIgnored private var rasterCache: (draft: CustomPriceTagDraft, raster: LabelRaster)?
     private var preparedDraft: CustomPriceTagDraft?
     private var preparedIDs: Set<UUID> = []
 
@@ -59,27 +60,61 @@ struct CustomPriceTagDraft: Equatable, Sendable {
         return preparedIDs.isSubset(of: Set(queue.entries.lazy.map(\.id)))
     }
 
+    /// A preview prepares the same immutable printer bits used by Prepare.
+    /// Keep only this model's latest exact draft, including its roll profile.
+    func previewRaster(for draft: CustomPriceTagDraft) throws -> LabelRaster {
+        var metrics = LabelPreparationMetrics()
+        var phase = LabelPreparationMetrics.Phase.failed
+        defer { metrics.record(kind: .custom, stage: .preview, phase: phase, total: 1) }
+        let prepared = try raster(for: draft, metrics: &metrics)
+        if prepared.reused { metrics.reusedRaster() }
+        phase = .completed
+        return prepared.raster
+    }
+
+    private func raster(for draft: CustomPriceTagDraft, metrics: inout LabelPreparationMetrics)
+        throws -> (raster: LabelRaster, reused: Bool) {
+        try draft.validate()
+        if let cached = rasterCache, cached.draft == draft { return (cached.raster, true) }
+        let raster = try metrics.measure(.render) { try self.render(draft) }
+        try raster.validate()
+        rasterCache = (draft, raster)
+        return (raster, false)
+    }
+
     /// Persists pending labels only. Transport still needs an explicit Print action.
     @discardableResult func prepare() -> Bool {
         guard !preparing else { return false }
-        if hasPreparedQueue { return true }
+        if hasPreparedQueue {
+            LabelPreparationMetrics().record(kind: .custom, stage: .queue, phase: .reusedQueue,
+                                            total: preparedIDs.count)
+            return true
+        }
         guard let draft else {
             error = isBulk ? "Enter 1–100 copies for the bulk price tag." : "Enter a whole-dollar price and 1–100 copies."
             return false
         }
         preparing = true; error = nil
-        defer { preparing = false }
+        var metrics = LabelPreparationMetrics()
+        var phase = LabelPreparationMetrics.Phase.failed
+        defer {
+            preparing = false
+            metrics.record(kind: .custom, stage: .queue, phase: phase, total: draft.copies)
+        }
         do {
             guard queue.isLoaded else { throw LabelPrintQueueFailure.notLoaded }
             guard queue.entries.isEmpty else { throw LabelPrintQueueFailure.unfinishedQueue }
-            let raster = try render(draft)
+            let prepared = try raster(for: draft, metrics: &metrics)
             let entries = try (1...draft.copies).map { copy in
-                try LabelQueueEntry(customPriceCents: draft.priceCents, raster: raster,
+                let entry = try LabelQueueEntry(customPriceCents: draft.priceCents, raster: prepared.raster,
                     copyNumber: copy, paperSize: draft.paperSize, isBulk: draft.isBulk)
+                if prepared.reused || copy > 1 { metrics.reusedRaster() }
+                return entry
             }
-            try queue.replace(with: entries)
+            try metrics.measure(.queueSave) { try queue.replace(with: entries) }
             preparedDraft = draft
             preparedIDs = Set(entries.lazy.map(\.id))
+            phase = .completed
             DiagnosticLog.shared.record("labels.custom_prepared", ["quantity": String(entries.count)])
             return true
         } catch {

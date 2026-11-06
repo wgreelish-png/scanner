@@ -79,6 +79,10 @@ import XCTest
             let data = try JSONEncoder().encode(draft)
             XCTAssertEqual(try JSONDecoder().decode(InventoryLabelDraft.self, from: data), draft)
         }
+        // JSONSerialization bridges edited fixture numbers through Double.
+        // Keep the exact 2.34 Codable check above; use binary-exact 2.5 here so
+        // that helper cannot alter the cost while testing missing legacy keys.
+        draft.profitInputs.acquisitionCost = Decimal(string: "2.5")
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(draft)) as? [String: Any])
         object.removeValue(forKey: "pricePosition")
         let legacyData = try JSONSerialization.data(withJSONObject: object)

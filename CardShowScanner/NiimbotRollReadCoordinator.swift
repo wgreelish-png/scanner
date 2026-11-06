@@ -5,6 +5,11 @@ enum NiimbotRollEstimateFreshness: Equatable, Sendable {
     case unknown, fresh, stale, unavailable
 }
 
+enum NiimbotRollRefreshSource: String, Equatable, Sendable {
+    case cache, read
+    case inFlight = "in_flight"
+}
+
 /// NIIMBOT replies carry an opcode but no request ID. After an abandoned
 /// dispatched read, only reconnecting permits another RFID request.
 struct NiimbotOptionalRollReplyGuard {
@@ -45,18 +50,44 @@ struct NiimbotPrintStockSnapshot: Equatable, Sendable {
     @ObservationIgnored private var connection = UUID()
     @ObservationIgnored private var revision = UUID()
     @ObservationIgnored private var task: Task<Void, Never>?
+    @ObservationIgnored private var cachedAt: TimeInterval?
+    @ObservationIgnored private let now: @MainActor () -> TimeInterval
+    private static let maximumCacheAge: TimeInterval = 30
+
+    init(now: @escaping @MainActor () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+        self.now = now
+    }
 
     deinit { task?.cancel() }
 
     func reset() {
         connection = UUID(); revision = UUID()
         task?.cancel(); task = nil; isReading = false
+        cachedAt = nil
         estimate = nil; info = nil; freshness = .unknown
     }
 
     func markStale() {
         revision = UUID()
+        cachedAt = nil
         if estimate != nil { freshness = .stale }
+    }
+
+    /// Automatic consumers may reuse one successful read for this connection.
+    /// An explicit Refresh still calls refreshInfo, which always reads again.
+    /// Printing, stock changes and disconnects invalidate the cache immediately;
+    /// a short monotonic lifetime also prevents indefinitely reusing quiet stock.
+    @discardableResult func refreshInfoIfNeeded(
+        load: @escaping @MainActor () async throws -> NiimbotRollInfo?,
+        onUpdate: @escaping @MainActor (NiimbotRollInfo?) -> Void = { _ in }
+    ) -> NiimbotRollRefreshSource {
+        guard task == nil else { return .inFlight }
+        if info != nil, let cachedAt {
+            let age = now() - cachedAt
+            if age.isFinite, age >= 0, age < Self.maximumCacheAge { return .cache }
+        }
+        _ = refreshInfo(load: load, onUpdate: onUpdate)
+        return .read
     }
 
     @discardableResult func refresh(load: @escaping @MainActor () async throws -> NiimbotRollEstimate?) -> Bool {
@@ -85,10 +116,12 @@ struct NiimbotPrintStockSnapshot: Equatable, Sendable {
             switch result {
             case .success(let value):
                 self.info = value
+                self.cachedAt = value == nil ? nil : self.now()
                 self.estimate = value?.estimate
                 self.freshness = self.estimate == nil ? .unavailable : .fresh
                 onUpdate(value)
             case .failure:
+                self.cachedAt = nil
                 self.info = nil
                 self.freshness = self.estimate == nil ? .unavailable : .stale
                 onUpdate(nil)

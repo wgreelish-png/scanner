@@ -523,7 +523,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                         Text(value.title).tag(value).accessibilityIdentifier("labels.style." + value.rawValue)
                     }
                 }.accessibilityIdentifier("labels.style")
-                Picker("Physical paper", selection: Binding(get: { paper }, set: { size in
+                Picker("Physical paper", selection: Binding(get: { paperPreferences.size }, set: { size in
                     paperPreferences.select(size)
                     updatePaperSize(paperPreferences.size)
                 })) {
@@ -825,7 +825,13 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         updatePricePosition(paperPreferences.pricePosition)
         guard validation == nil, approvals.isLoaded, canPrepareNewQueue, !preparing else { return }
         preparing = true
-        defer { preparing = false }
+        var metrics = LabelPreparationMetrics()
+        var preparationPhase = LabelPreparationMetrics.Phase.failed
+        var requestedCopies = 0
+        defer {
+            preparing = false
+            metrics.record(kind: .inventory, stage: .queue, phase: preparationPhase, total: requestedCopies)
+        }
         var pricesSaved = false
         do {
             let requests = try drafts.filter { !$0.isBlankPrice }.map { draft -> TagApprovalRequest in
@@ -835,35 +841,42 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
             }
             keepExistingStickerIDs.formIntersection(Set(requests.map(\.id)))
             if !requests.isEmpty {
-                try approvals.prepareForPrinting(requests, keepingExistingStickerIDs: keepExistingStickerIDs)
+                try metrics.measure(.approvalSave) {
+                    try approvals.prepareForPrinting(requests, keepingExistingStickerIDs: keepExistingStickerIDs)
+                }
                 pricesSaved = true
             }
             let draftsToPrint = printableDrafts
+            requestedCopies = draftsToPrint.reduce(0) { $0 + $1.copies }
             guard !draftsToPrint.isEmpty else {
                 preparationNotice = "Label choices saved. No labels need printing."
+                preparationPhase = .completed
                 return
             }
             var entries: [LabelQueueEntry] = []
             var priceRasters: [LabelPriceRasterKey: LabelRaster] = [:]
             for draft in draftsToPrint {
                 let raster: LabelRaster
+                var reused = false
                 if draft.style == .priceOnly {
                     // The branded design depends only on the final price and
                     // roll. Reuse identical artwork across inventory entries.
                     let key = LabelPriceRasterKey(paperSize: draft.paperSize,
                         pricePosition: draft.pricePosition, priceText: draft.priceText ?? "")
-                    if let saved = priceRasters[key] { raster = saved }
+                    if let saved = priceRasters[key] { raster = saved; reused = true }
                     else {
-                        raster = try InventoryLabelRenderer.renderRaster(draft)
+                        raster = try metrics.measure(.render) { try InventoryLabelRenderer.renderRaster(draft) }
                         priceRasters[key] = raster
                     }
-                } else { raster = try InventoryLabelRenderer.renderRaster(draft) }
+                } else { raster = try metrics.measure(.render) { try InventoryLabelRenderer.renderRaster(draft) } }
                 for copy in 1...draft.copies {
                     entries.append(try LabelQueueEntry(draft: draft, raster: raster, copyNumber: copy,
                         pricingRevisionID: draft.isBlankPrice ? nil : approvals.record(for: draft.id)?.priceRevisionID))
+                    if reused || copy > 1 { metrics.reusedRaster() }
                 }
             }
-            try queue.replace(with: entries)
+            try metrics.measure(.queueSave) { try queue.replace(with: entries) }
+            preparationPhase = .completed
             path.append(.queue)
         } catch {
             self.error = pricesSaved
@@ -1337,6 +1350,67 @@ private struct LabelActionBar<Content: View>: View {
     }
 
     private var progressScreen: some View {
+        #if DEBUG
+        LabelPrintProgressView(progress: progress, queue: queue, printer: printer, fixture: fixture)
+        #else
+        LabelPrintProgressView(progress: progress, queue: queue, printer: printer)
+        #endif
+    }
+
+    private var printHelp: String {
+        if queue.isPrinting {
+            return "Pausing stops new labels. The printer may finish labels already buffered. Check uncertain labels before retrying."
+        }
+        if let stockIssue { return stockIssue }
+        if printer.supportsContinuousPrinting {
+            return "D110-M batches keep the printer supplied; identical consecutive labels use the printer’s copy count."
+        }
+        return printer.isConnected
+            ? "Each label is confirmed before the next one prints."
+            : "Connect your printer to print the saved queue."
+    }
+
+    private var retryConfirmation: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text("Some selected labels may already have printed. The printer may also finish labels already buffered after stopping. Inspect the output and every selected Check label copy. Retry only copies you still need.")
+                    Toggle("I checked the printed labels", isOn: $acknowledged)
+                        .accessibilityIdentifier("labelQueue.acknowledgeUncertain")
+                }
+            }.navigationTitle("Check Before Retrying").navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) { Button("Cancel") { showingRetry = false } }
+                    ToolbarItem(placement: .topBarTrailing) { ClearLabelPrintQueueButton(identifier: "labelQueue.retry.clearQueue") }
+                }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    LabelActionBar {
+                        Button("Requeue Selected Labels") { retrySelected(); showingRetry = false }
+                            .buttonStyle(.borderedProminent).disabled(!acknowledged || selected.isEmpty)
+                            .accessibilityIdentifier("labelQueue.confirmRetry")
+                    }
+                }
+        }
+    }
+    private func retrySelected() {
+        perform { try queue.retry(ids: selected, acknowledgeUncertain: acknowledged); selected = [] }
+    }
+    private func perform(_ action: () throws -> Void) {
+        do { try action() } catch { actionError = error.localizedDescription }
+    }
+}
+
+/// The presented screen observes the live job itself. Formatting values in the
+/// presenting view's sheet builder can leave the sheet with an old count.
+@MainActor private struct LabelPrintProgressView: View {
+    let progress: LabelPrintProgressSession
+    let queue: LabelPrintQueue
+    let printer: NiimbotPrinter
+    #if DEBUG
+    var fixture: LabelPrintProgressFixture?
+    #endif
+
+    var body: some View {
         NavigationStack {
             VStack(spacing: 24) {
                 Spacer(minLength: 12)
@@ -1391,48 +1465,6 @@ private struct LabelActionBar<Content: View>: View {
             if progress.isRunning { progress.stop(queue: queue, using: printer) }
         }
         .accessibilityIdentifier("labelProgress.screen")
-    }
-
-    private var printHelp: String {
-        if queue.isPrinting {
-            return "Pausing stops new labels. The printer may finish labels already buffered. Check uncertain labels before retrying."
-        }
-        if let stockIssue { return stockIssue }
-        if printer.supportsContinuousPrinting {
-            return "D110-M batches keep the printer supplied; identical consecutive labels use the printer’s copy count."
-        }
-        return printer.isConnected
-            ? "Each label is confirmed before the next one prints."
-            : "Connect your printer to print the saved queue."
-    }
-
-    private var retryConfirmation: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    Text("Some selected labels may already have printed. The printer may also finish labels already buffered after stopping. Inspect the output and every selected Check label copy. Retry only copies you still need.")
-                    Toggle("I checked the printed labels", isOn: $acknowledged)
-                        .accessibilityIdentifier("labelQueue.acknowledgeUncertain")
-                }
-            }.navigationTitle("Check Before Retrying").navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) { Button("Cancel") { showingRetry = false } }
-                    ToolbarItem(placement: .topBarTrailing) { ClearLabelPrintQueueButton(identifier: "labelQueue.retry.clearQueue") }
-                }
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    LabelActionBar {
-                        Button("Requeue Selected Labels") { retrySelected(); showingRetry = false }
-                            .buttonStyle(.borderedProminent).disabled(!acknowledged || selected.isEmpty)
-                            .accessibilityIdentifier("labelQueue.confirmRetry")
-                    }
-                }
-        }
-    }
-    private func retrySelected() {
-        perform { try queue.retry(ids: selected, acknowledgeUncertain: acknowledged); selected = [] }
-    }
-    private func perform(_ action: () throws -> Void) {
-        do { try action() } catch { actionError = error.localizedDescription }
     }
 }
 

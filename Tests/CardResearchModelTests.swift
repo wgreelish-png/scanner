@@ -127,7 +127,7 @@ import SwiftData
             "ko:Holofoil": ["language": "ko", "finish": "Holofoil", "grades": [
                 ["grader": "PSA", "grade": "9", "guide_value": "23"]
             ]],
-            "Portuguese:Holofoil": ["language": "Portuguese", "finish": "Holofoil", "grades": [
+            "French:Holofoil": ["language": "French", "finish": "Holofoil", "grades": [
                 ["grader": "PSA", "grade": "9", "guide_value": "24"]
             ]]
         ]
