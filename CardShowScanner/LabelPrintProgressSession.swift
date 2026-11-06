@@ -117,15 +117,18 @@ import Observation
 /// An explicitly enabled, token-isolated UI-test transport. It never creates a
 /// Bluetooth connection and advances only when the test confirms each gate.
 @MainActor @Observable final class LabelPrintProgressFixture: LabelContinuousPrinterSending {
-    enum Stage: Equatable { case idle, labels, finishing }
+    enum Stage: Equatable { case idle, uploading, labels, finishing }
     private(set) var stage = Stage.idle
+    private(set) var uploadProgress: NiimbotUploadProgress?
     private let fails: Bool
     private let confirmsEachCopy: Bool
+    private let showsUpload: Bool
     @ObservationIgnored private var continuation: CheckedContinuation<Bool, Never>?
 
-    private init(fails: Bool, confirmsEachCopy: Bool) {
+    private init(fails: Bool, confirmsEachCopy: Bool, showsUpload: Bool) {
         self.fails = fails
         self.confirmsEachCopy = confirmsEachCopy
+        self.showsUpload = showsUpload
     }
 
     static func configured() -> LabelPrintProgressFixture? {
@@ -135,8 +138,10 @@ import Observation
               UUID(uuidString: String(token.dropFirst("--show-transactions-fixture-id=".count))) != nil,
               let mode = arguments.first(where: { $0.hasPrefix("--label-print-progress-fixture=") })
                 .map({ String($0.dropFirst("--label-print-progress-fixture=".count)) }),
-              ["success", "failure", "success-per-copy"].contains(mode) else { return nil }
-        return LabelPrintProgressFixture(fails: mode == "failure", confirmsEachCopy: mode == "success-per-copy")
+              ["success", "failure", "success-per-copy", "success-upload", "failure-upload"].contains(mode) else { return nil }
+        return LabelPrintProgressFixture(fails: mode == "failure" || mode == "failure-upload",
+            confirmsEachCopy: mode == "success-per-copy" || mode == "success-upload",
+            showsUpload: mode == "success-upload" || mode == "failure-upload")
     }
 
     func confirm() {
@@ -145,6 +150,7 @@ import Observation
     }
 
     func cancelPrinting() {
+        uploadProgress = nil
         let waiting = continuation; continuation = nil
         waiting?.resume(returning: false)
     }
@@ -155,8 +161,20 @@ import Observation
                            beforePages: @escaping @MainActor ([Int]) async throws -> Void,
                            afterPages: @escaping @MainActor ([Int]) async throws -> Void) async -> LabelSendOutcome {
         let pages = Array(rasters.indices)
+        defer { uploadProgress = nil }
         do {
             try await beforePages(pages)
+            if showsUpload {
+                stage = .uploading
+                for completedRequests in [0, 2, 4] {
+                    uploadProgress = NiimbotUploadProgress(pages: 0..<rasters.count,
+                        completedRequests: completedRequests, totalRequests: 4)
+                    let advanced = await withCheckedContinuation { continuation = $0 }
+                    guard advanced, !Task.isCancelled else { return .uncertain(.cancelled) }
+                    if fails, completedRequests == 2 { return .uncertain(.writeFailed) }
+                }
+                uploadProgress = nil
+            }
             stage = .labels
             for receipt in confirmsEachCopy ? pages.map({ [$0] }) : [pages] {
                 let confirmed = await withCheckedContinuation { continuation = $0 }

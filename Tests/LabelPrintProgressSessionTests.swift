@@ -117,6 +117,30 @@ import XCTest
         XCTAssertTrue(session.didSucceed)
     }
 
+    func testAcceptedUploadCannotAdvanceConfirmedPrintedCountOrDismissProgress() async throws {
+        let queue = try queue(entries(3)), sender = ProgressGatedSender(holdsPhysicalProof: true)
+        let session = LabelPrintProgressSession()
+        session.start(queue: queue, using: sender)
+        for _ in 0..<100 where !sender.isWaitingForPhysicalProof { await Task.yield() }
+        XCTAssertTrue(sender.isWaitingForPhysicalProof)
+        XCTAssertEqual(sender.uploadProgress?.fraction, 1)
+        XCTAssertEqual(session.total, 3)
+        XCTAssertEqual(session.completed(in: queue.entries), 0)
+        XCTAssertTrue(queue.entries.allSatisfy { $0.state == .sending })
+        XCTAssertTrue(session.isPresented)
+        XCTAssertFalse(session.didSucceed)
+        sender.confirmPhysicalCopies()
+        await waitForFinalAcknowledgement(sender)
+        XCTAssertEqual(session.completed(in: queue.entries), 3)
+        XCTAssertNil(sender.uploadProgress)
+        XCTAssertTrue(session.isPresented, "Physical confirmation still waits for final job acknowledgement")
+        XCTAssertFalse(session.didSucceed)
+        sender.finish()
+        await session.waitUntilFinished()
+        XCTAssertTrue(session.didSucceed)
+        XCTAssertFalse(session.isPresented)
+    }
+
     func testOpeningAnAlreadyCompletedQueueDoesNotPresentOrAutoNavigate() throws {
         var rows = try entries(1)
         rows[0].state = .completed
@@ -187,15 +211,28 @@ private struct ProgressQueueDocument: Codable { let version: Int; let entries: [
 @MainActor private final class ProgressGatedSender: LabelContinuousPrinterSending {
     let failsBeforeProof: Bool
     let finalOutcome: LabelSendOutcome
+    let holdsPhysicalProof: Bool
     var cancels = 0
+    private(set) var uploadProgress: NiimbotUploadProgress?
     private var continuation: CheckedContinuation<Void, Never>?
+    private var proofContinuation: CheckedContinuation<Bool, Never>?
     var isWaiting: Bool { continuation != nil }
-    init(failsBeforeProof: Bool = false, finalOutcome: LabelSendOutcome = .completed) {
+    var isWaitingForPhysicalProof: Bool { proofContinuation != nil }
+    init(failsBeforeProof: Bool = false, finalOutcome: LabelSendOutcome = .completed, holdsPhysicalProof: Bool = false) {
         self.failsBeforeProof = failsBeforeProof
         self.finalOutcome = finalOutcome
+        self.holdsPhysicalProof = holdsPhysicalProof
     }
     func printLabel(_ raster: LabelRaster) async -> LabelSendOutcome { .notSent(.unsupportedResponse) }
-    func cancelPrinting() { cancels += 1 }
+    func cancelPrinting() {
+        cancels += 1
+        let waiting = proofContinuation; proofContinuation = nil
+        waiting?.resume(returning: false)
+    }
+    func confirmPhysicalCopies() {
+        let waiting = proofContinuation; proofContinuation = nil
+        waiting?.resume(returning: true)
+    }
     func finish() { let waiting = continuation; continuation = nil; waiting?.resume() }
 
     func printContinuously(_ rasters: [LabelRaster],
@@ -204,6 +241,12 @@ private struct ProgressQueueDocument: Codable { let version: Int; let entries: [
         do {
             let pages = Array(rasters.indices)
             try await beforePages(pages)
+            if holdsPhysicalProof {
+                uploadProgress = NiimbotUploadProgress(pages: 0..<rasters.count, completedRequests: 4, totalRequests: 4)
+                let confirmed = await withCheckedContinuation { proofContinuation = $0 }
+                uploadProgress = nil
+                guard confirmed, !Task.isCancelled else { return .uncertain(.cancelled) }
+            }
             if failsBeforeProof { return .uncertain(.writeFailed) }
             try await afterPages(pages)
             await withCheckedContinuation { continuation = $0 }

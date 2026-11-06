@@ -1421,6 +1421,22 @@ private struct LabelActionBar<Content: View>: View {
     var fixture: LabelPrintProgressFixture?
     #endif
 
+    private var upload: NiimbotUploadProgress? {
+        guard progress.isRunning, !progress.didRequestStop else { return nil }
+        #if DEBUG
+        if let fixture { return fixture.uploadProgress }
+        #endif
+        return printer.uploadProgress
+    }
+
+    private var status: String {
+        #if DEBUG
+        if let fixture, fixture.stage == .labels, progress.isRunning, !progress.didRequestStop,
+           progress.completed(in: queue.entries) < progress.total { return "Waiting for printer confirmation…" }
+        #endif
+        return progress.status(in: queue.entries, printerStatus: printer.status)
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 24) {
@@ -1429,25 +1445,49 @@ private struct LabelActionBar<Content: View>: View {
                     .font(.system(size: 48)).foregroundStyle(.tint).accessibilityHidden(true)
                 Text(progress.isRunning ? "Printing Labels" : "Review Printing")
                     .font(.title2.bold())
-                Text("\(progress.completed(in: queue.entries).formatted()) of \(progress.total.formatted()) labels printed")
-                    .font(.title3.monospacedDigit())
-                    .accessibilityIdentifier("labelProgress.count")
-                ProgressView(value: Double(progress.completed(in: queue.entries)), total: Double(max(1, progress.total)))
-                    .accessibilityLabel("Label printing progress")
-                    .accessibilityIdentifier("labelProgress.bar")
-                Text(progress.status(in: queue.entries, printerStatus: printer.status))
-                    .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    .accessibilityIdentifier("labelProgress.status")
+                VStack(spacing: 8) {
+                    Text("Confirmed printed: \(progress.completed(in: queue.entries).formatted()) of \(progress.total.formatted())")
+                        .font(.title3.monospacedDigit())
+                        .accessibilityIdentifier("labelProgress.count")
+                    ProgressView(value: Double(progress.completed(in: queue.entries)), total: Double(max(1, progress.total)))
+                        .accessibilityLabel("Confirmed printed labels")
+                        .accessibilityIdentifier("labelProgress.bar")
+                    Text("The printed count updates when the printer confirms it.")
+                        .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                }
+                if let upload {
+                    VStack(spacing: 8) {
+                        HStack {
+                            Text(upload.pages.count == 1
+                                 ? "Sending label \(upload.pages.lowerBound + 1)"
+                                 : "Sending labels \(upload.pages.lowerBound + 1)–\(upload.pages.upperBound)")
+                                .accessibilityIdentifier("labelProgress.uploadRange")
+                            Spacer()
+                            Text("\(Int((upload.fraction * 100).rounded(.down)))%")
+                                .monospacedDigit().accessibilityIdentifier("labelProgress.uploadPercent")
+                        }.font(.subheadline)
+                        ProgressView(value: upload.fraction)
+                            .accessibilityLabel("Sending to printer")
+                            .accessibilityValue("\(Int((upload.fraction * 100).rounded(.down))) percent")
+                            .accessibilityIdentifier("labelProgress.uploadBar")
+                    }
+                } else {
+                    Text(status)
+                        .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        .accessibilityIdentifier("labelProgress.status")
+                }
                 if progress.isRunning {
                     Text("Keep the app open until the printer finishes.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 #if DEBUG
                 if let fixture, progress.isRunning, fixture.stage != .idle {
-                    Button(fixture.stage == .finishing ? "Finish Test Print" : "Confirm Test Labels") { fixture.confirm() }
+                    Button(fixture.stage == .finishing ? "Finish Test Print"
+                           : fixture.stage == .uploading ? "Advance Test Upload" : "Confirm Test Labels") { fixture.confirm() }
                         .buttonStyle(.bordered)
                         .accessibilityIdentifier(fixture.stage == .finishing
-                            ? "labelProgress.fixtureFinish" : "labelProgress.fixtureConfirm")
+                            ? "labelProgress.fixtureFinish" : fixture.stage == .uploading
+                                ? "labelProgress.fixtureUpload" : "labelProgress.fixtureConfirm")
                 }
                 #endif
                 Spacer(minLength: 12)

@@ -1007,15 +1007,15 @@ import XCTest
         defer { app.terminate() }
         prepareProgressFixture(app: app, copies: "3")
         tap(app.buttons["labelQueue.print"], app: app)
-        assertLiveProgress("0 of 3 labels printed", app: app)
+        assertLiveProgress("Confirmed printed: 0 of 3", app: app)
         tap(app.buttons["labelProgress.fixtureConfirm"], app: app)
-        assertLiveProgress("1 of 3 labels printed", app: app)
+        assertLiveProgress("Confirmed printed: 1 of 3", app: app)
         XCTAssertFalse(app.buttons["labelProgress.fixtureFinish"].exists,
                        "The first receipt must update the sheet before the next label or final acknowledgement")
         tap(app.buttons["labelProgress.fixtureConfirm"], app: app)
-        assertLiveProgress("2 of 3 labels printed", app: app)
+        assertLiveProgress("Confirmed printed: 2 of 3", app: app)
         tap(app.buttons["labelProgress.fixtureConfirm"], app: app)
-        assertLiveProgress("3 of 3 labels printed", app: app)
+        assertLiveProgress("Confirmed printed: 3 of 3", app: app)
         assertContains("Finishing print job", element: app.staticTexts["labelProgress.status"])
         XCTAssertTrue(app.buttons["labelProgress.pause"].exists,
                       "The final printer acknowledgement still owns the active job after the counter reaches its total")
@@ -1028,6 +1028,60 @@ import XCTest
         XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled)
         XCTAssertFalse(app.buttons["labelProgress.pause"].exists,
                        "Opening completed receipts must not present progress or automatically navigate away")
+        assertNoBluetoothPrompt(app: app)
+    }
+
+    func testUploadProgressStaysSeparateFromConfirmedPhysicalCopiesAndFinalAcknowledgement() {
+        continueAfterFailure = false
+        let app = launch(extraArguments: ["--label-print-progress-fixture=success-upload"])
+        defer { app.terminate() }
+        prepareProgressFixture(app: app, copies: "3")
+        tap(app.buttons["labelQueue.print"], app: app)
+        assertLiveProgress("Confirmed printed: 0 of 3", app: app)
+        assertUploadProgress("0%", app: app)
+        assertContains("Sending labels 1–3", element: app.staticTexts["labelProgress.uploadRange"])
+        tap(app.buttons["labelProgress.fixtureUpload"], app: app)
+        assertUploadProgress("50%", app: app)
+        assertLiveProgress("Confirmed printed: 0 of 3", app: app)
+        XCTAssertFalse(app.buttons["labelProgress.fixtureConfirm"].exists)
+        tap(app.buttons["labelProgress.fixtureUpload"], app: app)
+        assertUploadProgress("100%", app: app)
+        assertLiveProgress("Confirmed printed: 0 of 3", app: app)
+        XCTAssertFalse(app.buttons["labelProgress.fixtureFinish"].exists,
+                       "Accepted image data is not physical completion or final job acknowledgement")
+        tap(app.buttons["labelProgress.fixtureUpload"], app: app)
+        XCTAssertTrue(app.buttons["labelProgress.fixtureConfirm"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.progressIndicators["labelProgress.uploadBar"].exists)
+        assertContains("Waiting for printer confirmation", element: app.staticTexts["labelProgress.status"])
+        assertLiveProgress("Confirmed printed: 0 of 3", app: app)
+        for count in 1...3 {
+            tap(app.buttons["labelProgress.fixtureConfirm"], app: app)
+            assertLiveProgress("Confirmed printed: \(count) of 3", app: app)
+        }
+        assertContains("Finishing print job", element: app.staticTexts["labelProgress.status"])
+        XCTAssertTrue(app.buttons["labelProgress.pause"].exists)
+        tap(app.buttons["labelProgress.fixtureFinish"], app: app)
+        assertReturnedToPriceTags(app: app)
+        assertNoBluetoothPrompt(app: app)
+    }
+
+    func testPauseDuringUploadKeepsEveryUnconfirmedCopyAvailableForReview() {
+        continueAfterFailure = false
+        let app = launch(extraArguments: ["--label-print-progress-fixture=success-upload"])
+        defer { app.terminate() }
+        prepareProgressFixture(app: app, copies: "2")
+        tap(app.buttons["labelQueue.print"], app: app)
+        assertUploadProgress("0%", app: app)
+        tap(app.buttons["labelProgress.fixtureUpload"], app: app)
+        assertUploadProgress("50%", app: app)
+        tap(app.buttons["labelProgress.pause"], app: app)
+        XCTAssertTrue(app.buttons["labelProgress.reviewQueue"].waitForExistence(timeout: 5))
+        assertLiveProgress("Confirmed printed: 0 of 2", app: app)
+        XCTAssertFalse(app.progressIndicators["labelProgress.uploadBar"].exists)
+        XCTAssertFalse(app.buttons["labelProgress.fixtureFinish"].exists)
+        tap(app.buttons["labelProgress.reviewQueue"], app: app)
+        assertContains("0/2 completed", element: app.staticTexts["labelQueue.progress"])
+        XCTAssertTrue(app.buttons["labelQueue.retrySelected"].exists)
         assertNoBluetoothPrompt(app: app)
     }
 
@@ -1069,13 +1123,17 @@ import XCTest
 
     func testPrintingFailureStaysAvailableForReviewWithoutAutomaticRetryOrNavigation() {
         continueAfterFailure = false
-        let app = launch(extraArguments: ["--label-print-progress-fixture=failure"])
+        let app = launch(extraArguments: ["--label-print-progress-fixture=failure-upload"])
         defer { app.terminate() }
         prepareProgressFixture(app: app, copies: "2")
         tap(app.buttons["labelQueue.print"], app: app)
-        tap(app.buttons["labelProgress.fixtureConfirm"], app: app)
+        assertUploadProgress("0%", app: app)
+        tap(app.buttons["labelProgress.fixtureUpload"], app: app)
+        assertUploadProgress("50%", app: app)
+        tap(app.buttons["labelProgress.fixtureUpload"], app: app)
         XCTAssertTrue(app.buttons["labelProgress.reviewQueue"].waitForExistence(timeout: 5))
-        assertContains("0 of 2 labels printed", element: app.staticTexts["labelProgress.count"])
+        assertLiveProgress("Confirmed printed: 0 of 2", app: app)
+        XCTAssertFalse(app.progressIndicators["labelProgress.uploadBar"].exists)
         tap(app.buttons["labelProgress.reviewQueue"], app: app)
         XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled)
@@ -1105,6 +1163,16 @@ import XCTest
             predicate: NSPredicate(format: "value CONTAINS %@ AND value CONTAINS %@", "PokéDen price", price), object: preview)
         XCTAssertEqual(XCTWaiter.wait(for: [rendered], timeout: 5), .completed,
                        "Expected the selected card's initial PokéDen \(price) preview", file: file, line: line)
+    }
+
+    private func assertUploadProgress(_ expected: String, app: XCUIApplication,
+                                      file: StaticString = #filePath, line: UInt = #line) {
+        let value = app.staticTexts["labelProgress.uploadPercent"]
+        XCTAssertTrue(value.waitForExistence(timeout: 5), file: file, line: line)
+        let update = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", expected), object: value)
+        XCTAssertEqual(XCTWaiter.wait(for: [update], timeout: 5), .completed,
+                       "Expected upload progress \(expected), received \(value.label)", file: file, line: line)
+        XCTAssertTrue(app.progressIndicators["labelProgress.uploadBar"].exists, file: file, line: line)
     }
 
     private func assertLiveProgress(_ expected: String, app: XCUIApplication,

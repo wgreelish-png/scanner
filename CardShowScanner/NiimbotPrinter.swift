@@ -17,6 +17,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     private(set) var isConnected = false
     private(set) var isScanning = false
     private(set) var isPrinting = false
+    private(set) var uploadProgress: NiimbotUploadProgress?
     private(set) var isConfiguringPaper = false
     private var manualPaperMode: NiimbotPaperMode
     var paperMode: NiimbotPaperMode {
@@ -66,6 +67,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     @ObservationIgnored private var printOperation: UUID?
     @ObservationIgnored private var printEndAcknowledged = false
     @ObservationIgnored private var activePrintMetrics: NiimbotPrintTransferMetrics?
+    @ObservationIgnored private var uploadProgressThrottle = NiimbotUploadProgressThrottle()
     @ObservationIgnored private var lastPrintAttemptEnded: ContinuousClock.Instant?
     @ObservationIgnored private var activePrintStock: PreparedStockValidation?
     @ObservationIgnored private var printWasDispatched = false
@@ -363,6 +365,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
 
         let operation = UUID()
         printOperation = operation
+        clearUploadProgress()
         printEndAcknowledged = false
         printWasDispatched = false
         sendingPages = []
@@ -377,6 +380,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                 printEndAcknowledged = false
                 activePrintStock = nil
                 isPrinting = false
+                clearUploadProgress()
                 printCancellation = nil
                 sendingPages = []
                 dispatchedPages = []
@@ -630,6 +634,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     }
 
     private func endConnection(issue: LabelPrinterIssue, source: ConnectionEndSource) {
+        clearUploadProgress()
         if peripheral != nil || pending != nil || isConnected {
             let phase = UIApplication.shared.applicationState
             DiagnosticLog.shared.record("label.connection_ended", ["connection_end_source": source.rawValue,
@@ -1112,7 +1117,16 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             switch measurement {
             case let .planEncoded(duration): self.activePrintMetrics?.add(.planEncode, duration: duration)
             case let .groupStarted(pages): groupStarts[pages.lowerBound] = self.activePrintMetrics
+            case let .groupProgress(progress):
+                guard self.printOperation == operation, self.isPrinting, self.isConnected,
+                      self.printCancellation == nil, !Task.isCancelled else { return }
+                if self.uploadProgressThrottle.shouldPublish(progress, at: clock.now) { self.uploadProgress = progress }
             case let .groupSubmitted(pages, duration, accepted):
+                self.clearUploadProgress()
+                if accepted && self.printOperation == operation && self.isPrinting && self.isConnected
+                    && self.printCancellation == nil && !Task.isCancelled {
+                    self.status = "Waiting for printer confirmation…"
+                }
                 if let metrics = self.activePrintMetrics, let before = groupStarts.removeValue(forKey: pages.lowerBound) {
                     DiagnosticLog.shared.record("label.group_transfer", metrics.groupFields(since: before,
                         elapsed: duration, pages: pages, accepted: accepted))
@@ -1133,6 +1147,11 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         let elapsed = NiimbotPrintTransferMetrics.milliseconds(started.duration(to: ContinuousClock().now))
         DiagnosticLog.shared.record("label.print", ["phase": phase.rawValue, "page": String(page),
             "total": String(total), "quantity": String(quantity), "elapsed_ms": String(elapsed)])
+    }
+
+    private func clearUploadProgress() {
+        uploadProgress = nil
+        uploadProgressThrottle.reset()
     }
 
     /// CoreBluetooth callbacks need not reuse the discovery wrapper object.

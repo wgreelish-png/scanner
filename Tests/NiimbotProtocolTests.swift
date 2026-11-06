@@ -1326,6 +1326,7 @@ final class NiimbotProtocolTests: XCTestCase {
                 case let .planEncoded(duration):
                     plans += 1; XCTAssertTrue(requests.isEmpty); XCTAssertGreaterThanOrEqual(duration, .zero)
                 case .groupStarted: baseline = metrics
+                case .groupProgress: break
                 case let .groupSubmitted(pages, duration, accepted):
                     measuredGroups += 1
                     XCTAssertTrue(accepted)
@@ -1359,7 +1360,7 @@ final class NiimbotProtocolTests: XCTestCase {
                 switch measurement {
                 case .planEncoded: plans += 1
                 case let .groupSubmitted(pages, _, accepted): measured.append((pages, accepted))
-                case .groupStarted: break
+                case .groupStarted, .groupProgress: break
                 }
             })
             XCTFail("Failed upload must not be reported as accepted")
@@ -1367,6 +1368,107 @@ final class NiimbotProtocolTests: XCTestCase {
         XCTAssertEqual(plans, 1, "The validated legacy plan is reused instead of re-encoding during each print")
         XCTAssertEqual(measured.map { Array($0.0) }, [[0], [1]])
         XCTAssertEqual(measured.map { $0.1 }, [true, false])
+    }
+
+    func testUploadFractionAndThrottlePreserveGroupBoundariesAndFinalAcceptance() {
+        let origin = ContinuousClock().now
+        var throttle = NiimbotUploadProgressThrottle()
+        func progress(_ completed: Int, pages: Range<Int> = 0..<8) -> NiimbotUploadProgress {
+            .init(pages: pages, completedRequests: completed, totalRequests: 100)
+        }
+        XCTAssertEqual(progress(0).fraction, 0)
+        XCTAssertEqual(progress(25).fraction, 0.25)
+        XCTAssertEqual(progress(100).fraction, 1)
+        XCTAssertEqual(progress(150).fraction, 1)
+        XCTAssertEqual(progress(-1).fraction, 0)
+        XCTAssertEqual(NiimbotUploadProgress(pages: 0..<1, completedRequests: 1, totalRequests: 0).fraction, 0)
+        XCTAssertTrue(throttle.shouldPublish(progress(0), at: origin))
+        XCTAssertFalse(throttle.shouldPublish(progress(1), at: origin.advanced(by: .milliseconds(50))))
+        XCTAssertFalse(throttle.shouldPublish(progress(25), at: origin.advanced(by: .milliseconds(199))))
+        XCTAssertTrue(throttle.shouldPublish(progress(26), at: origin.advanced(by: .milliseconds(200))))
+        XCTAssertFalse(throttle.shouldPublish(progress(90), at: origin.advanced(by: .milliseconds(250))))
+        XCTAssertTrue(throttle.shouldPublish(progress(100), at: origin.advanced(by: .milliseconds(251))))
+        XCTAssertTrue(throttle.shouldPublish(progress(0, pages: 8..<10), at: origin.advanced(by: .milliseconds(252))))
+        throttle.reset()
+        XCTAssertTrue(throttle.shouldPublish(progress(0, pages: 8..<10), at: origin.advanced(by: .milliseconds(253))))
+    }
+
+    @MainActor func testUploadProgressFollowsValidatedExchangesWithoutPhysicalProofOrReorderingABA() async throws {
+        let identity = d110MIdentity()
+        let rasters = [denseRaster, variantRaster(0x7f), denseRaster]
+        let plan = try NiimbotProtocol.continuousRequests(for: rasters, identity: identity)
+        var requests: [NiimbotRequest] = [], receipts: [Int] = [], will: [[Int]] = []
+        var progress: [Int: [NiimbotUploadProgress]] = [:]
+        var activeGroup: Int?, exchangedInGroup = 0, submitted = 0
+        var receiptsAtUploadAcceptance: [Int] = []
+        try await NiimbotD110Session.printContinuously(rasters, identity: identity, exchange: { request in
+            requests.append(request)
+            if activeGroup != nil { exchangedInGroup += 1 }
+            if request.command == 0xdc { return request.response == nil ? nil : self.d110MReadiness }
+            if request.command == 0xe3 { submitted += 1 }
+            if request.command == 0xa3 && request.response != nil {
+                return .init(command: 0xb3, data: Data([0, UInt8(submitted), 100, 100]))
+            }
+            return request.response.map { .init(command: $0, data: Data([1])) }
+        }, pause: {}, onPagesWillSend: { will.append($0) }, onPagesCompleted: { pages in
+            XCTAssertEqual(requests.last?.command, 0xa3)
+            XCTAssertEqual(requests.last?.response, 0xb3)
+            receipts.append(contentsOf: pages)
+        }, onMeasurement: { measurement in
+            switch measurement {
+            case .planEncoded: break
+            case let .groupStarted(pages): activeGroup = pages.lowerBound; exchangedInGroup = 0
+            case let .groupProgress(value):
+                XCTAssertEqual(value.completedRequests, exchangedInGroup,
+                               "Progress must follow a returned and validated exchange")
+                progress[value.pages.lowerBound, default: []].append(value)
+                if value.fraction == 1 { receiptsAtUploadAcceptance.append(receipts.count) }
+            case .groupSubmitted: activeGroup = nil
+            }
+        })
+        XCTAssertEqual(will, [[0], [1], [2]], "A/B/A keeps its original physical card order")
+        XCTAssertEqual(receipts, [0, 1, 2])
+        XCTAssertEqual(receiptsAtUploadAcceptance, [0, 0, 2], "Upload acceptance is not physical printing proof")
+        for group in plan.groups {
+            let values = try XCTUnwrap(progress[group.indices.lowerBound])
+            XCTAssertEqual(values.map(\.completedRequests), Array(0...group.requests.count))
+            XCTAssertTrue(values.allSatisfy { $0.pages == group.indices && $0.totalRequests == group.requests.count })
+            XCTAssertEqual(values.last?.fraction, 1)
+        }
+        let status = NiimbotRequest(0xa3, response: 0xb3)
+        let readiness = NiimbotRequest(0xdc, [4], response: 0xd9, responseAlternatives: [0xdd, 0xd9])
+        let expected = [readiness] + plan.initialization + plan.groups[0].requests + plan.groups[1].requests
+            + [status] + plan.groups[2].requests + [status, NiimbotRequest(0xf3, response: 0xf4, requiresTrue: true), NiimbotRequest(0xdc, [1])]
+        XCTAssertEqual(requests, expected, "Progress introduces no new commands, waits, regrouping or reordered artwork")
+    }
+
+    @MainActor func testFailedOrCancelledUploadNeverPublishesFinalAcceptanceOrPhysicalCompletion() async {
+        for failure in 0..<3 {
+            var progress: [NiimbotUploadProgress] = [], accepted: [Bool] = [], receipts: [Int] = []
+            let operation = Task { @MainActor in
+                try await NiimbotD110Session.printContinuously([denseRaster, variantRaster(0x7f)], identity: d110MIdentity(),
+                    exchange: { request in
+                        if request.command == 0xdc { return self.d110MReadiness }
+                        if request.command == 0x85 && failure == 0 { throw LabelPrinterIssue.connectionLost }
+                        if request.command == 0xe3 && failure == 1 { return .init(command: 0xe4, data: Data([0])) }
+                        if request.command == 0x85 && failure == 2 { withUnsafeCurrentTask { $0?.cancel() } }
+                        return request.response.map { .init(command: $0, data: Data([1])) }
+                    }, pause: {}, onPagesWillSend: { _ in }, onPagesCompleted: { receipts.append(contentsOf: $0) },
+                    onMeasurement: { measurement in
+                        if case let .groupProgress(value) = measurement { progress.append(value) }
+                        if case let .groupSubmitted(_, _, value) = measurement { accepted.append(value) }
+                    })
+            }
+            do { try await operation.value; XCTFail("Interrupted or rejected uploads cannot succeed") }
+            catch {
+                if failure == 2 { XCTAssertTrue(error is CancellationError) }
+                else { XCTAssertEqual(error as? LabelPrinterIssue, failure == 0 ? .connectionLost : .printerNotReady) }
+            }
+            XCTAssertEqual(progress.first?.fraction, 0)
+            XCTAssertFalse(progress.contains { $0.fraction == 1 })
+            XCTAssertEqual(accepted, [false])
+            XCTAssertTrue(receipts.isEmpty)
+        }
     }
 
     func testErrorRepliesPreserveVerifiedIdleOrCompletedLinksWithoutWeakeningRequiredWork() {

@@ -26,6 +26,11 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 87 separates live sending progress from the printer-confirmed label count.
+Upload activity updates from completed transfers while physical counts continue
+to use saved printer receipts. Card order and the existing transfer sequence
+are preserved. See the [diagnostic comparison](docs/PrinterStageTimings.md).
+
 Build 86 renders inventory-label previews on their initial presentation and
 whenever the selected draft changes, without requiring a style toggle. A
 preview is displayed only while it matches the current draft.
