@@ -1,9 +1,11 @@
-# D110-M image-write experiment — build 88
+# D110-M image-write experiment — build 89
 
 Branch: `experiment/niimbot-d110m-write-without-response`.
 Base: `facaae2`, the current build 87 app. Development uses the isolated
 `/workspace/scanner-d110m-experiment` worktree; the daily branch is unchanged.
-The diagnostic revision is `experiment-d110m-write-without-response`.
+The diagnostic revision is `experiment-d110m-label-ready`. Build 89 also fixes
+initial inventory-label navigation so the preview and Prepare button use the
+current selection immediately. The transport experiment itself is unchanged.
 
 This experiment changes eligible image-data transport only. Existing rendering,
 row compression, native identical-copy grouping, card order, page pipelining,

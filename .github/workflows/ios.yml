@@ -8,17 +8,19 @@ on:
   workflow_dispatch:
     inputs:
       test_scope:
-        description: Native regression scope
+        description: Regression scope
         type: choice
         default: all
         options:
           - all
           - printer_transport
+          - label_preview
 concurrency:
   group: ios-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 jobs:
   native:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.test_scope != 'label_preview' }}
     runs-on: macos-15-intel
     timeout-minutes: 20
     steps:
@@ -63,12 +65,22 @@ jobs:
   ui:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.test_scope != 'printer_transport' }}
     runs-on: macos-15-intel
-    timeout-minutes: 20
+    timeout-minutes: ${{ inputs.test_scope == 'label_preview' && 30 || 20 }}
     steps:
       - uses: actions/checkout@v4
       - name: Build and run UI regression tests
         id: ui_tests
-        run: bash scripts/run_ios_tests.sh CardShowScannerUITests
+        env:
+          SCANNER_TEST_SCOPE: ${{ inputs.test_scope || 'all' }}
+        run: |
+          if [ "$SCANNER_TEST_SCOPE" = label_preview ]; then
+            bash scripts/run_ios_tests.sh \
+              CardShowScannerUITests/InventoryLabelsUITests/testSelectedInventoryIsReadyImmediatelyOnFirstNavigation \
+              CardShowScannerUITests/InventoryLabelsUITests/testReselectedInventoryIsReadyImmediatelyWithoutLayoutChanges \
+              CardShowScannerUITests/InventoryLabelsUITests/testPrintAllIsReadyImmediatelyWithoutLayoutChanges
+          else
+            bash scripts/run_ios_tests.sh CardShowScannerUITests
+          fi
       - name: Publish UI test summary
         if: ${{ always() && steps.ui_tests.outcome != 'skipped' }}
         run: python3 scripts/report_xcode_test_summary.py NativeTests.log
@@ -88,7 +100,7 @@ jobs:
             NativeTests.log
             NativeCrashSummary.log
   research_ui:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.test_scope != 'printer_transport' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview') }}
     runs-on: macos-15-intel
     timeout-minutes: 15
     steps:
@@ -115,7 +127,7 @@ jobs:
             NativeTests.log
             NativeCrashSummary.log
   evidence_ui:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.test_scope != 'printer_transport' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview') }}
     runs-on: macos-15-intel
     timeout-minutes: 20
     steps:
@@ -142,7 +154,7 @@ jobs:
             NativeTests.log
             NativeCrashSummary.log
   budget_ui:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.test_scope != 'printer_transport' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview') }}
     runs-on: macos-15-intel
     timeout-minutes: 15
     steps:

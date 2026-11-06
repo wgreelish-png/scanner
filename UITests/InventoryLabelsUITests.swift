@@ -3,6 +3,59 @@ import XCTest
 /// Automatic printer discovery is disabled for these offline UI fixtures.
 /// Queue files use the same isolated token as inventory and financial records.
 @MainActor final class InventoryLabelsUITests: XCTestCase {
+    func testSelectedInventoryIsReadyImmediatelyOnFirstNavigation() {
+        continueAfterFailure = false
+        let app = launch()
+        defer { app.terminate() }
+        tap(app.buttons["show.inventory"], app: app)
+        let stockAID = inventoryID(of: inventory("Stock A", app: app))
+        openBatch(app: app)
+        tap(app.buttons["labels.select." + stockAID], app: app)
+        tap(app.buttons["labels.continueSelection"], app: app)
+
+        assertInventoryReadyWithoutInteraction(price: "$35", labels: 1, app: app)
+        app.buttons["labels.prepare"].tap()
+        XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
+        assertContains("0/1 completed", element: app.staticTexts["labelQueue.progress"])
+        let queued = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "labelQueue.entry.")).firstMatch
+        reveal(queued, app: app)
+        assertContains("Stock A", element: queued)
+        assertContains("$35", element: queued)
+        XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled, "Preparation cannot start a hardware print")
+        assertNoBluetoothPrompt(app: app)
+    }
+
+    func testReselectedInventoryIsReadyImmediatelyWithoutLayoutChanges() {
+        continueAfterFailure = false
+        let app = launch()
+        defer { app.terminate() }
+        tap(app.buttons["show.inventory"], app: app)
+        let stockAID = inventoryID(of: inventory("Stock A", app: app))
+        let stockBID = inventoryID(of: inventory("Stock B", app: app))
+        openBatch(app: app)
+        tap(app.buttons["labels.select." + stockAID], app: app)
+        tap(app.buttons["labels.continueSelection"], app: app)
+        assertInventoryReadyWithoutInteraction(price: "$35", labels: 1, app: app)
+
+        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        XCTAssertTrue(app.navigationBars["Select Label Cards"].waitForExistence(timeout: 5))
+        tap(app.buttons["labels.select." + stockAID], app: app)
+        tap(app.buttons["labels.select." + stockBID], app: app)
+        tap(app.buttons["labels.continueSelection"], app: app)
+        assertInventoryReadyWithoutInteraction(price: "$5", labels: 1, app: app)
+        assertNoBluetoothPrompt(app: app)
+    }
+
+    func testPrintAllIsReadyImmediatelyWithoutLayoutChanges() {
+        continueAfterFailure = false
+        let app = launch()
+        defer { app.terminate() }
+        tap(app.buttons["show.priceTags"], app: app)
+        tap(app.buttons["priceTags.all"], app: app)
+        assertInventoryReadyWithoutInteraction(price: "$35", labels: 3, app: app)
+        assertNoBluetoothPrompt(app: app)
+    }
+
     func testSingleCardDraftIsIsolatedAndAcceptsZeroWithoutClampingCopies() {
         continueAfterFailure = false
         let app = launch()
@@ -1151,6 +1204,26 @@ import XCTest
         XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["labelProgress.pause"].exists, "Preparation never starts a print job")
         XCTAssertTrue(app.buttons["labelQueue.print"].isEnabled)
+    }
+
+    /// Reading accessibility state is passive: revealing or scrolling the list
+    /// here could refresh the destination and hide a first-navigation failure.
+    private func assertInventoryReadyWithoutInteraction(price: String, labels: Int, app: XCUIApplication,
+                                                        file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(app.navigationBars["Label Details"].waitForExistence(timeout: 5), file: file, line: line)
+        assertContains("\(labels) labels", element: app.staticTexts["labels.totalCount"], file: file, line: line)
+        let prepare = app.buttons["labels.prepare"]
+        let ready = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND isEnabled == true AND isHittable == true"), object: prepare)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 5), .completed,
+                       "Prepare must work before touching a layout control or scrolling", file: file, line: line)
+        let preview = app.images["labels.bitmapPreview"].firstMatch
+        XCTAssertTrue(preview.waitForExistence(timeout: 5),
+                      "The initial preview must appear without a refresh gesture", file: file, line: line)
+        let rendered = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value CONTAINS %@ AND value CONTAINS %@", "PokéDen price", price), object: preview)
+        XCTAssertEqual(XCTWaiter.wait(for: [rendered], timeout: 5), .completed,
+                       "Expected the current selection's initial \(price) preview", file: file, line: line)
     }
 
     private func assertInitialInventoryPreview(_ price: String, app: XCUIApplication,

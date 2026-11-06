@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Observation
 
 /// Printer settings also reflect the connection started from Price Tags.
 @MainActor struct LabelPrinterSettingsView: View {
@@ -262,6 +263,14 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View { configuration.label }
 }
 
+/// Navigation destinations can outlive the view value that created them. Keep
+/// selected drafts in one observable owner so a first push reads the current
+/// selection, including before any layout control causes another body update.
+@MainActor @Observable private final class InventoryLabelFlowDrafts {
+    var values: [InventoryLabelDraft]
+    init(_ values: [InventoryLabelDraft]) { self.values = values }
+}
+
 /// The sheet owns navigation. All values copied here remain independent of stock.
 @MainActor struct InventoryLabelFlowView: View {
     let inventory: [ShowInventoryItem]
@@ -273,7 +282,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     @State private var path: [InventoryLabelStep]
     @State private var search = ""
     @State private var selectedIDs: Set<UUID>
-    @State private var drafts: [InventoryLabelDraft]
+    @State private var draftState: InventoryLabelFlowDrafts
     @State private var style: InventoryLabelStyle = .priceOnly
     @State private var paper: InventoryLabelSize
     @State private var pricePosition: LabelPricePosition
@@ -312,8 +321,13 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
             initialDrafts[index].pricePosition = paperPreferences.pricePosition
         }
         _selectedIDs = State(initialValue: Set(initialDrafts.map(\.id)))
-        _drafts = State(initialValue: initialDrafts)
+        _draftState = State(initialValue: InventoryLabelFlowDrafts(initialDrafts))
         _path = State(initialValue: initialDrafts.isEmpty ? [] : [.configure])
+    }
+
+    private var drafts: [InventoryLabelDraft] {
+        get { draftState.values }
+        nonmutating set { draftState.values = newValue }
     }
 
     private var available: [ShowInventoryItem] {

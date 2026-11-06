@@ -7,6 +7,7 @@ SCANNER_UI_RUN=false
 for SCANNER_ALLOWED_TARGET in "$@"; do
   case "$SCANNER_ALLOWED_TARGET" in
     CardShowScannerTests/NiimbotImageTransportTests|CardShowScannerTests/NiimbotProtocolTests|CardShowScannerTests/ScannerDiagnosticsTests) ;;
+    CardShowScannerUITests/InventoryLabelsUITests/testSelectedInventoryIsReadyImmediatelyOnFirstNavigation|CardShowScannerUITests/InventoryLabelsUITests/testReselectedInventoryIsReadyImmediatelyWithoutLayoutChanges|CardShowScannerUITests/InventoryLabelsUITests/testPrintAllIsReadyImmediatelyWithoutLayoutChanges) ;;
     CardShowScannerTests|CardShowScannerUITests|CardShowScannerUITests/ResearchUITests|CardShowScannerUITests/MarketEvidenceUITests|CardShowScannerUITests/AppNavigationUITests|CardShowScannerUITests/ShowBudgetUITests|CardShowScannerUITests/ShowTransactionsUITests|CardShowScannerUITests/CardShowInventoryUITests|CardShowScannerUITests/ReviewPresentationUITests|CardShowScannerUITests/ListBulkDeletionUITests) ;;
     *) echo "Unknown test target" >&2; exit 2 ;;
   esac

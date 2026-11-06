@@ -26,6 +26,11 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Experiment build 89 fixes initial inventory-label preparation: the preview and
+Prepare button read the current selected drafts on the first navigation, without
+requiring another layout-control tap. Layout, saved prices and print transport
+settings are preserved.
+
 Experiment build 88 adds an opt-in [D110-M image transport experiment](docs/D110MWriteWithoutResponseExperiment.md).
 Acknowledged writes remain the default. The isolated experiment branch changes
 only eligible image-data transport and its diagnostics; card order, artwork,
