@@ -30,8 +30,18 @@ enum DiagnosticPrinterFields {
             return acceptsInteger(value, maximum: 255)
         case "sent_bytes", "notification_bytes", "notification_count", "packet_count":
             return acceptsInteger(value, maximum: 1_000_000)
+        case "native_groups", "native_copies":
+            return acceptsInteger(value, maximum: 250)
+        case "image_packets", "request_count", "status_polls":
+            return acceptsInteger(value, maximum: 1_000_000)
+        case "wire_bytes":
+            return acceptsInteger(value, maximum: 100_000_000)
+        case "transfer_elapsed_ms":
+            return acceptsInteger(value, maximum: 3_600_000)
         case "write_mode":
             return ["acknowledged", "unacknowledged"].contains(value)
+        case "print_task":
+            return ["legacy_serial", "declared_serial", "buffered_copies"].contains(value)
         default:
             return true
         }
@@ -217,7 +227,8 @@ enum ServiceDiagnosticFields {
         "scan_ms", "capture_ms", "frames", "domain", "code", "records", "rejected_records", "phase", "candidate_index", "app_version", "build", "downloaded_bytes", "cached_shards", "cache", "source", "persisted", "cache_backend", "revision",
         "record_index", "page", "total", "shape", "priced_records", "unpriced_records", "invalid_price_records", "observed_count", "entry_limit", "method", "solid", "tracked", "border_retry", "border_retained", "scan_stage", "raw_quads", "rejected_quads", "candidate_quads", "selected_base", "quad_source",
         "quad_aspect", "quad_area", "quad_support", "mean_luma", "luma_std", "match_distance", "match_gap", "sample_age_ms",
-        "request_code", "response_code", "last_response_code", "sent_bytes", "notification_bytes", "notification_count", "packet_count", "write_mode"]
+        "request_code", "response_code", "last_response_code", "sent_bytes", "notification_bytes", "notification_count", "packet_count", "write_mode",
+        "print_task", "native_groups", "native_copies", "image_packets", "request_count", "wire_bytes", "transfer_elapsed_ms", "status_polls"]
     private var current: URL { directory.appendingPathComponent("current.jsonl") }
     private var previous: URL { directory.appendingPathComponent("previous.jsonl") }
     var enabled: Bool { defaults.object(forKey: "diagnosticsEnabled") as? Bool ?? true }

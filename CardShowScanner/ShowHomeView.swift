@@ -369,6 +369,8 @@ private struct ShowWorkingInventoryRow: View {
     let store: ShowBudgetStore
     @State private var showingCostEditor = false
     @State private var showingLabel = false
+    @State private var returnToPriceTagsAfterPrinting = false
+    @State private var showingPriceTagsAfterPrinting = false
     private var item: ShowInventoryItem? { store.inventory.first { $0.id == itemID } }
 
     var body: some View {
@@ -441,10 +443,19 @@ private struct ShowWorkingInventoryRow: View {
                     .accessibilityLabel("Card options").accessibilityIdentifier("inventory.options")
             }
         }
-        .sheet(isPresented: $showingLabel) {
+        .sheet(isPresented: $showingLabel, onDismiss: {
+            guard returnToPriceTagsAfterPrinting else { return }
+            returnToPriceTagsAfterPrinting = false
+            showingPriceTagsAfterPrinting = true
+        }) {
             InventoryLabelFlowView(inventory: store.inventory, initialInventoryID: itemID,
-                marketQuotes: TagPricingContext.currentQuotes(inventory: store.inventory, context: context))
+                marketQuotes: TagPricingContext.currentQuotes(inventory: store.inventory, context: context),
+                onPrintingCompleted: {
+                    returnToPriceTagsAfterPrinting = true
+                    showingLabel = false
+                })
         }
+        .navigationDestination(isPresented: $showingPriceTagsAfterPrinting) { PriceTagsView(store: store) }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             ShowInventoryQuickSellAction(itemID: itemID, store: store)
         }

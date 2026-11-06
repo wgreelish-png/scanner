@@ -986,6 +986,102 @@ import XCTest
         assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
     }
 
+    func testCustomPrintingShowsProgressWaitsForFinalAcknowledgementAndReturnsToPriceTags() {
+        continueAfterFailure = false
+        let app = launch(extraArguments: ["--label-print-progress-fixture=success"])
+        defer { app.terminate() }
+        prepareProgressFixture(app: app, copies: "3")
+        tap(app.buttons["labelQueue.print"], app: app)
+        assertContains("0 of 3 labels printed", element: app.staticTexts["labelProgress.count"])
+        tap(app.buttons["labelProgress.fixtureConfirm"], app: app)
+        assertContains("3 of 3 labels printed", element: app.staticTexts["labelProgress.count"])
+        assertContains("Finishing print job", element: app.staticTexts["labelProgress.status"])
+        XCTAssertTrue(app.buttons["labelProgress.pause"].exists,
+                      "The final printer acknowledgement still owns the active job after the counter reaches its total")
+        tap(app.buttons["labelProgress.fixtureFinish"], app: app)
+        assertReturnedToPriceTags(app: app)
+        XCTAssertFalse(app.navigationBars["Custom Price Tag"].exists)
+        tap(app.buttons["priceTags.queue"], app: app)
+        XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
+        assertContains("3/3 completed", element: app.staticTexts["labelQueue.progress"])
+        XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled)
+        XCTAssertFalse(app.buttons["labelProgress.pause"].exists,
+                       "Opening completed receipts must not present progress or automatically navigate away")
+        assertNoBluetoothPrompt(app: app)
+    }
+
+    func testInventoryPrintCompletionClosesTheBatchSheetAndReturnsToPriceTags() {
+        continueAfterFailure = false
+        let app = launch(extraArguments: ["--label-print-progress-fixture=success"])
+        defer { app.terminate() }
+        tap(app.buttons["show.priceTags"], app: app)
+        tap(app.buttons["priceTags.all"], app: app)
+        tap(app.buttons["labels.prepare"], app: app)
+        XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
+        tap(app.buttons["labelQueue.print"], app: app)
+        tap(app.buttons["labelProgress.fixtureConfirm"], app: app)
+        assertContains("Finishing print job", element: app.staticTexts["labelProgress.status"])
+        tap(app.buttons["labelProgress.fixtureFinish"], app: app)
+        assertReturnedToPriceTags(app: app)
+        XCTAssertFalse(app.buttons["labels.close"].exists)
+        tap(app.buttons["priceTags.queue"], app: app)
+        assertContains("3/3 completed", element: app.staticTexts["labelQueue.progress"])
+        assertNoBluetoothPrompt(app: app)
+    }
+
+    func testPauseKeepsProgressForQueueReviewInsteadOfReturningToPriceTags() {
+        continueAfterFailure = false
+        let app = launch(extraArguments: ["--label-print-progress-fixture=success"])
+        defer { app.terminate() }
+        prepareProgressFixture(app: app, copies: "2")
+        tap(app.buttons["labelQueue.print"], app: app)
+        XCTAssertTrue(app.buttons["labelProgress.fixtureConfirm"].waitForExistence(timeout: 5))
+        tap(app.buttons["labelProgress.pause"], app: app)
+        XCTAssertTrue(app.buttons["labelProgress.reviewQueue"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["labelProgress.fixtureFinish"].exists)
+        tap(app.buttons["labelProgress.reviewQueue"], app: app)
+        XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
+        assertContains("0/2 completed", element: app.staticTexts["labelQueue.progress"])
+        XCTAssertTrue(app.buttons["labelQueue.retrySelected"].exists)
+        assertNoBluetoothPrompt(app: app)
+    }
+
+    func testPrintingFailureStaysAvailableForReviewWithoutAutomaticRetryOrNavigation() {
+        continueAfterFailure = false
+        let app = launch(extraArguments: ["--label-print-progress-fixture=failure"])
+        defer { app.terminate() }
+        prepareProgressFixture(app: app, copies: "2")
+        tap(app.buttons["labelQueue.print"], app: app)
+        tap(app.buttons["labelProgress.fixtureConfirm"], app: app)
+        XCTAssertTrue(app.buttons["labelProgress.reviewQueue"].waitForExistence(timeout: 5))
+        assertContains("0 of 2 labels printed", element: app.staticTexts["labelProgress.count"])
+        tap(app.buttons["labelProgress.reviewQueue"], app: app)
+        XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled)
+        XCTAssertTrue(app.buttons["labelQueue.retrySelected"].exists)
+        assertNoBluetoothPrompt(app: app)
+    }
+
+    private func prepareProgressFixture(app: XCUIApplication, copies: String) {
+        tap(app.buttons["show.priceTags"], app: app)
+        tap(app.buttons["priceTags.custom"], app: app)
+        enter("5", field: app.textFields["customLabels.price"], app: app)
+        enter(copies, field: app.textFields["customLabels.copies"], app: app)
+        tap(app.buttons["customLabels.keyboardDone"], app: app)
+        tap(app.buttons["customLabels.prepare"], app: app)
+        XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["labelProgress.pause"].exists, "Preparation never starts a print job")
+        XCTAssertTrue(app.buttons["labelQueue.print"].isEnabled)
+    }
+
+    private func assertReturnedToPriceTags(app: XCUIApplication) {
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == true"),
+                                             object: app.buttons["priceTags.all"])
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 5), .completed)
+        XCTAssertTrue(app.navigationBars["Price Tags"].exists)
+        XCTAssertFalse(app.buttons["labelProgress.pause"].exists)
+    }
+
     private func launch(extraArguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         if let path = ProcessInfo.processInfo.environment["DYLD_FALLBACK_LIBRARY_PATH"] {

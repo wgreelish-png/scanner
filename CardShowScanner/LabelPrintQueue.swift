@@ -185,6 +185,9 @@ private struct LabelQueueFile: Codable {
     private(set) var isPrinting = false
     private(set) var isLoaded = false
     private(set) var error: String?
+    /// Set only after this explicit run ends with durable, confirmed output.
+    /// A full physical count alone is insufficient while PrintEnd is pending.
+    private(set) var lastRunCompletedSuccessfully = false
 
     var canStart: Bool { isLoaded && !isPrinting && pendingCount > 0 }
     var pendingCount: Int { entryCount(in: .pending) }
@@ -266,7 +269,9 @@ private struct LabelQueueFile: Codable {
     /// Only an explicit user action calls this method. Failure pauses the whole
     /// batch; neither reconnecting nor retrying selected entries starts it.
     func start(using printer: any LabelPrinterSending) async {
+        lastRunCompletedSuccessfully = false
         guard canStart, !Task.isCancelled else { return }
+        let requestedIDs = Set(entries.filter { $0.state == .pending }.map(\.id))
         isPrinting = true
         stopRequested = false
         let sessionID = UUID()
@@ -274,6 +279,10 @@ private struct LabelQueueFile: Codable {
         activePrinter = printer
         error = nil
         defer {
+            let completedIDs = Set(entries.filter { $0.state == .completed }.map(\.id))
+            lastRunCompletedSuccessfully = activeSessionID == sessionID && isLoaded && error == nil
+                && !stopRequested && !Task.isCancelled && !requestedIDs.isEmpty
+                && requestedIDs.isSubset(of: completedIDs) && entries.allSatisfy { $0.state == .completed }
             activePrinter = nil
             activeSessionID = nil
             isPrinting = false

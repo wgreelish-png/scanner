@@ -177,6 +177,39 @@ import UniformTypeIdentifiers
         }
     }
 
+    func testPrintTransferSummaryStoresOnlyBoundedAggregateFieldsAndRespectsOptOut() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = "PrintTransferDiagnostics." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let log = DiagnosticLog(directory: directory, defaults: defaults)
+        let expected = ["print_task": "buffered_copies", "total": "250", "native_groups": "250", "native_copies": "219",
+            "image_packets": "1000000", "request_count": "1000000", "wire_bytes": "100000000",
+            "transfer_elapsed_ms": "3600000", "status_polls": "1000000"]
+        log.record("label.transfer_summary", expected.merging([
+            "card_name": "PRIVATE_CARD", "packet_hex": "PRIVATE_PACKET", "product_uid": "PRIVATE_ROLL"
+        ]) { _, value in value })
+        log.record("label.transfer_summary", ["print_task": "PRIVATE_PRINTER", "native_groups": "251", "native_copies": "251",
+            "image_packets": "1000001", "request_count": "1e3", "wire_bytes": "100000001",
+            "transfer_elapsed_ms": "3600001", "status_polls": "01"])
+        defaults.set(false, forKey: "diagnosticsEnabled")
+        log.record("label.transfer_summary", expected)
+        let file = try log.exportForCopy()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let text = try String(contentsOf: file, encoding: .utf8)
+        let rows = try diagnosticRows(text).filter { $0["event"] as? String == "label.transfer_summary" }
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows.first?["fields"] as? [String: String], expected)
+        XCTAssertEqual(rows.last?["fields"] as? [String: String], [:])
+        XCTAssertFalse(text.contains("PRIVATE_"))
+        for key in expected.keys where key != "print_task" && key != "total" {
+            for invalid in ["-1", "+1", "1.5", "1e3", "01", " 1", "1\n", "PRIVATE_VALUE", ""] {
+                XCTAssertFalse(DiagnosticPrinterFields.accepts(key, invalid), "\(key) must reject noncanonical values")
+            }
+        }
+    }
+
     func testBetaIndexLimitDiagnosticsPersistOnlyBoundedCounts() throws {
         let failure = BetaAPIIndexValidationFailure(stage: .categories, reason: .tooManyEntries,
             observedCount: 257, entryLimit: 256)

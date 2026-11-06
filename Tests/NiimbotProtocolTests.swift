@@ -1143,17 +1143,108 @@ final class NiimbotProtocolTests: XCTestCase {
             }, pause: { pauses += 1 }, onPagesWillSend: { indices in
                 if indices == [5] {
                     XCTAssertEqual(receipts, [[0, 1], [2]])
-                    XCTAssertEqual(pauses, 2, "A freed window must refill before another polling pause")
+                    XCTAssertEqual(pauses, 0, "Physical progress must refill without an extra polling delay")
                 }
                 will.append(indices)
             }, onPagesCompleted: { receipts.append($0) })
             XCTAssertEqual(will, [[0, 1, 2], [3, 4], [5]])
             XCTAssertEqual(receipts, [[0, 1], [2], [3, 4, 5]])
-            XCTAssertEqual(polls, 3); XCTAssertEqual(pauses, 3)
+            XCTAssertEqual(polls, 3); XCTAssertEqual(pauses, 0)
             XCTAssertEqual(requests.filter { $0.command == 0x01 }.count, 1)
             XCTAssertEqual(requests.filter { $0.command == 0xf3 }.count, 1)
             XCTAssertEqual(requests.filter { $0.command == 0xe3 }.count, 3)
             XCTAssertEqual(requests.last?.command, version == 4 ? 0xdc : 0xf3)
+        }
+    }
+
+    @MainActor func testContinuousPollingWaitsOnlyAfterBusyStatusAndRefillsBeforePollingAgain() async throws {
+        var events: [String] = []
+        var polls = 0
+        let rasters = [denseRaster, variantRaster(0x7f), variantRaster(0x3f)]
+        try await NiimbotD110Session.printContinuously(rasters, identity: d110MIdentity(), exchange: { request in
+            if request.command == 0xdc { return request.response == nil ? nil : self.d110MReadiness }
+            if request.command == 0xa3 && request.response != nil {
+                events.append("poll")
+                let count = [0, 1, 1, 3][polls]
+                polls += 1
+                return .init(command: 0xb3, data: Data([0, UInt8(count), 100, 100]))
+            }
+            return request.response.map { .init(command: $0, data: Data([1])) }
+        }, pause: { events.append("pause") }, onPagesWillSend: { pages in
+            events.append("send\(pages[0])")
+        }, onPagesCompleted: { pages in events.append("proof\(pages.last!)") })
+        XCTAssertEqual(events, ["send0", "send1", "poll", "pause", "poll", "proof0", "send2",
+                                "poll", "pause", "poll", "proof2"])
+    }
+
+    @MainActor func testContinuousCancellationDuringBusyWaitPreventsAnotherPollOrRefill() async {
+        var polls = 0
+        var will: [[Int]] = []
+        let operation = Task { @MainActor in
+            try await NiimbotD110Session.printContinuously(
+                [denseRaster, variantRaster(0x7f), variantRaster(0x3f)], identity: d110MIdentity(), exchange: { request in
+                    if request.command == 0xdc { return self.d110MReadiness }
+                    if request.command == 0xa3 {
+                        guard request.response != nil else { return nil }
+                        polls += 1
+                        return .init(command: 0xb3, data: Data([0, 0, 100, 100]))
+                    }
+                    return request.response.map { .init(command: $0, data: Data([1])) }
+                }, pause: { withUnsafeCurrentTask { $0?.cancel() } },
+                onPagesWillSend: { will.append($0) }, onPagesCompleted: { _ in XCTFail("Busy is not physical completion") })
+        }
+        do { try await operation.value; XCTFail("Cancellation must stop the polling loop") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(polls, 1)
+        XCTAssertEqual(will, [[0], [1]])
+    }
+
+    func testPrintTransferMetricsCountDispatchedFragmentsAndNativeCopiesWithoutArtwork() {
+        var metrics = NiimbotPrintTransferMetrics(identity: d110MIdentity(), continuous: true, total: 9)
+        let pageData = Data([0, 96, 1, 64, 0, 8, 0, 0, 0, 0, 0, 0, 0])
+        let copies = NiimbotPrintTransferMetrics.pageCopies(command: 0x13, data: pageData)
+        metrics.recordWrite(command: 0x13, response: 0x14, copies: copies, byteCount: 10, startsRequest: true)
+        metrics.recordWrite(command: 0x13, response: 0x14, copies: copies, byteCount: 10, startsRequest: false)
+        for command in [UInt8(0x83), 0x84, 0x85] {
+            metrics.recordWrite(command: command, response: nil, copies: 1, byteCount: 12, startsRequest: true)
+        }
+        metrics.recordWrite(command: 0xa3, response: nil, copies: 1, byteCount: 7, startsRequest: true)
+        metrics.recordWrite(command: 0xa3, response: 0xb3, copies: 1, byteCount: 7, startsRequest: true)
+        metrics.recordWrite(command: 0x13, response: 0x14, copies: 1, byteCount: 20, startsRequest: true)
+        XCTAssertEqual(metrics.diagnosticFields(elapsedMilliseconds: 4_000), ["print_task": "buffered_copies", "total": "9",
+            "native_groups": "2", "native_copies": "7", "image_packets": "3", "request_count": "7",
+            "wire_bytes": "90", "transfer_elapsed_ms": "4000", "status_polls": "1"])
+        XCTAssertEqual(metrics.diagnosticFields(elapsedMilliseconds: -1)["transfer_elapsed_ms"], "0")
+        XCTAssertEqual(metrics.diagnosticFields(elapsedMilliseconds: 3_600_001)["transfer_elapsed_ms"], "3600000")
+        XCTAssertEqual(NiimbotPrintTransferMetrics.pageCopies(command: 0x13, data: Data([0, 96, 1, 64])), 1)
+        XCTAssertEqual(NiimbotPrintTransferMetrics.pageCopies(command: 0x85, data: pageData), 1)
+        XCTAssertEqual(NiimbotPrintTransferMetrics(identity: d110MIdentity(), continuous: false, total: 1).task, "declared_serial")
+        let legacy = NiimbotD110Identity(modelID: 2304, protocolVersion: 1, firmwareBytes: Data([5, 34]))
+        XCTAssertEqual(NiimbotPrintTransferMetrics(identity: legacy, continuous: true, total: 1).task, "legacy_serial")
+    }
+
+    func testErrorRepliesPreserveVerifiedIdleOrCompletedLinksWithoutWeakeningRequiredWork() {
+        typealias Policy = NiimbotErrorReplyDisposition
+        // DB/00 errors and post-end unsolicited 1B/DD/D9 state changes share
+        // this operation boundary; required expected statuses stay fatal.
+        let requests: [Policy.Request] = [.none, .required, .optionalRoll, .cleanupHeartbeat]
+        for request in requests {
+            XCTAssertEqual(Policy.resolve(verified: false, settingUp: false, printing: false, configuring: false,
+                                          printEndAcknowledged: true, request: request), .disconnect)
+            XCTAssertEqual(Policy.resolve(verified: true, settingUp: true, printing: false, configuring: false,
+                                          printEndAcknowledged: true, request: request), .disconnect)
+            for printing in [false, true] {
+                XCTAssertEqual(Policy.resolve(verified: true, settingUp: false, printing: printing, configuring: true,
+                    printEndAcknowledged: true, request: request), request == .optionalRoll ? .rejectOptionalRoll : .disconnect)
+            }
+            XCTAssertEqual(Policy.resolve(verified: true, settingUp: false, printing: false, configuring: false,
+                printEndAcknowledged: false, request: request), request == .none ? .warnConnected
+                    : request == .optionalRoll ? .rejectOptionalRoll : .disconnect)
+            XCTAssertEqual(Policy.resolve(verified: true, settingUp: false, printing: true, configuring: false,
+                printEndAcknowledged: false, request: request), request == .optionalRoll ? .rejectOptionalRoll : .disconnect)
+            XCTAssertEqual(Policy.resolve(verified: true, settingUp: false, printing: true, configuring: false,
+                printEndAcknowledged: true, request: request), request == .optionalRoll ? .rejectOptionalRoll
+                    : request == .required ? .disconnect : .warnConnected)
         }
     }
 
@@ -1315,7 +1406,7 @@ final class NiimbotProtocolTests: XCTestCase {
     @MainActor func testContinuousPollingTimesOutOnlyAfterOneHundredPollsWithoutPhysicalProgress() async throws {
         let rasters = [denseRaster, variantRaster(0x7f), variantRaster(0x3f)]
         for makesProgress in [false, true] {
-            var polls = 0
+            var polls = 0, pauses = 0
             var receipts: [[Int]] = []
             do {
                 try await NiimbotD110Session.printContinuously(rasters, identity: d110MIdentity(), exchange: { request in
@@ -1327,10 +1418,11 @@ final class NiimbotProtocolTests: XCTestCase {
                         return .init(command: 0xb3, data: Data([0, UInt8(count), 100, 100]))
                     }
                     return request.response.map { .init(command: $0, data: Data([1])) }
-                }, pause: {}, onPagesWillSend: { _ in }, onPagesCompleted: { receipts.append($0) })
+                }, pause: { pauses += 1 }, onPagesWillSend: { _ in }, onPagesCompleted: { receipts.append($0) })
                 XCTAssertTrue(makesProgress)
             } catch { XCTAssertEqual(error as? LabelPrinterIssue, .responseTimeout); XCTAssertFalse(makesProgress) }
             XCTAssertEqual(polls, makesProgress ? 200 : 100)
+            XCTAssertEqual(pauses, makesProgress ? 198 : 99, "Every unfinished counter waits before its next poll")
             XCTAssertEqual(receipts, makesProgress ? [[0], [1, 2]] : [])
         }
     }

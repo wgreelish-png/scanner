@@ -26,6 +26,11 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 83 adds [printing progress and return to Price Tags](docs/PrintProgressAndConnection.md).
+The progress screen waits for the final job confirmation, then returns to Price
+Tags while retaining an idle foreground printer connection. Buffered mixed-label
+jobs check available progress immediately after uploading each window.
+
 Build 82 leaves the [price area blank for unavailable or $0 prices](docs/WriteInPriceTags.md)
 while still printing the label, ready for a handwritten price. Known positive
 prices and saved 2-for-$1 deals keep their usual artwork.
