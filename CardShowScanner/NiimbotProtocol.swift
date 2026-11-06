@@ -328,9 +328,41 @@ struct NiimbotTransferWaitTiming {
     }
 }
 
+/// Prepared-group transport progress, independent of physical print receipts.
+/// A complete group has validated every exchange through PageEnd acceptance.
+struct NiimbotUploadProgress: Equatable, Sendable {
+    let pages: Range<Int>
+    let completedRequests: Int
+    let totalRequests: Int
+
+    var fraction: Double {
+        guard totalRequests > 0 else { return 0 }
+        return Double(max(0, min(completedRequests, totalRequests))) / Double(totalRequests)
+    }
+}
+
+/// Keep packet-level progress in memory while bounding observable UI updates.
+/// Group boundaries and the final validated exchange always publish promptly.
+struct NiimbotUploadProgressThrottle {
+    private var pages: Range<Int>?
+    private var publishedAt: ContinuousClock.Instant?
+
+    mutating func shouldPublish(_ progress: NiimbotUploadProgress, at now: ContinuousClock.Instant) -> Bool {
+        let elapsed = publishedAt.map { $0.duration(to: now) >= .milliseconds(200) } ?? true
+        let publish = pages != progress.pages || progress.fraction == 1 || elapsed
+        guard publish else { return false }
+        pages = progress.pages
+        publishedAt = now
+        return true
+    }
+
+    mutating func reset() { pages = nil; publishedAt = nil }
+}
+
 enum NiimbotPrintMeasurement {
     case planEncoded(Duration)
     case groupStarted(Range<Int>)
+    case groupProgress(NiimbotUploadProgress)
     case groupSubmitted(Range<Int>, Duration, accepted: Bool)
 }
 
@@ -747,13 +779,16 @@ enum NiimbotProtocol {
     private static func sendGroup(_ requests: [NiimbotRequest], indices: Range<Int>,
                                   exchange: Exchange, observe: Measurement) async throws {
         observe(.groupStarted(indices))
+        observe(.groupProgress(NiimbotUploadProgress(pages: indices, completedRequests: 0, totalRequests: requests.count)))
         let clock = ContinuousClock()
         let started = clock.now
         var accepted = false
         defer { observe(.groupSubmitted(indices, started.duration(to: clock.now), accepted: accepted)) }
-        for request in requests {
+        for (index, request) in requests.enumerated() {
             try Task.checkCancellation()
             try request.validateResponse(try await exchange(request))
+            observe(.groupProgress(NiimbotUploadProgress(pages: indices, completedRequests: index + 1,
+                                                       totalRequests: requests.count)))
         }
         accepted = true
     }

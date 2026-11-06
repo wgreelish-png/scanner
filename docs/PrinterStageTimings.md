@@ -118,6 +118,58 @@ Hardware buffer capacity and feed speed are not established by these logs.
 The two-group upload window, acknowledged writes and existing pacing are
 unchanged. This build measures the stages needed for a supported next change.
 
+## Diagnostic 15 and progress clarity — build 87
+
+The supplied build 85 diagnostic contains two finalized ten-label jobs on model
+2320, protocol 4, using `d110m_v4`. Both dispatched one PrintStart and one
+PrintEnd. Their measured timings were:
+
+| Measurement | Mixed prices | Identical copies |
+| --- | ---: | ---: |
+| Entire transfer | 99.954 s | 32.029 s |
+| Bluetooth write acknowledgement waits | 77.928 s | 21.772 s |
+| Packet pacing | 18.118 s | 5.036 s |
+| Additional printer-reply wait | 0.147 s | 0.112 s |
+| Image groups | 8 | 2 |
+| Image packets | 1,549 | 414 |
+
+The mixed job reused five rendered price designs during preparation, but some
+matching designs were separated in card order and needed separate uploads.
+The user chose to preserve that order. Only consecutive identical artwork may
+share a native-copy group; cards are not regrouped by price.
+
+The first physical-counter query arrived after two complete image uploads.
+The mixed job's first saved confirmation arrived about 24 seconds after its
+first page started. The identical-copy job's first query arrived about 26 seconds
+after its first group started and already confirmed six printed copies. These
+are confirmation delays, not exact physical print durations. The log cannot
+show whether an on-screen count was rendered incorrectly, but it does prove
+that confirmation may lag actual output while an image is uploading.
+
+Build 87 shows upload activity separately from the confirmed printed count.
+The sending bar advances only after a request completes and validates, with
+observable UI updates limited to roughly five per second plus group boundaries.
+It reflects the current group's completed requests, not bytes delivered over
+the air or physical labels printed. Once that upload ends, the screen can wait
+for the printer's next confirmation. A submitted image never advances a receipt
+or triggers successful return by itself. Final PrintEnd acknowledgement, saved
+receipts, Pause, failure review and interruption handling stay in effect.
+
+The new progress events are in memory only; raster requests do not create a
+new diagnostic line per packet. No printer commands, packet spacing, write
+acknowledgements, quality, buffer limits, physical label order or stored queue
+schema are changed by this progress update.
+
+To check build 87 on the phone, repeat the same-order mixed batch and the
+identical-copy batch. During an upload, the separate Sending range and percentage
+should move even when Confirmed printed has no new proof. Once an upload ends,
+the screen can transition directly to Waiting for printer confirmation; a
+visible 100% frame is not required. The identical-copy counter may legitimately
+jump from 0 to several labels when its first status query returns. Pause during
+an upload and verify the upload indicator disappears, unconfirmed copies remain
+reviewable, and the app does not return to Price Tags as if printing succeeded.
+The last physical receipt must still wait for the final job acknowledgement.
+
 ## Validation receipt
 
 - All 322 portable tests passed: 172 JavaScript, 59 research-server, 49 Postman
@@ -129,6 +181,12 @@ unchanged. This build measures the stages needed for a supported next change.
   images, exact command paths, timing order and interruption, preview reuse,
   metadata caching/invalidation and diagnostic privacy/opt-out. Independent
   source review found no blockers.
+- Build 87 reran the 322 portable tests and source/runtime checks successfully.
+  Four additional native and two UI regressions cover upload throttling,
+  exact A/B/A card order and wire bytes, interrupted/failed uploads, upload
+  acceptance versus physical proof, and final acknowledgement gating. These
+  native/UI regressions are authored and reviewed, with execution pending on
+  iOS. The progress change introduces no additional printer requests.
 - The previous build 84 iOS CI release build passed. Its native run exposed
   four existing fixture issues: border pixels in a blank-price crop, a lossy
   JSONSerialization test helper, an overlong language-name fixture and an
