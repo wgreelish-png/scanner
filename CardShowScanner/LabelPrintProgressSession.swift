@@ -19,7 +19,7 @@ import Observation
     var total: Int { requestedIDs.count }
 
     func completed(in entries: [LabelQueueEntry]) -> Int {
-        entries.lazy.filter { requestedIDs.contains($0.id) && $0.state == .completed }.count
+        entries.lazy.filter { self.requestedIDs.contains($0.id) && $0.state == .completed }.count
     }
 
     func status(in entries: [LabelQueueEntry], printerStatus: String) -> String {
