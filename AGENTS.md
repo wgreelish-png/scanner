@@ -7,3 +7,9 @@
   each task unless the user explicitly asks.
 - When starting a new day's branch, carry forward the accumulated app changes,
   including unmerged work from the previous day. Keep existing history intact.
+
+# Validation workflow
+
+- Finish implementation before running checks.
+- Push the completed changes and start the relevant GitHub checks, then report
+  that they are running. Do not wait for CI to finish unless the user asks.

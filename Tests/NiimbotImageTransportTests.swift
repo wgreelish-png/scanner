@@ -358,6 +358,99 @@ import XCTest
                        start.advanced(by: .milliseconds(270)))
     }
 
+    func testReadinessPreflightAlreadyReadyDoesNotSleepOrRecheck() async throws {
+        var checks = 0, reads = 0, sleeps = 0
+        let result = try await NiimbotImageReadinessPreflight.probe(isReady: {
+            reads += 1
+            XCTAssertEqual(checks, 1)
+            return true
+        }, checkOperation: { checks += 1 }, sleep: { _ in sleeps += 1 })
+        XCTAssertTrue(result.initiallyReady)
+        XCTAssertTrue(result.ready)
+        XCTAssertEqual(result.rechecks, 0)
+        XCTAssertEqual(checks, 1)
+        XCTAssertEqual(reads, 1)
+        XCTAssertEqual(sleeps, 0)
+        XCTAssertGreaterThanOrEqual(result.elapsed, .zero)
+    }
+
+    func testReadinessPreflightStopsAsSoonAsReadinessAppearsAfterAwaitedSleeps() async throws {
+        var checks = 0, reads = 0
+        var sleeps: [Duration] = []
+        let result = try await NiimbotImageReadinessPreflight.probe(isReady: {
+            reads += 1
+            XCTAssertEqual(checks, reads, "The current operation is checked before every readiness read")
+            XCTAssertEqual(sleeps.count, reads - 1, "Every recheck must follow an awaited delay")
+            return sleeps.count == 2
+        }, checkOperation: { checks += 1 }, sleep: { sleeps.append($0) })
+        XCTAssertFalse(result.initiallyReady)
+        XCTAssertTrue(result.ready)
+        XCTAssertEqual(result.rechecks, 2)
+        XCTAssertEqual(reads, 3)
+        XCTAssertEqual(sleeps, [.milliseconds(250), .milliseconds(250)])
+        XCTAssertGreaterThanOrEqual(result.elapsed, .zero)
+    }
+
+    func testReadinessPreflightPersistentBackpressureUsesOnlyEightAwaitedRechecks() async throws {
+        var checks = 0, reads = 0
+        var sleeps: [Duration] = []
+        let result = try await NiimbotImageReadinessPreflight.probe(isReady: {
+            reads += 1
+            XCTAssertEqual(checks, reads)
+            XCTAssertEqual(sleeps.count, reads - 1)
+            return false
+        }, checkOperation: { checks += 1 }, sleep: { sleeps.append($0) })
+        XCTAssertFalse(result.initiallyReady)
+        XCTAssertFalse(result.ready)
+        XCTAssertEqual(result.rechecks, 8)
+        XCTAssertEqual(checks, 9)
+        XCTAssertEqual(reads, 9)
+        XCTAssertEqual(sleeps, Array(repeating: .milliseconds(250), count: 8))
+        XCTAssertGreaterThanOrEqual(result.elapsed, .zero)
+    }
+
+    func testReadinessPreflightChecksCancellationEvenWhenInjectedSleepIgnoresIt() async {
+        for initiallyCanceled in [false, true] {
+            var checks = 0, reads = 0, sleeps = 0
+            let task = Task { @MainActor in
+                if initiallyCanceled { withUnsafeCurrentTask { $0?.cancel() } }
+                return try await NiimbotImageReadinessPreflight.probe(isReady: {
+                    reads += 1
+                    return false
+                }, checkOperation: { checks += 1 }, sleep: { _ in
+                    sleeps += 1
+                    withUnsafeCurrentTask { $0?.cancel() }
+                })
+            }
+            do { _ = try await task.value; XCTFail("A canceled preflight cannot select a transport") }
+            catch { XCTAssertTrue(error is CancellationError) }
+            let expected = initiallyCanceled ? 0 : 1
+            XCTAssertEqual(reads, expected, "Cancellation prevents another readiness read")
+            XCTAssertEqual(checks, expected)
+            XCTAssertEqual(sleeps, expected)
+        }
+    }
+
+    func testReadinessPreflightOperationFailureStopsBeforeInitialOrSubsequentRead() async {
+        enum Failure: Error { case connectionLost }
+        for failAt in [1, 2] {
+            var checks = 0, reads = 0, sleeps = 0
+            do {
+                _ = try await NiimbotImageReadinessPreflight.probe(isReady: {
+                    reads += 1
+                    return false
+                }, checkOperation: {
+                    checks += 1
+                    if checks == failAt { throw Failure.connectionLost }
+                }, sleep: { _ in sleeps += 1 })
+                XCTFail("A stale or disconnected operation cannot continue its preflight")
+            } catch { XCTAssertTrue(error is Failure) }
+            XCTAssertEqual(checks, failAt)
+            XCTAssertEqual(reads, failAt - 1)
+            XCTAssertEqual(sleeps, failAt - 1)
+        }
+    }
+
     private func waitForSleepCount(_ count: Int, sleeper: ImagePacingSleeper) async {
         for _ in 0..<100 where sleeper.count < count { await Task.yield() }
         XCTAssertEqual(sleeper.count, count)

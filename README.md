@@ -26,6 +26,11 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 92 checks experimental Bluetooth readiness before starting a label. If
+readiness remains unavailable, a dual-mode printer uses the existing acknowledged
+transport for the entire job. Diagnostics separate this preflight from image
+upload; an already-started page is never replayed or switched automatically.
+
 Build 91 automatically clears an unprinted label queue when leaving its print
 screen or sending the app to the background. Previews retain the queue; active,
 printed and uncertain jobs retain their existing review handling. Label

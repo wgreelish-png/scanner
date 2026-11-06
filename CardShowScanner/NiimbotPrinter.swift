@@ -380,15 +380,15 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         let jobClock = ContinuousClock(), jobStarted = ContinuousClock().now
         var jobSucceeded = false
         let operation = UUID()
+        let connection = connectionGeneration
         let configuration = NiimbotImageTransportPreferences.shared.snapshot
-        activeImageTransport = NiimbotImageTransportSelection(requested: configuration, identity: identity,
-            supportsWithoutResponse: writeCharacteristic.properties.contains(.writeWithoutResponse),
-            maximumResponseWrite: writeCharacteristic.properties.contains(.write)
-                ? peripheral.maximumWriteValueLength(for: .withResponse) : 0,
-            maximumWithoutResponseWrite: writeCharacteristic.properties.contains(.writeWithoutResponse)
-                ? peripheral.maximumWriteValueLength(for: .withoutResponse) : 0)
-        imageWriteGate = activeImageTransport?.mode == .pacedWithoutResponse
-            ? NiimbotImageWriteGate(configuration: configuration) : nil
+        let supportsWithoutResponse = writeCharacteristic.properties.contains(.writeWithoutResponse)
+        let maximumResponseWrite = writeCharacteristic.properties.contains(.write)
+            ? peripheral.maximumWriteValueLength(for: .withResponse) : 0
+        let maximumWithoutResponseWrite = supportsWithoutResponse
+            ? peripheral.maximumWriteValueLength(for: .withoutResponse) : 0
+        activeImageTransport = nil
+        imageWriteGate = nil
         cancelImagePacingWake()
         printOperation = operation
         clearUploadProgress()
@@ -439,6 +439,30 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                 // count becoming stale during printing does not erase the roll.
                 let mode = detected == nil ? paperMode : self.paperMode
                 activePrintStock = PreparedStockValidation(connection: connectionGeneration, product: detected, paperMode: mode)
+                let candidate = NiimbotImageTransportSelection(requested: configuration, identity: identity,
+                    supportsWithoutResponse: supportsWithoutResponse, maximumResponseWrite: maximumResponseWrite,
+                    maximumWithoutResponseWrite: maximumWithoutResponseWrite)
+                var readiness: NiimbotImageReadinessPreflight.Result?
+                if candidate.mode == .pacedWithoutResponse {
+                    // Optional RFID work has settled. Establish readiness before
+                    // PrintStart/page setup, so fallback never replays a page or
+                    // changes an already-started job's image transport.
+                    readiness = try await NiimbotImageReadinessPreflight.probe(isReady: {
+                        peripheral.canSendWriteWithoutResponse
+                    }, checkOperation: {
+                        try self.checkPrintOperation(operation)
+                        guard self.connectionGeneration == connection else { throw LabelPrinterIssue.connectionLost }
+                    })
+                    guard readiness?.ready == true || maximumResponseWrite > 0 else {
+                        throw LabelPrinterIssue.writeFailed
+                    }
+                }
+                try checkPrintOperation(operation)
+                activeImageTransport = NiimbotImageTransportSelection(requested: configuration, identity: identity,
+                    supportsWithoutResponse: supportsWithoutResponse, maximumResponseWrite: maximumResponseWrite,
+                    maximumWithoutResponseWrite: maximumWithoutResponseWrite, readiness: readiness)
+                imageWriteGate = activeImageTransport?.mode == .pacedWithoutResponse
+                    ? NiimbotImageWriteGate(configuration: configuration) : nil
                 rollReader.markStale()
                 try await sendBatch(rasters, operation: operation, paperMode: mode, continuous: continuous,
                                     beforePages: beforePages, afterPages: afterPages)

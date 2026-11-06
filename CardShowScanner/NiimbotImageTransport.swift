@@ -188,6 +188,39 @@ struct NiimbotImageReadinessRecheck {
     }
 }
 
+/// Establish readiness before any print command can make output uncertain.
+/// An unsuccessful probe permits the caller to select its baseline transport;
+/// it never authorizes a write or changes transport after transmission begins.
+@MainActor enum NiimbotImageReadinessPreflight {
+    struct Result: Equatable, Sendable {
+        let initiallyReady: Bool
+        let ready: Bool
+        let rechecks: Int
+        let elapsed: Duration
+    }
+
+    static func probe(isReady: @MainActor () -> Bool,
+                      checkOperation: @MainActor () throws -> Void,
+                      sleep: @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) })
+        async throws -> Result {
+        let clock = ContinuousClock(), started = ContinuousClock().now
+        try Task.checkCancellation()
+        try checkOperation()
+        let initial = isReady()
+        if initial { return Result(initiallyReady: true, ready: true, rechecks: 0, elapsed: started.duration(to: clock.now)) }
+        for attempt in 1...NiimbotImageReadinessRecheck.maximumChecks {
+            try await sleep(.milliseconds(NiimbotImageReadinessRecheck.intervalMilliseconds))
+            try Task.checkCancellation()
+            try checkOperation()
+            if isReady() {
+                return Result(initiallyReady: false, ready: true, rechecks: attempt, elapsed: started.duration(to: clock.now))
+            }
+        }
+        return Result(initiallyReady: false, ready: false, rechecks: NiimbotImageReadinessRecheck.maximumChecks,
+                      elapsed: started.duration(to: clock.now))
+    }
+}
+
 /// One cancelable pacing/readiness wake for the current transfer. The callback
 /// is only a wake hint: the driver must recheck readiness, pacing and job IDs.
 @MainActor final class NiimbotImagePacingWake {

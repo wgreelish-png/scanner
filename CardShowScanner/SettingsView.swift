@@ -325,7 +325,7 @@ private struct ScannerDatabaseSettingsView: View {
         } header: {
             Text("D110-M transport experiment")
         } footer: {
-            Text("For A/B testing on a supported D110-M. Start with 10 ms pacing, 1 write and 64 bytes per burst. Hardware reliability and speed are pending verification. Settings are captured when a print job starts.")
+            Text("For A/B testing on a supported D110-M. Start with 10 ms pacing, 1 write and 64 bytes per burst. If Bluetooth is not ready before printing, the job uses Acknowledged. Hardware reliability and speed are pending verification. Settings are captured when a print job starts.")
         }
         .disabled(printer.isPrinting || printer.isConfiguringPaper)
     }

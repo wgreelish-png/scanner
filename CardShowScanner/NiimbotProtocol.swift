@@ -120,6 +120,7 @@ struct NiimbotImageTransportSelection: Equatable, Sendable {
     enum Fallback: String, Sendable {
         case none, unsupportedModel = "unsupported_model", unsupportedCharacteristic = "unsupported_characteristic"
         case invalidWriteSize = "invalid_write_size"
+        case readinessUnavailable = "readiness_unavailable"
     }
 
     let requested: NiimbotImageTransportConfiguration
@@ -127,10 +128,13 @@ struct NiimbotImageTransportSelection: Equatable, Sendable {
     let fallback: Fallback
     let maximumResponseWrite: Int
     let maximumWithoutResponseWrite: Int
+    let readiness: NiimbotImageReadinessPreflight.Result?
 
     init(requested: NiimbotImageTransportConfiguration, identity: NiimbotD110Identity,
-         supportsWithoutResponse: Bool, maximumResponseWrite: Int, maximumWithoutResponseWrite: Int) {
+         supportsWithoutResponse: Bool, maximumResponseWrite: Int, maximumWithoutResponseWrite: Int,
+         readiness: NiimbotImageReadinessPreflight.Result? = nil) {
         self.requested = requested
+        self.readiness = readiness
         self.maximumResponseWrite = max(0, maximumResponseWrite)
         self.maximumWithoutResponseWrite = max(0, maximumWithoutResponseWrite)
         if requested.mode == .acknowledged {
@@ -141,6 +145,8 @@ struct NiimbotImageTransportSelection: Equatable, Sendable {
             mode = .acknowledged; fallback = .unsupportedCharacteristic
         } else if maximumWithoutResponseWrite <= 0 {
             mode = .acknowledged; fallback = .invalidWriteSize
+        } else if readiness?.ready == false {
+            mode = .acknowledged; fallback = .readinessUnavailable
         } else {
             mode = .pacedWithoutResponse; fallback = .none
         }
@@ -151,13 +157,20 @@ struct NiimbotImageTransportSelection: Equatable, Sendable {
     }
 
     var diagnosticFields: [String: String] {
-        ["transport_requested": requested.mode.rawValue, "transport_selected": mode.rawValue,
+        var fields: [String: String] = ["transport_requested": requested.mode.rawValue, "transport_selected": mode.rawValue,
          "transport_fallback": fallback.rawValue, "max_write_response_bytes": String(maximumResponseWrite),
          "max_write_without_response_bytes": String(maximumWithoutResponseWrite),
          "image_pacing_ms": String(requested.pacingMilliseconds), "image_burst_writes": String(requested.burstWriteLimit),
          "image_burst_bytes": String(requested.burstByteLimit), "pending_packet_limit": "1",
          "readiness_recheck_ms": String(NiimbotImageReadinessRecheck.intervalMilliseconds),
          "readiness_recheck_limit": String(NiimbotImageReadinessRecheck.maximumChecks)]
+        if let readiness {
+            fields["wor_ready_at_preflight_start"] = String(readiness.initiallyReady)
+            fields["wor_ready_before_print"] = String(readiness.ready)
+            fields["wor_preflight_checks"] = String(min(NiimbotImageReadinessRecheck.maximumChecks, max(0, readiness.rechecks)))
+            fields["wor_preflight_wait_ms"] = String(NiimbotPrintTransferMetrics.milliseconds(readiness.elapsed))
+        }
+        return fields
     }
 }
 
