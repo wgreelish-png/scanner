@@ -138,6 +138,8 @@ import SwiftUI
             }
             .pickerStyle(.menu).labelsHidden()
             .accessibilityLabel("Game")
+            .accessibilityValue(gamePreferences.selectedGame.isEmpty
+                ? "All Games" : InventoryGameFilter.title(for: gamePreferences.selectedGame))
             .accessibilityIdentifier("priceTags.game")
         }
         .padding(.horizontal, 16).padding(.vertical, 10)

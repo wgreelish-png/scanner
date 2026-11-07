@@ -12,6 +12,7 @@ import XCTest
         }
         let suffix = String(UUID().uuidString.prefix(8))
         let deletedName = "UITest Delete \(suffix)", keptName = "UITest Keep \(suffix)"
+        app.launchArguments = ["-autoDatabaseUpdates", "NO", "-betaAutomaticIPAllowlist", "NO"]
         app.launch()
         defer { app.terminate() }
         openLists(in: app)
@@ -49,15 +50,23 @@ import XCTest
 
     private func openLists(in app: XCUIApplication) {
         let open = app.tabBars.buttons["Lists"]
-        XCTAssertTrue(open.waitForExistence(timeout: 10)); open.tap()
+        XCTAssertTrue(open.waitForExistence(timeout: 10))
+        _ = UITestInteraction.tapToolbar(open, in: app)
         XCTAssertTrue(app.navigationBars["My Lists"].waitForExistence(timeout: 5))
     }
     private func createList(_ name: String, in app: XCUIApplication) {
-        app.buttons["savedLists.newList"].tap()
+        guard UITestInteraction.tapToolbar(app.buttons["savedLists.newList"], in: app) else { return }
         let input = app.textFields["savedLists.newName"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
-        input.tap(); input.typeText(name + "\n")
-        app.buttons["savedLists.create"].tap()
+        guard UITestInteraction.tap(input, in: app) else { return }
+        // An immediate return/create pair can retire the final simulated key
+        // before it commits. Verify the exact input before saving the real list.
+        input.typeText(name)
+        let entered = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", name), object: input)
+        let result = XCTWaiter.wait(for: [entered], timeout: 5)
+        XCTAssertEqual(result, .completed, "The complete list name must be entered before Create")
+        guard result == .completed else { return }
+        guard UITestInteraction.tapToolbar(app.buttons["savedLists.create"], in: app) else { return }
         XCTAssertTrue(row(name, in: app).waitForExistence(timeout: 5))
     }
     private func row(_ name: String, in app: XCUIApplication) -> XCUIElement {

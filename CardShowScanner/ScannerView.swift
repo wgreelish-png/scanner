@@ -203,6 +203,7 @@ import UIKit
         }.foregroundStyle(.primary).tint(.primary)
             .padding(.horizontal, 8).padding(.vertical, 3)
             .background(.regularMaterial, ignoresSafeAreaEdges: .top)
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("scanner.header")
     }
 

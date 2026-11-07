@@ -336,11 +336,20 @@ import XCTest
         let search = app.searchFields.firstMatch
         tap(search, app: app)
         search.typeText("Stock A")
-        tap(app.buttons["labels.selection.keyboardDone"], app: app)
+        guard UITestInteraction.submitSearch(in: app, doneIdentifier: "labels.selection.keyboardDone") else { return }
+        XCTAssertEqual(search.value as? String, "Stock A")
         XCTAssertFalse(app.buttons["labels.select." + stockBID].exists)
         tap(app.buttons["labels.select." + stockAID], app: app)
-        enter("", field: search, app: app)
-        tap(app.buttons["labels.selection.keyboardDone"], app: app)
+        tap(search, app: app)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        guard UITestInteraction.tap(app.buttons["Cancel"], in: app, identifier: "nativeSearch.cancel") else { return }
+        let keyboardDismissed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"),
+                                                         object: app.keyboards.firstMatch)
+        XCTAssertEqual(XCTWaiter.wait(for: [keyboardDismissed], timeout: 5), .completed)
+        let clearedQuery = search.value as? String ?? ""
+        XCTAssertTrue(clearedQuery.isEmpty || clearedQuery == search.placeholderValue,
+                      "Cancel must clear the search without clearing the selected cards")
+        XCTAssertTrue(app.buttons["labels.select." + stockBID].waitForExistence(timeout: 5))
         tap(app.buttons["labels.select." + stockBID], app: app)
         assertContains("2 cards selected", element: app.staticTexts["labels.selectedCount"])
         tap(app.buttons["labels.continueSelection"], app: app)
@@ -431,7 +440,15 @@ import XCTest
         tap(app.buttons["labels.continueSelection"], app: app)
         assertContains("1 labels", element: app.staticTexts["labels.totalCount"])
         tap(app.buttons["labels.continueReview"], app: app)
-        tap(app.switches["labels.keepExistingSticker." + stockAID], app: app)
+        let keepSticker = app.switches["labels.keepExistingSticker." + stockAID]
+        let review = app.collectionViews["labels.review"]
+        let prepare = app.buttons["labels.prepare"]
+        guard revealInReviewAboveFooter(keepSticker, list: review, footer: prepare, app: app) else { return }
+        keepSticker.tap()
+        let retained = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "1"), object: keepSticker)
+        XCTAssertEqual(XCTWaiter.wait(for: [retained], timeout: 5), .completed,
+                       "Keep Existing Sticker must be on before saving label choices")
+        assertContains("0", element: app.descendants(matching: .any)["labels.reviewCount"])
         tap(app.buttons["labels.prepare"], app: app)
         assertContains("Label choices saved. No individual labels need printing.",
             element: app.staticTexts["labels.preparationNotice"])
@@ -1426,6 +1443,28 @@ import XCTest
             list.swipeUp()
         }
         XCTAssertTrue(element.exists && element.isHittable, "Expected a control in the foreground print list", file: file, line: line)
+    }
+
+    /// XCTest can call a List switch hittable while its tap point is beneath a
+    /// safe-area footer. Scroll the actual review list before interacting with it.
+    private func revealInReviewAboveFooter(_ element: XCUIElement, list: XCUIElement,
+                                          footer: XCUIElement, app: XCUIApplication,
+                                          file: StaticString = #filePath, line: UInt = #line) -> Bool {
+        guard list.waitForExistence(timeout: 5), footer.waitForExistence(timeout: 5) else {
+            XCTFail("Expected the foreground review list and its fixed action", file: file, line: line)
+            return false
+        }
+        for _ in 0..<6 {
+            let window = app.windows.firstMatch.frame
+            let listFrame = list.frame.intersection(window)
+            let top = max(listFrame.minY, app.navigationBars["Review Labels"].frame.maxY)
+            let bottom = min(listFrame.maxY, footer.frame.minY) - 8
+            let viewport = CGRect(x: listFrame.minX, y: top, width: listFrame.width, height: max(0, bottom - top))
+            if element.exists, element.isHittable, element.frame.height > 0, viewport.contains(element.frame) { return true }
+            list.swipeUp()
+        }
+        XCTFail("The review control must be fully visible above the fixed Prepare footer", file: file, line: line)
+        return false
     }
 
     private func assertForegroundQueueCardOrder(_ expected: [String], app: XCUIApplication,

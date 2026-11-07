@@ -4,6 +4,34 @@ import XCTest
 /// use a checked screen coordinate, avoiding XCTest's AXScrollToVisible action
 /// on a button that is already in the navigation bar.
 @MainActor enum UITestInteraction {
+    /// SwiftUI searchable may provide its own keyboard accessory instead of a
+    /// screen's custom Done button. Both paths must submit without clearing the query.
+    @discardableResult
+    static func submitSearch(in app: XCUIApplication, doneIdentifier: String,
+                             file: StaticString = #filePath, line: UInt = #line) -> Bool {
+        let keyboard = app.keyboards.firstMatch
+        guard keyboard.waitForExistence(timeout: 5) else {
+            XCTFail("Search must show its keyboard before submission", file: file, line: line)
+            return false
+        }
+        let done = app.buttons[doneIdentifier]
+        if waitUntilTouchable(done, in: app, timeout: 1) {
+            guard tap(done, in: app, identifier: doneIdentifier, file: file, line: line) else { return false }
+        } else {
+            let submit = app.keyboards.buttons.matching(NSPredicate(format: "label ==[c] %@", "search")).firstMatch
+            guard waitUntilTouchable(submit, in: app, timeout: 5) else {
+                XCTFail("The search keyboard must expose Done or its native Search action", file: file, line: line)
+                return false
+            }
+            submit.tap()
+        }
+        guard wait(timeout: 5, until: { !keyboard.exists }) else {
+            XCTFail("Submitting search must dismiss its keyboard", file: file, line: line)
+            return false
+        }
+        return true
+    }
+
     @discardableResult
     static func reveal(_ element: XCUIElement, in app: XCUIApplication,
                        identifier: String? = nil, towardTopWhenMissing: Bool = false, file: StaticString = #filePath,

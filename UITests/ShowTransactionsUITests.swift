@@ -272,16 +272,7 @@ import XCTest
         let search = app.searchFields.firstMatch
         tap(search, app: app); search.typeText("Stock A")
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "Inventory search opens the keyboard before submission")
-        let keyboardDone = app.buttons["showInventorySelection.keyboardDone"]
-        if keyboardDone.exists && keyboardDone.isHittable {
-            tap(keyboardDone, app: app)
-        } else {
-            // Native searchable can own its accessory row. Its Search return
-            // action still invokes the screen's existing onSubmit handler.
-            let submit = app.keyboards.buttons.matching(NSPredicate(format: "label ==[c] %@", "search")).firstMatch
-            XCTAssertTrue(submit.waitForExistence(timeout: 5), "The native search keyboard must expose its submit action")
-            tap(submit, app: app)
-        }
+        guard UITestInteraction.submitSearch(in: app, doneIdentifier: "showInventorySelection.keyboardDone") else { return }
         let dismissed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.keyboards.firstMatch)
         XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
         XCTAssertEqual(search.value as? String, "Stock A")

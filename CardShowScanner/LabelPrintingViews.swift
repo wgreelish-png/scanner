@@ -391,6 +391,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     var body: some View {
         NavigationStack(path: $path) {
             selection
+                .toolbar { closeToolbar }
                 .navigationDestination(for: InventoryLabelStep.self) { step in
                     Group {
                         switch step {
@@ -403,9 +404,9 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                             })
                         }
                     }
+                    .toolbar { closeToolbar }
                 }
         }
-        .toolbar { closeToolbar }
         .sheet(item: $editing) { draft in
             InventoryLabelEditor(draft: draft, paperPreferences: paperPreferences) { updated in
                 if let index = drafts.firstIndex(where: { $0.id == updated.id }) {
