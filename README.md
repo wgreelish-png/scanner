@@ -26,6 +26,12 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 100 adds a [shared, remembered game filter](docs/InventoryByGame.md) to
+Show Inventory and Price Tags. Inventory summaries and new label batches use
+the selected game; All Games retains the existing default. Existing label
+price order, prepared queues, inventory records and transaction selections
+remain intact.
+
 Build 99 resolves missing roll products such as `03032380` through the public
 template API on first use, then caches validated geometry for offline reuse.
 The existing bundled catalog stays unchanged and offline. Only the nonunique

@@ -51,6 +51,12 @@ import SwiftData
                 inventory.append(.init(sourceInventoryID: 4, card: Self.card("Unavailable Stock", price: nil), quantity: 1))
                 inventory.append(.init(sourceInventoryID: 5, card: Self.card("Zero Stock", price: 0), quantity: 1))
             }
+            if ProcessInfo.processInfo.arguments.contains("--inventory-games-fixture") {
+                inventory.append(.init(sourceInventoryID: 6,
+                    card: Self.card("YGO Stock", price: 10, game: "Yu-Gi-Oh!"), quantity: 2))
+                inventory.append(.init(sourceInventoryID: 7,
+                    card: Self.card("Magic Stock", price: 20, game: "Magic: The Gathering"), quantity: 1))
+            }
             try! store.seedInventory(inventory, sourceLocationID: 9001)
         }
         let context = container.mainContext
@@ -81,8 +87,8 @@ import SwiftData
             try! context.save()
         }
     }
-    private static func card(_ name: String, price: Decimal?) -> CardCandidate {
-        CardCandidate(identity: .init(game: "Pokémon", productID: "mock:" + name, printing: "Normal"),
+    private static func card(_ name: String, price: Decimal?, game: String = "Pokémon") -> CardCandidate {
+        CardCandidate(identity: .init(game: game, productID: "mock:" + name, printing: "Normal"),
             name: name, set: "Synthetic set", number: "1", marketPrice: price,
             confidence: 100, printings: ["Normal"])
     }

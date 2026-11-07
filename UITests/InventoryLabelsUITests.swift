@@ -3,6 +3,58 @@ import XCTest
 /// Automatic printer discovery is disabled for these offline UI fixtures.
 /// Queue files use the same isolated token as inventory and financial records.
 @MainActor final class InventoryLabelsUITests: XCTestCase {
+    func testGameFilterCarriesFromInventoryIntoPrintedLabelBatch() {
+        continueAfterFailure = false
+        let app = launch(mixedGames: true)
+        defer { app.terminate() }
+        tap(app.buttons["show.inventory"], app: app)
+        let inventoryList = app.collectionViews["showInventory.screen"]
+        XCTAssertTrue(inventoryList.waitForExistence(timeout: 5))
+        assertContains("6 cards available", element: app.staticTexts["showInventory.quantity"])
+        assertGameChoice("All Games", picker: app.buttons["showInventory.game"])
+        chooseGame("Yu-Gi-Oh!", picker: app.buttons["showInventory.game"], app: app)
+        assertContains("2 cards available", element: app.staticTexts["showInventory.quantity"])
+        let inventoryRows = inventoryList.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "showInventory.item."))
+        XCTAssertEqual(inventoryRows.count, 1)
+        assertContains("YGO Stock", element: inventoryRows.element(boundBy: 0))
+        for name in ["Stock A", "Stock B", "Magic Stock"] {
+            XCTAssertFalse(inventoryRows.matching(NSPredicate(format: "label CONTAINS %@", name)).firstMatch.exists)
+        }
+
+        openPriceTags(app: app)
+        assertGameChoice("Yu-Gi-Oh!", picker: app.buttons["priceTags.game"])
+        tap(app.buttons["priceTags.all"], app: app)
+        XCTAssertTrue(app.navigationBars["Label Details"].waitForExistence(timeout: 5))
+        assertContains("2 labels", element: app.staticTexts["labels.totalCount"])
+        XCTAssertTrue(app.buttons["labels.prepare"].isEnabled)
+        app.buttons["labels.prepare"].tap()
+        XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
+        assertContains("0/2 completed", element: app.staticTexts["labelQueue.progress"])
+        assertForegroundQueueCardOrder(["YGO Stock", "YGO Stock"], app: app)
+        let queueRows = app.collectionViews["labelQueue.screen"].buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "labelQueue.entry."))
+        for name in ["Stock A", "Stock B", "Magic Stock"] {
+            XCTAssertFalse(queueRows.matching(NSPredicate(format: "label CONTAINS %@", name)).firstMatch.exists)
+        }
+        XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled, "Preparing a filtered batch cannot begin a hardware print")
+
+        dismissInventoryPrintSheet(app: app)
+        XCTAssertTrue(app.navigationBars["Price Tags"].waitForExistence(timeout: 5))
+        chooseGame("All Games", picker: app.buttons["priceTags.game"], app: app)
+        tap(app.buttons["priceTags.all"], app: app)
+        XCTAssertTrue(app.navigationBars["Label Details"].waitForExistence(timeout: 5))
+        assertContains("6 labels", element: app.staticTexts["labels.totalCount"])
+        tap(app.buttons["labels.close"], app: app)
+        XCTAssertTrue(app.navigationBars["Price Tags"].waitForExistence(timeout: 5))
+        backFromPrintScreen("Price Tags", app: app)
+        XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 5))
+        tap(app.buttons["show.inventory"], app: app)
+        XCTAssertTrue(inventoryList.waitForExistence(timeout: 5))
+        assertGameChoice("All Games", picker: app.buttons["showInventory.game"])
+        assertContains("6 cards available", element: app.staticTexts["showInventory.quantity"])
+        assertNoBluetoothPrompt(app: app)
+    }
+
     func testInventoryPrintOrderSortsNumericPricesAndRemembersSelection() {
         continueAfterFailure = false
         let app = launch()
@@ -1497,13 +1549,14 @@ import XCTest
         XCTAssertFalse(app.buttons["labelProgress.pause"].exists)
     }
 
-    private func launch(extraArguments: [String] = []) -> XCUIApplication {
+    private func launch(extraArguments: [String] = [], mixedGames: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         if let path = ProcessInfo.processInfo.environment["DYLD_FALLBACK_LIBRARY_PATH"] {
             app.launchEnvironment["DYLD_FALLBACK_LIBRARY_PATH"] = path
         }
         app.launchArguments = ["--show-transactions-ui-fixture", "--show-transactions-fixture-id=" + UUID().uuidString,
                                "--uitest-disable-printer-auto-connect"] + extraArguments
+        if mixedGames { app.launchArguments.append("--inventory-games-fixture") }
         app.launch()
         XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 10))
         return app
@@ -1512,6 +1565,20 @@ import XCTest
     private func clearQueue(_ identifier: String, app: XCUIApplication) {
         tap(app.buttons[identifier], app: app)
         tap(app.buttons[identifier + ".confirm"], app: app)
+    }
+
+    private func chooseGame(_ game: String, picker: XCUIElement, app: XCUIApplication) {
+        tap(picker, app: app)
+        tap(app.buttons[game], app: app)
+        assertGameChoice(game, picker: picker)
+    }
+
+    private func assertGameChoice(_ game: String, picker: XCUIElement,
+                                  file: StaticString = #filePath, line: UInt = #line) {
+        let selected = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", game, game), object: picker)
+        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed,
+                       "Expected selected game \(game)", file: file, line: line)
     }
 
     private func assertNoPrintingPricePrompts(app: XCUIApplication,

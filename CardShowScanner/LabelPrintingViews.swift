@@ -309,15 +309,24 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     init(inventory: [ShowInventoryItem], initialInventoryID: UUID? = nil,
          marketQuotes: [UUID: TagMarketQuote] = [:], mode: InventoryLabelBatchMode = .custom,
          paperPreferences: LabelPaperPreferences = .shared, onPrintingCompleted: (() -> Void)? = nil) {
-        self.inventory = inventory
+        let savedGame = InventoryGamePreferences.shared.selectedGame
+        let explicitItem = inventory.first { $0.id == initialInventoryID && $0.quantity > 0 }
+        let game = explicitItem.map {
+            InventoryGameFilter.matches($0, game: savedGame) ? savedGame
+                : InventoryGameFilter.canonicalGame($0.card.identity.game)
+        } ?? savedGame
+        // Capture the chosen game's stock before selecting drafts or copies.
+        // An explicit card action stays available even with a different saved filter.
+        let scopedInventory = InventoryGameFilter.filtered(inventory, game: game)
+        self.inventory = scopedInventory
         self.marketQuotes = marketQuotes
         self.mode = mode
         self.onPrintingCompleted = onPrintingCompleted
         _paperPreferences = State(initialValue: paperPreferences)
         _paper = State(initialValue: paperPreferences.size)
         _pricePosition = State(initialValue: paperPreferences.pricePosition)
-        let initial = inventory.first { $0.id == initialInventoryID && $0.quantity > 0 }
-        let batchDrafts = InventoryLabelBatch.drafts(mode: mode, inventory: inventory,
+        let initial = scopedInventory.first { $0.id == initialInventoryID && $0.quantity > 0 }
+        let batchDrafts = InventoryLabelBatch.drafts(mode: mode, inventory: scopedInventory,
             marketQuotes: marketQuotes, store: .shared)
         var initialDrafts = initial.map {
             [InventoryLabelBatch.draft(for: $0, mode: .custom, marketQuotes: marketQuotes, store: .shared)]

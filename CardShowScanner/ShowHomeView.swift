@@ -101,6 +101,7 @@ private struct ShowHomeRouteCard: View {
     @State private var store: ShowBudgetStore
     @State private var search = ""
     @AppStorage("showInventorySort") private var sortPreference = ShowInventorySort.nameAscending.rawValue
+    @State private var gamePreferences = InventoryGamePreferences.shared
     @State private var seedError: String?
     @State private var showingTransaction = false
     @State private var selectingTransaction = false
@@ -113,10 +114,13 @@ private struct ShowHomeRouteCard: View {
     }
 
     private var selectedSort: ShowInventorySort { ShowInventorySort(preference: sortPreference) }
+    private var gameInventory: [ShowInventoryItem] {
+        InventoryGameFilter.filtered(available, game: gamePreferences.selectedGame)
+    }
 
     private var filtered: [ShowInventoryItem] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        let matches = available.filter { item in
+        let matches = gameInventory.filter { item in
             query.isEmpty || [item.card.name, item.card.set, item.card.number, item.card.identity.printing,
              item.card.identity.condition, item.card.identity.language].joined(separator: " ")
                 .localizedCaseInsensitiveContains(query)
@@ -150,7 +154,12 @@ private struct ShowHomeRouteCard: View {
                     }
                 }
             } else if store.isLoaded && filtered.isEmpty {
-                Section { ContentUnavailableView.search(text: search) }
+                Section {
+                    if gameInventory.isEmpty {
+                        ContentUnavailableView("No cards for this game", systemImage: "rectangle.stack",
+                            description: Text("Choose another game or All Games to view your available stock."))
+                    } else { ContentUnavailableView.search(text: search) }
+                }
             } else if store.isLoaded {
                 Section {
                     ForEach(filtered) { item in
@@ -188,6 +197,7 @@ private struct ShowHomeRouteCard: View {
                 }
             }
         }
+        .accessibilityIdentifier("showInventory.screen")
         .navigationTitle("Show Inventory").navigationBarTitleDisplayMode(.inline)
         .searchable(text: $search, prompt: "Name, set, or card number")
         .scrollDismissesKeyboard(.interactively)
@@ -210,6 +220,11 @@ private struct ShowHomeRouteCard: View {
                     .accessibilityLabel("TCGTracking Source Snapshot")
                     .accessibilityIdentifier("showInventory.importSnapshot")
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink { PriceTagsView(store: store) } label: {
+                    Label("Price Tags", systemImage: "printer")
+                }.accessibilityIdentifier("showInventory.priceTags")
+            }
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
                 Button("Done") { endSearchEditing() }.fixedSize().frame(minWidth: 64, minHeight: 44)
@@ -228,6 +243,15 @@ private struct ShowHomeRouteCard: View {
 
     private var inventorySummary: some View {
         VStack(alignment: .leading, spacing: 4) {
+            Picker("Game", selection: Binding(get: { gamePreferences.selectedGame }, set: { game in
+                endSearchEditing()
+                gamePreferences.selectedGame = game
+            })) {
+                Text("All Games").tag("")
+                ForEach(InventoryGameFilter.games(in: available, including: gamePreferences.selectedGame), id: \.self) { game in
+                    Text(game).tag(game)
+                }
+            }.pickerStyle(.menu).accessibilityIdentifier("showInventory.game")
             if selectingTransaction {
                 HStack {
                     Text("\(transactionQuantities.values.reduce(0, +).formatted()) selected")
@@ -238,9 +262,9 @@ private struct ShowHomeRouteCard: View {
                         .accessibilityIdentifier("showInventory.clearSelection")
                 }
             }
-            Text("\(available.reduce(0) { $0 + $1.quantity }.formatted()) cards available")
+            Text("\(gameInventory.reduce(0) { $0 + $1.quantity }.formatted()) cards available")
                 .font(.headline).monospacedDigit().accessibilityIdentifier("showInventory.quantity")
-            Text("\(available.count.formatted()) acquisition lots · Quantities count physical cards")
+            Text("\(gameInventory.count.formatted()) acquisition lots · Quantities count physical cards")
                 .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("showInventory.lots")
             Label("Local stock · Works offline", systemImage: "iphone")
                 .font(.caption).foregroundStyle(.indigo).accessibilityIdentifier("showInventory.localStock")

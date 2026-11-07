@@ -8,8 +8,8 @@ import XCTest
     }
 
     private func item(_ index: Int, name: String = "Card", market: Decimal? = 10,
-                      quantity: Int = 1) -> ShowInventoryItem {
-        let card = CardCandidate(identity: .init(game: "Pokémon", productID: "p:42", printing: "Normal"),
+                      quantity: Int = 1, game: String = "Pokémon") -> ShowInventoryItem {
+        let card = CardCandidate(identity: .init(game: game, productID: "p:42", printing: "Normal"),
             name: name, set: "Set", number: "42", marketPrice: market, confidence: 100, printings: ["Normal"])
         return ShowInventoryItem(id: UUID(uuidString: String(format: "20000000-0000-0000-0000-%012d", index))!,
                                  card: card, quantity: quantity)
@@ -35,6 +35,57 @@ import XCTest
         XCTAssertTrue(store.records.isEmpty)
         XCTAssertTrue(InventoryLabelBatch.selectedIDs(mode: .custom, inventory: source, store: store).isEmpty)
         XCTAssertTrue(InventoryLabelBatch.drafts(mode: .custom, inventory: source, store: store).isEmpty)
+    }
+
+    func testPrintAllUsesOnlyTheFilteredGameAndRetainsEveryAvailableCopyAndWriteInPrice() throws {
+        let store = store()
+        let known = item(1, name: "English A", quantity: 2, game: "Pokemon")
+        let missing = item(2, name: "English B", market: nil, quantity: 3)
+        let zero = item(3, name: "English C", market: 0, quantity: 4)
+        let soldOut = item(4, name: "English sold out", quantity: 0)
+        let yugioh = item(5, quantity: 5, game: "Yu-Gi-Oh!")
+        let magic = item(6, quantity: 6, game: "Magic: The Gathering")
+        let japanese = item(7, quantity: 7, game: "Pokemon Japan")
+        let source = [yugioh, zero, soldOut, japanese, known, magic, missing], original = source
+        let filtered = InventoryGameFilter.filtered(source, game: "Pokemon TCG")
+        XCTAssertEqual(InventoryLabelBatch.selectedIDs(mode: .all, inventory: filtered, store: store),
+                       Set([known.id, missing.id, zero.id]))
+        let drafts = InventoryLabelBatch.drafts(mode: .all, inventory: filtered, store: store)
+        XCTAssertEqual(drafts.map(\.id), [known.id, missing.id, zero.id])
+        XCTAssertEqual(drafts.map(\.copies), [2, 3, 4])
+        XCTAssertEqual(drafts.reduce(0) { $0 + $1.copies }, 9)
+        XCTAssertTrue(try XCTUnwrap(drafts.first { $0.id == missing.id }).isBlankPrice)
+        XCTAssertTrue(try XCTUnwrap(drafts.first { $0.id == zero.id }).isBlankPrice)
+        XCTAssertEqual(source, original)
+        XCTAssertTrue(store.records.isEmpty)
+    }
+
+    func testPriceChangedSelectionCannotEscapeTheFilteredGameOrRepriceItsSavedStickers() throws {
+        let store = store()
+        let unchanged = item(1, name: "YGO A", quantity: 2, game: "Yu-Gi-Oh!")
+        let unprinted = item(2, name: "YGO B", quantity: 3, game: "YuGiOh")
+        let changed = item(3, name: "YGO C", quantity: 2, game: "Yu-Gi-Oh")
+        let missing = item(4, name: "YGO D", market: nil, quantity: 4, game: "Yu-Gi-Oh!")
+        let soldOut = item(5, quantity: 0, game: "YuGiOh")
+        let pokemon = item(6, quantity: 5)
+        let magic = item(7, quantity: 6, game: "MTG")
+        let japanese = item(8, quantity: 7, game: "Pokémon Japan")
+        try approve(unchanged, in: store)
+        try approve(unprinted, in: store, labeled: false)
+        try approve(changed, in: store)
+        try store.approve([.init(id: changed.id, approvedTag: .individual(1_200), currentMarket: 12)])
+        let records = store.records
+        let source = [pokemon, changed, magic, unchanged, missing, japanese, unprinted, soldOut], original = source
+        let filtered = InventoryGameFilter.filtered(source, game: "Yu-Gi-Oh!")
+        XCTAssertEqual(InventoryLabelBatch.selectedIDs(mode: .priceChanged, inventory: filtered, store: store),
+                       Set([unprinted.id, changed.id, missing.id]))
+        let drafts = InventoryLabelBatch.drafts(mode: .priceChanged, inventory: filtered, store: store)
+        XCTAssertEqual(drafts.map(\.id), [unprinted.id, changed.id, missing.id])
+        XCTAssertEqual(drafts.map(\.copies), [3, 2, 4])
+        XCTAssertEqual(drafts.first { $0.id == changed.id }?.tag, .individual(1_200))
+        XCTAssertTrue(try XCTUnwrap(drafts.first { $0.id == missing.id }).isBlankPrice)
+        XCTAssertEqual(store.records, records)
+        XCTAssertEqual(source, original)
     }
 
     func testPriceChangedIncludesNewUnprintedAndSavedStickerChangesWithoutMarketRepricing() throws {

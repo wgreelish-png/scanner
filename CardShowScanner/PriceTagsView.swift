@@ -7,6 +7,7 @@ import SwiftUI
     @State private var approvals = TagApprovalStore.shared
     @State private var queue = LabelPrintQueue.shared
     @State private var printer = NiimbotPrinter.shared
+    @State private var gamePreferences = InventoryGamePreferences.shared
     @State private var paperPreferences: LabelPaperPreferences
     @State private var batch: InventoryLabelBatchMode?
     @State private var destination: Destination?
@@ -18,9 +19,12 @@ import SwiftUI
         _paperPreferences = State(initialValue: paperPreferences)
     }
 
-    private var available: [ShowInventoryItem] { store.inventory.filter { $0.quantity > 0 } }
+    private var gameInventory: [ShowInventoryItem] {
+        InventoryGameFilter.filtered(store.inventory, game: gamePreferences.selectedGame)
+    }
+    private var available: [ShowInventoryItem] { gameInventory.filter { $0.quantity > 0 } }
     private var changedIDs: Set<UUID> {
-        InventoryLabelBatch.selectedIDs(mode: .priceChanged, inventory: store.inventory,
+        InventoryLabelBatch.selectedIDs(mode: .priceChanged, inventory: gameInventory,
             store: approvals)
     }
 
@@ -34,6 +38,7 @@ import SwiftUI
                     Text("Choose a batch, check the labels, then print.")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
+                gamePicker
                 printerStatus
                 VStack(spacing: 12) {
                     batchButton(.all, title: "Print All", subtitle: "One label per available copy, including reprints.",
@@ -59,7 +64,9 @@ import SwiftUI
                     }
                 } else if available.isEmpty {
                     ContentUnavailableView("No available cards", systemImage: "shippingbox",
-                        description: Text("Create a custom sticker above, or import inventory to prepare card labels."))
+                        description: Text(gamePreferences.selectedGame.isEmpty
+                            ? "Create a custom sticker above, or import inventory to prepare card labels."
+                            : "No available cards for \(InventoryGameFilter.title(for: gamePreferences.selectedGame)). Choose All Games or another game to prepare inventory labels."))
                 }
                 VStack(spacing: 0) {
                     Button { destination = .queue } label: {
@@ -93,7 +100,7 @@ import SwiftUI
             }
         }
         .sheet(item: $batch) { mode in
-            InventoryLabelFlowView(inventory: store.inventory, mode: mode,
+            InventoryLabelFlowView(inventory: gameInventory, mode: mode,
                                    paperPreferences: paperPreferences, onPrintingCompleted: finishPrinting)
         }
         .navigationDestination(item: $destination) { route in
@@ -117,6 +124,24 @@ import SwiftUI
     private func finishPrinting() {
         batch = nil
         destination = nil
+    }
+
+    private var gamePicker: some View {
+        HStack {
+            Text("Game").font(.subheadline.weight(.semibold))
+            Spacer()
+            Picker("Game", selection: $gamePreferences.selectedGame) {
+                Text("All Games").tag("")
+                ForEach(InventoryGameFilter.games(in: store.inventory, including: gamePreferences.selectedGame), id: \.self) { game in
+                    Text(InventoryGameFilter.title(for: game)).tag(game)
+                }
+            }
+            .pickerStyle(.menu).labelsHidden()
+            .accessibilityLabel("Game")
+            .accessibilityIdentifier("priceTags.game")
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
     }
 
     private var printerStatus: some View {
