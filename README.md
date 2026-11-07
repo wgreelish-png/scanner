@@ -26,6 +26,11 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 95 adds saved printer-transfer tuning in Settings → Diagnostics. Adjust
+image frames per write, batch bytes and image pacing; defaults retain the
+working build-94 profile (2 frames, 64 bytes, 10 ms per image frame). Settings
+are captured per job and Bluetooth limits still cap each batch automatically.
+
 Build 94 combines two adjacent image frames into one acknowledged write on the
 verified D110-M v4 path, capped at 64 bytes and the negotiated payload limits.
 Card order, artwork, native copies and printer-confirmed completion are preserved.

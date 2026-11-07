@@ -245,6 +245,9 @@ private struct ScannerDatabaseSettingsView: View {
 
 @MainActor private struct DiagnosticsSettingsView: View {
     @AppStorage("diagnosticsEnabled") private var diagnosticsEnabled = true
+    @State private var printerTransfer = NiimbotImageTransferPreferences.shared
+    @State private var printer = NiimbotPrinter.shared
+    @State private var printQueue = LabelPrintQueue.shared
     @State private var diagnosticURL: URL?
     @State private var error: String?
     @State private var confirmClear = false
@@ -280,6 +283,7 @@ private struct ScannerDatabaseSettingsView: View {
             } footer: {
                 Text("Keeps about 512 KB of recent local events, including scanner timings, save errors, device heat and memory warnings. While the app is active, health summaries include app memory/CPU, battery state and responsiveness. Available iOS crash/hang report counts are included. Card contents, credentials, camera images and call stacks are excluded. Copy puts the diagnostic file on the clipboard; Export opens file sharing.")
             }
+            printerTransferTuning
             Section {
                 Button("Clear Diagnostic Log", role: .destructive) { confirmClear = true }
                     .accessibilityIdentifier("settings.clearDiagnostics")
@@ -296,6 +300,34 @@ private struct ScannerDatabaseSettingsView: View {
             }
         }
         .failureAlert($error)
+    }
+
+    private var printerTransferTuning: some View {
+        Section {
+            Stepper(value: $printerTransfer.framesPerWrite, in: 1...NiimbotImageTransferConfiguration.maximumFrames) {
+                LabeledContent("Frames per write", value: printerTransfer.framesPerWrite == 1
+                    ? "1 frame" : "\(printerTransfer.framesPerWrite) frames")
+            }.accessibilityIdentifier("settings.printerTransfer.frames")
+            Stepper(value: $printerTransfer.byteLimit, in: 20...NiimbotImageTransferConfiguration.maximumBytes, step: 4) {
+                LabeledContent("Batch byte limit", value: "\(printerTransfer.byteLimit) bytes")
+            }.accessibilityIdentifier("settings.printerTransfer.bytes")
+            Stepper(value: $printerTransfer.pacingMilliseconds,
+                    in: 0...NiimbotImageTransferConfiguration.maximumPacingMilliseconds) {
+                LabeledContent("Image pacing", value: "\(printerTransfer.pacingMilliseconds) ms/frame")
+            }.accessibilityIdentifier("settings.printerTransfer.pacing")
+            if printer.isConnected, printer.acknowledgedImageWriteCapacity > 0 {
+                LabeledContent("Effective batch limit",
+                    value: "\(min(printerTransfer.byteLimit, printer.acknowledgedImageWriteCapacity)) bytes")
+                    .accessibilityIdentifier("settings.printerTransfer.effectiveBytes")
+            }
+            Button("Restore Defaults") { printerTransfer.reset() }
+                .accessibilityIdentifier("settings.printerTransfer.reset")
+        } header: {
+            Text("Printer transfer tuning")
+        } footer: {
+            Text("Uses acknowledged Bluetooth writes (ACK). Batches are also capped by Bluetooth. One frame uses unbatched writes. Changes are saved for the next job. Change one value at a time when testing.")
+        }
+        .disabled(printer.isPrinting || printer.isConfiguringPaper || printQueue.isPrinting)
     }
 
     private func cleanupDiagnostics() {

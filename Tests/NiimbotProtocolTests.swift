@@ -1429,8 +1429,214 @@ final class NiimbotProtocolTests: XCTestCase {
             total: 1, maximumImageWriteBytes: 512).diagnosticFields(elapsedMilliseconds: 0)["image_batch_limit"], "64")
     }
 
+    func testConfiguredImageBatchesRespectFrameByteAndNegotiatedLimits() throws {
+        let blank = NiimbotRequest(0x84, [0, 0, 1]) // 10 framed bytes.
+        let dense = NiimbotRequest(0x85, Array(repeating: 0xff, count: 18)) // 25 framed bytes.
+        let blanks = Array(repeating: blank, count: 20)
+        let rows = Array(repeating: dense, count: 20)
+        for frames in [4, 8, 16] {
+            let configuration = NiimbotImageTransferConfiguration(framesPerWrite: frames, byteLimit: 256)
+            let small = try XCTUnwrap(NiimbotImageWriteBatch.batch(in: blanks, at: 0,
+                maximumWriteBytes: 512, configuration: configuration))
+            XCTAssertEqual(small.count, frames)
+            let full = try XCTUnwrap(NiimbotImageWriteBatch.batch(in: rows, at: 0,
+                maximumWriteBytes: 512, configuration: configuration))
+            XCTAssertEqual(full.count, min(frames, 10), "256 bytes cannot contain eleven complete 25-byte frames")
+            XCTAssertEqual(try NiimbotImageWriteBatch.encode(full, maximumWriteBytes: 512,
+                configuration: configuration).count, full.count * 25)
+            let negotiated = NiimbotImageWriteBatch.batch(in: rows, at: 0,
+                maximumWriteBytes: 64, configuration: configuration)
+            XCTAssertEqual(negotiated?.count, 2)
+            XCTAssertNil(NiimbotImageWriteBatch.batch(in: rows, at: 0,
+                maximumWriteBytes: 49, configuration: configuration))
+            let requested = NiimbotImageTransferConfiguration(framesPerWrite: frames, byteLimit: 64)
+            XCTAssertEqual(NiimbotImageWriteBatch.batch(in: rows, at: 0,
+                maximumWriteBytes: 512, configuration: requested)?.count, 2)
+        }
+        let singles = NiimbotImageTransferConfiguration(framesPerWrite: 1, byteLimit: 256)
+        XCTAssertNil(NiimbotImageWriteBatch.batch(in: rows, at: 0, maximumWriteBytes: 512, configuration: singles))
+        XCTAssertFalse(NiimbotImageWriteBatch.canBatch([dense, dense], maximumWriteBytes: 512, configuration: singles))
+        XCTAssertThrowsError(try NiimbotImageWriteBatch.encode([dense, dense], maximumWriteBytes: 512, configuration: singles))
+        XCTAssertNil(NiimbotImageWriteBatch.batch(in: rows, at: -1, maximumWriteBytes: 512))
+        XCTAssertNil(NiimbotImageWriteBatch.batch(in: rows, at: rows.count, maximumWriteBytes: 512))
+        for index in rows.indices {
+            XCTAssertEqual(NiimbotImageWriteBatch.batch(in: rows, at: index, maximumWriteBytes: 512),
+                           NiimbotImageWriteBatch.pair(in: rows, at: index, maximumWriteBytes: 512),
+                           "The default preserves build 94's two-frame, 64-byte grouping")
+        }
+    }
+
+    func testConfiguredImageBatchesStopAtControlsRepliesAndInvalidFrames() throws {
+        let row = NiimbotRequest(0x84, [0, 0, 1])
+        let configuration = NiimbotImageTransferConfiguration(framesPerWrite: 16, byteLimit: 256)
+        let boundaries = [
+            NiimbotRequest(0x83, response: 0x86), NiimbotRequest(0x84, responseAlternatives: [0x86]),
+            NiimbotRequest(0x85, requiresTrue: true), NiimbotRequest(0x85, beginsPrint: true),
+            NiimbotRequest(0x01, response: 0x02, beginsPrint: true), NiimbotRequest(0x03, response: 0x04),
+            NiimbotRequest(0x13, response: 0x14), NiimbotRequest(0x20, response: 0x30),
+            NiimbotRequest(0xa3), NiimbotRequest(0xa3, response: 0xb3),
+            NiimbotRequest(0xe3, response: 0xe4, requiresTrue: true), NiimbotRequest(0xf3, response: 0xf4),
+            NiimbotRequest(0x85, Array(repeating: 0xff, count: 256))
+        ]
+        for boundary in boundaries {
+            var requests = Array(repeating: row, count: 4)
+            requests.append(boundary)
+            requests.append(contentsOf: Array(repeating: row, count: 4))
+            XCTAssertEqual(NiimbotImageWriteBatch.batch(in: requests, at: 0,
+                maximumWriteBytes: 512, configuration: configuration), Array(requests.prefix(4)))
+            XCTAssertNil(NiimbotImageWriteBatch.batch(in: requests, at: 4,
+                maximumWriteBytes: 512, configuration: configuration))
+            XCTAssertEqual(NiimbotImageWriteBatch.batch(in: requests, at: 5,
+                maximumWriteBytes: 512, configuration: configuration), Array(requests.suffix(4)))
+            XCTAssertFalse(NiimbotImageWriteBatch.canBatch(requests, maximumWriteBytes: 512, configuration: configuration))
+            XCTAssertThrowsError(try NiimbotImageWriteBatch.encode(requests, maximumWriteBytes: 512, configuration: configuration))
+        }
+    }
+
+    func testConfiguredImageBatchEncoderKeepsEveryOriginalByteAndFrameInOrder() throws {
+        var requests: [NiimbotRequest] = []
+        for row in 0..<25 {
+            requests.append(row.isMultiple(of: 3)
+                ? NiimbotRequest(0x84, [0, UInt8(row), 1])
+                : NiimbotRequest(0x85, [0, UInt8(row), 1, 1, 1, 1] + Array(repeating: UInt8(row), count: 12)))
+        }
+        var original = Data()
+        for request in requests { original.append(try NiimbotProtocol.encode(command: request.command, data: request.data)) }
+        for frames in [4, 8, 16] {
+            let configuration = NiimbotImageTransferConfiguration(framesPerWrite: frames, byteLimit: 256)
+            var encoded = Data(), flattened: [NiimbotRequest] = []
+            var index = 0
+            while index < requests.count {
+                if let batch = NiimbotImageWriteBatch.batch(in: requests, at: index,
+                    maximumWriteBytes: 241, configuration: configuration) {
+                    let bytes = try NiimbotImageWriteBatch.encode(batch, maximumWriteBytes: 241, configuration: configuration)
+                    XCTAssertLessThanOrEqual(batch.count, frames)
+                    XCTAssertLessThanOrEqual(bytes.count, 241)
+                    flattened.append(contentsOf: batch)
+                    encoded.append(bytes)
+                    index += batch.count
+                } else {
+                    let request = requests[index]
+                    encoded.append(try NiimbotProtocol.encode(command: request.command, data: request.data))
+                    flattened.append(request)
+                    index += 1
+                }
+            }
+            XCTAssertEqual(flattened, requests)
+            XCTAssertEqual(encoded, original)
+            var parser = NiimbotStreamParser()
+            var packets: [NiimbotPacket] = []
+            for offset in stride(from: 0, to: encoded.count, by: 17) {
+                packets.append(contentsOf: parser.append(encoded.subdata(in: offset..<min(encoded.count, offset + 17))))
+            }
+            XCTAssertEqual(packets, requests.map { NiimbotPacket(command: $0.command, data: $0.data) })
+            XCTAssertEqual(parser.bufferedByteCount, 0)
+        }
+    }
+
+    private var stripedRaster: LabelRaster {
+        var bytes = Data()
+        for row in 0..<240 { bytes.append(contentsOf: Array(repeating: row / 20 % 2 == 0 ? UInt8(0xff) : 0x7f, count: 12)) }
+        return LabelRaster(width: 96, height: 240, data: bytes)
+    }
+
+    @MainActor func testConfiguredSessionsKeepDefaultAndSingleFrameLogicalStreamsAndMixedCardOrder() async throws {
+        let rasters = [stripedRaster, denseRaster, stripedRaster]
+        let baseline = AckImageTrace(readiness: d110MReadiness)
+        try await NiimbotD110Session.printContinuously(rasters, identity: d110MIdentity(),
+            imageBatchExchange: { baseline.recordBatch($0) }, maximumImageWriteBytes: 64,
+            exchange: baseline.exchange, pause: {}, onPagesWillSend: { baseline.will.append($0) },
+            onPagesCompleted: { baseline.receipts.append(contentsOf: $0) })
+        XCTAssertEqual(baseline.batches.count, 13, "Build 94 sends six pairs per striped image and one dense-image pair")
+        for frames in [1, 2, 4, 8, 16] {
+            let configuration = NiimbotImageTransferConfiguration(framesPerWrite: frames, byteLimit: frames <= 2 ? 64 : 256)
+            let trace = AckImageTrace(readiness: d110MReadiness, configuration: configuration)
+            try await NiimbotD110Session.printContinuously(rasters, identity: d110MIdentity(),
+                imageBatchExchange: { trace.recordBatch($0) }, maximumImageWriteBytes: 512,
+                imageTransferConfiguration: configuration, exchange: trace.exchange, pause: {},
+                onPagesWillSend: { trace.will.append($0) }, onPagesCompleted: { trace.receipts.append(contentsOf: $0) })
+            XCTAssertEqual(trace.requests, baseline.requests, "Batch tuning cannot change logical commands, artwork or copy order")
+            XCTAssertEqual(trace.will, [[0], [1], [2]])
+            XCTAssertEqual(trace.receipts, [0, 1, 2])
+            if frames == 1 { XCTAssertTrue(trace.batches.isEmpty) }
+            if frames == 2 { XCTAssertEqual(trace.batches, baseline.batches) }
+            if frames == 4 { XCTAssertEqual(trace.batches.map(\.count), [4, 4, 4, 2, 4, 4, 4]) }
+            if frames == 8 { XCTAssertEqual(trace.batches.map(\.count), [8, 4, 2, 8, 4]) }
+            if frames == 16 { XCTAssertEqual(trace.batches.map(\.count), [10, 2, 2, 10, 2]) }
+        }
+    }
+
+    @MainActor func testChangingSavedTransferSettingsDuringHeldAcknowledgementCannotAlterTheJobSnapshot() async throws {
+        let suite = "NiimbotHeldImageConfigurationTests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = NiimbotImageTransferPreferences(defaults: defaults, keyPrefix: "held")
+        preferences.framesPerWrite = 4
+        preferences.byteLimit = 256
+        let snapshot = preferences.snapshot
+        let trace = AckImageTrace(readiness: d110MReadiness, configuration: snapshot)
+        var acknowledgement: CheckedContinuation<Void, Error>?
+        var progress: [Int] = []
+        let operation = Task { @MainActor in
+            try await NiimbotD110Session.printContinuously([stripedRaster], identity: d110MIdentity(),
+                imageBatchExchange: { rows in
+                    trace.recordBatch(rows)
+                    if trace.batches.count == 1 { try await withCheckedThrowingContinuation { acknowledgement = $0 } }
+                }, maximumImageWriteBytes: 256, imageTransferConfiguration: snapshot,
+                exchange: trace.exchange, pause: {}, onPagesWillSend: { trace.will.append($0) },
+                onPagesCompleted: { trace.receipts.append(contentsOf: $0) },
+                onMeasurement: { if case let .groupProgress(value) = $0 { progress.append(value.completedRequests) } })
+        }
+        defer { operation.cancel(); acknowledgement?.resume(throwing: CancellationError()) }
+        for _ in 0..<200 where acknowledgement == nil { await Task.yield() }
+        let held = try XCTUnwrap(acknowledgement)
+        XCTAssertEqual(progress, [0, 1, 2])
+        preferences.framesPerWrite = 1
+        preferences.byteLimit = 20
+        preferences.pacingMilliseconds = 50
+        acknowledgement = nil
+        held.resume()
+        try await operation.value
+        XCTAssertEqual(trace.batches.map(\.count), [4, 4, 4])
+        XCTAssertEqual(progress, [0, 1, 2, 6, 10, 14, 15])
+        XCTAssertEqual(trace.receipts, [0])
+        XCTAssertEqual(snapshot, NiimbotImageTransferConfiguration(framesPerWrite: 4, byteLimit: 256, pacingMilliseconds: 10))
+        XCTAssertEqual(preferences.snapshot, NiimbotImageTransferConfiguration(framesPerWrite: 1, byteLimit: 20, pacingMilliseconds: 50))
+    }
+
+    func testConfiguredMetricsCountLargeBatchesAsOneWriteAndManyLogicalFrames() {
+        let configuration = NiimbotImageTransferConfiguration(framesPerWrite: 16, byteLimit: 256, pacingMilliseconds: 0)
+        var metrics = NiimbotPrintTransferMetrics(identity: d110MIdentity(), continuous: true,
+            total: 1, maximumImageWriteBytes: 241, imageTransferConfiguration: configuration)
+        let before = metrics
+        metrics.recordWrite(command: 0x85, response: nil, copies: 1, byteCount: 200, startsRequest: true, imageFrameCount: 8)
+        metrics.recordWrite(command: 0x85, response: nil, copies: 1, byteCount: 100, startsRequest: true, imageFrameCount: 4)
+        metrics.recordWrite(command: 0x85, response: nil, copies: 1, byteCount: 10, startsRequest: true)
+        metrics.recordWrite(command: 0x85, response: nil, copies: 1, byteCount: 15, startsRequest: false)
+        metrics.recordWrite(command: 0xe3, response: 0xe4, copies: 1, byteCount: 8, startsRequest: true, imageFrameCount: 16)
+        let fields = metrics.diagnosticFields(elapsedMilliseconds: 100)
+        XCTAssertEqual(fields["image_packets"], "13")
+        XCTAssertEqual(fields["request_count"], "14")
+        XCTAssertEqual(fields["wire_bytes"], "333")
+        XCTAssertEqual(fields["image_write_count"], "4")
+        XCTAssertEqual(fields["image_batch_count"], "2")
+        XCTAssertEqual(fields["image_batched_packets"], "12")
+        XCTAssertEqual(fields["image_max_write_bytes"], "200")
+        XCTAssertEqual(fields["image_batch_limit"], "241")
+        XCTAssertEqual(fields["image_batch_frame_limit"], "16")
+        XCTAssertEqual(fields["image_requested_byte_limit"], "256")
+        XCTAssertEqual(fields["image_pacing_ms"], "0")
+        let group = metrics.groupFields(since: before, elapsed: .milliseconds(100), pages: 0..<1, accepted: true)
+        XCTAssertEqual(group["group_image_writes"], "4")
+        XCTAssertEqual(group["group_image_packets"], "13")
+        var bounded = NiimbotPrintTransferMetrics(identity: d110MIdentity(), continuous: true, total: 1)
+        bounded.recordWrite(command: 0x85, response: nil, copies: 1, byteCount: 256, startsRequest: true, imageFrameCount: Int.max)
+        XCTAssertEqual(bounded.diagnosticFields(elapsedMilliseconds: 0)["image_packets"], "16")
+    }
+
     @MainActor private final class AckImageTrace {
         let readiness: NiimbotPacket
+        let configuration: NiimbotImageTransferConfiguration
         var requests: [NiimbotRequest] = []
         var batches: [[NiimbotRequest]] = []
         var will: [[Int]] = []
@@ -1438,12 +1644,16 @@ final class NiimbotProtocolTests: XCTestCase {
         private var quantity = 1
         private var submitted = 0
 
-        init(readiness: NiimbotPacket) { self.readiness = readiness }
+        init(readiness: NiimbotPacket, configuration: NiimbotImageTransferConfiguration = .init()) {
+            self.readiness = readiness
+            self.configuration = configuration
+        }
 
         func recordBatch(_ rows: [NiimbotRequest]) {
-            XCTAssertEqual(rows.count, 2)
+            XCTAssertGreaterThanOrEqual(rows.count, 2)
+            XCTAssertLessThanOrEqual(rows.count, configuration.framesPerWrite)
             XCTAssertTrue(rows.allSatisfy(\.isOneWayImage), "No control or required reply reaches the image callback")
-            XCTAssertTrue(NiimbotImageWriteBatch.canBatch(rows, maximumWriteBytes: 64))
+            XCTAssertTrue(NiimbotImageWriteBatch.canBatch(rows, maximumWriteBytes: configuration.byteLimit, configuration: configuration))
             requests.append(contentsOf: rows)
             batches.append(rows)
         }
@@ -1478,6 +1688,7 @@ final class NiimbotProtocolTests: XCTestCase {
             "printer_model": "2320", "protocol_version": "4", "command_path": "d110m_v4",
             "image_write_count": "3", "image_batch_count": "0", "image_batched_packets": "0",
             "image_max_write_bytes": "12", "image_batch_limit": "0", "image_batch_frame_limit": "1",
+            "image_requested_byte_limit": "64", "image_pacing_ms": "10",
             "plan_encode_ms": "0", "packet_encode_ms": "0", "packet_pacing_ms": "0", "att_ack_wait_ms": "0",
             "printer_reply_wait_ms": "0", "status_poll_ms": "0", "status_backoff_ms": "0", "print_start_ms": "0", "print_end_ms": "0"])
         XCTAssertEqual(metrics.diagnosticFields(elapsedMilliseconds: -1)["transfer_elapsed_ms"], "0")

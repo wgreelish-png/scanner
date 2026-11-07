@@ -1,4 +1,44 @@
-# Printer stage timings and reuse — build 85
+# Printer transfer timings and tuning — build 95
+
+## Saved transfer tuning
+
+Open **Settings → Diagnostics → Printer transfer tuning**. These controls apply
+to acknowledged image writes on model 2320/protocol 4. Other printer paths keep
+their existing behavior. Settings persist across relaunches and are captured
+once at job entry; controls lock during printing and paper configuration.
+
+| Control | Default | Range |
+| --- | ---: | ---: |
+| Frames per write | 2 | 1–16 |
+| Batch byte limit | 64 bytes | 20–256 bytes |
+| Image pacing | 10 ms/frame | 0–50 ms/frame |
+
+One frame selects unbatched writes. The byte limit caps combined image batches;
+a standalone frame keeps its existing transport path. The effective batch cap
+also respects the connection's acknowledged and ordinary payload limits, so a
+requested 256 bytes can become 241 bytes on the tested connection. Full encoded
+frames remain intact, and a batch never crosses a control, reply or page boundary.
+
+Image pacing is multiplied by the number of frames in each write. Zero removes
+only the intentional image delay; every write still awaits its Bluetooth ACK.
+Control-command pacing remains 10 ms. A live limit shrink that invalidates a
+planned batch stops the send, preserving the existing uncertain-output review.
+There is no automatic replay or switch to without-response image writes.
+
+**Restore Defaults** resets only these three tuning preferences to 2/64/10.
+Paper, price position, inventory, label artwork and completion receipts are unchanged.
+
+For a controlled comparison:
+
+1. Repeat the same four cards at 2 frames, 64 bytes and 10 ms/frame.
+2. Change only pacing to 8 ms/frame, repeat and inspect every label.
+3. Restore 10 ms/frame; raise bytes to 128 while keeping two frames, then repeat
+   with four frames. Dense frames are 25 bytes, so four need at least 100 bytes.
+4. Export each diagnostic file with the settings and physical artwork/order/count
+   result. Increase limits or lower pacing further only after the prior output
+   is complete and correct. Saved receipts remain the physical-completion proof.
+
+## Implementation history
 
 Build 93 restores the working acknowledged transport. The unsuccessful
 without-response experiment remains in its separate Git branch/history; its
@@ -94,7 +134,8 @@ per-write scheduling overhead, not a large artwork file or slow rendering.
 Build 94 enables the two-frame grouping described above. The 512-byte
 acknowledged API limit does not prove a 512-byte ordinary ATT payload; the same
 connection reports 241 bytes for without-response writes. The initial 64-byte
-cap stays below both. Actual printer acceptance and speed remain to be checked.
+cap stays below both. The default profile's successful result is recorded below;
+higher limits and lower pacing still need hardware comparison.
 
 | Summary field | Measurement |
 | --- | --- |
@@ -103,6 +144,7 @@ cap stays below both. Actual printer acceptance and speed remain to be checked.
 | `image_batch_count`, `image_batched_packets` | Submitted two-frame payloads and logical frames included in them. |
 | `image_max_write_bytes` | Largest actual image-write payload. |
 | `image_batch_limit`, `image_batch_frame_limit` | Captured payload cap and maximum frames per write. A disabled cap is zero. |
+| `image_requested_byte_limit`, `image_pacing_ms` | Saved requested batch bytes and per-image-frame delay captured for this job. |
 | `group_image_writes` | Actual image writes for one submitted group. |
 
 First print three known different prices and inspect artwork, order and count.
@@ -110,7 +152,16 @@ Then repeat the original mixed-price batch with the same paper, price side and
 copies, and export diagnostics. Expect a positive batch count and fewer actual
 image writes than logical image frames. Compare wire bytes, original frame
 counts, acknowledgement waits and wall spans. Also repeat identical copies to
-check their existing native-copy reuse. No hardware result is claimed yet.
+check their existing native-copy reuse. Compare newly tuned output with the
+working default profile before retaining the new settings.
+
+The supplied successful build-94 console log confirms four completed labels in
+26.971 seconds of sending-stage wall time: 772 logical image frames used 387
+actual writes (385 pairs and two singles), with a largest payload of 50 bytes.
+Acknowledgement waiting accumulated 16.167 seconds and pacing 8.785 seconds.
+All four physical receipts and the final PrintEnd reply arrived. These four
+labels are not an identical-input timing comparison with the older five-label
+baseline. Higher settings and lower pacing still need their own hardware checks.
 
 Pacing could also be measured separately. Removing every observed pacing delay
 could recover at most about 11.4 seconds in this baseline, while acknowledgement

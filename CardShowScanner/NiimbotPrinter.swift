@@ -67,6 +67,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     @ObservationIgnored private var printOperation: UUID?
     @ObservationIgnored private var printEndAcknowledged = false
     @ObservationIgnored private var activePrintMetrics: NiimbotPrintTransferMetrics?
+    @ObservationIgnored private var activeImageTransferConfiguration: NiimbotImageTransferConfiguration?
     @ObservationIgnored private var uploadProgressThrottle = NiimbotUploadProgressThrottle()
     @ObservationIgnored private var lastPrintAttemptEnded: ContinuousClock.Instant?
     @ObservationIgnored private var activePrintStock: PreparedStockValidation?
@@ -367,6 +368,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         do { for raster in rasters { try raster.validate() } } catch { return .notSent(.invalidLabel) }
 
         let operation = UUID()
+        activeImageTransferConfiguration = NiimbotImageTransferPreferences.shared.snapshot
         printOperation = operation
         clearUploadProgress()
         printEndAcknowledged = false
@@ -382,6 +384,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                 printOperation = nil
                 printEndAcknowledged = false
                 activePrintStock = nil
+                activeImageTransferConfiguration = nil
                 isPrinting = false
                 clearUploadProgress()
                 printCancellation = nil
@@ -762,15 +765,18 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         }
         let bytes: Data
         if let imageBatch {
+            let configuration = activeImageTransferConfiguration ?? .init()
             guard writeType == .withResponse, !optionalRollRead, !beginsPrint, response == nil,
                   responseAlternatives.isEmpty, let first = imageBatch.first,
                   first.command == command, first.data == data,
-                  NiimbotImageWriteBatch.canBatch(imageBatch, maximumWriteBytes: acknowledgedImageWriteLimit) else {
+                  NiimbotImageWriteBatch.canBatch(imageBatch, maximumWriteBytes: acknowledgedImageWriteLimit,
+                                                configuration: configuration) else {
                 throw LabelPrinterIssue.writeFailed
             }
             let clock = ContinuousClock(), started = ContinuousClock().now
             defer { activePrintMetrics?.add(.packetEncode, duration: started.duration(to: clock.now)) }
-            bytes = try NiimbotImageWriteBatch.encode(imageBatch, maximumWriteBytes: acknowledgedImageWriteLimit)
+            bytes = try NiimbotImageWriteBatch.encode(imageBatch, maximumWriteBytes: acknowledgedImageWriteLimit,
+                                                    configuration: configuration)
         } else { bytes = try encodePacket(command: command, data: data) }
         let id = UUID()
         return try await withTaskCancellationHandler {
@@ -822,7 +828,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             return
         }
         guard maximumLength > 0 else { connectionFailed(.writeFailed); return }
-        // A pair is one ordinary acknowledged write. A changed payload limit
+        // An image batch is one ordinary acknowledged write. A changed payload limit
         // must not turn it into a long write or silently fragment/replay it.
         if transaction.imageFrameCount > 1, transaction.offset < transaction.bytes.count {
             guard transaction.writeType == .withResponse, transaction.offset == 0,
@@ -1047,7 +1053,9 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     private func exchange(_ request: NiimbotRequest, timeout: Duration = .seconds(5), optionalRollRead: Bool = false) async throws -> NiimbotPacket? {
         // The reference's BLE transport spaces complete packets by 10ms. Radio
         // backpressure alone does not bound the UART module's consumer speed.
-        try await pacePacket()
+        let imagePacing = request.isOneWayImage && supportsImageTransferTuning
+            ? (activeImageTransferConfiguration?.pacingMilliseconds ?? 10) : 10
+        try await pacePacket(milliseconds: imagePacing)
         return try await transfer(command: request.command, data: request.data, response: request.response,
                                   responseAlternatives: request.responseAlternatives, beginsPrint: request.beginsPrint,
                                   optionalRollRead: optionalRollRead,
@@ -1055,35 +1063,47 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     }
 
     /// The without-response limit is only an ordinary-ATT payload hint here;
-    /// both image frames are always sent with an acknowledged write.
-    private var acknowledgedImageWriteLimit: Int {
-        guard writeType == .withResponse, identity?.modelID == 2320, identity?.protocolVersion == 4,
+    /// image frames are always sent with an acknowledged write.
+    private var supportsImageTransferTuning: Bool {
+        writeType == .withResponse && identity?.modelID == 2320 && identity?.protocolVersion == 4
+    }
+
+    var acknowledgedImageWriteCapacity: Int {
+        guard supportsImageTransferTuning,
               let peripheral, peripheral.state == .connected,
               writeCharacteristic?.properties.contains(.write) == true else { return 0 }
         let acknowledged = peripheral.maximumWriteValueLength(for: .withResponse)
         let ordinary = peripheral.maximumWriteValueLength(for: .withoutResponse)
         guard acknowledged > 0, ordinary > 0 else { return 0 }
-        return min(NiimbotImageWriteBatch.maximumBytes, min(acknowledged, ordinary))
+        return min(NiimbotImageTransferConfiguration.maximumBytes, min(acknowledged, ordinary))
+    }
+
+    private var acknowledgedImageWriteLimit: Int {
+        min(activeImageTransferConfiguration?.byteLimit ?? 64, acknowledgedImageWriteCapacity)
     }
 
     private func exchangeImageBatch(_ requests: [NiimbotRequest], operation: UUID, connection: UUID) async throws {
+        let configuration = activeImageTransferConfiguration ?? .init()
         guard let first = requests.first,
-              NiimbotImageWriteBatch.canBatch(requests, maximumWriteBytes: acknowledgedImageWriteLimit) else {
+              NiimbotImageWriteBatch.canBatch(requests, maximumWriteBytes: acknowledgedImageWriteLimit,
+                                            configuration: configuration) else {
             throw LabelPrinterIssue.writeFailed
         }
-        // Retain the total pacing budget of the two original frames. Their
-        // encoded bytes are contiguous inside this one acknowledged payload.
-        try await pacePacket(frameCount: requests.count)
+        // The captured pacing budget applies per original image frame; bytes
+        // within this one acknowledged payload remain contiguous.
+        try await pacePacket(frameCount: requests.count, milliseconds: configuration.pacingMilliseconds)
         try checkPrintOperation(operation)
         guard connectionGeneration == connection else { throw LabelPrinterIssue.connectionLost }
         _ = try await transfer(command: first.command, data: first.data, response: nil, imageBatch: requests)
     }
 
-    private func pacePacket(frameCount: Int = 1) async throws {
+    private func pacePacket(frameCount: Int = 1, milliseconds: Int = 10) async throws {
+        try Task.checkCancellation()
+        guard milliseconds > 0 else { return }
         let clock = ContinuousClock()
         let started = clock.now
         defer { activePrintMetrics?.add(.packetPacing, duration: started.duration(to: clock.now)) }
-        try await Task.sleep(for: .milliseconds(10 * frameCount))
+        try await Task.sleep(for: .milliseconds(milliseconds * frameCount))
     }
 
     private func sendBatch(_ rasters: [LabelRaster], operation: UUID, paperMode: NiimbotPaperMode, continuous: Bool,
@@ -1093,10 +1113,13 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         let clock = ContinuousClock()
         let started = clock.now
         let connection = connectionGeneration
-        let imageWriteLimit = acknowledgedImageWriteLimit
+        let requested = activeImageTransferConfiguration ?? .init()
+        let configuration = supportsImageTransferTuning ? requested : NiimbotImageTransferConfiguration(
+            framesPerWrite: 1, byteLimit: requested.byteLimit, pacingMilliseconds: 10)
+        let imageWriteLimit = configuration.framesPerWrite > 1 ? acknowledgedImageWriteLimit : 0
         activePrintMetrics = NiimbotPrintTransferMetrics(identity: identity, continuous: continuous, total: rasters.count,
             previousJobGap: lastPrintAttemptEnded.map { $0.duration(to: started) },
-            maximumImageWriteBytes: imageWriteLimit)
+            maximumImageWriteBytes: imageWriteLimit, imageTransferConfiguration: configuration)
         defer {
             let ended = clock.now
             let elapsed = NiimbotPrintTransferMetrics.milliseconds(started.duration(to: ended))
@@ -1199,10 +1222,12 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         if continuous {
             try await NiimbotD110Session.printContinuously(rasters, identity: identity, paperMode: paperMode,
                 imageBatchExchange: imageBatchExchange, maximumImageWriteBytes: imageWriteLimit,
+                imageTransferConfiguration: configuration,
                 exchange: exchange, pause: pause, onPagesWillSend: willSend, onPagesCompleted: didComplete, onMeasurement: observe)
         } else {
             try await NiimbotD110Session.printBatch(rasters, identity: identity, paperMode: paperMode,
                 imageBatchExchange: imageBatchExchange, maximumImageWriteBytes: imageWriteLimit,
+                imageTransferConfiguration: configuration,
                 exchange: exchange, pause: pause, onPageWillSend: { try await willSend([$0]) },
                 onPageCompleted: { try await didComplete([$0]) }, onMeasurement: observe)
         }

@@ -308,8 +308,8 @@ import UniformTypeIdentifiers
         defer { defaults.removePersistentDomain(forName: suite) }
         let log = DiagnosticLog(directory: directory, defaults: defaults)
         let summary = ["write_mode": "acknowledged", "image_write_count": "6", "image_batch_count": "5",
-            "image_batched_packets": "10", "image_max_write_bytes": "50", "image_batch_limit": "64",
-            "image_batch_frame_limit": "2"]
+            "image_batched_packets": "10", "image_max_write_bytes": "192", "image_batch_limit": "256",
+            "image_batch_frame_limit": "16", "image_requested_byte_limit": "256", "image_pacing_ms": "50"]
         let group = ["page": "1", "quantity": "1", "total": "2", "accepted": "true",
             "group_image_packets": "3", "group_image_writes": "2", "group_wire_bytes": "75"]
         let privateFields = ["packet_hex": "PRIVATE_PACKET", "image_data": "PRIVATE_IMAGE",
@@ -338,7 +338,8 @@ import UniformTypeIdentifiers
         let log = DiagnosticLog(directory: directory, defaults: defaults)
         let bounds: [String: UInt64] = ["image_write_count": 1_000_000, "image_batch_count": 1_000_000,
             "image_batched_packets": 1_000_000, "group_image_writes": 1_000_000,
-            "image_max_write_bytes": 65_535, "image_batch_limit": 64, "image_batch_frame_limit": 2]
+            "image_max_write_bytes": 65_535, "image_batch_limit": 256, "image_batch_frame_limit": 16,
+            "image_requested_byte_limit": 256, "image_pacing_ms": 50]
         let zero = Dictionary(uniqueKeysWithValues: bounds.keys.map { ($0, "0") })
         let maximum = Dictionary(uniqueKeysWithValues: bounds.map { ($0.key, String($0.value)) })
         log.record("label.transfer_summary", zero)

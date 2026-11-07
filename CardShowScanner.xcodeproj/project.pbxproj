@@ -63,9 +63,11 @@
         A010F88FDCBFC3852A75AC09 /* RepricingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = A94FD7F38C66C5FA086B4C6C; };
         B7CECD2CC03A26EC34B15868 /* InventoryLabelsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 646D15CFFA029575D106B91E; };
         E8D243F21174DBD7E78ED9C2 /* NiimbotProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56D60BD16FDD19AF38CCD570; };
+        70A18BA53D5DB5407CFE2055 /* NiimbotImageTransferPreferencesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CED5013024F3BE74914FE08; };
         F9A62D43CC797A646D8C4017 /* LabelPrintQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C33015E72EC423950F0E61C; };
         04CB15B40E469B9093E2B509 /* InventoryLabelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58527D29B178E9291E13EEB6; };
         CDDA1A2E575809F0879AD797 /* NiimbotProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = C45F2902A14F50D9D5EC623B; };
+        A1723E674DF29AC8E50825A4 /* NiimbotImageTransferPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F4A86513AD8610FC43D245A; };
         9738F6B29A8DBA6A9C494C6D /* NiimbotPrinter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95CBAF8C5BE3E61C6D035D92; };
         4EECBFDB71BD85E3B4F84ED1 /* LabelPrintingViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC7CB98C1ADF14B28350C401; };
         A336FEE67ABB04C00980B15C /* LabelPrinting.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE81B5E629AAE05B05FB7AD2; };
@@ -303,9 +305,11 @@
         A94FD7F38C66C5FA086B4C6C /* RepricingPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepricingPolicy.swift; sourceTree = "<group>"; };
         646D15CFFA029575D106B91E /* InventoryLabelsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InventoryLabelsUITests.swift; sourceTree = "<group>"; };
         56D60BD16FDD19AF38CCD570 /* NiimbotProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NiimbotProtocolTests.swift; sourceTree = "<group>"; };
+        8CED5013024F3BE74914FE08 /* NiimbotImageTransferPreferencesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NiimbotImageTransferPreferencesTests.swift; sourceTree = "<group>"; };
         4C33015E72EC423950F0E61C /* LabelPrintQueueTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabelPrintQueueTests.swift; sourceTree = "<group>"; };
         58527D29B178E9291E13EEB6 /* InventoryLabelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InventoryLabelTests.swift; sourceTree = "<group>"; };
         C45F2902A14F50D9D5EC623B /* NiimbotProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NiimbotProtocol.swift; sourceTree = "<group>"; };
+        9F4A86513AD8610FC43D245A /* NiimbotImageTransferPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NiimbotImageTransferPreferences.swift; sourceTree = "<group>"; };
         95CBAF8C5BE3E61C6D035D92 /* NiimbotPrinter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NiimbotPrinter.swift; sourceTree = "<group>"; };
         FC7CB98C1ADF14B28350C401 /* LabelPrintingViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabelPrintingViews.swift; sourceTree = "<group>"; };
         EE81B5E629AAE05B05FB7AD2 /* LabelPrinting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabelPrinting.swift; sourceTree = "<group>"; };
@@ -546,6 +550,7 @@
                 7F1ED60734D18EB3991C1E03 /* TagApprovalStoreTests.swift */,
                 5FEA9BB5ECA6753145C08285 /* RepricingPolicyTests.swift */,
                 56D60BD16FDD19AF38CCD570 /* NiimbotProtocolTests.swift */,
+                8CED5013024F3BE74914FE08 /* NiimbotImageTransferPreferencesTests.swift */,
                 8A68C9175DD55D8DA9ABC42D /* LabelPrintRunOutcomeTests.swift */,
                 8DC6FAB2EF4A4062C4CAEFF9 /* LabelPrintProgressSessionTests.swift */,
                 E75F8145D61187184ABED69D /* WriteInLabelTests.swift */,
@@ -639,6 +644,7 @@
                 BB8C8715E353B862FB495D11 /* TagApprovalStore.swift */,
                 A94FD7F38C66C5FA086B4C6C /* RepricingPolicy.swift */,
                 C45F2902A14F50D9D5EC623B /* NiimbotProtocol.swift */,
+                9F4A86513AD8610FC43D245A /* NiimbotImageTransferPreferences.swift */,
                 AAACE416640EBC0819907652 /* LabelPrintProgressSession.swift */,
                 AD6F39C4D263651B7A08E101 /* LabelStockPrintPreflight.swift */,
                 75F7CEAEC328E250594488C4 /* NiimbotLabelCatalog.swift */,
@@ -924,6 +930,7 @@
                 2EF371D80A5D78F322D8F5A3 /* TagApprovalStoreTests.swift in Sources */,
                 C98D4B97BC1DBAB8E048DEEC /* RepricingPolicyTests.swift in Sources */,
                 E8D243F21174DBD7E78ED9C2 /* NiimbotProtocolTests.swift in Sources */,
+                70A18BA53D5DB5407CFE2055 /* NiimbotImageTransferPreferencesTests.swift in Sources */,
                 87765794BD3FD535208A304E /* LabelPrintRunOutcomeTests.swift in Sources */,
                 4DBE04D3038F36DCBDE59F28 /* LabelPrintProgressSessionTests.swift in Sources */,
                 F75F77A755D9D31F83AB1046 /* WriteInLabelTests.swift in Sources */,
@@ -1016,6 +1023,7 @@
                 0CCD61129E14827A956CF412 /* TagApprovalStore.swift in Sources */,
                 A010F88FDCBFC3852A75AC09 /* RepricingPolicy.swift in Sources */,
                 CDDA1A2E575809F0879AD797 /* NiimbotProtocol.swift in Sources */,
+                A1723E674DF29AC8E50825A4 /* NiimbotImageTransferPreferences.swift in Sources */,
                 A0BB7A74EE78A11AF2E278BF /* LabelPrintProgressSession.swift in Sources */,
                 6C94415688824B85272A2A29 /* LabelStockPrintPreflight.swift in Sources */,
                 9F176B6392A6F2E1FBE82D10 /* NiimbotLabelCatalog.swift in Sources */,
@@ -1173,7 +1181,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 94;
+				CURRENT_PROJECT_VERSION = 95;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -1210,7 +1218,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 94;
+				CURRENT_PROJECT_VERSION = 95;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";

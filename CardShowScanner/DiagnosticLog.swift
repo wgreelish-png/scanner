@@ -31,7 +31,8 @@ enum DiagnosticPrinterFields {
     static let batchingBounds: [String: UInt64] = [
         "image_write_count": 1_000_000, "image_batch_count": 1_000_000,
         "image_batched_packets": 1_000_000, "group_image_writes": 1_000_000,
-        "image_max_write_bytes": 65_535, "image_batch_limit": 64, "image_batch_frame_limit": 2
+        "image_max_write_bytes": 65_535, "image_batch_limit": 256, "image_batch_frame_limit": 16,
+        "image_requested_byte_limit": 256, "image_pacing_ms": 50
     ]
     static let batchingKeys = Set(batchingBounds.keys)
 
