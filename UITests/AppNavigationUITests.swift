@@ -196,21 +196,7 @@ import XCTest
         continueAfterFailure = false
         let app = launch(persistentNavigation: true)
         defer { app.terminate() }
-        selectTab("Show", in: app)
-        tapVisible(app.buttons["show.inventory"], in: app)
-        tapVisible(app.buttons["showInventory.importSnapshot"], in: app)
-        XCTAssertTrue(app.navigationBars["Card Show Inventory"].waitForExistence(timeout: 5))
-        let updated = app.staticTexts["cardShowInventory.updated"]
-        reveal(updated, in: app)
-        let importedAt = updated.label
-        XCTAssertFalse(importedAt.isEmpty)
-        tapVisible(app.buttons["cardShowInventory.open"], in: app)
-        XCTAssertTrue(app.navigationBars["Card Show"].waitForExistence(timeout: 5))
-        let source = app.staticTexts["This list mirrors your Card Show location. Use an editable copy to scan or change cards locally."]
-        reveal(source, in: app)
-        XCTAssertTrue(source.exists)
-        tapVisible(app.buttons["list.card.10000000-0000-0000-0000-000000000002"], in: app)
-        assertDirectMarket(in: app, cardName: "Navigation Imported Card")
+        let importedAt = openImportedFixtureResearch(in: app)
         openResearchOptions(in: app)
         XCTAssertFalse(app.buttons["cardResearch.editCard"].exists, "Imported cards remain read-only")
         tapVisible(app.buttons["cardResearch.importedDetails"], in: app)
@@ -220,6 +206,14 @@ import XCTest
         assertImportedCardUnchanged(in: app)
         _ = UITestInteraction.tapToolbar(app.navigationBars["Card Details"].buttons["Done"], in: app)
         assertDirectMarket(in: app, cardName: "Navigation Imported Card")
+        assertImportedSnapshotUnchanged(importedAt, in: app)
+    }
+
+    func testImportedResearchConnectionRetainsTabsAndReadonlySnapshotAcrossSections() async throws {
+        continueAfterFailure = false
+        let app = launch(persistentNavigation: true)
+        defer { app.terminate() }
+        let importedAt = openImportedFixtureResearch(in: app)
         _ = UITestInteraction.tapToolbar(app.buttons["cardResearch.connection"], in: app)
         XCTAssertTrue(app.navigationBars["TCGTracking API Connection"].waitForExistence(timeout: 5))
         assertMainTabs(in: app)
@@ -242,14 +236,41 @@ import XCTest
         assertImportedCardUnchanged(in: app)
         _ = UITestInteraction.tapToolbar(app.navigationBars["Card Details"].buttons["Done"], in: app)
         assertDirectMarket(in: app, cardName: "Navigation Imported Card")
+        assertImportedSnapshotUnchanged(importedAt, in: app)
+    }
+
+    /// Both scenarios start from the same real imported-card navigation path;
+    /// their separate launches keep each bounded without dropping assertions.
+    private func openImportedFixtureResearch(in app: XCUIApplication) -> String {
+        selectTab("Show", in: app)
+        tapVisible(app.buttons["show.inventory"], in: app)
+        tapVisible(app.buttons["showInventory.importSnapshot"], in: app)
+        XCTAssertTrue(app.navigationBars["Card Show Inventory"].waitForExistence(timeout: 5))
+        let updated = app.staticTexts["cardShowInventory.updated"]
+        reveal(updated, in: app)
+        let importedAt = updated.label
+        XCTAssertFalse(importedAt.isEmpty)
+        tapVisible(app.buttons["cardShowInventory.open"], in: app)
+        XCTAssertTrue(app.navigationBars["Card Show"].waitForExistence(timeout: 5))
+        let source = app.staticTexts["This list mirrors your Card Show location. Use an editable copy to scan or change cards locally."]
+        reveal(source, in: app)
+        XCTAssertTrue(source.exists)
+        tapVisible(app.buttons["list.card.10000000-0000-0000-0000-000000000002"], in: app)
+        assertDirectMarket(in: app, cardName: "Navigation Imported Card")
+        return importedAt
+    }
+
+    private func assertImportedSnapshotUnchanged(_ importedAt: String, in app: XCUIApplication) {
         goBack(from: "Card Research", in: app)
         XCTAssertTrue(app.navigationBars["Card Show"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["scanner.options"].exists)
         XCTAssertFalse(app.buttons["list.searchAndAdd"].exists)
+        let source = app.staticTexts["This list mirrors your Card Show location. Use an editable copy to scan or change cards locally."]
         reveal(source, in: app)
         XCTAssertTrue(source.exists)
         goBack(from: "Card Show", in: app)
         XCTAssertTrue(app.navigationBars["Card Show Inventory"].waitForExistence(timeout: 5))
+        let updated = app.staticTexts["cardShowInventory.updated"]
         reveal(updated, in: app)
         XCTAssertEqual(updated.label, importedAt, "Research must not refresh or replace the saved snapshot")
         let quantity = app.descendants(matching: .any)["cardShowInventory.quantity"]

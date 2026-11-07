@@ -37,7 +37,7 @@ import XCTest
         let app = launchEvidence("--uitest-market-evidence")
         defer { app.terminate() }
         XCTAssertTrue(app.navigationBars["Market Details"].waitForExistence(timeout: 10))
-        revealChart(app.descendants(matching: .any)["marketEvidence.priceChart"], in: app)
+        revealChart(app.descendants(matching: .any).matching(identifier: "marketEvidence.priceChart").firstMatch, in: app)
         let windows = app.segmentedControls["marketEvidence.volumeWindow"]
         reveal(windows, in: app)
         let tcg = app.staticTexts["marketEvidence.tcgQuantity"]
@@ -51,7 +51,7 @@ import XCTest
         UITestInteraction.tap(windows.buttons["90 days"], in: app)
         assertReportedValue("30", title: "TCGplayer reported units", element: tcg)
         assertReportedValue("7", title: "Manapool reported units", element: manapool)
-        revealChart(app.descendants(matching: .any)["marketEvidence.volumeChart"], in: app)
+        revealChart(app.descendants(matching: .any).matching(identifier: "marketEvidence.volumeChart").firstMatch, in: app)
     }
 
     func testResearchEvidenceUsesCalendarPeriodsAndShowsSeparatePriceAndCountCharts() async throws {
@@ -77,8 +77,10 @@ import XCTest
         guard UITestInteraction.tap(windows.buttons["All"], in: app, identifier: "research.historyPeriod.All"),
               assertReportedValue("4", title: "Reported days in this period", element: days),
               assertReportedValue("6", title: "Sales in returned days", element: sales) else { return }
-        revealChart(app.descendants(matching: .any)["research.historyChart"], in: app)
-        revealChart(app.descendants(matching: .any)["research.salesHistoryChart"], in: app)
+        // Swift Charts can expose the identifier on both its outer container
+        // and internal AX chart. Measure the first (outer) matching chart.
+        revealChart(app.descendants(matching: .any).matching(identifier: "research.historyChart").firstMatch, in: app)
+        revealChart(app.descendants(matching: .any).matching(identifier: "research.salesHistoryChart").firstMatch, in: app)
         XCTAssertFalse(app.alerts.firstMatch.exists)
     }
 
