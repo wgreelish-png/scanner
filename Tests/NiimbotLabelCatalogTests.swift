@@ -2,6 +2,33 @@ import XCTest
 @testable import CardShowScanner
 
 final class NiimbotLabelCatalogTests: XCTestCase {
+    func testRollDetectionDiagnosticsIdentifyThirtyByTwelveStockWithoutNeedingValidCounters() throws {
+        let product = try XCTUnwrap(NiimbotLabelCatalog.shared.product(code: "010424790"))
+        let info = NiimbotRollInfo(productCode: product.code, totalLabels: 0, usedLabels: 999, labelType: 1)
+        XCTAssertNil(info.estimate, "Size detection must remain independent of optional remaining-label counters")
+        XCTAssertEqual(NiimbotRollDetection.diagnosticFields(info), [
+            "roll_detection_result": "matched", "roll_product_code": "010424790",
+            "label_width_mm": "30.0", "label_height_mm": "12.0",
+            "label_feed_dots": "240", "label_head_dots": "96"
+        ])
+    }
+
+    func testRollDetectionDiagnosticsDistinguishUnknownStockMediaMismatchAndUnavailableReads() {
+        let unknown = NiimbotRollInfo(productCode: "00000000", totalLabels: 70, usedLabels: 0, labelType: 1)
+        XCTAssertEqual(NiimbotRollDetection.diagnosticFields(unknown), [
+            "roll_detection_result": "unknown_product", "roll_product_code": "00000000"
+        ])
+        let mismatched = NiimbotRollInfo(productCode: "120425109", totalLabels: 70, usedLabels: 0, labelType: 5)
+        XCTAssertEqual(NiimbotRollDetection.diagnosticFields(mismatched), [
+            "roll_detection_result": "media_mismatch", "roll_product_code": "120425109"
+        ], "A known code with incompatible media cannot claim a detected paper size")
+        XCTAssertEqual(NiimbotRollDetection.diagnosticFields(nil), ["roll_detection_result": "unavailable"])
+        for invalidCode in ["PRIVATE_ROLL_SERIAL", "120425109\nPRIVATE", String(repeating: "7", count: 33)] {
+            let invalid = NiimbotRollInfo(productCode: invalidCode, totalLabels: 70, usedLabels: 0, labelType: 1)
+            XCTAssertEqual(NiimbotRollDetection.diagnosticFields(invalid), ["roll_detection_result": "unknown_product"])
+        }
+    }
+
     private func product(width: Double = 40, height: Double = 12, rotation: Int = 90,
                          areas: [NiimbotLabelArea] = [], flags: UInt8 = 0) throws -> NiimbotLabelProduct {
         try NiimbotLabelProduct(code: "00123456", width: width, height: height,

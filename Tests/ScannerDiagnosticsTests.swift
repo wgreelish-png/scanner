@@ -249,8 +249,8 @@ import UniformTypeIdentifiers
         let text = try String(contentsOf: file, encoding: .utf8)
         XCTAssertFalse(text.contains("PRIVATE_"))
         let rows = try diagnosticRows(text).filter { ($0["event"] as? String)?.hasPrefix("label.") == true }
-        XCTAssertEqual(rows.compactMap { $0["event"] as? String }, expected.map(\.0))
-        XCTAssertEqual(rows.compactMap { $0["fields"] as? [String: String] }, expected.map(\.1),
+        XCTAssertEqual(rows.compactMap { $0["event"] as? String }, expected.map { $0.0 })
+        XCTAssertEqual(rows.compactMap { $0["fields"] as? [String: String] }, expected.map { $0.1 },
                        "Only bounded timing/count fields and fixed classifications may enter a diagnostic file")
     }
 
@@ -365,6 +365,122 @@ import UniformTypeIdentifiers
         XCTAssertEqual(rows.first?["fields"] as? [String: String], zero)
         XCTAssertEqual(rows.dropFirst().first?["fields"] as? [String: String], maximum)
         XCTAssertTrue(rows.dropFirst(2).allSatisfy { ($0["fields"] as? [String: String]) == [:] })
+    }
+
+    func testRollReadAndDetectionResultsKeepOnlyScopedMetadataAndRespectOptOut() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = "RollResultDiagnostics." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let log = DiagnosticLog(directory: directory, defaults: defaults)
+        let expected: [(String, [String: String])] = [
+            ("label.roll_read", ["roll_read_source": "forced", "roll_read_result": "response",
+                "write_mode": "acknowledged", "roll_read_ms": "18"]),
+            ("label.roll_detection", ["roll_detection_result": "matched", "roll_product_code": "06172315",
+                "label_width_mm": "14.0", "label_height_mm": "40.0", "label_feed_dots": "320", "label_head_dots": "96"]),
+            ("label.roll_read", ["roll_read_source": "forced", "roll_read_result": "failed",
+                "roll_read_error": "printerBusy", "write_mode": "acknowledged", "roll_read_ms": "18"]),
+            ("label.roll_detection", ["roll_detection_result": "unavailable"]),
+            ("label.roll_read", ["roll_read_source": "read", "roll_read_result": "no_roll",
+                "write_mode": "unacknowledged", "roll_read_ms": "33"])
+        ]
+        let privateFields = ["uid": "PRIVATE_UID", "roll_serial": "PRIVATE_SERIAL", "serial": "PRIVATE_SERIAL",
+            "packet_hex": "PRIVATE_PACKET", "device_name": "PRIVATE_PRINTER", "card_name": "PRIVATE_CARD"]
+        for (event, fields) in expected {
+            let wrongScope = event == "label.roll_read"
+                ? ["roll_detection_result": "matched", "roll_product_code": "120425109", "label_width_mm": "40.0",
+                   "label_height_mm": "12.0", "label_feed_dots": "320", "label_head_dots": "96"]
+                : ["roll_read_result": "response", "roll_read_error": "other"]
+            log.record(event, fields.merging(privateFields) { _, value in value }
+                .merging(wrongScope) { _, value in value })
+        }
+        defaults.set(false, forKey: "diagnosticsEnabled")
+        for (event, fields) in expected { log.record(event, fields) }
+        let file = try log.exportForCopy()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let text = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertFalse(text.contains("PRIVATE_"))
+        let rows = try diagnosticRows(text).filter { ($0["event"] as? String)?.hasPrefix("label.roll_") == true }
+        XCTAssertEqual(rows.compactMap { $0["event"] as? String }, expected.map(\.0))
+        XCTAssertEqual(rows.compactMap { $0["fields"] as? [String: String] }, expected.map(\.1),
+                       "Only the nonunique product SKU is retained, including its leading zero")
+    }
+
+    func testRollResultClassificationsRequireTheirExactEventAndFixedValues() {
+        let fields: [(String, String, [String])] = [
+            ("roll_read_result", "label.roll_read", ["response", "no_roll", "failed"]),
+            ("roll_read_error", "label.roll_read", ["responseTimeout", "printerBusy", "cancelled", "unsupportedResponse",
+                "notActive", "notConnected", "connectionLost", "writeFailed", "other"]),
+            ("roll_detection_result", "label.roll_detection", ["matched", "unknown_product", "media_mismatch", "unavailable", "invalidated"])
+        ]
+        for (key, event, allowed) in fields {
+            for value in allowed {
+                XCTAssertTrue(DiagnosticPrinterFields.accepts(key, value, event: event))
+                XCTAssertFalse(DiagnosticPrinterFields.accepts(key, value))
+                XCTAssertFalse(DiagnosticPrinterFields.accepts(key, value, event: "label.transfer_summary"))
+                let wrongEvent = event == "label.roll_read" ? "label.roll_detection" : "label.roll_read"
+                XCTAssertFalse(DiagnosticPrinterFields.accepts(key, value, event: wrongEvent))
+            }
+            for value in ["", "PRIVATE_VALUE", "Response", "1", "true", "responseTimeout-PRIVATE"] {
+                XCTAssertFalse(DiagnosticPrinterFields.accepts(key, value, event: event))
+            }
+        }
+        for value in ["acknowledged", "unacknowledged"] {
+            XCTAssertTrue(DiagnosticPrinterFields.accepts("write_mode", value, event: "label.roll_read"))
+        }
+    }
+
+    func testRollProductsAndDimensionsRejectInvalidFormatsAndOutOfRangeValuesAtStorage() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = "RejectedRollMetadata." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let log = DiagnosticLog(directory: directory, defaults: defaults)
+        let dimensions: ([String], [String]) = (
+            ["0.000001", "0.5", "12", "12.0", "99.999999", "100", "100.000000"],
+            ["0", "0.000000", "-1", "+1", "01", "01.0", ".5", "12.", "12.0000001", "100.000001", "101",
+             "1e1", "NaN", "inf", "１２.０", " 12", "12\n", "1,5", "1_2", "PRIVATE_DIMENSION"])
+        let cases: [(String, [String], [String])] = [
+            ("roll_product_code", ["0", "06172315", String(repeating: "9", count: 32)],
+                ["", String(repeating: "9", count: 33), "12A34", "１２３", "١٢٣", "-1", "+1", "1e3", "1.0", " 123", "123\n", "123/456", "PRIVATE_SKU"]),
+            ("label_width_mm", dimensions.0, dimensions.1),
+            ("label_height_mm", dimensions.0, dimensions.1),
+            ("label_feed_dots", ["1", "320", "800"], ["0", "801", "01", "+1", "-1", "1.5", "1e2", "１２", "18446744073709551616"]),
+            ("label_head_dots", ["96"], ["0", "95", "97", "096", "+96", "96.0", "９６", "PRIVATE_HEAD"])
+        ]
+        var expected: [[String: String]] = []
+        for (key, valid, invalid) in cases {
+            for value in valid {
+                XCTAssertTrue(DiagnosticPrinterFields.accepts(key, value, event: "label.roll_detection"))
+                XCTAssertFalse(DiagnosticPrinterFields.accepts(key, value, event: "label.roll_read"))
+                XCTAssertFalse(DiagnosticPrinterFields.accepts(key, value))
+                log.record("label.roll_detection", [key: value]); expected.append([key: value])
+            }
+            for value in invalid {
+                XCTAssertFalse(DiagnosticPrinterFields.accepts(key, value, event: "label.roll_detection"))
+                log.record("label.roll_detection", [key: value]); expected.append([:])
+            }
+        }
+        let allFields = ["roll_read_result": "response", "roll_read_error": "other", "roll_detection_result": "matched",
+            "roll_product_code": "120425109", "label_width_mm": "40.0", "label_height_mm": "12.0",
+            "label_feed_dots": "320", "label_head_dots": "96"]
+        for event in ["label.transfer_summary", "web.scan_stats"] {
+            log.record(event, allFields); expected.append([:])
+        }
+        log.record("label.roll_read", ["roll_read_result": "PRIVATE_RESULT", "roll_read_error": "PRIVATE_ERROR"])
+        expected.append([:])
+        log.record("label.roll_detection", ["roll_detection_result": "PRIVATE_RESULT"])
+        expected.append([:])
+        let file = try log.exportForCopy()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let text = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertFalse(text.contains("PRIVATE_"))
+        let rows = try diagnosticRows(text).filter {
+            ["label.roll_detection", "label.roll_read", "label.transfer_summary", "web.scan_stats"].contains($0["event"] as? String ?? "")
+        }
+        XCTAssertEqual(rows.compactMap { $0["fields"] as? [String: String] }, expected)
     }
 
     func testBetaIndexLimitDiagnosticsPersistOnlyBoundedCounts() throws {

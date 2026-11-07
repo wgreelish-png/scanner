@@ -26,6 +26,12 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 98 improves [roll detection and its diagnostics](docs/RollDetection.md).
+RFID reads prefer acknowledged writes and report explicit read/detection results;
+matched rolls show their detected dimensions. Idle stock/readiness changes
+coalesce a refresh, and valid unsolicited roll updates apply while idle.
+Label artwork, saved preferences, inventory and print ordering are retained.
+
 Build 97 adds a saved [label print order](docs/LabelPrintOrder.md): card name
 (the existing preparation default), price ascending or price descending.
 Preparation and review use the selected order; an explicit Sort Labels action

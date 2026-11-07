@@ -7,6 +7,7 @@ SCANNER_UI_RUN=false
 for SCANNER_ALLOWED_TARGET in "$@"; do
   case "$SCANNER_ALLOWED_TARGET" in
     CardShowScannerTests/NiimbotProtocolTests|CardShowScannerTests/ScannerDiagnosticsTests|CardShowScannerTests/NiimbotImageTransferPreferencesTests) ;;
+    CardShowScannerTests/NiimbotRollReadCoordinatorTests|CardShowScannerTests/NiimbotLabelCatalogTests) ;;
     CardShowScannerTests/LabelPrintQueueTests|CardShowScannerTests/LabelPrintRunOutcomeTests|CardShowScannerTests/CustomPriceTagTests) ;;
     CardShowScannerTests/InventoryLabelTests|CardShowScannerTests/AdaptiveLabelRenderingTests|CardShowScannerTests/CustomLabelQueueTests) ;;
     CardShowScannerUITests/InventoryLabelsUITests/testSelectedInventoryIsReadyImmediatelyOnFirstNavigation|CardShowScannerUITests/InventoryLabelsUITests/testReselectedInventoryIsReadyImmediatelyWithoutLayoutChanges|CardShowScannerUITests/InventoryLabelsUITests/testPrintAllIsReadyImmediatelyWithoutLayoutChanges) ;;

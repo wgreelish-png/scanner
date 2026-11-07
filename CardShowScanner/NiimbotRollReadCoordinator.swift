@@ -10,6 +10,26 @@ enum NiimbotRollRefreshSource: String, Equatable, Sendable {
     case inFlight = "in_flight"
 }
 
+/// A roll read is a tiny command, not an image upload. Prefer the established
+/// acknowledged channel; use the advertised no-response path only if needed.
+enum NiimbotOptionalRollWritePolicy {
+    enum Mode: Equatable, Sendable { case acknowledged, unacknowledged }
+    enum FailureAction: Equatable, Sendable { case keepConnection, quarantineRead, retireConnection }
+
+    static func select(supportsWrite: Bool, supportsWriteWithoutResponse: Bool) -> Mode? {
+        if supportsWrite { return .acknowledged }
+        return supportsWriteWithoutResponse ? .unacknowledged : nil
+    }
+
+    static func failureAction(mode: Mode, wasDispatched: Bool,
+                              awaitingAcknowledgement: Bool) -> FailureAction {
+        // CoreBluetooth's write callback has no request identifier. A pending
+        // ACK cannot be abandoned while allowing another command on this link.
+        if mode == .acknowledged && awaitingAcknowledgement { return .retireConnection }
+        return wasDispatched ? .quarantineRead : .keepConnection
+    }
+}
+
 /// NIIMBOT replies carry an opcode but no request ID. After an abandoned
 /// dispatched read, only reconnecting permits another RFID request.
 struct NiimbotOptionalRollReplyGuard {

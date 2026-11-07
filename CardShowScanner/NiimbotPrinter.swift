@@ -81,6 +81,8 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     @ObservationIgnored private var identificationStep: NiimbotIdentificationStep?
     @ObservationIgnored private let rollReader = NiimbotRollReadCoordinator()
     @ObservationIgnored private var rollReplyGuard = NiimbotOptionalRollReplyGuard()
+    @ObservationIgnored private var rollChangeNeedsRefresh = false
+    @ObservationIgnored private var rollChangeRefreshTask: Task<Void, Never>?
     private static let paperModeDefaultsKey = "niimbotPaperMode"
     private static let lastPrinterDefaultsKey = "niimbotLastVerifiedPrinter"
 
@@ -458,26 +460,46 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         let load: @MainActor () async throws -> NiimbotRollInfo? = { [weak self] in
             let clock = ContinuousClock()
             let started = clock.now
+            var fields = ["roll_read_source": force ? "forced" : "read", "roll_read_result": "failed"]
             defer {
-                DiagnosticLog.shared.record("label.roll_read", ["roll_read_source": force ? "forced" : "read",
-                    "roll_read_ms": String(NiimbotPrintTransferMetrics.milliseconds(started.duration(to: clock.now)))])
+                fields["roll_read_ms"] = String(NiimbotPrintTransferMetrics.milliseconds(started.duration(to: clock.now)))
+                DiagnosticLog.shared.record("label.roll_read", fields)
             }
-            guard let self, self.connectionGeneration == generation,
-                  self.isConnected, !self.rollReplyGuard.isQuarantined else { throw LabelPrinterIssue.printerBusy }
-            // This task was authorized while idle. Print/settings may claim
-            // their flags meanwhile, but must drain this read before writing.
-            return try await NiimbotD110Session.readRollInfo { [weak self] request in
-                guard let self, self.connectionGeneration == generation else { throw LabelPrinterIssue.connectionLost }
-                return try await self.exchange(request, timeout: .milliseconds(750), optionalRollRead: true)
+            do {
+                guard let self, self.connectionGeneration == generation,
+                      self.isConnected, !self.rollReplyGuard.isQuarantined else { throw LabelPrinterIssue.printerBusy }
+                fields["write_mode"] = self.writeCharacteristic?.properties.contains(.write) == true
+                    ? "acknowledged" : "unacknowledged"
+                // Foreground print/settings work drains this one read before
+                // using the same serialized command channel.
+                let info = try await NiimbotD110Session.readRollInfo { [weak self] request in
+                    guard let self, self.connectionGeneration == generation else { throw LabelPrinterIssue.connectionLost }
+                    return try await self.exchange(request, timeout: .milliseconds(750), optionalRollRead: true)
+                }
+                fields["roll_read_result"] = info == nil ? "no_roll" : "response"
+                return info
+            } catch {
+                let issue = error as? LabelPrinterIssue
+                let reasons: [LabelPrinterIssue] = [.responseTimeout, .printerBusy, .cancelled, .unsupportedResponse,
+                    .notActive, .notConnected, .connectionLost, .writeFailed]
+                fields["roll_read_error"] = error is CancellationError ? "cancelled"
+                    : issue.flatMap { reasons.contains($0) ? $0.rawValue : nil } ?? "other"
+                throw error
             }
         }
         let update: @MainActor (NiimbotRollInfo?) -> Void = { [weak self] info in
             guard let self, self.connectionGeneration == generation else { return }
             self.updateDetectedRoll(info)
         }
-        if force { rollReader.refreshInfo(load: load, onUpdate: update) }
+        if force {
+            // Clear synchronously with authorization, before the coordinator
+            // captures its revision. A later stock event must retain its intent.
+            rollChangeNeedsRefresh = false
+            rollReader.refreshInfo(load: load, onUpdate: update)
+        }
         else {
             let source = rollReader.refreshInfoIfNeeded(load: load, onUpdate: update)
+            if source == .read { rollChangeNeedsRefresh = false }
             if source != .read {
                 DiagnosticLog.shared.record("label.roll_read", ["roll_read_source": source.rawValue, "roll_read_ms": "0"])
             }
@@ -485,6 +507,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     }
 
     private func updateDetectedRoll(_ info: NiimbotRollInfo?) {
+        DiagnosticLog.shared.record("label.roll_detection", NiimbotRollDetection.diagnosticFields(info))
         guard let info else {
             LabelPaperPreferences.shared.updateDetectedProduct(nil)
             rollProductStatus = "Roll could not be identified. Choose the paper size manually."
@@ -500,8 +523,27 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     }
 
     private func clearDetectedRoll() {
+        if LabelPaperPreferences.shared.detectedProduct != nil {
+            DiagnosticLog.shared.record("label.roll_detection", ["roll_detection_result": "invalidated"])
+        }
         LabelPaperPreferences.shared.updateDetectedProduct(nil)
         rollProductStatus = nil
+    }
+
+    /// One stock-change refresh may wait for an obsolete RFID read to settle.
+    /// It never polls, crosses a connection generation or interrupts printing.
+    private func refreshAfterRollChange() {
+        guard rollChangeNeedsRefresh, rollChangeRefreshTask == nil, isConnected,
+              !isPrinting, !isConfiguringPaper, !rollReplyGuard.isQuarantined else { return }
+        let generation = connectionGeneration
+        rollChangeRefreshTask = Task { [weak self] in
+            guard let self else { return }
+            await self.rollReader.waitUntilIdle()
+            guard self.connectionGeneration == generation else { return }
+            defer { self.rollChangeRefreshTask = nil }
+            guard !Task.isCancelled, self.rollChangeNeedsRefresh, self.canRefreshRollEstimate else { return }
+            self.refreshRollEstimate(force: false)
+        }
     }
 
     private func savePaperMode(_ mode: NiimbotPaperMode) {
@@ -651,6 +693,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         printEndAcknowledged = false
         activePrintStock = nil
         rollReader.reset(); rollReplyGuard = NiimbotOptionalRollReplyGuard()
+        rollChangeRefreshTask?.cancel(); rollChangeRefreshTask = nil; rollChangeNeedsRefresh = false
         clearDetectedRoll()
         connectionStage = nil
         identificationStep = nil
@@ -743,8 +786,8 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     }
 
     /// Exactly one request is in flight. Required-command timeouts retire the
-    /// connection. Optional RFID timeouts instead quarantine further reads
-    /// until reconnect, so a late reply cannot be accepted as fresh metadata.
+    /// connection. An optional RFID timeout after its ATT ACK quarantines only
+    /// roll replies; an outstanding ATT ACK must retire the whole connection.
     private func transfer(command: UInt8, data: Data, response: UInt8?, responseAlternatives: Set<UInt8> = [],
                           beginsPrint: Bool = false,
                           optionalRollRead: Bool = false,
@@ -756,13 +799,17 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         guard pending == nil else { throw LabelPrinterIssue.printerBusy }
         let cleanupHeartbeat = printEndAcknowledged && command == 0xdc && data == Data([1]) && response == nil
         if isPrinting && !optionalRollRead && !cleanupHeartbeat, !activePrintStockMatches { throw LabelPrinterIssue.paperMismatch }
+        let transferWriteType: CBCharacteristicWriteType
         if optionalRollRead {
             guard command == 0x1a, response == 0x1b, responseAlternatives.isEmpty, !beginsPrint,
-                  writeCharacteristic?.properties.contains(.writeWithoutResponse) == true else {
+                  let mode = NiimbotOptionalRollWritePolicy.select(
+                    supportsWrite: writeCharacteristic?.properties.contains(.write) == true,
+                    supportsWriteWithoutResponse: writeCharacteristic?.properties.contains(.writeWithoutResponse) == true) else {
                 rollReplyGuard.markUnsupported()
                 throw LabelPrinterIssue.unsupportedResponse
             }
-        }
+            transferWriteType = mode == .acknowledged ? .withResponse : .withoutResponse
+        } else { transferWriteType = writeType }
         let bytes: Data
         if let imageBatch {
             let configuration = activeImageTransferConfiguration ?? .init()
@@ -783,14 +830,14 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             try await withCheckedThrowingContinuation { continuation in
                 guard !Task.isCancelled else { continuation.resume(throwing: LabelPrinterIssue.cancelled); return }
                 // Printing/settings retain their negotiated ATT write type.
-                // The tiny optional read uses the advertised no-response path
-                // so abandoning it cannot misapply a later ATT write callback.
+                // Optional reads prefer ACK writes and retire this connection
+                // if that callback is still outstanding when the read fails.
                 let transaction = Transfer(id: id, command: command, bytes: bytes, expectedResponse: response,
                                            responseAlternatives: responseAlternatives, beginsPrint: beginsPrint,
                                            optionalRollRead: optionalRollRead,
                                            pageCopies: NiimbotPrintTransferMetrics.pageCopies(command: command, data: data),
                                            cleanupHeartbeat: cleanupHeartbeat,
-                                           writeType: optionalRollRead ? .withoutResponse : writeType,
+                                           writeType: transferWriteType,
                                            imageFrameCount: imageBatch?.count ?? 1,
                                            continuation: continuation)
                 pending = transaction
@@ -920,8 +967,15 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     }
 
     private func failOptionalRollTransfer(_ issue: LabelPrinterIssue, ambiguous: Bool) {
-        guard pending?.optionalRollRead == true else { return }
-        rollReplyGuard.abandonRead(wasSent: ambiguous)
+        guard let transaction = pending, transaction.optionalRollRead else { return }
+        let action = NiimbotOptionalRollWritePolicy.failureAction(
+            mode: transaction.writeType == .withResponse ? .acknowledged : .unacknowledged,
+            wasDispatched: ambiguous, awaitingAcknowledgement: transaction.awaitingWriteResponse)
+        if action == .retireConnection {
+            connectionFailed(issue)
+            return
+        }
+        if action == .quarantineRead { rollReplyGuard.abandonRead(wasSent: true) }
         if issue == .unsupportedResponse { rollReplyGuard.markUnsupported() }
         failTransfer(issue)
     }
@@ -981,19 +1035,29 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             if packet.command == 0x1b && pending?.optionalRollRead != true {
                 rollReader.markStale()
                 let known = LabelPaperPreferences.shared.detectedProduct
-                let reported = (try? NiimbotProtocol.rollInfo(packet))?.matchedProduct(in: .shared)
+                let info = try? NiimbotProtocol.rollInfo(packet)
+                let reported = info?.matchedProduct(in: .shared)
                 if known == nil || reported != known {
+                    rollChangeNeedsRefresh = true
                     clearDetectedRoll()
                     if isPrinting {
                         guard errorReplyDisposition == .warnConnected else { connectionFailed(.paperMismatch); return }
                         _ = handlePrinterErrorReply(.paperMismatch)
                     }
                 }
+                if isConnected, !isPrinting, !isConfiguringPaper, !rollReplyGuard.isQuarantined {
+                    updateDetectedRoll(info)
+                    refreshAfterRollChange()
+                }
                 continue
             }
             if let identity, [UInt8(0xdd), 0xd9].contains(packet.command) {
-                do { try NiimbotProtocol.validateReadiness(packet, identity: identity) }
+                do {
+                    try NiimbotProtocol.validateReadiness(packet, identity: identity)
+                    refreshAfterRollChange()
+                }
                 catch {
+                    rollChangeNeedsRefresh = true
                     rollReader.markStale(); clearDetectedRoll()
                     if isPrinting {
                         let issue = (error as? LabelPrinterIssue) ?? .paperMismatch

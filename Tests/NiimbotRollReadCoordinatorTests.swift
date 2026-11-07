@@ -270,6 +270,64 @@ import XCTest
         guardState.markUnsupported()
         XCTAssertTrue(guardState.isQuarantined); XCTAssertFalse(guardState.consumeLateResponse(0x00))
     }
+
+    func testOptionalRollWritePrefersAcknowledgementsAndFallsBackOnlyForAnUnacknowledgedOnlyChannel() {
+        XCTAssertEqual(NiimbotOptionalRollWritePolicy.select(supportsWrite: true, supportsWriteWithoutResponse: true), .acknowledged)
+        XCTAssertEqual(NiimbotOptionalRollWritePolicy.select(supportsWrite: true, supportsWriteWithoutResponse: false), .acknowledged)
+        XCTAssertEqual(NiimbotOptionalRollWritePolicy.select(supportsWrite: false, supportsWriteWithoutResponse: true), .unacknowledged)
+        XCTAssertNil(NiimbotOptionalRollWritePolicy.select(supportsWrite: false, supportsWriteWithoutResponse: false))
+    }
+
+    func testOptionalReadFailureRetiresAnOutstandingGattAcknowledgementButOnlyQuarantinesALatePrinterReply() {
+        let awaiting = NiimbotOptionalRollWritePolicy.failureAction(mode: .acknowledged,
+            wasDispatched: true, awaitingAcknowledgement: true)
+        XCTAssertEqual(awaiting, .retireConnection, "A late GATT acknowledgement must never settle a later command")
+        for mode in [NiimbotOptionalRollWritePolicy.Mode.acknowledged, .unacknowledged] {
+            XCTAssertEqual(NiimbotOptionalRollWritePolicy.failureAction(mode: mode,
+                wasDispatched: false, awaitingAcknowledgement: false), .keepConnection)
+            let completedWrite = NiimbotOptionalRollWritePolicy.failureAction(mode: mode,
+                wasDispatched: true, awaitingAcknowledgement: false)
+            XCTAssertEqual(completedWrite, .quarantineRead, "A missing RFID reply alone need not tear down a verified link")
+            var guardState = NiimbotOptionalRollReplyGuard()
+            guardState.abandonRead(wasSent: completedWrite == .quarantineRead)
+            let requiredReplies: [UInt8] = [0x14, 0x31, 0xb3, 0xdb, 0xe4, 0xf4]
+            for required in requiredReplies {
+                XCTAssertFalse(guardState.consumeLateResponse(required))
+            }
+            XCTAssertTrue(guardState.consumeLateResponse(0x1b))
+            XCTAssertFalse(guardState.consumeLateResponse(0x00), "Only one compatible abandoned-read reply may be consumed")
+            XCTAssertTrue(guardState.isQuarantined, "The old RFID opcode cannot become eligible again on this connection")
+        }
+    }
+
+    func testRetiredOptionalReadCancellationAndFailureCannotSettleAReplacementConnectionRead() async {
+        for issue in [LabelPrinterIssue.cancelled, .connectionLost] {
+            let reader = NiimbotRollReadCoordinator(), old = RollReadGate(), current = RollReadGate()
+            var publications: [NiimbotRollInfo?] = []
+            reader.refreshInfo(load: {
+                guard let estimate = try await old.read() else { return nil }
+                return NiimbotRollInfo(estimate: estimate)
+            }, onUpdate: { publications.append($0) })
+            await waitForRead(old)
+            reader.reset()
+            reader.refreshInfo(load: {
+                guard let estimate = try await current.read() else { return nil }
+                return NiimbotRollInfo(estimate: estimate)
+            }, onUpdate: { publications.append($0) })
+            await waitForRead(current)
+            old.finish(.failure(issue))
+            for _ in 0..<5 { await Task.yield() }
+            XCTAssertTrue(reader.isReading)
+            XCTAssertNil(reader.info)
+            XCTAssertTrue(publications.isEmpty, "An old cancellation or failure cannot publish nil into the new connection")
+            let replacement = estimate(used: 20)
+            current.finish(.success(replacement))
+            await reader.waitUntilIdle()
+            XCTAssertEqual(publications, [NiimbotRollInfo(estimate: replacement)])
+            XCTAssertEqual(reader.estimate, replacement)
+            XCTAssertEqual(reader.freshness, .fresh)
+        }
+    }
 }
 
 @MainActor private final class RollReadClock { var uptime: TimeInterval = 100 }

@@ -35,10 +35,13 @@ enum DiagnosticPrinterFields {
         "image_requested_byte_limit": 256, "image_pacing_ms": 50
     ]
     static let batchingKeys = Set(batchingBounds.keys)
+    static let rollKeys: Set<String> = ["roll_read_result", "roll_read_error", "roll_detection_result", "roll_product_code",
+        "label_width_mm", "label_height_mm", "label_feed_dots", "label_head_dots"]
 
     static func accepts(_ key: String, _ value: String, event: String? = nil) -> Bool {
         if timingKeys.contains(key) { return acceptsInteger(value, maximum: 3_600_000) }
         if let maximum = batchingBounds[key] { return acceptsInteger(value, maximum: maximum) }
+        if rollKeys.contains(key) { return acceptsRoll(key, value, event: event) }
         if key == "elapsed_ms", event?.hasPrefix("label.") == true {
             return acceptsInteger(value, maximum: 3_600_000)
         }
@@ -80,6 +83,36 @@ enum DiagnosticPrinterFields {
                     "required_failure", "request_cancelled"].contains(value)
         default:
             return true
+        }
+    }
+
+    private static func acceptsRoll(_ key: String, _ value: String, event: String?) -> Bool {
+        switch key {
+        case "roll_read_result":
+            return event == "label.roll_read" && ["response", "no_roll", "failed"].contains(value)
+        case "roll_read_error":
+            return event == "label.roll_read" && ["responseTimeout", "printerBusy", "cancelled", "unsupportedResponse",
+                "notActive", "notConnected", "connectionLost", "writeFailed", "other"].contains(value)
+        default:
+            guard event == "label.roll_detection" else { return false }
+            switch key {
+            case "roll_detection_result":
+                return ["matched", "unknown_product", "media_mismatch", "unavailable", "invalidated"].contains(value)
+            case "roll_product_code":
+                // This is a nonunique catalog SKU, not a tag UID or roll serial.
+                // Keep leading zeros rather than parsing the product as an integer.
+                return (1...32).contains(value.utf8.count) && value.utf8.allSatisfy { (48...57).contains($0) }
+            case "label_width_mm", "label_height_mm":
+                guard value.range(of: #"\A(?:0|[1-9][0-9]{0,2})(?:\.[0-9]{1,6})?\z"#, options: .regularExpression) != nil,
+                      let millimeters = Double(value), millimeters.isFinite else { return false }
+                return millimeters > 0 && millimeters <= 100
+            case "label_feed_dots":
+                return acceptsInteger(value, maximum: 800) && value != "0"
+            case "label_head_dots":
+                return value == "96"
+            default:
+                return false
+            }
         }
     }
 
@@ -275,6 +308,7 @@ enum ServiceDiagnosticFields {
         "render_count", "raster_reuse_count", "roll_read_source", "connection_end_source"])
         .union(DiagnosticPrinterFields.timingKeys)
         .union(DiagnosticPrinterFields.batchingKeys)
+        .union(DiagnosticPrinterFields.rollKeys)
     private var current: URL { directory.appendingPathComponent("current.jsonl") }
     private var previous: URL { directory.appendingPathComponent("previous.jsonl") }
     var enabled: Bool { defaults.object(forKey: "diagnosticsEnabled") as? Bool ?? true }

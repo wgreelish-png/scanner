@@ -217,6 +217,11 @@ struct LabelRollEstimatePresentation {
             Text(presentation.detail ?? "Connect the printer to read its roll counter.")
                 .font(.caption).foregroundStyle(.secondary)
                 .accessibilityIdentifier(identifier + ".context")
+            if paperPreferences.detectedProduct != nil {
+                LabeledContent("Detected label size", value: paperPreferences.size.title)
+                    .font(.caption)
+                    .accessibilityIdentifier(identifier + ".detectedSize")
+            }
             if paperPreferences.detectedProduct == nil, let status = printer.rollProductStatus {
                 Text(status).font(.caption).foregroundStyle(.secondary)
                     .accessibilityIdentifier(identifier + ".productStatus")
