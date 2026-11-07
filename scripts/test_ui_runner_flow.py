@@ -115,6 +115,19 @@ class UIRunnerFlowTests(unittest.TestCase):
         self.assertFalse(any(row["args"][:2] in (["simctl", "create"], ["simctl", "boot"],
                                                 ["simctl", "shutdown"]) for row in commands))
 
+    def test_simulator_compilation_uses_destination_architecture_without_dropping_requested_tests(self):
+        for target in ("CardShowScannerUITests", "CardShowScannerTests"):
+            with self.subTest(target=target):
+                result, commands, _ = self.run_flow(target=target)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                builds = [row["args"] for row in commands if row["tool"] == "xcodebuild"]
+                for arguments in builds:
+                    self.assertEqual(arguments.count("ONLY_ACTIVE_ARCH=YES"), 1)
+                    self.assertIn("platform=iOS Simulator,id=", arguments[arguments.index("-destination") + 1])
+                    self.assertIn("-only-testing:" + target, arguments)
+                    self.assertFalse(any(value.startswith("ARCHS=") for value in arguments),
+                                     "The simulator destination, not a hard-coded architecture, selects the build")
+
     def test_readiness_timeout_reports_bounded_progress_and_nonzero_status(self):
         failure = subprocess.TimeoutExpired(["xcrun", "simctl", "bootstatus"], 300,
                                             output=b"Waiting for DataMigrator")

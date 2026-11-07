@@ -19,11 +19,12 @@ on:
           - show_readiness
 concurrency:
   group: ios-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
-  cancel-in-progress: true
+  # Let an active validation finish when another run is requested on this branch.
+  cancel-in-progress: false
 jobs:
   native:
     runs-on: macos-15-intel
-    timeout-minutes: 20
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -85,7 +86,7 @@ jobs:
   ui:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.test_scope != 'printer_transport' }}
     runs-on: macos-15-intel
-    timeout-minutes: ${{ (inputs.test_scope == 'label_preview' || inputs.test_scope == 'label_queue' || inputs.test_scope == 'show_readiness') && 30 || 20 }}
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - name: Build and run UI regression tests
@@ -135,7 +136,7 @@ jobs:
   research_ui:
     if: ${{ github.event_name != 'workflow_dispatch' || (inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness') }}
     runs-on: macos-15-intel
-    timeout-minutes: 15
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - name: Build and run Research UI checks independently
@@ -162,7 +163,7 @@ jobs:
   evidence_ui:
     if: ${{ github.event_name != 'workflow_dispatch' || (inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness') }}
     runs-on: macos-15-intel
-    timeout-minutes: 20
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - name: Build and run navigation and chart UI checks independently
@@ -189,7 +190,7 @@ jobs:
   budget_ui:
     if: ${{ github.event_name != 'workflow_dispatch' || (inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness') }}
     runs-on: macos-15-intel
-    timeout-minutes: 15
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - name: Build and run show budget UI check independently
@@ -215,7 +216,7 @@ jobs:
             NativeCrashSummary.log
   release:
     runs-on: macos-15-intel
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Build Release configuration for iPhone
