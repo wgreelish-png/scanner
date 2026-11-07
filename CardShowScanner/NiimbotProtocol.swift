@@ -203,13 +203,17 @@ struct NiimbotRollInfo: Equatable, Sendable {
 /// serial strings, counters and raw responses never enter these diagnostics.
 enum NiimbotRollDetection {
     static func diagnosticFields(_ info: NiimbotRollInfo?, catalog: NiimbotLabelCatalog = .shared) -> [String: String] {
+        diagnosticFields(info, product: info.flatMap { catalog.product(code: $0.productCode) })
+    }
+
+    static func diagnosticFields(_ info: NiimbotRollInfo?, product: NiimbotLabelProduct?) -> [String: String] {
         guard let info else { return ["roll_detection_result": "unavailable"] }
         var fields = ["roll_detection_result": "unknown_product"]
         if (1...32).contains(info.productCode.utf8.count),
            info.productCode.utf8.allSatisfy({ (48...57).contains($0) }) {
             fields["roll_product_code"] = info.productCode
         }
-        guard let product = catalog.product(code: info.productCode) else { return fields }
+        guard let product, product.code == info.productCode else { return fields }
         guard product.paperType == info.labelType else {
             fields["roll_detection_result"] = "media_mismatch"
             return fields

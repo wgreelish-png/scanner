@@ -6,6 +6,7 @@ import SwiftUI
     @State private var model: CustomPriceTagModel
     @State private var paperPreferences: LabelPaperPreferences
     @State private var queue = LabelPrintQueue.shared
+    @State private var printer = NiimbotPrinter.shared
     @State private var showingQueue = false
     @State private var bitmap: InventoryLabelBitmap?
     @State private var previewDraft: CustomPriceTagDraft?
@@ -59,7 +60,7 @@ import SwiftUI
                     model.pricePosition = position
                     paperPreferences.selectPricePosition(position)
                 }), identifier: "customLabels.pricePosition")
-                Text(paperPreferences.detectedProduct == nil
+                Text(printer.isReadingRoll ? "Reading label measurements…" : paperPreferences.detectedProduct == nil
                      ? "1–100 copies. Label size and price position are remembered. Check the size matches the loaded roll."
                      : "Detected from roll. The design uses these measurements within the printer's 12 mm head. Your price-side preference is remembered.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -107,6 +108,7 @@ import SwiftUI
                 Text("\(model.copies) labels").font(.subheadline).monospacedDigit()
                 Spacer(minLength: 12)
                 Button(model.hasPreparedQueue ? "View Queue" : "Prepare Labels") {
+                    guard model.hasPreparedQueue || !printer.isReadingRoll else { return }
                     focused = nil
                     model.paperSize = paperPreferences.size
                     model.pricePosition = paperPreferences.pricePosition
@@ -114,6 +116,7 @@ import SwiftUI
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(model.draft == nil || model.preparing || queue.isPrinting || !queue.isLoaded
+                          || (!model.hasPreparedQueue && printer.isReadingRoll)
                           || (!queue.entries.isEmpty && !model.hasPreparedQueue))
                 .accessibilityIdentifier("customLabels.prepare")
             }.padding(16).background(.bar)

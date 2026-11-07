@@ -26,6 +26,11 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 99 resolves missing roll products such as `03032380` through the public
+template API on first use, then caches validated geometry for offline reuse.
+The existing bundled catalog stays unchanged and offline. Only the nonunique
+product code is requested. See [roll detection](docs/RollDetection.md).
+
 Build 98 improves [roll detection and its diagnostics](docs/RollDetection.md).
 RFID reads prefer acknowledged writes and report explicit read/detection results;
 matched rolls show their detected dimensions. Idle stock/readiness changes

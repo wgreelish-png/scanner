@@ -359,7 +359,8 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         }
     }
     private var canPrepareNewQueue: Bool {
-        queue.isLoaded && !queue.isPrinting && queue.entries.allSatisfy { $0.state == .completed }
+        queue.isLoaded && !queue.isPrinting && !printer.isReadingRoll
+            && queue.entries.allSatisfy { $0.state == .completed }
     }
     private var labelCount: Int { printableDrafts.reduce(0) { $0 + $1.copies } }
     private var bulkCount: Int { printableDrafts.filter(\.isBulk).reduce(0) { $0 + $1.copies } }
@@ -559,7 +560,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                         paperPreferences.selectPricePosition(position)
                     }), identifier: "labels.pricePosition")
                 }
-                Text(paperPreferences.detectedProduct != nil
+                Text(printer.isReadingRoll ? "Reading label measurements…" : paperPreferences.detectedProduct != nil
                      ? "Detected from roll. The design uses these measurements within the printer's 12 mm head. Your price-side preference is remembered."
                      : (style == .priceOnly
                         ? "Label size and price position are remembered. Check the size matches the loaded roll. Artwork is centered in the printer's 12 mm printable strip."

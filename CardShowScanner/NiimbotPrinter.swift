@@ -80,6 +80,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     @ObservationIgnored private var connectionStage: ConnectionStage?
     @ObservationIgnored private var identificationStep: NiimbotIdentificationStep?
     @ObservationIgnored private let rollReader = NiimbotRollReadCoordinator()
+    @ObservationIgnored private let labelProducts = NiimbotLabelProductResolver.shared
     @ObservationIgnored private var rollReplyGuard = NiimbotOptionalRollReplyGuard()
     @ObservationIgnored private var rollChangeNeedsRefresh = false
     @ObservationIgnored private var rollChangeRefreshTask: Task<Void, Never>?
@@ -458,34 +459,16 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         }
         let generation = connectionGeneration
         let load: @MainActor () async throws -> NiimbotRollInfo? = { [weak self] in
-            let clock = ContinuousClock()
-            let started = clock.now
-            var fields = ["roll_read_source": force ? "forced" : "read", "roll_read_result": "failed"]
-            defer {
-                fields["roll_read_ms"] = String(NiimbotPrintTransferMetrics.milliseconds(started.duration(to: clock.now)))
-                DiagnosticLog.shared.record("label.roll_read", fields)
+            guard let self else { throw LabelPrinterIssue.connectionLost }
+            let info = try await self.readRollInfo(force: force, generation: generation)
+            if let info {
+                try Task.checkCancellation()
+                guard self.connectionGeneration == generation else { throw LabelPrinterIssue.connectionLost }
+                await self.resolveRollProduct(info)
+                try Task.checkCancellation()
+                guard self.connectionGeneration == generation else { throw LabelPrinterIssue.connectionLost }
             }
-            do {
-                guard let self, self.connectionGeneration == generation,
-                      self.isConnected, !self.rollReplyGuard.isQuarantined else { throw LabelPrinterIssue.printerBusy }
-                fields["write_mode"] = self.writeCharacteristic?.properties.contains(.write) == true
-                    ? "acknowledged" : "unacknowledged"
-                // Foreground print/settings work drains this one read before
-                // using the same serialized command channel.
-                let info = try await NiimbotD110Session.readRollInfo { [weak self] request in
-                    guard let self, self.connectionGeneration == generation else { throw LabelPrinterIssue.connectionLost }
-                    return try await self.exchange(request, timeout: .milliseconds(750), optionalRollRead: true)
-                }
-                fields["roll_read_result"] = info == nil ? "no_roll" : "response"
-                return info
-            } catch {
-                let issue = error as? LabelPrinterIssue
-                let reasons: [LabelPrinterIssue] = [.responseTimeout, .printerBusy, .cancelled, .unsupportedResponse,
-                    .notActive, .notConnected, .connectionLost, .writeFailed]
-                fields["roll_read_error"] = error is CancellationError ? "cancelled"
-                    : issue.flatMap { reasons.contains($0) ? $0.rawValue : nil } ?? "other"
-                throw error
-            }
+            return info
         }
         let update: @MainActor (NiimbotRollInfo?) -> Void = { [weak self] info in
             guard let self, self.connectionGeneration == generation else { return }
@@ -506,16 +489,69 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         }
     }
 
+    /// Keep Bluetooth timing separate from a possible first-use API lookup.
+    private func readRollInfo(force: Bool, generation: UUID) async throws -> NiimbotRollInfo? {
+        let clock = ContinuousClock()
+        let started = clock.now
+        var fields = ["roll_read_source": force ? "forced" : "read", "roll_read_result": "failed"]
+        defer {
+            fields["roll_read_ms"] = String(NiimbotPrintTransferMetrics.milliseconds(started.duration(to: clock.now)))
+            DiagnosticLog.shared.record("label.roll_read", fields)
+        }
+        do {
+            guard self.connectionGeneration == generation,
+                  self.isConnected, !self.rollReplyGuard.isQuarantined else { throw LabelPrinterIssue.printerBusy }
+            fields["write_mode"] = self.writeCharacteristic?.properties.contains(.write) == true
+                ? "acknowledged" : "unacknowledged"
+            // Foreground print/settings work drains this one read before
+            // using the same serialized command channel.
+            let info = try await NiimbotD110Session.readRollInfo { [weak self] request in
+                guard let self, self.connectionGeneration == generation else { throw LabelPrinterIssue.connectionLost }
+                return try await self.exchange(request, timeout: .milliseconds(750), optionalRollRead: true)
+            }
+            fields["roll_read_result"] = info == nil ? "no_roll" : "response"
+            return info
+        } catch {
+            let issue = error as? LabelPrinterIssue
+            let reasons: [LabelPrinterIssue] = [.responseTimeout, .printerBusy, .cancelled, .unsupportedResponse,
+                .notActive, .notConnected, .connectionLost, .writeFailed]
+            fields["roll_read_error"] = error is CancellationError ? "cancelled"
+                : issue.flatMap { reasons.contains($0) ? $0.rawValue : nil } ?? "other"
+            throw error
+        }
+    }
+
+    private func resolveRollProduct(_ info: NiimbotRollInfo) async {
+        guard labelProducts.product(code: info.productCode) == nil else { return }
+        let clock = ContinuousClock(), started = ContinuousClock().now
+        var fields = ["source": "api", "phase": "failed"]
+        defer {
+            fields["elapsed_ms"] = String(NiimbotPrintTransferMetrics.milliseconds(started.duration(to: clock.now)))
+            DiagnosticLog.shared.record("label.roll_lookup", fields)
+        }
+        do {
+            let product = try await labelProducts.resolve(code: info.productCode)
+            fields["phase"] = product == nil ? "not_found" : "matched"
+        } catch { fields["reason"] = "lookup_failed" }
+    }
+
+    private func matchedRollProduct(_ info: NiimbotRollInfo?) -> NiimbotLabelProduct? {
+        guard let info, let product = labelProducts.product(code: info.productCode),
+              product.paperType == info.labelType else { return nil }
+        return product
+    }
+
     private func updateDetectedRoll(_ info: NiimbotRollInfo?) {
-        DiagnosticLog.shared.record("label.roll_detection", NiimbotRollDetection.diagnosticFields(info))
+        let product = info.flatMap { labelProducts.product(code: $0.productCode) }
+        DiagnosticLog.shared.record("label.roll_detection", NiimbotRollDetection.diagnosticFields(info, product: product))
         guard let info else {
             LabelPaperPreferences.shared.updateDetectedProduct(nil)
             rollProductStatus = "Roll could not be identified. Choose the paper size manually."
             return
         }
-        guard let product = info.matchedProduct(in: .shared) else {
+        guard let product = matchedRollProduct(info) else {
             LabelPaperPreferences.shared.updateDetectedProduct(nil)
-            rollProductStatus = "Roll could not be matched to the offline catalog. Choose paper settings manually."
+            rollProductStatus = "Label measurements unavailable. Refresh to try again or choose paper settings manually."
             return
         }
         LabelPaperPreferences.shared.updateDetectedProduct(product)
@@ -1036,7 +1072,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                 rollReader.markStale()
                 let known = LabelPaperPreferences.shared.detectedProduct
                 let info = try? NiimbotProtocol.rollInfo(packet)
-                let reported = info?.matchedProduct(in: .shared)
+                let reported = matchedRollProduct(info)
                 if known == nil || reported != known {
                     rollChangeNeedsRefresh = true
                     clearDetectedRoll()

@@ -4,8 +4,16 @@ The app bundles the reviewed 13,085-byte product catalog, containing 130 product
 codes and 150 vendor input regions. An actual printer RFID reply supplies the
 non-unique product code. A matching catalog entry sets the dimensions and
 Gap/Transparent media for newly prepared labels without an internet request.
-Missing, unknown or unsupported roll metadata keeps the manual paper workflow.
+Build 99 also reuses validated persisted product metadata, and an unknown product
+code can use the public template API before keeping the manual paper workflow
+when metadata remains unavailable or unsupported.
 Roll identity is usable even when its remaining-label counters are unavailable.
+
+The online fallback validates the returned barcode and printable geometry before
+saving a bounded geometry-only cache for offline reuse. It sends only the product
+SKU, never the tag UID or roll serial. Preparation waits for metadata to settle;
+late results cannot replace the detected size for a newer connection or roll.
+See [roll detection](RollDetection.md) for lookup limits and diagnostic results.
 
 The renderer generates each design from the existing shared vector PokéDen
 wordmark, scalable text, border and divider. There is no image per product.
@@ -34,9 +42,11 @@ region is preserved as supplied, without inventing a lane split or lane count.
 
 The detected roll is authoritative while verified on the current connection.
 The saved manual size, manual media choice and saved price side remain intact.
-Disconnecting or receiving unknown/missing roll metadata restores the remembered
-manual choice. Detection never starts printing. There is no polling loop or
-cloud lookup, and no unique RFID tag ID or roll serial is retained in labels,
+Disconnecting or receiving missing/unresolved roll metadata restores the
+remembered manual choice. Detection never starts printing. Known bundled and
+cached products need no cloud lookup; an unknown SKU may request only that
+nonunique product code from the template API. There is no polling loop, and no
+unique RFID tag ID or roll serial is sent in that request or retained in labels,
 the catalog, diagnostics or preferences.
 
 A prepared queue retains its own paper geometry and printer bits. Reconnecting,
