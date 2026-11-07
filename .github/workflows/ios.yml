@@ -101,7 +101,7 @@ jobs:
   ui:
     if: ${{ github.event_name != 'workflow_dispatch' || ((inputs.job_scope == 'all' || inputs.job_scope == 'ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'navigation_price') }}
     runs-on: macos-15-intel
-    # The full selection can use 39 bounded six-minute cases, plus cold setup.
+    # The full selection can use 42 bounded six-minute cases, plus cold setup.
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
@@ -132,11 +132,14 @@ jobs:
               CardShowScannerUITests/InventoryLabelsUITests/testCustomPrintingShowsProgressWaitsForFinalAcknowledgementAndReturnsToPriceTags
           elif [ "$SCANNER_TEST_SCOPE" = label_controls ]; then
             bash scripts/run_ios_tests.sh \
-              CardShowScannerUITests/InventoryLabelsUITests/testPaperModeCanBeChosenOfflineAndPersistsAfterUnprintedQueueCleanup \
+              CardShowScannerUITests/InventoryLabelsUITests/testPaperModeCanBeChosenOfflineWithoutStartingBluetooth \
+              CardShowScannerUITests/InventoryLabelsUITests/testPaperModePreferenceSurvivesRelaunchAfterUnprintedQueueCleanup \
+              CardShowScannerUITests/InventoryLabelsUITests/testPaperModeQueueReplacementPreservesLabelContentAndInventory \
               CardShowScannerUITests/InventoryLabelsUITests/testPauseDuringUploadKeepsEveryUnconfirmedCopyAvailableForReview \
               CardShowScannerUITests/InventoryLabelsUITests/testPauseKeepsProgressForQueueReviewInsteadOfReturningToPriceTags \
               CardShowScannerUITests/InventoryLabelsUITests/testPrintingFailureStaysAvailableForReviewWithoutAutomaticRetryOrNavigation \
               CardShowScannerUITests/InventoryLabelsUITests/testSingleCardDraftIsIsolatedAndAcceptsZeroWithoutClampingCopies \
+              CardShowScannerUITests/InventoryLabelsUITests/testSingleCardDraftCancelPreservesInventoryAndBudget \
               CardShowScannerUITests/InventoryLabelsUITests/testInventoryPrintOrderSortsNumericPricesAndRemembersSelection \
               CardShowScannerUITests/InventoryLabelsUITests/testLeavingCustomAndBulkPrintQueuesClearsThemAndPreservesPreferences
           else

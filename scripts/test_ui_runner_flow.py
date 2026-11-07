@@ -132,11 +132,14 @@ class UIRunnerFlowTests(unittest.TestCase):
 
     def test_ui_navigation_has_a_bounded_longer_allowance_without_relaxing_native_test_limits(self):
         label_targets = tuple("CardShowScannerUITests/InventoryLabelsUITests/" + name for name in (
-            "testPaperModeCanBeChosenOfflineAndPersistsAfterUnprintedQueueCleanup",
+            "testPaperModeCanBeChosenOfflineWithoutStartingBluetooth",
+            "testPaperModePreferenceSurvivesRelaunchAfterUnprintedQueueCleanup",
+            "testPaperModeQueueReplacementPreservesLabelContentAndInventory",
             "testPauseDuringUploadKeepsEveryUnconfirmedCopyAvailableForReview",
             "testPauseKeepsProgressForQueueReviewInsteadOfReturningToPriceTags",
             "testPrintingFailureStaysAvailableForReviewWithoutAutomaticRetryOrNavigation",
             "testSingleCardDraftIsIsolatedAndAcceptsZeroWithoutClampingCopies",
+            "testSingleCardDraftCancelPreservesInventoryAndBudget",
             "testInventoryPrintOrderSortsNumericPricesAndRemembersSelection",
             "testLeavingCustomAndBulkPrintQueuesClearsThemAndPreservesPreferences"))
         navigation_targets = tuple("CardShowScannerUITests/AppNavigationUITests/" + name for name in (
@@ -164,9 +167,12 @@ class UIRunnerFlowTests(unittest.TestCase):
                                      ["-only-testing:" + target for target in targets])
                     self.assertFalse(any(value.startswith("-skip-testing:") for value in arguments))
 
-        for targets in (label_targets, navigation_targets):
-            rejected, commands, _ = self.run_flow(target=targets[0],
-                                                 additional_targets=(*targets[1:-1], targets[-1] + "Typo"))
+        rejected_selections = [(*targets[:-1], targets[-1] + "Typo")
+                               for targets in (label_targets, navigation_targets)]
+        rejected_selections.append(("CardShowScannerUITests/InventoryLabelsUITests/"
+                                    "testPaperModeCanBeChosenOfflineAndPersistsAfterUnprintedQueueCleanup",))
+        for targets in rejected_selections:
+            rejected, commands, _ = self.run_flow(target=targets[0], additional_targets=targets[1:])
             self.assertEqual(rejected.returncode, 2)
             self.assertIn("Unknown test target", rejected.stderr)
             self.assertFalse(commands, "An unallowlisted method must fail before invoking any tool")

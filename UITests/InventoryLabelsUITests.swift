@@ -250,76 +250,54 @@ import XCTest
         assertNoBluetoothPrompt(app: app)
     }
 
-    func testSingleCardDraftIsIsolatedAndAcceptsZeroWithoutClampingCopies() {
+    func testSingleCardDraftCancelPreservesInventoryAndBudget() {
         continueAfterFailure = false
         let app = launch()
         defer { app.terminate() }
-        assertBalances(app: app)
-        tap(app.buttons["show.inventory"], app: app)
-        assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
-        let row = inventory("Stock A", app: app)
-        let inventoryID = inventoryID(of: row)
-        tap(row, app: app)
-        XCTAssertTrue(app.navigationBars["Card Research"].waitForExistence(timeout: 5))
-        let market = app.segmentedControls["cardResearch.section"].buttons["Market"]
-        XCTAssertTrue(market.waitForExistence(timeout: 5)); XCTAssertTrue(market.isSelected)
-        UITestInteraction.tapToolbar(app.descendants(matching: .any).matching(identifier: "cardResearch.options").firstMatch,
-                                     in: app, identifier: "cardResearch.options")
-        tap(app.buttons["cardResearch.inventoryDetails"], app: app)
-        XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5))
-        assertContains("$35.00", element: app.staticTexts["$35.00"])
-        assertContains("Cost unknown", element: app.descendants(matching: .any)["inventory.cost"])
-        UITestInteraction.tapToolbar(app.descendants(matching: .any).matching(identifier: "inventory.options").firstMatch,
-                                     in: app, identifier: "inventory.options")
-        tap(app.buttons["inventory.printLabel"], app: app)
-        XCTAssertTrue(app.navigationBars["Label Details"].waitForExistence(timeout: 5))
-        assertContains("1 labels", element: app.staticTexts["labels.totalCount"])
-        tap(app.buttons["labels.style"], app: app)
-        tap(app.buttons["Card details"], app: app)
-
+        let inventoryID = openSingleCardLabelDetails(app: app)
         let edit = app.buttons["labels.edit." + inventoryID]
         guard openInventoryLabelEditor(edit, app: app) else { return }
         assertNoPrintingPricePrompts(app: app)
         XCTAssertEqual(app.textFields["labels.editor.price"].value as? String, "35")
         XCTAssertEqual(app.textFields["labels.editor.copies"].value as? String, "1")
-        enter("12", field: app.textFields["labels.editor.price"], app: app)
-        tap(app.buttons["labels.editor.cancel"], app: app)
+        enterLabelValue("12", field: app.textFields["labels.editor.price"], screen: "Edit Label", app: app)
+        tapVisibleLabelControl(app.buttons["labels.editor.cancel"], screen: "Edit Label", app: app)
         assertContains("$35", element: edit)
+        tapVisibleLabelControl(app.buttons["labels.close"], screen: "Label Details", app: app)
+        assertSingleCardInventoryUnchanged(app: app)
+    }
 
+    func testSingleCardDraftIsIsolatedAndAcceptsZeroWithoutClampingCopies() {
+        continueAfterFailure = false
+        let app = launch()
+        defer { app.terminate() }
+        let inventoryID = openSingleCardLabelDetails(app: app)
+        let edit = app.buttons["labels.edit." + inventoryID]
         guard openInventoryLabelEditor(edit, app: app) else { return }
-        enter("", field: app.textFields["labels.editor.price"], app: app)
+        assertNoPrintingPricePrompts(app: app)
+        XCTAssertEqual(app.textFields["labels.editor.price"].value as? String, "35")
+        XCTAssertEqual(app.textFields["labels.editor.copies"].value as? String, "1")
+        enterLabelValue("", field: app.textFields["labels.editor.price"], screen: "Edit Label", app: app)
         XCTAssertTrue(app.buttons["labels.editor.save"].isEnabled, "An empty asking price leaves a write-in area")
-        enter("0", field: app.textFields["labels.editor.price"], app: app)
-        enter("101", field: app.textFields["labels.editor.copies"], app: app)
+        enterLabelValue("0", field: app.textFields["labels.editor.price"], screen: "Edit Label", app: app)
+        enterLabelValue("101", field: app.textFields["labels.editor.copies"], screen: "Edit Label", app: app)
         XCTAssertEqual(app.textFields["labels.editor.copies"].value as? String, "101")
         XCTAssertFalse(app.buttons["labels.editor.save"].isEnabled, "Copies above the explicit limit remain visible for correction")
-        enter("2", field: app.textFields["labels.editor.copies"], app: app)
-        tap(app.buttons["labels.editor.keyboardDone"], app: app)
+        enterLabelValue("2", field: app.textFields["labels.editor.copies"], screen: "Edit Label", app: app)
+        tapVisibleLabelControl(app.buttons["labels.editor.keyboardDone"], screen: "Edit Label", app: app)
         tap(app.buttons["labels.editor.preview"], app: app)
         let preview = app.images["labels.bitmapPreview"].firstMatch
         reveal(preview, app: app)
         XCTAssertTrue((preview.value as? String ?? "").contains("Blank price · write in"))
         XCTAssertTrue((preview.value as? String ?? "").contains("Card details"))
-        tap(app.buttons["labels.editor.save"], app: app)
+        tapVisibleLabelControl(app.buttons["labels.editor.save"], screen: "Edit Label", app: app)
         assertContains("Blank price · write in", element: edit)
         assertContains("2 labels", element: app.staticTexts["labels.totalCount"])
-        tap(app.buttons["labels.continueReview"], app: app)
+        tapVisibleLabelControl(app.buttons["labels.continueReview"], screen: "Label Details", app: app)
         assertContains("Blank price · write in", element: app.descendants(matching: .any)["labels.review.price." + inventoryID])
         assertContains("2", element: app.descendants(matching: .any)["labels.review.copies." + inventoryID])
-        tap(app.buttons["labels.close"], app: app)
-
-        XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5))
-        reveal(app.staticTexts["$35.00"], app: app)
-        XCTAssertTrue(app.staticTexts["$35.00"].exists, "Label price edits must not change the saved market price")
-        assertContains("Cost unknown", element: app.descendants(matching: .any)["inventory.cost"])
-        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
-        XCTAssertTrue(app.navigationBars["Card Research"].waitForExistence(timeout: 5))
-        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
-        XCTAssertTrue(app.navigationBars["Show Inventory"].waitForExistence(timeout: 5))
-        assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
-        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
-        assertBalances(app: app)
-        assertNoBluetoothPrompt(app: app)
+        tapVisibleLabelControl(app.buttons["labels.close"], screen: "Review Labels", app: app)
+        assertSingleCardInventoryUnchanged(app: app)
     }
 
     func testBatchSearchCopiesPreviewAndLeavingUnprintedQueueClearsBeforeRelaunch() {
@@ -1165,38 +1143,17 @@ import XCTest
         assertNoBluetoothPrompt(app: app)
     }
 
-    func testPaperModeCanBeChosenOfflineAndPersistsAfterUnprintedQueueCleanup() {
+    func testPaperModeCanBeChosenOfflineWithoutStartingBluetooth() {
         continueAfterFailure = false
         let app = launch()
-        defer {
-            let gap = app.segmentedControls["labelPrinter.paperMode"].buttons["Gap"]
-            if app.state == .runningForeground && gap.exists && gap.isHittable { gap.tap() }
-            app.terminate()
-        }
+        defer { restoreGapAndTerminate(app) }
         assertBalances(app: app)
         tap(app.buttons["show.priceTags"], app: app)
-        tap(app.buttons["priceTags.custom"], app: app)
-        enter("5", field: app.textFields["customLabels.price"], app: app)
-        enter("3", field: app.textFields["customLabels.copies"], app: app)
-        tap(app.buttons["customLabels.keyboardDone"], app: app)
-        tap(app.buttons["customLabels.prepare"], app: app)
-        XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
-        assertContains("0/3 completed", element: app.staticTexts["labelQueue.progress"])
-        assertContains("3", element: app.descendants(matching: .any)["labelQueue.totalCount"])
-        XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled)
-        XCTAssertFalse(app.buttons["labelQueue.pause"].exists)
-        let queued = firstEntryInForegroundQueue(app: app)
-        let queuedID = queued.identifier, queuedDescription = queued.label
-
-        backFromPrintScreen("Label Print Queue", app: app)
-        XCTAssertTrue(app.navigationBars["Custom Price Tag"].waitForExistence(timeout: 5))
-        backFromPrintScreen("Custom Price Tag", app: app)
-        XCTAssertTrue(app.navigationBars["Price Tags"].waitForExistence(timeout: 5))
         tap(app.buttons["priceTags.printer"], app: app)
         XCTAssertTrue(app.navigationBars["Label Printer"].waitForExistence(timeout: 5))
         let mode = app.segmentedControls["labelPrinter.paperMode"]
         XCTAssertTrue(mode.waitForExistence(timeout: 5))
-        tap(mode.buttons["Gap"], app: app)
+        tapVisibleLabelControl(mode.buttons["Gap"], screen: "Label Printer", app: app)
         XCTAssertTrue(mode.buttons["Gap"].isSelected)
         let connection = app.staticTexts["labelPrinter.connection"]
         let status = app.staticTexts["labelPrinter.status"]
@@ -1208,7 +1165,7 @@ import XCTest
         XCTAssertFalse(app.buttons["labelPrinter.readPaperMode"].isEnabled)
         XCTAssertFalse(app.staticTexts["labelPrinter.paperModeStatus"].exists)
 
-        tap(mode.buttons["Transparent"], app: app)
+        tapVisibleLabelControl(mode.buttons["Transparent"], screen: "Label Printer", app: app)
         XCTAssertTrue(mode.buttons["Transparent"].isSelected)
         XCTAssertFalse(mode.buttons["Gap"].isSelected)
         XCTAssertEqual(connection.label, originalConnection)
@@ -1219,6 +1176,49 @@ import XCTest
         XCTAssertFalse(app.staticTexts["labelPrinter.paperModeStatus"].exists,
                        "Changing the preference alone must not claim to have configured a printer")
         assertNoBluetoothPrompt(app: app)
+        tapVisibleLabelControl(mode.buttons["Gap"], screen: "Label Printer", app: app)
+        XCTAssertTrue(mode.buttons["Gap"].isSelected)
+        XCTAssertEqual(connection.label, originalConnection)
+        XCTAssertEqual(status.label, originalStatus)
+        backFromFocusedLabelScreen("Label Printer", app: app)
+        backFromFocusedLabelScreen("Price Tags", app: app)
+        assertBalances(app: app)
+        tap(app.buttons["show.inventory"], app: app)
+        assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
+    }
+
+    func testPaperModePreferenceSurvivesRelaunchAfterUnprintedQueueCleanup() {
+        continueAfterFailure = false
+        let app = launch()
+        defer { restoreGapAndTerminate(app) }
+        tap(app.buttons["show.priceTags"], app: app)
+        prepareThreeCustomLabels(app: app)
+        XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
+        assertContains("0/3 completed", element: app.staticTexts["labelQueue.progress"])
+        assertContains("3", element: app.descendants(matching: .any)["labelQueue.totalCount"])
+        XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled)
+        XCTAssertFalse(app.buttons["labelQueue.pause"].exists)
+        let queuedID = firstEntryInForegroundQueue(app: app).identifier
+        backFromFocusedLabelScreen("Label Print Queue", app: app)
+        XCTAssertTrue(app.navigationBars["Custom Price Tag"].waitForExistence(timeout: 5))
+        backFromFocusedLabelScreen("Custom Price Tag", app: app)
+        XCTAssertTrue(app.navigationBars["Price Tags"].waitForExistence(timeout: 5))
+        tap(app.buttons["priceTags.printer"], app: app)
+        XCTAssertTrue(app.navigationBars["Label Printer"].waitForExistence(timeout: 5))
+        let mode = app.segmentedControls["labelPrinter.paperMode"]
+        let connection = app.staticTexts["labelPrinter.connection"]
+        let status = app.staticTexts["labelPrinter.status"]
+        tapVisibleLabelControl(mode.buttons["Gap"], screen: "Label Printer", app: app)
+        XCTAssertTrue(mode.buttons["Gap"].isSelected)
+        let originalConnection = connection.label, originalStatus = status.label
+        assertContains("not connected", element: connection)
+        tapVisibleLabelControl(mode.buttons["Transparent"], screen: "Label Printer", app: app)
+        XCTAssertTrue(mode.buttons["Transparent"].isSelected)
+        XCTAssertEqual(connection.label, originalConnection)
+        XCTAssertEqual(status.label, originalStatus, "Choosing paper offline cannot start a Bluetooth search or connection")
+        XCTAssertFalse(app.buttons["labelPrinter.applyPaperMode"].isEnabled)
+        XCTAssertFalse(app.buttons["labelPrinter.readPaperMode"].isEnabled)
+        assertNoBluetoothPrompt(app: app)
 
         app.terminate(); app.launch()
         XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 10))
@@ -1227,27 +1227,66 @@ import XCTest
         XCTAssertTrue(app.navigationBars["Label Printer"].waitForExistence(timeout: 5))
         XCTAssertTrue(mode.buttons["Transparent"].isSelected, "The explicitly selected stock mode survives relaunch")
         XCTAssertEqual(connection.label, originalConnection)
-        XCTAssertEqual(status.label, originalStatus)
+        XCTAssertEqual(status.label, "Search for a NIIMBOT D110 or D110-M to connect.",
+                       "The printer starts each process idle; connection status is not a saved preference")
+        XCTAssertFalse(app.buttons["labelPrinter.disconnect"].exists)
         XCTAssertFalse(app.buttons["labelPrinter.applyPaperMode"].isEnabled)
         XCTAssertFalse(app.buttons["labelPrinter.readPaperMode"].isEnabled)
         assertNoBluetoothPrompt(app: app)
-        tap(mode.buttons["Gap"], app: app)
+        let relaunchedStatus = status.label
+        tapVisibleLabelControl(mode.buttons["Gap"], screen: "Label Printer", app: app)
         XCTAssertTrue(mode.buttons["Gap"].isSelected)
-        backFromPrintScreen("Label Printer", app: app)
+        XCTAssertEqual(connection.label, originalConnection)
+        XCTAssertEqual(status.label, relaunchedStatus, "Changing paper mode must leave this process's idle status unchanged")
+        backFromFocusedLabelScreen("Label Printer", app: app)
         XCTAssertTrue(app.navigationBars["Price Tags"].waitForExistence(timeout: 5))
         tap(app.buttons["priceTags.queue"], app: app)
         assertEmptyPrintQueue(app: app)
         XCTAssertFalse(app.buttons[queuedID].exists, "The old batch was cleared when leaving without printing")
-        backFromPrintScreen("Label Print Queue", app: app)
-        tap(app.buttons["priceTags.custom"], app: app)
-        enter("5", field: app.textFields["customLabels.price"], app: app)
-        enter("3", field: app.textFields["customLabels.copies"], app: app)
-        tap(app.buttons["customLabels.keyboardDone"], app: app)
-        app.buttons["customLabels.prepare"].tap()
+        assertNoBluetoothPrompt(app: app)
+    }
+
+    func testPaperModeQueueReplacementPreservesLabelContentAndInventory() {
+        continueAfterFailure = false
+        let app = launch()
+        defer { restoreGapAndTerminate(app) }
+        assertBalances(app: app)
+        tap(app.buttons["show.priceTags"], app: app)
+        tap(app.buttons["priceTags.printer"], app: app)
+        XCTAssertTrue(app.navigationBars["Label Printer"].waitForExistence(timeout: 5))
+        let mode = app.segmentedControls["labelPrinter.paperMode"]
+        let connection = app.staticTexts["labelPrinter.connection"]
+        let status = app.staticTexts["labelPrinter.status"]
+        let settingsConnection = connection.label, settingsStatus = status.label
+        tapVisibleLabelControl(mode.buttons["Gap"], screen: "Label Printer", app: app)
+        XCTAssertTrue(mode.buttons["Gap"].isSelected)
+        assertContains("not connected", element: connection)
+        XCTAssertEqual(connection.label, settingsConnection)
+        XCTAssertEqual(status.label, settingsStatus)
+        backFromFocusedLabelScreen("Label Printer", app: app)
+        prepareThreeCustomLabels(app: app)
+        let queued = firstEntryInForegroundQueue(app: app)
+        let queuedID = queued.identifier, queuedDescription = queued.label
+        assertContains("0/3 completed", element: app.staticTexts["labelQueue.progress"])
+        backFromFocusedLabelScreen("Label Print Queue", app: app)
+        XCTAssertTrue(app.navigationBars["Custom Price Tag"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["customLabels.clearQueue"].isEnabled, "Leaving without printing clears the old queue")
+        XCTAssertEqual(app.textFields["customLabels.price"].value as? String, "5")
+        XCTAssertEqual(app.textFields["customLabels.copies"].value as? String, "3")
+        tapVisibleLabelControl(app.buttons["customLabels.prepare"], screen: "Custom Price Tag", app: app)
         revealInForegroundQueue(mode, app: app)
         XCTAssertTrue(mode.buttons["Gap"].isSelected, "Settings and the saved queue use the same paper preference")
-        XCTAssertEqual(connection.label, originalConnection)
-        XCTAssertEqual(status.label, originalStatus)
+        let queueConnection = connection.label, queueStatus = status.label
+        assertContains("not connected", element: connection)
+        XCTAssertEqual(connection.label, settingsConnection)
+        tapVisibleLabelControl(mode.buttons["Transparent"], screen: "Label Print Queue", app: app)
+        XCTAssertTrue(mode.buttons["Transparent"].isSelected)
+        XCTAssertEqual(connection.label, queueConnection)
+        XCTAssertEqual(status.label, queueStatus, "Changing the offline queue's mode cannot start Bluetooth")
+        tapVisibleLabelControl(mode.buttons["Gap"], screen: "Label Print Queue", app: app)
+        XCTAssertTrue(mode.buttons["Gap"].isSelected)
+        XCTAssertEqual(connection.label, queueConnection)
+        XCTAssertEqual(status.label, queueStatus, "Changing the offline queue's mode cannot start Bluetooth")
         XCTAssertFalse(app.buttons["labelPrinter.applyPaperMode"].isEnabled)
         XCTAssertFalse(app.buttons["labelPrinter.readPaperMode"].isEnabled)
         assertContains("0/3 completed", element: app.staticTexts["labelQueue.progress"])
@@ -1258,10 +1297,10 @@ import XCTest
         XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled)
         XCTAssertFalse(app.buttons["labelQueue.pause"].exists)
         assertNoBluetoothPrompt(app: app)
-        backFromPrintScreen("Label Print Queue", app: app)
-        backFromPrintScreen("Custom Price Tag", app: app)
+        backFromFocusedLabelScreen("Label Print Queue", app: app)
+        backFromFocusedLabelScreen("Custom Price Tag", app: app)
         XCTAssertTrue(app.navigationBars["Price Tags"].waitForExistence(timeout: 5))
-        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        backFromFocusedLabelScreen("Price Tags", app: app)
         XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 5))
         assertBalances(app: app)
         tap(app.buttons["show.inventory"], app: app)
@@ -1419,6 +1458,96 @@ import XCTest
         assertContains("0/2 completed", element: app.staticTexts["labelQueue.progress"])
         XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled)
         assertManualRetryVisible(in: app)
+        assertNoBluetoothPrompt(app: app)
+    }
+
+    /// These focused scenarios already know the active screen. Resolve that
+    /// screen's native control instead of traversing every covered navigation bar.
+    private func tapVisibleLabelControl(_ element: XCUIElement, screen: String, app: XCUIApplication,
+                                        file: StaticString = #filePath, line: UInt = #line) {
+        guard app.navigationBars[screen].waitForExistence(timeout: 5),
+              element.waitForExistence(timeout: 5), element.isEnabled, element.isHittable else {
+            XCTFail("Expected a visible enabled control on \(screen)", file: file, line: line)
+            return
+        }
+        let frame = element.frame
+        guard frame.width > 0, frame.height > 0, app.windows.firstMatch.frame.contains(frame) else {
+            XCTFail("The \(screen) control must be entirely inside the foreground window", file: file, line: line)
+            return
+        }
+        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+    }
+
+    private func enterLabelValue(_ value: String, field: XCUIElement, screen: String, app: XCUIApplication) {
+        if !field.exists || !field.isHittable { reveal(field, app: app) }
+        let keyboard = app.keyboards.firstMatch
+        if keyboard.exists, field.exists, field.frame.maxY > keyboard.frame.minY {
+            reveal(field, app: app)
+        }
+        tapVisibleLabelControl(field, screen: screen, app: app)
+        if let existing = field.value as? String, !existing.isEmpty,
+           existing != field.placeholderValue || existing.allSatisfy({ $0.isNumber }) {
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: existing.count))
+        }
+        if !value.isEmpty { field.typeText(value) }
+    }
+
+    private func backFromFocusedLabelScreen(_ title: String, app: XCUIApplication) {
+        tapVisibleLabelControl(app.navigationBars[title].buttons.element(boundBy: 0), screen: title, app: app)
+    }
+
+    private func prepareThreeCustomLabels(app: XCUIApplication) {
+        tap(app.buttons["priceTags.custom"], app: app)
+        enterLabelValue("5", field: app.textFields["customLabels.price"], screen: "Custom Price Tag", app: app)
+        enterLabelValue("3", field: app.textFields["customLabels.copies"], screen: "Custom Price Tag", app: app)
+        tapVisibleLabelControl(app.buttons["customLabels.keyboardDone"], screen: "Custom Price Tag", app: app)
+        tapVisibleLabelControl(app.buttons["customLabels.prepare"], screen: "Custom Price Tag", app: app)
+    }
+
+    private func restoreGapAndTerminate(_ app: XCUIApplication) {
+        let gap = app.segmentedControls["labelPrinter.paperMode"].buttons["Gap"]
+        if app.state == .runningForeground && gap.exists && gap.isHittable { gap.tap() }
+        app.terminate()
+    }
+
+    private func openSingleCardLabelDetails(app: XCUIApplication) -> String {
+        assertBalances(app: app)
+        tap(app.buttons["show.inventory"], app: app)
+        assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
+        let row = inventory("Stock A", app: app)
+        let inventoryID = inventoryID(of: row)
+        tapVisibleLabelControl(row, screen: "Show Inventory", app: app)
+        XCTAssertTrue(app.navigationBars["Card Research"].waitForExistence(timeout: 5))
+        let market = app.segmentedControls["cardResearch.section"].buttons["Market"]
+        XCTAssertTrue(market.waitForExistence(timeout: 5)); XCTAssertTrue(market.isSelected)
+        tapVisibleLabelControl(app.descendants(matching: .any).matching(identifier: "cardResearch.options").firstMatch,
+                               screen: "Card Research", app: app)
+        tapVisibleLabelControl(app.buttons["cardResearch.inventoryDetails"], screen: "Card Research", app: app)
+        XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5))
+        assertContains("$35.00", element: app.staticTexts["$35.00"])
+        assertContains("Cost unknown", element: app.descendants(matching: .any)["inventory.cost"])
+        tapVisibleLabelControl(app.descendants(matching: .any).matching(identifier: "inventory.options").firstMatch,
+                               screen: "Card Details", app: app)
+        tapVisibleLabelControl(app.buttons["inventory.printLabel"], screen: "Card Details", app: app)
+        XCTAssertTrue(app.navigationBars["Label Details"].waitForExistence(timeout: 5))
+        assertContains("1 labels", element: app.staticTexts["labels.totalCount"])
+        tapVisibleLabelControl(app.buttons["labels.style"], screen: "Label Details", app: app)
+        tapVisibleLabelControl(app.buttons["Card details"], screen: "Label Details", app: app)
+        return inventoryID
+    }
+
+    private func assertSingleCardInventoryUnchanged(app: XCUIApplication) {
+        XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5))
+        reveal(app.staticTexts["$35.00"], app: app)
+        XCTAssertTrue(app.staticTexts["$35.00"].exists, "Label price edits must not change the saved market price")
+        assertContains("Cost unknown", element: app.descendants(matching: .any)["inventory.cost"])
+        backFromFocusedLabelScreen("Card Details", app: app)
+        XCTAssertTrue(app.navigationBars["Card Research"].waitForExistence(timeout: 5))
+        backFromFocusedLabelScreen("Card Research", app: app)
+        XCTAssertTrue(app.navigationBars["Show Inventory"].waitForExistence(timeout: 5))
+        assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
+        backFromFocusedLabelScreen("Show Inventory", app: app)
+        assertBalances(app: app)
         assertNoBluetoothPrompt(app: app)
     }
 
