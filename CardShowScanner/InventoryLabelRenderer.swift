@@ -171,16 +171,18 @@ import UIKit
         let layout = adaptiveBrandedPriceLayout(width: size.width, height: size.height, price: text, pricePosition: pricePosition)
         guard pageBounds.width > 0, pageBounds.height > 0,
               layout.logoArea.width > 0, layout.logoArea.height > 0 else { throw InventoryLabelFailure.invalidRaster }
-        let padding = max(2, min(6, size.height * 0.07))
+        let frame = adaptiveBrandedPriceFrame(size: size)
         context.saveGState()
         context.setStrokeColor(UIColor.black.cgColor)
-        context.setLineWidth(max(1, min(2, size.height / 48)))
-        let border = UIBezierPath(roundedRect: CGRect(origin: .zero, size: size).insetBy(dx: padding / 2, dy: padding / 2),
-                                  cornerRadius: min(10, size.height / 8))
+        context.setLineWidth(frame.lineWidth)
+        let border = UIBezierPath(roundedRect: frame.border, cornerRadius: frame.cornerRadius)
         context.addPath(border.cgPath)
         context.strokePath()
-        context.move(to: CGPoint(x: layout.dividerX, y: padding * 2))
-        context.addLine(to: CGPoint(x: layout.dividerX, y: size.height - padding * 2))
+        // A one-dot rule needs a half-dot centre; two-dot rules use integer
+        // centres. Keep both edges on dot boundaries before bilevel packing.
+        let dividerX = (layout.dividerX - frame.phase).rounded() + frame.phase
+        context.move(to: CGPoint(x: dividerX, y: frame.dividerInset))
+        context.addLine(to: CGPoint(x: dividerX, y: size.height - frame.dividerInset))
         context.strokePath()
         let scale = min(layout.logoArea.width / pageBounds.width, layout.logoArea.height / pageBounds.height)
         let logoSize = CGSize(width: pageBounds.width * scale, height: pageBounds.height * scale)
@@ -193,6 +195,29 @@ import UIKit
         let maximum: CGFloat = isBulk ? min(44, size.height * 0.6) : min(64, size.height * 0.75)
         let font = try fittedPriceFont(text, maximum: maximum, rect: layout.priceArea)
         drawCentered(text, font: font, rect: layout.priceArea)
+    }
+
+    struct BrandedPriceFrame {
+        let border: CGRect
+        let lineWidth: CGFloat
+        let cornerRadius: CGFloat
+        let dividerInset: CGFloat
+        var phase: CGFloat { lineWidth == 1 ? 0.5 : 0 }
+    }
+
+    /// Detected printable bounds already have integer dot edges. Align rules
+    /// inside those bounds so fractional stroke coverage cannot change their
+    /// thickness from one row or stock size to the next. Text boxes stay fixed.
+    static func adaptiveBrandedPriceFrame(size: CGSize) -> BrandedPriceFrame {
+        let padding = max(2, min(6, size.height * 0.07))
+        let lineWidth = max(1, min(2, (size.height / 48).rounded()))
+        let phase: CGFloat = lineWidth == 1 ? 0.5 : 0
+        let inset = (padding / 2 - phase).rounded() + phase
+        return BrandedPriceFrame(
+            border: CGRect(origin: .zero, size: size).insetBy(dx: inset, dy: inset),
+            lineWidth: lineWidth,
+            cornerRadius: min(10, size.height / 8).rounded(),
+            dividerInset: (padding * 2).rounded())
     }
 
     private static func drawAdaptiveDetails(price: String, name: String, number: String,

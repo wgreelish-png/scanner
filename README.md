@@ -26,6 +26,12 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 96 smooths enlarged on-screen label previews and aligns dimension-driven
+branded frame/divider strokes to the printer's native dot grid. The current
+wordmark, 4× supersampling, paper dimensions, text and saved preferences
+remain in place. Existing queue artwork and acknowledged transfer settings are
+preserved. See the [label quality print check](docs/LabelPrintQuality.md).
+
 Build 95 adds saved printer-transfer tuning in Settings → Diagnostics. Adjust
 image frames per write, batch bytes and image pacing; defaults retain the
 working build-94 profile (2 frames, 64 bytes, 10 ms per image frame). Settings

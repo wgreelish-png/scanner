@@ -46,6 +46,69 @@ import UIKit
         return count
     }
 
+    func testAdaptiveFrameStrokeEdgesStayOnWholePrinterDotsForShortAndFullHeightRegions() {
+        for width in [CGFloat(176), 240, 320, 400] {
+            for height in [CGFloat(16), 24, 32, 48, 56, 72, 88, 96] {
+                let frame = InventoryLabelRenderer.adaptiveBrandedPriceFrame(size: CGSize(width: width, height: height))
+                let half = frame.lineWidth / 2
+                XCTAssertTrue([CGFloat(1), 2].contains(frame.lineWidth))
+                for edge in [frame.border.minX - half, frame.border.maxX + half,
+                             frame.border.minY - half, frame.border.maxY + half] {
+                    XCTAssertEqual(edge, edge.rounded(), "A stroke edge must coincide with a physical dot edge")
+                }
+                XCTAssertGreaterThanOrEqual(frame.border.minX - half, 0)
+                XCTAssertGreaterThanOrEqual(frame.border.minY - half, 0)
+                XCTAssertLessThanOrEqual(frame.border.maxX + half, width)
+                XCTAssertLessThanOrEqual(frame.border.maxY + half, height)
+                XCTAssertEqual(frame.cornerRadius, frame.cornerRadius.rounded())
+                XCTAssertEqual(frame.dividerInset, frame.dividerInset.rounded())
+                XCTAssertGreaterThan(frame.dividerInset, frame.border.minY + half)
+                XCTAssertLessThan(frame.dividerInset * 2, height)
+                for position in LabelPricePosition.allCases {
+                    let layout = InventoryLabelRenderer.adaptiveBrandedPriceLayout(width: width, height: height,
+                        price: "$4", pricePosition: position)
+                    let centre = (layout.dividerX - frame.phase).rounded() + frame.phase
+                    XCTAssertEqual(centre - half, (centre - half).rounded())
+                    XCTAssertEqual(centre + half, (centre + half).rounded())
+                }
+            }
+        }
+    }
+
+    func testAdaptiveFramePrintsUniformSolidRulesOnBothPriceSidesWithoutDither() throws {
+        for regionHeight in [Double(4), 7, 11] {
+            let product = try NiimbotLabelProduct(code: "999001", width: 40, height: 12, rotation: 90,
+                paperType: 1, inputAreas: [.init(x: 1, y: 0.5, width: 38, height: regionHeight)])
+            let paper = try InventoryLabelSize(product: product), area = product.geometry.printableArea
+            let frame = InventoryLabelRenderer.adaptiveBrandedPriceFrame(
+                size: CGSize(width: CGFloat(area.width), height: CGFloat(area.height)))
+            let half = frame.lineWidth / 2
+            let straightStart = Int(ceil(frame.border.minX + frame.cornerRadius + 2))
+            let straightEnd = Int(floor(frame.border.maxX - frame.cornerRadius - 2))
+            for position in LabelPricePosition.allCases {
+                let draft = CustomPriceTagDraft(priceCents: 400, copies: 1, paperSize: paper, pricePosition: position)
+                let bitmap = try InventoryLabelRenderer.render(draft)
+                assertInkInside(bitmap.raster, area)
+                // This strip ends before the logo, amount and divider begin.
+                // Every straight-frame column must have exactly 1 or 2 solid
+                // dots, rather than alternating thickness or scattered fringe.
+                for x in straightStart..<straightEnd {
+                    var count = 0
+                    for y in 0..<Int(frame.dividerInset) {
+                        let actual = black(bitmap.raster, x: Int(area.x) + x, y: Int(area.y) + y)
+                        let expected = CGFloat(y) >= frame.border.minY - half && CGFloat(y) < frame.border.minY + half
+                        XCTAssertEqual(actual, expected)
+                        if actual { count += 1 }
+                    }
+                    XCTAssertEqual(count, Int(frame.lineWidth))
+                }
+                let decoded = try pixels(bitmap.previewImage)
+                XCTAssertTrue(decoded.allSatisfy { $0 == 0 || $0 == 255 })
+                XCTAssertEqual(decoded, try pixels(InventoryLabelRenderer.image(raster: bitmap.raster, paper: paper)))
+            }
+        }
+    }
+
     func testEveryCatalogProductGeneratesOneDesignInsideItsMeasuredPrintableRegion() throws {
         let catalog = NiimbotLabelCatalog.shared
         XCTAssertEqual(catalog.count, 130)

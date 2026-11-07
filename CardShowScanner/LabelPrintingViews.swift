@@ -1079,7 +1079,9 @@ private struct LabelBitmapImage: View {
     let image: UIImage
     var description = ""
     var body: some View {
-        Image(uiImage: image).resizable().interpolation(.none).scaledToFit()
+        // Scale the exact decoded printer bits smoothly on Retina displays.
+        // This affects presentation only; the queued raster remains one bit/dot.
+        Image(uiImage: image).resizable().interpolation(.high).scaledToFit()
             .padding(12).frame(maxWidth: .infinity)
             .background(.white, in: RoundedRectangle(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.35)))

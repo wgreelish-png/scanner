@@ -67,7 +67,7 @@ import SwiftUI
             }
             Section("Preview") {
                 if let bitmap, let previewDraft, previewDraft == model.draft {
-                    Image(uiImage: bitmap.previewImage).resizable().interpolation(.none).scaledToFit()
+                    Image(uiImage: bitmap.previewImage).resizable().interpolation(.high).scaledToFit()
                         .frame(maxWidth: .infinity).padding(12).background(.white)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                         .accessibilityLabel("Price tag preview")
