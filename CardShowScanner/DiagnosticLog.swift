@@ -28,9 +28,16 @@ enum DiagnosticPrinterFields {
         "att_ack_wait_ms", "printer_reply_wait_ms", "status_poll_ms", "status_backoff_ms", "print_start_ms",
         "print_end_ms", "previous_job_gap_ms", "roll_read_ms", "preparation_elapsed_ms", "render_elapsed_ms",
         "approval_save_ms", "queue_save_ms"]
+    static let batchingBounds: [String: UInt64] = [
+        "image_write_count": 1_000_000, "image_batch_count": 1_000_000,
+        "image_batched_packets": 1_000_000, "group_image_writes": 1_000_000,
+        "image_max_write_bytes": 65_535, "image_batch_limit": 64, "image_batch_frame_limit": 2
+    ]
+    static let batchingKeys = Set(batchingBounds.keys)
 
     static func accepts(_ key: String, _ value: String, event: String? = nil) -> Bool {
         if timingKeys.contains(key) { return acceptsInteger(value, maximum: 3_600_000) }
+        if let maximum = batchingBounds[key] { return acceptsInteger(value, maximum: maximum) }
         if key == "elapsed_ms", event?.hasPrefix("label.") == true {
             return acceptsInteger(value, maximum: 3_600_000)
         }
@@ -266,6 +273,7 @@ enum ServiceDiagnosticFields {
         "group_image_packets", "group_requests", "group_wire_bytes", "preparation_kind", "preparation_stage",
         "render_count", "raster_reuse_count", "roll_read_source", "connection_end_source"])
         .union(DiagnosticPrinterFields.timingKeys)
+        .union(DiagnosticPrinterFields.batchingKeys)
     private var current: URL { directory.appendingPathComponent("current.jsonl") }
     private var previous: URL { directory.appendingPathComponent("previous.jsonl") }
     var enabled: Bool { defaults.object(forKey: "diagnosticsEnabled") as? Bool ?? true }

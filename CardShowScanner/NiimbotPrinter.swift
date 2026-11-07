@@ -119,6 +119,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         let pageCopies: Int
         let cleanupHeartbeat: Bool
         let writeType: CBCharacteristicWriteType
+        let imageFrameCount: Int
         let continuation: CheckedContinuation<NiimbotPacket?, Error>
         var offset = 0
         var awaitingWriteResponse = false
@@ -134,6 +135,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
 
         init(id: UUID, command: UInt8, bytes: Data, expectedResponse: UInt8?, responseAlternatives: Set<UInt8>, beginsPrint: Bool,
              optionalRollRead: Bool, pageCopies: Int, cleanupHeartbeat: Bool, writeType: CBCharacteristicWriteType,
+             imageFrameCount: Int = 1,
              continuation: CheckedContinuation<NiimbotPacket?, Error>) {
             self.id = id
             self.command = command
@@ -144,6 +146,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             self.pageCopies = pageCopies
             self.cleanupHeartbeat = cleanupHeartbeat
             self.optionalRollRead = optionalRollRead; self.writeType = writeType
+            self.imageFrameCount = imageFrameCount
             self.continuation = continuation
         }
     }
@@ -742,6 +745,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     private func transfer(command: UInt8, data: Data, response: UInt8?, responseAlternatives: Set<UInt8> = [],
                           beginsPrint: Bool = false,
                           optionalRollRead: Bool = false,
+                          imageBatch: [NiimbotRequest]? = nil,
                           timeout: Duration = .seconds(5)) async throws -> NiimbotPacket? {
         try Task.checkCancellation()
         guard UIApplication.shared.applicationState == .active else { throw LabelPrinterIssue.notActive }
@@ -756,7 +760,18 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                 throw LabelPrinterIssue.unsupportedResponse
             }
         }
-        let bytes = try encodePacket(command: command, data: data)
+        let bytes: Data
+        if let imageBatch {
+            guard writeType == .withResponse, !optionalRollRead, !beginsPrint, response == nil,
+                  responseAlternatives.isEmpty, let first = imageBatch.first,
+                  first.command == command, first.data == data,
+                  NiimbotImageWriteBatch.canBatch(imageBatch, maximumWriteBytes: acknowledgedImageWriteLimit) else {
+                throw LabelPrinterIssue.writeFailed
+            }
+            let clock = ContinuousClock(), started = ContinuousClock().now
+            defer { activePrintMetrics?.add(.packetEncode, duration: started.duration(to: clock.now)) }
+            bytes = try NiimbotImageWriteBatch.encode(imageBatch, maximumWriteBytes: acknowledgedImageWriteLimit)
+        } else { bytes = try encodePacket(command: command, data: data) }
         let id = UUID()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
@@ -770,6 +785,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                                            pageCopies: NiimbotPrintTransferMetrics.pageCopies(command: command, data: data),
                                            cleanupHeartbeat: cleanupHeartbeat,
                                            writeType: optionalRollRead ? .withoutResponse : writeType,
+                                           imageFrameCount: imageBatch?.count ?? 1,
                                            continuation: continuation)
                 pending = transaction
                 if tracesPendingTransfer { diagnostic(.requestStarted) }
@@ -806,6 +822,15 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             return
         }
         guard maximumLength > 0 else { connectionFailed(.writeFailed); return }
+        // A pair is one ordinary acknowledged write. A changed payload limit
+        // must not turn it into a long write or silently fragment/replay it.
+        if transaction.imageFrameCount > 1, transaction.offset < transaction.bytes.count {
+            guard transaction.writeType == .withResponse, transaction.offset == 0,
+                  transaction.bytes.count <= acknowledgedImageWriteLimit else {
+                connectionFailed(.writeFailed)
+                return
+            }
+        }
         // CoreBluetooth reports the negotiated payload limit for this write
         // type. No ATT size is assumed; without-response writes additionally
         // observe the peripheral's transmit backpressure.
@@ -834,7 +859,8 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             peripheral.writeValue(chunk, for: writeCharacteristic, type: transaction.writeType)
             if !transaction.optionalRollRead {
                 activePrintMetrics?.recordWrite(command: transaction.command, response: transaction.expectedResponse,
-                    copies: transaction.pageCopies, byteCount: chunk.count, startsRequest: startsRequest)
+                    copies: transaction.pageCopies, byteCount: chunk.count, startsRequest: startsRequest,
+                    imageFrameCount: transaction.imageFrameCount)
             }
             if transaction.writeType == .withResponse { return }
         }
@@ -1028,11 +1054,36 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                                   timeout: timeout)
     }
 
-    private func pacePacket() async throws {
+    /// The without-response limit is only an ordinary-ATT payload hint here;
+    /// both image frames are always sent with an acknowledged write.
+    private var acknowledgedImageWriteLimit: Int {
+        guard writeType == .withResponse, identity?.modelID == 2320, identity?.protocolVersion == 4,
+              let peripheral, peripheral.state == .connected,
+              writeCharacteristic?.properties.contains(.write) == true else { return 0 }
+        let acknowledged = peripheral.maximumWriteValueLength(for: .withResponse)
+        let ordinary = peripheral.maximumWriteValueLength(for: .withoutResponse)
+        guard acknowledged > 0, ordinary > 0 else { return 0 }
+        return min(NiimbotImageWriteBatch.maximumBytes, min(acknowledged, ordinary))
+    }
+
+    private func exchangeImageBatch(_ requests: [NiimbotRequest], operation: UUID, connection: UUID) async throws {
+        guard let first = requests.first,
+              NiimbotImageWriteBatch.canBatch(requests, maximumWriteBytes: acknowledgedImageWriteLimit) else {
+            throw LabelPrinterIssue.writeFailed
+        }
+        // Retain the total pacing budget of the two original frames. Their
+        // encoded bytes are contiguous inside this one acknowledged payload.
+        try await pacePacket(frameCount: requests.count)
+        try checkPrintOperation(operation)
+        guard connectionGeneration == connection else { throw LabelPrinterIssue.connectionLost }
+        _ = try await transfer(command: first.command, data: first.data, response: nil, imageBatch: requests)
+    }
+
+    private func pacePacket(frameCount: Int = 1) async throws {
         let clock = ContinuousClock()
         let started = clock.now
         defer { activePrintMetrics?.add(.packetPacing, duration: started.duration(to: clock.now)) }
-        try await Task.sleep(for: .milliseconds(10))
+        try await Task.sleep(for: .milliseconds(10 * frameCount))
     }
 
     private func sendBatch(_ rasters: [LabelRaster], operation: UUID, paperMode: NiimbotPaperMode, continuous: Bool,
@@ -1041,8 +1092,11 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         guard let identity else { throw LabelPrinterIssue.unsupportedPrinter }
         let clock = ContinuousClock()
         let started = clock.now
+        let connection = connectionGeneration
+        let imageWriteLimit = acknowledgedImageWriteLimit
         activePrintMetrics = NiimbotPrintTransferMetrics(identity: identity, continuous: continuous, total: rasters.count,
-            previousJobGap: lastPrintAttemptEnded.map { $0.duration(to: started) })
+            previousJobGap: lastPrintAttemptEnded.map { $0.duration(to: started) },
+            maximumImageWriteBytes: imageWriteLimit)
         defer {
             let ended = clock.now
             let elapsed = NiimbotPrintTransferMetrics.milliseconds(started.duration(to: ended))
@@ -1072,6 +1126,15 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
                     duration: requestStarted.duration(to: clock.now))
             }
             return try await self.exchange(request, timeout: bufferedPage ? .seconds(10) : .seconds(5))
+        }
+        var imageBatchExchange: NiimbotD110Session.ImageBatchExchange?
+        if imageWriteLimit > 0 {
+            imageBatchExchange = { [weak self] requests in
+                guard let self else { throw LabelPrinterIssue.connectionLost }
+                try self.checkPrintOperation(operation)
+                guard clock.now < deadline else { throw LabelPrinterIssue.responseTimeout }
+                try await self.exchangeImageBatch(requests, operation: operation, connection: connection)
+            }
         }
         let pause: @MainActor () async throws -> Void = { [weak self] in
             let started = clock.now
@@ -1135,9 +1198,11 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
         }
         if continuous {
             try await NiimbotD110Session.printContinuously(rasters, identity: identity, paperMode: paperMode,
+                imageBatchExchange: imageBatchExchange, maximumImageWriteBytes: imageWriteLimit,
                 exchange: exchange, pause: pause, onPagesWillSend: willSend, onPagesCompleted: didComplete, onMeasurement: observe)
         } else {
             try await NiimbotD110Session.printBatch(rasters, identity: identity, paperMode: paperMode,
+                imageBatchExchange: imageBatchExchange, maximumImageWriteBytes: imageWriteLimit,
                 exchange: exchange, pause: pause, onPageWillSend: { try await willSend([$0]) },
                 onPageCompleted: { try await didComplete([$0]) }, onMeasurement: observe)
         }

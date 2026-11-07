@@ -26,6 +26,12 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 94 combines two adjacent image frames into one acknowledged write on the
+verified D110-M v4 path, capped at 64 bytes and the negotiated payload limits.
+Card order, artwork, native copies and printer-confirmed completion are preserved.
+The next export records actual image writes and batches for comparison; hardware
+speed and output checks remain pending.
+
 Build 93 restores the working acknowledged printer transport and removes the
 failed image-transport experiment from the app. Existing preview, progress,
 unprinted-queue cleanup, label preferences and inventory behavior are retained.

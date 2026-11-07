@@ -1199,6 +1199,267 @@ final class NiimbotProtocolTests: XCTestCase {
         XCTAssertEqual(will, [[0], [1]])
     }
 
+    func testAcknowledgedImagePairsPreserveEveryFramedByteAndOriginalOrder() throws {
+        let blank = NiimbotRequest(0x84, [0, 0, 1])
+        let dense = NiimbotRequest(0x85, Array(repeating: 0xff, count: 18))
+        let sparse = NiimbotRequest(0x83, [0, 1, 1, 0, 0, 1, 0, 7])
+        let requests = [blank, dense, sparse, dense, blank]
+        var groups: [[NiimbotRequest]] = []
+        var next = 0
+        while next < requests.count {
+            let group = NiimbotImageWriteBatch.pair(in: requests, at: next, maximumWriteBytes: 241) ?? [requests[next]]
+            groups.append(group)
+            next += group.count
+        }
+        XCTAssertEqual(groups.map(\.count), [2, 2, 1])
+        XCTAssertEqual(groups.flatMap { $0 }, requests)
+        var original = Data(), grouped = Data()
+        for request in requests { original.append(try NiimbotProtocol.encode(command: request.command, data: request.data)) }
+        for group in groups {
+            let bytes: Data
+            if group.count == 2 { bytes = try NiimbotImageWriteBatch.encode(group, maximumWriteBytes: 241) }
+            else { bytes = try NiimbotProtocol.encode(command: group[0].command, data: group[0].data) }
+            XCTAssertLessThanOrEqual(bytes.count, 64)
+            XCTAssertLessThanOrEqual(group.count, 2)
+            grouped.append(bytes)
+            var parser = NiimbotStreamParser()
+            var decoded: [NiimbotPacket] = []
+            for offset in stride(from: 0, to: bytes.count, by: 7) {
+                decoded.append(contentsOf: parser.append(bytes.subdata(in: offset..<min(bytes.count, offset + 7))))
+            }
+            XCTAssertEqual(decoded, group.map { NiimbotPacket(command: $0.command, data: $0.data) })
+            XCTAssertEqual(parser.bufferedByteCount, 0)
+        }
+        XCTAssertEqual(grouped, original, "Coalescing only concatenates complete, independently checksummed frames")
+    }
+
+    func testAcknowledgedImagePairsRespectTwoFrameByteAndNegotiatedLimits() throws {
+        let dense = NiimbotRequest(0x85, Array(repeating: 0xff, count: 18)) // 25 encoded bytes.
+        XCTAssertTrue(NiimbotImageWriteBatch.canBatch([dense, dense], maximumWriteBytes: 50))
+        XCTAssertEqual(try NiimbotImageWriteBatch.encode([dense, dense], maximumWriteBytes: 50).count, 50)
+        XCTAssertFalse(NiimbotImageWriteBatch.canBatch([dense, dense], maximumWriteBytes: 49))
+        XCTAssertThrowsError(try NiimbotImageWriteBatch.encode([dense, dense], maximumWriteBytes: 49)) {
+            XCTAssertEqual($0 as? LabelPrinterIssue, .invalidLabel)
+        }
+        for limit in [-1, 0, 20, 25] {
+            XCTAssertNil(NiimbotImageWriteBatch.pair(in: [dense, dense], at: 0, maximumWriteBytes: limit),
+                         "A smaller negotiated limit retains the existing singleton/fragmentation path")
+        }
+        XCTAssertFalse(NiimbotImageWriteBatch.canBatch([], maximumWriteBytes: 241))
+        XCTAssertFalse(NiimbotImageWriteBatch.canBatch([dense], maximumWriteBytes: 241))
+        XCTAssertFalse(NiimbotImageWriteBatch.canBatch([dense, dense, dense], maximumWriteBytes: 241))
+        let larger = NiimbotRequest(0x85, Array(repeating: 0xff, count: 30))
+        XCTAssertFalse(NiimbotImageWriteBatch.canBatch([larger, larger], maximumWriteBytes: 512),
+                       "The app's 64-byte cap still applies when CoreBluetooth advertises a larger maximum")
+        let invalid = NiimbotRequest(0x85, Array(repeating: 0xff, count: 256))
+        XCTAssertFalse(NiimbotImageWriteBatch.canBatch([invalid, dense], maximumWriteBytes: 512))
+        XCTAssertThrowsError(try NiimbotImageWriteBatch.encode([invalid, dense], maximumWriteBytes: 512))
+        XCTAssertThrowsError(try NiimbotImageWriteBatch.encode([dense], maximumWriteBytes: 512))
+        XCTAssertNil(NiimbotImageWriteBatch.pair(in: [dense], at: 0, maximumWriteBytes: 241))
+    }
+
+    func testAcknowledgedImagePairsNeverCrossControlReplyOrCheckpointBoundaries() {
+        for value in UInt8.min...UInt8.max {
+            XCTAssertEqual(NiimbotRequest(value).isOneWayImage, [UInt8(0x83), 0x84, 0x85].contains(value))
+        }
+        let image = NiimbotRequest(0x84, [0, 0, 1])
+        let boundaries = [
+            NiimbotRequest(0x83, response: 0x86), NiimbotRequest(0x84, responseAlternatives: [0x86]),
+            NiimbotRequest(0x85, requiresTrue: true), NiimbotRequest(0x85, beginsPrint: true),
+            NiimbotRequest(0x01, response: 0x02, beginsPrint: true), NiimbotRequest(0x03, response: 0x04),
+            NiimbotRequest(0x13, response: 0x14), NiimbotRequest(0x20, response: 0x30),
+            NiimbotRequest(0xa3), NiimbotRequest(0xa3, response: 0xb3),
+            NiimbotRequest(0xe3, response: 0xe4, requiresTrue: true), NiimbotRequest(0xf3, response: 0xf4)
+        ]
+        for boundary in boundaries {
+            XCTAssertFalse(boundary.isOneWayImage)
+            XCTAssertFalse(NiimbotImageWriteBatch.canBatch([image, boundary], maximumWriteBytes: 241))
+            XCTAssertFalse(NiimbotImageWriteBatch.canBatch([boundary, image], maximumWriteBytes: 241))
+            XCTAssertThrowsError(try NiimbotImageWriteBatch.encode([image, boundary], maximumWriteBytes: 241))
+            XCTAssertNil(NiimbotImageWriteBatch.pair(in: [image, boundary, image], at: 0, maximumWriteBytes: 241))
+            XCTAssertNil(NiimbotImageWriteBatch.pair(in: [image, boundary, image], at: 1, maximumWriteBytes: 241))
+        }
+    }
+
+    @MainActor func testAcknowledgedImagePairsKeepTheOriginalMixedCardProtocolAndPhysicalOrder() async throws {
+        let rasters = [denseRaster, variantRaster(0x7f), denseRaster]
+        var traces: [AckImageTrace] = []
+        for limit in [0, 25, 64] {
+            let trace = AckImageTrace(readiness: d110MReadiness)
+            try await NiimbotD110Session.printContinuously(rasters, identity: d110MIdentity(),
+                imageBatchExchange: { rows in trace.recordBatch(rows) }, maximumImageWriteBytes: limit,
+                exchange: trace.exchange, pause: {}, onPagesWillSend: { trace.will.append($0) },
+                onPagesCompleted: { trace.receipts.append(contentsOf: $0) })
+            XCTAssertEqual(trace.will, [[0], [1], [2]])
+            XCTAssertEqual(trace.receipts, [0, 1, 2])
+            XCTAssertEqual(trace.requests.filter { $0.command == 0x01 }.count, 1)
+            XCTAssertEqual(trace.requests.filter { $0.command == 0xf3 }.count, 1)
+            XCTAssertEqual(trace.batches.count, limit == 64 ? 3 : 0)
+            traces.append(trace)
+        }
+        XCTAssertEqual(traces[0].requests, traces[1].requests)
+        XCTAssertEqual(traces[0].requests, traces[2].requests,
+                       "The flattened logical stream, raster positions, controls and copy quantities remain exact")
+        let originalBytes = try traces[0].requests.map { try NiimbotProtocol.encode(command: $0.command, data: $0.data) }
+        let batchedBytes = try traces[2].requests.map { try NiimbotProtocol.encode(command: $0.command, data: $0.data) }
+        XCTAssertEqual(originalBytes, batchedBytes)
+    }
+
+    @MainActor func testAcknowledgedImagePairProgressAdvancesOnlyAfterTheBatchAcknowledgementReturns() async throws {
+        let trace = AckImageTrace(readiness: d110MReadiness)
+        var acknowledgement: CheckedContinuation<Void, Error>?
+        var progress: [NiimbotUploadProgress] = []
+        let operation = Task { @MainActor in
+            try await NiimbotD110Session.printContinuously([denseRaster], identity: d110MIdentity(),
+                imageBatchExchange: { rows in
+                    trace.recordBatch(rows)
+                    try await withCheckedThrowingContinuation { acknowledgement = $0 }
+                }, maximumImageWriteBytes: 64, exchange: trace.exchange, pause: {},
+                onPagesWillSend: { trace.will.append($0) }, onPagesCompleted: { trace.receipts.append(contentsOf: $0) },
+                onMeasurement: { if case let .groupProgress(value) = $0 { progress.append(value) } })
+        }
+        defer { operation.cancel(); acknowledgement?.resume(throwing: CancellationError()) }
+        for _ in 0..<200 where acknowledgement == nil { await Task.yield() }
+        let held = try XCTUnwrap(acknowledgement)
+        XCTAssertEqual(progress.map(\.completedRequests), [0, 1, 2])
+        XCTAssertTrue(trace.receipts.isEmpty)
+        XCTAssertFalse(trace.requests.contains { $0.command == 0xe3 })
+        XCTAssertFalse(trace.requests.contains { $0.command == 0xa3 && $0.response != nil })
+        acknowledgement = nil
+        held.resume()
+        try await operation.value
+        XCTAssertEqual(progress.map(\.completedRequests), [0, 1, 2, 4, 5])
+        XCTAssertEqual(trace.receipts, [0])
+    }
+
+    @MainActor func testCancelledOrFailedAcknowledgedImagePairDoesNotReachPageEndOrReplay() async throws {
+        for cancel in [false, true] {
+            let trace = AckImageTrace(readiness: d110MReadiness)
+            var acknowledgement: CheckedContinuation<Void, Error>?
+            var progress: [NiimbotUploadProgress] = [], accepted: [Bool] = []
+            let operation = Task { @MainActor in
+                try await NiimbotD110Session.printContinuously([denseRaster, variantRaster(0x7f)], identity: d110MIdentity(),
+                    imageBatchExchange: { rows in
+                        trace.recordBatch(rows)
+                        try await withCheckedThrowingContinuation { acknowledgement = $0 }
+                    }, maximumImageWriteBytes: 64, exchange: trace.exchange, pause: {},
+                    onPagesWillSend: { trace.will.append($0) }, onPagesCompleted: { trace.receipts.append(contentsOf: $0) },
+                    onMeasurement: {
+                        if case let .groupProgress(value) = $0 { progress.append(value) }
+                        if case let .groupSubmitted(_, _, value) = $0 { accepted.append(value) }
+                    })
+            }
+            defer { operation.cancel(); acknowledgement?.resume(throwing: CancellationError()) }
+            for _ in 0..<200 where acknowledgement == nil { await Task.yield() }
+            let held = try XCTUnwrap(acknowledgement)
+            acknowledgement = nil
+            if cancel { operation.cancel(); held.resume() }
+            else { held.resume(throwing: LabelPrinterIssue.writeFailed) }
+            do { try await operation.value; XCTFail("A canceled or failed batch cannot finish the group") }
+            catch {
+                if cancel { XCTAssertTrue(error is CancellationError) }
+                else { XCTAssertEqual(error as? LabelPrinterIssue, .writeFailed) }
+            }
+            XCTAssertEqual(trace.batches.count, 1)
+            XCTAssertEqual(trace.will, [[0]])
+            XCTAssertTrue(trace.receipts.isEmpty)
+            XCTAssertFalse(trace.requests.contains { $0.command == 0xe3 || $0.command == 0xf3 })
+            XCTAssertFalse(trace.requests.contains { $0.command == 0xa3 && $0.response != nil })
+            XCTAssertEqual(accepted, [false])
+            XCTAssertEqual(progress.map(\.completedRequests), [0, 1, 2],
+                           "A failed or canceled pair publishes no image progress after the callback")
+        }
+    }
+
+    @MainActor func testAcknowledgedImagePairsStillRequireThePositivePageEndReply() async {
+        let trace = AckImageTrace(readiness: d110MReadiness)
+        do {
+            try await NiimbotD110Session.printContinuously([denseRaster, variantRaster(0x7f)], identity: d110MIdentity(),
+                imageBatchExchange: { rows in trace.recordBatch(rows) }, maximumImageWriteBytes: 64,
+                exchange: { request in
+                    let reply = try trace.exchange(request)
+                    return request.command == 0xe3 ? .init(command: 0xe4, data: Data([0])) : reply
+                }, pause: {}, onPagesWillSend: { trace.will.append($0) },
+                onPagesCompleted: { trace.receipts.append(contentsOf: $0) })
+            XCTFail("Bluetooth acknowledgement cannot replace PageEnd's required printer reply")
+        } catch { XCTAssertEqual(error as? LabelPrinterIssue, .printerNotReady) }
+        XCTAssertEqual(trace.batches.count, 1)
+        XCTAssertEqual(trace.will, [[0]])
+        XCTAssertTrue(trace.receipts.isEmpty)
+        XCTAssertEqual(trace.requests.filter { $0.command == 0xe3 }.count, 1)
+        XCTAssertFalse(trace.requests.contains { $0.command == 0xa3 && $0.response != nil })
+    }
+
+    @MainActor func testAcknowledgedImagePairsPreserveTenIdenticalNativeCopies() async throws {
+        let trace = AckImageTrace(readiness: d110MReadiness)
+        try await NiimbotD110Session.printContinuously(Array(repeating: denseRaster, count: 10), identity: d110MIdentity(),
+            imageBatchExchange: { rows in trace.recordBatch(rows) }, maximumImageWriteBytes: 64,
+            exchange: trace.exchange, pause: {}, onPagesWillSend: { trace.will.append($0) },
+            onPagesCompleted: { trace.receipts.append(contentsOf: $0) })
+        XCTAssertEqual(trace.will.map(\.count), [8, 2])
+        XCTAssertEqual(trace.receipts, Array(0..<10))
+        XCTAssertEqual(trace.batches.count, 2, "Each identical-copy group still uploads its image once")
+        XCTAssertEqual(trace.requests.filter { $0.command == 0x01 }.count, 1)
+        XCTAssertEqual(trace.requests.filter { $0.command == 0xf3 }.count, 1)
+    }
+
+    func testAcknowledgedImageMetricsSeparateLogicalFramesFromActualWriteCalls() {
+        var metrics = NiimbotPrintTransferMetrics(identity: d110MIdentity(), continuous: true,
+            total: 1, maximumImageWriteBytes: 64)
+        metrics.recordWrite(command: 0x85, response: nil, copies: 1, byteCount: 50, startsRequest: true, imageFrameCount: 2)
+        let before = metrics
+        metrics.recordWrite(command: 0x84, response: nil, copies: 1, byteCount: 10, startsRequest: true)
+        metrics.recordWrite(command: 0x85, response: nil, copies: 1, byteCount: 20, startsRequest: true)
+        metrics.recordWrite(command: 0x85, response: nil, copies: 1, byteCount: 5, startsRequest: false)
+        metrics.recordWrite(command: 0xe3, response: 0xe4, copies: 1, byteCount: 8, startsRequest: true)
+        let fields = metrics.diagnosticFields(elapsedMilliseconds: 100)
+        XCTAssertEqual(fields["image_packets"], "4")
+        XCTAssertEqual(fields["request_count"], "5")
+        XCTAssertEqual(fields["wire_bytes"], "93")
+        XCTAssertEqual(fields["image_write_count"], "4")
+        XCTAssertEqual(fields["image_batch_count"], "1")
+        XCTAssertEqual(fields["image_batched_packets"], "2")
+        XCTAssertEqual(fields["image_max_write_bytes"], "50")
+        XCTAssertEqual(fields["image_batch_limit"], "64")
+        XCTAssertEqual(fields["image_batch_frame_limit"], "2")
+        let group = metrics.groupFields(since: before, elapsed: .milliseconds(100), pages: 0..<1, accepted: true)
+        XCTAssertEqual(group["group_image_writes"], "3")
+        XCTAssertEqual(group["group_image_packets"], "2")
+        XCTAssertEqual(NiimbotPrintTransferMetrics(identity: d110MIdentity(), continuous: true,
+            total: 1, maximumImageWriteBytes: 512).diagnosticFields(elapsedMilliseconds: 0)["image_batch_limit"], "64")
+    }
+
+    @MainActor private final class AckImageTrace {
+        let readiness: NiimbotPacket
+        var requests: [NiimbotRequest] = []
+        var batches: [[NiimbotRequest]] = []
+        var will: [[Int]] = []
+        var receipts: [Int] = []
+        private var quantity = 1
+        private var submitted = 0
+
+        init(readiness: NiimbotPacket) { self.readiness = readiness }
+
+        func recordBatch(_ rows: [NiimbotRequest]) {
+            XCTAssertEqual(rows.count, 2)
+            XCTAssertTrue(rows.allSatisfy(\.isOneWayImage), "No control or required reply reaches the image callback")
+            XCTAssertTrue(NiimbotImageWriteBatch.canBatch(rows, maximumWriteBytes: 64))
+            requests.append(contentsOf: rows)
+            batches.append(rows)
+        }
+
+        func exchange(_ request: NiimbotRequest) throws -> NiimbotPacket? {
+            requests.append(request)
+            if request.command == 0xdc { return request.response == nil ? nil : readiness }
+            if request.command == 0x13 { quantity = Int(request.data[4]) << 8 | Int(request.data[5]) }
+            if request.command == 0xe3 { submitted += quantity }
+            if request.command == 0xa3 && request.response != nil {
+                return .init(command: 0xb3, data: Data([0, UInt8(submitted), 100, 100]))
+            }
+            return request.response.map { .init(command: $0, data: Data([1])) }
+        }
+    }
+
     func testPrintTransferMetricsCountDispatchedFragmentsAndNativeCopiesWithoutArtwork() {
         var metrics = NiimbotPrintTransferMetrics(identity: d110MIdentity(), continuous: true, total: 9)
         let pageData = Data([0, 96, 1, 64, 0, 8, 0, 0, 0, 0, 0, 0, 0])
@@ -1215,6 +1476,8 @@ final class NiimbotProtocolTests: XCTestCase {
             "native_groups": "2", "native_copies": "7", "image_packets": "3", "request_count": "7",
             "wire_bytes": "90", "transfer_elapsed_ms": "4000", "status_polls": "1", "print_start_count": "0", "print_end_count": "0",
             "printer_model": "2320", "protocol_version": "4", "command_path": "d110m_v4",
+            "image_write_count": "3", "image_batch_count": "0", "image_batched_packets": "0",
+            "image_max_write_bytes": "12", "image_batch_limit": "0", "image_batch_frame_limit": "1",
             "plan_encode_ms": "0", "packet_encode_ms": "0", "packet_pacing_ms": "0", "att_ack_wait_ms": "0",
             "printer_reply_wait_ms": "0", "status_poll_ms": "0", "status_backoff_ms": "0", "print_start_ms": "0", "print_end_ms": "0"])
         XCTAssertEqual(metrics.diagnosticFields(elapsedMilliseconds: -1)["transfer_elapsed_ms"], "0")
@@ -1437,8 +1700,13 @@ final class NiimbotProtocolTests: XCTestCase {
         }
         let status = NiimbotRequest(0xa3, response: 0xb3)
         let readiness = NiimbotRequest(0xdc, [4], response: 0xd9, responseAlternatives: [0xdd, 0xd9])
-        let expected = [readiness] + plan.initialization + plan.groups[0].requests + plan.groups[1].requests
-            + [status] + plan.groups[2].requests + [status, NiimbotRequest(0xf3, response: 0xf4, requiresTrue: true), NiimbotRequest(0xdc, [1])]
+        var expected: [NiimbotRequest] = [readiness]
+        expected.append(contentsOf: plan.initialization)
+        expected.append(contentsOf: plan.groups[0].requests)
+        expected.append(contentsOf: plan.groups[1].requests)
+        expected.append(status)
+        expected.append(contentsOf: plan.groups[2].requests)
+        expected.append(contentsOf: [status, NiimbotRequest(0xf3, response: 0xf4, requiresTrue: true), NiimbotRequest(0xdc, [1])])
         XCTAssertEqual(requests, expected, "Progress introduces no new commands, waits, regrouping or reordered artwork")
     }
 

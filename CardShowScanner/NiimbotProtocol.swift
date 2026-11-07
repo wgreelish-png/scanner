@@ -70,6 +70,11 @@ struct NiimbotRequest: Equatable, Sendable {
     let beginsPrint: Bool
     let requiresTrue: Bool
 
+    var isOneWayImage: Bool {
+        (command == 0x83 || command == 0x84 || command == 0x85)
+            && response == nil && responseAlternatives.isEmpty && !requiresTrue && !beginsPrint
+    }
+
     init(_ command: UInt8, _ data: [UInt8] = [1], response: UInt8? = nil,
          responseAlternatives: Set<UInt8> = [], beginsPrint: Bool = false, requiresTrue: Bool = false) {
         self.command = command
@@ -92,6 +97,35 @@ struct NiimbotRequest: Equatable, Sendable {
             guard packet.data.count == 1 else { throw LabelPrinterIssue.unsupportedResponse }
             guard packet.data.first == 1 else { throw LabelPrinterIssue.printerNotReady }
         }
+    }
+}
+
+/// Pair only complete, adjacent one-way image frames. Control requests and
+/// reply checkpoints remain distinct exchanges in their original order.
+enum NiimbotImageWriteBatch {
+    static let maximumFrames = 2
+    static let maximumBytes = 64
+
+    static func canBatch(_ requests: [NiimbotRequest], maximumWriteBytes: Int) -> Bool {
+        let limit = min(maximumBytes, max(0, maximumWriteBytes))
+        guard requests.count == maximumFrames,
+              requests.allSatisfy({ $0.isOneWayImage && $0.data.count <= 255 }) else { return false }
+        return requests.reduce(0) { $0 + $1.data.count + 7 } <= limit
+    }
+
+    static func pair(in requests: [NiimbotRequest], at index: Int, maximumWriteBytes: Int) -> [NiimbotRequest]? {
+        guard requests.indices.contains(index), index < requests.count - 1 else { return nil }
+        let pair = [requests[index], requests[index + 1]]
+        return canBatch(pair, maximumWriteBytes: maximumWriteBytes) ? pair : nil
+    }
+
+    static func encode(_ requests: [NiimbotRequest], maximumWriteBytes: Int) throws -> Data {
+        guard canBatch(requests, maximumWriteBytes: maximumWriteBytes) else { throw LabelPrinterIssue.invalidLabel }
+        var bytes = Data()
+        for request in requests {
+            bytes.append(try NiimbotProtocol.encode(command: request.command, data: request.data))
+        }
+        return bytes
     }
 }
 
@@ -217,6 +251,7 @@ struct NiimbotPrintTransferMetrics {
     let total: Int
     let identity: NiimbotD110Identity
     let previousJobGap: Duration?
+    let maximumImageWriteBytes: Int
     private(set) var groups = 0
     private(set) var nativeCopies = 0
     private(set) var imagePackets = 0
@@ -225,13 +260,19 @@ struct NiimbotPrintTransferMetrics {
     private(set) var statusPolls = 0
     private(set) var printStarts = 0
     private(set) var printEnds = 0
+    private(set) var imageWriteCount = 0
+    private(set) var imageBatchCount = 0
+    private(set) var imageBatchedPackets = 0
+    private(set) var imageMaxWriteBytes = 0
     private var timings: [NiimbotPrintTiming: Duration] = [:]
 
-    init(identity: NiimbotD110Identity, continuous: Bool, total: Int, previousJobGap: Duration? = nil) {
+    init(identity: NiimbotD110Identity, continuous: Bool, total: Int, previousJobGap: Duration? = nil,
+         maximumImageWriteBytes: Int = 0) {
         task = identity.modelID != 2320 ? "legacy_serial" : continuous ? "buffered_copies" : "declared_serial"
         self.total = total
         self.identity = identity
         self.previousJobGap = previousJobGap
+        self.maximumImageWriteBytes = min(NiimbotImageWriteBatch.maximumBytes, max(0, maximumImageWriteBytes))
     }
 
     static func pageCopies(command: UInt8, data: Data) -> Int {
@@ -242,10 +283,16 @@ struct NiimbotPrintTransferMetrics {
     }
 
     mutating func recordWrite(command: UInt8, response: UInt8?, copies: Int,
-                              byteCount: Int, startsRequest: Bool) {
+                              byteCount: Int, startsRequest: Bool, imageFrameCount: Int = 1) {
         wireBytes += max(0, byteCount)
+        let isImage = command == 0x83 || command == 0x84 || command == 0x85
+        let frameCount = isImage ? min(NiimbotImageWriteBatch.maximumFrames, max(1, imageFrameCount)) : 1
+        if isImage {
+            imageWriteCount += 1
+            imageMaxWriteBytes = max(imageMaxWriteBytes, max(0, byteCount))
+        }
         guard startsRequest else { return }
-        requests += 1
+        requests += frameCount
         if command == 0x01 { printStarts += 1 }
         if command == 0xf3 { printEnds += 1 }
         if command == 0x13 {
@@ -253,7 +300,13 @@ struct NiimbotPrintTransferMetrics {
             // Extra physical copies that reuse an image upload.
             nativeCopies += max(0, copies - 1)
         }
-        if command == 0x83 || command == 0x84 || command == 0x85 { imagePackets += 1 }
+        if isImage {
+            imagePackets += frameCount
+            if frameCount > 1 {
+                imageBatchCount += 1
+                imageBatchedPackets += frameCount
+            }
+        }
         // M-v4 also emits a one-way A3 page preamble; it is not a status poll.
         if command == 0xa3 && response == 0xb3 { statusPolls += 1 }
     }
@@ -278,6 +331,7 @@ struct NiimbotPrintTransferMetrics {
         ["page": String(pages.lowerBound + 1), "quantity": String(pages.count), "total": String(total),
          "accepted": String(accepted), "elapsed_ms": String(Self.milliseconds(elapsed)),
          "group_image_packets": String(imagePackets - before.imagePackets),
+         "group_image_writes": String(imageWriteCount - before.imageWriteCount),
          "group_requests": String(requests - before.requests), "group_wire_bytes": String(wireBytes - before.wireBytes)]
     }
 
@@ -289,6 +343,12 @@ struct NiimbotPrintTransferMetrics {
          "status_polls": String(statusPolls), "print_start_count": String(printStarts), "print_end_count": String(printEnds),
          "printer_model": String(identity.modelID), "protocol_version": String(identity.protocolVersion)]
         fields["command_path"] = NiimbotProtocol.diagnosticCommandPath(for: identity)
+        fields["image_write_count"] = String(imageWriteCount)
+        fields["image_batch_count"] = String(imageBatchCount)
+        fields["image_batched_packets"] = String(imageBatchedPackets)
+        fields["image_max_write_bytes"] = String(imageMaxWriteBytes)
+        fields["image_batch_limit"] = String(maximumImageWriteBytes)
+        fields["image_batch_frame_limit"] = maximumImageWriteBytes > 0 ? "2" : "1"
         for timing in NiimbotPrintTiming.allCases { fields[timing.rawValue] = String(Self.milliseconds(timings[timing] ?? .zero)) }
         if let previousJobGap { fields["previous_job_gap_ms"] = String(Self.milliseconds(previousJobGap)) }
         return fields
@@ -767,6 +827,7 @@ enum NiimbotProtocol {
 /// tests can exercise native requests, responses and completion without a radio.
 @MainActor enum NiimbotD110Session {
     typealias Exchange = @MainActor (NiimbotRequest) async throws -> NiimbotPacket?
+    typealias ImageBatchExchange = @MainActor ([NiimbotRequest]) async throws -> Void
     typealias Measurement = @MainActor (NiimbotPrintMeasurement) -> Void
 
     private static func measuredPlan<T>(_ observe: Measurement, build: () throws -> T) rethrows -> T {
@@ -777,6 +838,7 @@ enum NiimbotProtocol {
     }
 
     private static func sendGroup(_ requests: [NiimbotRequest], indices: Range<Int>,
+                                  imageBatchExchange: ImageBatchExchange?, maximumImageWriteBytes: Int,
                                   exchange: Exchange, observe: Measurement) async throws {
         observe(.groupStarted(indices))
         observe(.groupProgress(NiimbotUploadProgress(pages: indices, completedRequests: 0, totalRequests: requests.count)))
@@ -784,10 +846,20 @@ enum NiimbotProtocol {
         let started = clock.now
         var accepted = false
         defer { observe(.groupSubmitted(indices, started.duration(to: clock.now), accepted: accepted)) }
-        for (index, request) in requests.enumerated() {
+        var index = 0
+        while index < requests.count {
             try Task.checkCancellation()
-            try request.validateResponse(try await exchange(request))
-            observe(.groupProgress(NiimbotUploadProgress(pages: indices, completedRequests: index + 1,
+            if let imageBatchExchange,
+               let pair = NiimbotImageWriteBatch.pair(in: requests, at: index, maximumWriteBytes: maximumImageWriteBytes) {
+                try await imageBatchExchange(pair)
+                try Task.checkCancellation()
+                index += pair.count
+            } else {
+                let request = requests[index]
+                try request.validateResponse(try await exchange(request))
+                index += 1
+            }
+            observe(.groupProgress(NiimbotUploadProgress(pages: indices, completedRequests: index,
                                                        totalRequests: requests.count)))
         }
         accepted = true
@@ -879,17 +951,21 @@ enum NiimbotProtocol {
 
     static func printLabel(_ raster: LabelRaster, identity: NiimbotD110Identity,
                            paperMode: NiimbotPaperMode = .gap,
+                           imageBatchExchange: ImageBatchExchange? = nil, maximumImageWriteBytes: Int = 0,
                            exchange: Exchange, pause: @MainActor () async throws -> Void,
                            onMeasurement: Measurement = { _ in }) async throws {
         // Validate the entire raster before sending the first print command.
         let requests = try measuredPlan(onMeasurement) {
             try NiimbotProtocol.printRequests(for: raster, identity: identity, paperMode: paperMode)
         }
-        try await printPreparedLabel(requests, index: 0, identity: identity, exchange: exchange,
+        try await printPreparedLabel(requests, index: 0, identity: identity,
+                                     imageBatchExchange: imageBatchExchange, maximumImageWriteBytes: maximumImageWriteBytes,
+                                     exchange: exchange,
                                      pause: pause, onMeasurement: onMeasurement)
     }
 
     private static func printPreparedLabel(_ requests: [NiimbotRequest], index: Int, identity: NiimbotD110Identity,
+                                          imageBatchExchange: ImageBatchExchange?, maximumImageWriteBytes: Int,
                                           exchange: Exchange, pause: @MainActor () async throws -> Void,
                                           onMeasurement: Measurement) async throws {
         let advanced = identity.protocolVersion >= 3
@@ -897,7 +973,9 @@ enum NiimbotProtocol {
                                       responseAlternatives: [0xdd, 0xd9])
         guard let reply = try await exchange(readiness) else { throw LabelPrinterIssue.unsupportedResponse }
         try NiimbotProtocol.validateReadiness(reply, identity: identity)
-        try await sendGroup(requests, indices: index..<(index + 1), exchange: exchange, observe: onMeasurement)
+        try await sendGroup(requests, indices: index..<(index + 1),
+                            imageBatchExchange: imageBatchExchange, maximumImageWriteBytes: maximumImageWriteBytes,
+                            exchange: exchange, observe: onMeasurement)
         // PageEnd only acknowledges receipt. The printer's completed-page
         // counter is the D110 reference's completion condition, polled at 300ms.
         // Bound total polling as well as each individual BLE request timeout.
@@ -930,6 +1008,7 @@ enum NiimbotProtocol {
     /// PrintEnd, setup cycle or final-label feed between those pages.
     static func printBatch(_ rasters: [LabelRaster], identity: NiimbotD110Identity,
                            paperMode: NiimbotPaperMode = .gap,
+                           imageBatchExchange: ImageBatchExchange? = nil, maximumImageWriteBytes: Int = 0,
                            exchange: Exchange, pause: @MainActor () async throws -> Void,
                            onPageWillSend: @MainActor (Int) async throws -> Void = { _ in },
                            onPageCompleted: @MainActor (Int) async throws -> Void = { _ in },
@@ -948,6 +1027,7 @@ enum NiimbotProtocol {
                 try await onPageWillSend(index)
                 try Task.checkCancellation()
                 try await printPreparedLabel(requests, index: index, identity: identity,
+                                            imageBatchExchange: imageBatchExchange, maximumImageWriteBytes: maximumImageWriteBytes,
                                             exchange: exchange, pause: pause, onMeasurement: onMeasurement)
                 try await onPageCompleted(index)
             }
@@ -973,7 +1053,9 @@ enum NiimbotProtocol {
                 try Task.checkCancellation()
                 try await onPageWillSend(index)
             }
-            try await sendGroup(requests, indices: index..<(index + 1), exchange: exchange, observe: onMeasurement)
+            try await sendGroup(requests, indices: index..<(index + 1),
+                                imageBatchExchange: imageBatchExchange, maximumImageWriteBytes: maximumImageWriteBytes,
+                                exchange: exchange, observe: onMeasurement)
 
             var completed = false
             for _ in 0..<100 {
@@ -1016,6 +1098,7 @@ enum NiimbotProtocol {
     /// and must persist successfully before another group can enter the window.
     static func printContinuously(_ rasters: [LabelRaster], identity: NiimbotD110Identity,
                                   paperMode: NiimbotPaperMode = .gap,
+                                  imageBatchExchange: ImageBatchExchange? = nil, maximumImageWriteBytes: Int = 0,
                                   exchange: Exchange, pause: @MainActor () async throws -> Void,
                                   onPagesWillSend: @MainActor ([Int]) async throws -> Void,
                                   onPagesCompleted: @MainActor ([Int]) async throws -> Void,
@@ -1026,7 +1109,9 @@ enum NiimbotProtocol {
         try Task.checkCancellation()
         guard plan.usesCumulativePageCounter else {
             // No new legacy-D110 commands or buffering assumptions are added.
-            try await printBatch(rasters, identity: identity, paperMode: paperMode, exchange: exchange, pause: pause,
+            try await printBatch(rasters, identity: identity, paperMode: paperMode,
+                imageBatchExchange: imageBatchExchange, maximumImageWriteBytes: maximumImageWriteBytes,
+                exchange: exchange, pause: pause,
                 onPageWillSend: { try await onPagesWillSend([$0]) },
                 onPageCompleted: { try await onPagesCompleted([$0]) }, onMeasurement: onMeasurement)
             return
@@ -1059,7 +1144,9 @@ enum NiimbotProtocol {
                     }
                     initialized = true
                 }
-                try await sendGroup(group.requests, indices: group.indices, exchange: exchange, observe: onMeasurement)
+                try await sendGroup(group.requests, indices: group.indices,
+                                    imageBatchExchange: imageBatchExchange, maximumImageWriteBytes: maximumImageWriteBytes,
+                                    exchange: exchange, observe: onMeasurement)
                 submittedPages = group.indices.upperBound
                 inFlight.append(group.indices)
                 nextGroup += 1

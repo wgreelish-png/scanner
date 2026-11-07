@@ -5,6 +5,24 @@ without-response experiment remains in its separate Git branch/history; its
 picker, preflight and image pump are removed from the main app. Preview,
 progress and abandoned-queue cleanup fixes remain.
 
+Build 94 adds bounded acknowledged image batching on the verified model
+2320/protocol-4 path. It combines exactly two adjacent complete one-way image
+frames (`0x83`, `0x84`, `0x85`) into a single ordinary acknowledged write.
+The encoded payload is capped at the minimum of 64 bytes, the acknowledged
+write limit and the ordinary payload hint. Unknown limits and other printer
+profiles retain single-frame writes. No extra setting or approval is needed.
+
+Each original frame keeps its header, length, payload, checksum and footer.
+Odd tails and every control, required reply and page boundary stay separate.
+The pair waits for its normal CoreBluetooth write acknowledgement before upload
+progress advances by two requests. Physical counts still require the printer's
+counter and final job acknowledgement. Failed or cancelled output is not replayed.
+
+The pair retains a total 20 ms pacing budget, while its two encoded frames are
+contiguous inside the payload. This changes the spacing inside a pair, which
+requires physical-printer validation. A payload-limit shrink before submission
+stops the pair rather than fragmenting it or retrying its rows automatically.
+
 The next diagnostic export can distinguish artwork preparation, command
 encoding, Bluetooth acknowledgement waits, printer replies and completion
 polling. Events now include fractional-second ISO 8601 timestamps. Durations
@@ -66,27 +84,39 @@ it can include user interaction and time outside the app. Physical-counter
 confirmation may arrive after a label finishes while the next complete image
 uploads. Neither PageEnd nor a full upload is counted as physical completion.
 
-## Acknowledged transfer opportunities
+## Comparing acknowledged image batching
 
 The supplied five-label baseline submitted 23,696 image bytes through 968 image
 writes. It took 62.450 seconds, including 48.791 seconds of accumulated ATT
 acknowledgement waiting and 11.420 seconds of inter-packet pacing. This is mainly
 per-write scheduling overhead, not a large artwork file or slow rendering.
 
-A separate hardware experiment could combine adjacent complete, one-way image
-frames into fewer acknowledged writes. Start with two frames and at most 64
-bytes, respect the negotiated payload limits, and flush before any control or
-reply-requiring command. The 512-byte acknowledged API limit does not prove a
-512-byte ordinary ATT payload; the same connection reports 241 bytes for
-without-response writes. Firmware acceptance of concatenated frames is unproven.
-NiimBlue's existing serialized per-frame transport does not establish it either.
-Card order and printer-confirmed completion must remain unchanged.
+Build 94 enables the two-frame grouping described above. The 512-byte
+acknowledged API limit does not prove a 512-byte ordinary ATT payload; the same
+connection reports 241 bytes for without-response writes. The initial 64-byte
+cap stays below both. Actual printer acceptance and speed remain to be checked.
+
+| Summary field | Measurement |
+| --- | --- |
+| `image_packets` | Original logical image frames; grouping must not change this count. |
+| `image_write_count` | Actual Bluetooth image writes, including any fragmented single frames. |
+| `image_batch_count`, `image_batched_packets` | Submitted two-frame payloads and logical frames included in them. |
+| `image_max_write_bytes` | Largest actual image-write payload. |
+| `image_batch_limit`, `image_batch_frame_limit` | Captured payload cap and maximum frames per write. A disabled cap is zero. |
+| `group_image_writes` | Actual image writes for one submitted group. |
+
+First print three known different prices and inspect artwork, order and count.
+Then repeat the original mixed-price batch with the same paper, price side and
+copies, and export diagnostics. Expect a positive batch count and fewer actual
+image writes than logical image frames. Compare wire bytes, original frame
+counts, acknowledgement waits and wall spans. Also repeat identical copies to
+check their existing native-copy reuse. No hardware result is claimed yet.
 
 Pacing could also be measured separately. Removing every observed pacing delay
 could recover at most about 11.4 seconds in this baseline, while acknowledgement
 waits would remain. Firmware may need processing time after an ATT receipt, so
-the rollback retains the working 10 ms spacing. Neither optimization is enabled
-in build 93, and neither has a measured hardware speed or reliability result.
+build 94 retains the total 10 ms budget per original frame. Removing that budget
+is a separate change and is not part of image batching.
 
 ## Avoiding repeated work
 
@@ -142,8 +172,9 @@ introduced.
    neither event may replay uncertain output automatically.
 
 Hardware buffer capacity and feed speed are not established by these logs.
-The two-group upload window, acknowledged writes and existing pacing are
-unchanged. This build measures the stages needed for a supported next change.
+The two-group upload window and acknowledged writes are unchanged. Image batching
+changes packaging and spacing inside each pair, while retaining the total pacing
+budget. The new counters measure the actual effect of that change.
 
 ## Diagnostic 15 and progress clarity — build 87
 
