@@ -7,6 +7,18 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      job_scope:
+        description: Jobs to run
+        type: choice
+        default: all
+        options:
+          - all
+          - native
+          - ui
+          - research_ui
+          - evidence_ui
+          - budget_ui
+          - release
       test_scope:
         description: Regression scope
         type: choice
@@ -18,11 +30,12 @@ on:
           - label_queue
           - show_readiness
 concurrency:
-  group: ios-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  group: ios-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}-${{ inputs.job_scope || 'all' }}
   # Let an active validation finish when another run is requested on this branch.
   cancel-in-progress: false
 jobs:
   native:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job_scope == 'all' || inputs.job_scope == 'native' }}
     runs-on: macos-15-intel
     timeout-minutes: 90
     steps:
@@ -84,7 +97,7 @@ jobs:
             NativeTests.log
             NativeCrashSummary.log
   ui:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.test_scope != 'printer_transport' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || ((inputs.job_scope == 'all' || inputs.job_scope == 'ui') && inputs.test_scope != 'printer_transport') }}
     runs-on: macos-15-intel
     timeout-minutes: 120
     steps:
@@ -134,7 +147,7 @@ jobs:
             NativeTests.log
             NativeCrashSummary.log
   research_ui:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || ((inputs.job_scope == 'all' || inputs.job_scope == 'research_ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness') }}
     runs-on: macos-15-intel
     timeout-minutes: 120
     steps:
@@ -161,7 +174,7 @@ jobs:
             NativeTests.log
             NativeCrashSummary.log
   evidence_ui:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || ((inputs.job_scope == 'all' || inputs.job_scope == 'evidence_ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness') }}
     runs-on: macos-15-intel
     timeout-minutes: 120
     steps:
@@ -188,7 +201,7 @@ jobs:
             NativeTests.log
             NativeCrashSummary.log
   budget_ui:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || ((inputs.job_scope == 'all' || inputs.job_scope == 'budget_ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness') }}
     runs-on: macos-15-intel
     timeout-minutes: 120
     steps:
@@ -215,6 +228,7 @@ jobs:
             NativeTests.log
             NativeCrashSummary.log
   release:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job_scope == 'all' || inputs.job_scope == 'release' }}
     runs-on: macos-15-intel
     timeout-minutes: 30
     steps:

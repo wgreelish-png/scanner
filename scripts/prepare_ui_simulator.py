@@ -18,10 +18,10 @@ MODELS = (
     "iPhone 13 Pro", "iPhone 13",
 )
 
-# A cold hosted runner can spend more than 30 seconds starting CoreSimulator
+# A cold hosted runner can spend more than 90 seconds starting CoreSimulator
 # before it returns its device list. Keep setup bounded without resetting any
 # existing device or hiding a stalled service behind unbounded retries.
-SIMULATOR_DISCOVERY_TIMEOUT = 90
+SIMULATOR_DISCOVERY_TIMEOUT = 300
 SIMULATOR_CREATION_TIMEOUT = 120
 SIMULATOR_BOOT_TIMEOUT = 90
 

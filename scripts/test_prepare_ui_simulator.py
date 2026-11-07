@@ -89,8 +89,8 @@ class SelectUISimulatorTests(unittest.TestCase):
             operation = arguments[1:3]
             if operation == ("simctl", "list"):
                 # Simulate a cold CoreSimulator service that would exceed the
-                # old 30-second deadline, without sleeping in a portable test.
-                required = 45
+                # former 90-second deadline, without sleeping in a portable test.
+                required = 150
                 value = ({"devices": {runtime["identifier"]: [self.device()]}}
                          if arguments[3] == "devices" else {"runtimes": [runtime]})
                 output = json.dumps(value)
@@ -100,7 +100,7 @@ class SelectUISimulatorTests(unittest.TestCase):
                 required, output = 0, "18.5"
             if timeout < required:
                 raise subprocess.TimeoutExpired(arguments, timeout)
-            self.assertLessEqual(timeout, 120, "Cold setup must remain bounded")
+            self.assertLessEqual(timeout, 300, "Cold setup must remain bounded")
             return subprocess.CompletedProcess(arguments, 0, stdout=output)
 
         with patch.object(sys, "argv", ["prepare_ui_simulator.py", "create"]), \
@@ -110,9 +110,24 @@ class SelectUISimulatorTests(unittest.TestCase):
             self.assertEqual(prepare_ui_simulator.main(), 0)
         self.assertEqual(output.getvalue().strip(), device_id)
         self.assertEqual([timeout for arguments, timeout in calls if arguments[1:3] == ("simctl", "list")],
-                         [90, 90])
+                         [300, 300])
         self.assertEqual(calls[-1][0][1:3], ("simctl", "create"))
         self.assertEqual(calls[-1][1], 120)
+
+    def test_stalled_discovery_fails_once_with_bounded_diagnostic_instead_of_retrying_forever(self):
+        command = ("xcrun", "simctl", "list", "devices", "available", "-j")
+        failure = subprocess.TimeoutExpired(command, 300, output=b"Waiting for CoreSimulatorService")
+        with patch.object(sys, "argv", ["prepare_ui_simulator.py", "create"]), \
+             patch.object(prepare_ui_simulator.subprocess, "run", side_effect=failure) as run, \
+             contextlib.redirect_stdout(io.StringIO()) as output, \
+             contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(prepare_ui_simulator.main(), 1)
+        self.assertEqual(run.call_count, 1, "A stalled service must not start an endless discovery loop")
+        self.assertEqual(run.call_args.kwargs["timeout"], 300)
+        self.assertEqual(output.getvalue(), "", "Failure must not return a usable simulator identifier")
+        self.assertIn("device selection failed", errors.getvalue())
+        self.assertIn("exceeded 300 seconds", errors.getvalue())
+        self.assertIn("Waiting for CoreSimulatorService", errors.getvalue())
 
     def test_cold_boot_request_has_a_bounded_budget_and_does_not_reset_the_device(self):
         device_id = "10000000-0000-0000-0000-000000000002"
