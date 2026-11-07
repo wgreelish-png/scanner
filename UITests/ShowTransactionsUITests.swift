@@ -28,10 +28,13 @@ import XCTest
         assertRevealedContains("Cost unknown", identifier: "inventory.cost", app: app)
         app.terminate(); app.launch()
         XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 10))
-        assertStock("7", app: app)
+        assertContains("7 cards in local stock", element: app.buttons["show.inventory"])
         assertBalances(available: "$300.00", saved: "$0.00", app: app)
         tap(app.buttons["show.inventory"], app: app)
         assertContains("2 cards available", element: app.staticTexts["showInventory.quantity"])
+        XCTAssertTrue(app.buttons["showInventory.game"].label.contains("Yu-Gi-Oh!") ||
+                      (app.buttons["showInventory.game"].value as? String)?.contains("Yu-Gi-Oh!") == true,
+                      "Viewing newly added cards must not overwrite the remembered inventory game")
         returnToShow(app: app)
         tap(app.buttons["showFixture.reviewOffer"], app: app)
         XCTAssertFalse(app.buttons["list.addOwnedInventory"].exists)

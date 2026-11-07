@@ -1492,6 +1492,8 @@ import XCTest
         tap(app.buttons["priceTags.custom"], app: app)
         enter("5", field: app.textFields["customLabels.price"], app: app)
         enter(copies, field: app.textFields["customLabels.copies"], app: app)
+        XCTAssertEqual(app.textFields["customLabels.copies"].value as? String, copies,
+                       "Replace the existing copy count before preparing the print fixture")
         tap(app.buttons["customLabels.keyboardDone"], app: app)
         tap(app.buttons["customLabels.prepare"], app: app)
         XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
@@ -1671,7 +1673,10 @@ import XCTest
 
     private func enter(_ value: String, field: XCUIElement, app: XCUIApplication) {
         tap(field, app: app)
-        if let existing = field.value as? String, existing != field.placeholderValue, !existing.isEmpty {
+        if let existing = field.value as? String, !existing.isEmpty,
+           existing != field.placeholderValue || existing.allSatisfy({ $0.isNumber }) {
+            // A real numeric default can equal its placeholder (copies starts
+            // at "1"). It must still be replaced rather than appended to.
             field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: existing.count))
         }
         if !value.isEmpty { field.typeText(value) }
