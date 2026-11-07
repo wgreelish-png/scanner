@@ -190,6 +190,7 @@ private struct LabelQueueFile: Codable {
     private(set) var lastRunCompletedSuccessfully = false
 
     var canStart: Bool { isLoaded && !isPrinting && pendingCount > 0 }
+    var canReorder: Bool { isLoaded && !isPrinting && pendingCount > 1 }
     var pendingCount: Int { entryCount(in: .pending) }
     var completedCount: Int { entryCount(in: .completed) }
     var failedCount: Int { entryCount(in: .failed) }
@@ -264,6 +265,19 @@ private struct LabelQueueFile: Codable {
         guard next.allSatisfy({ $0.state == .pending && $0.lastIssue == nil }) else {
             throw LabelPrintQueueFailure.invalidEntry
         }
+        try commit(next)
+    }
+
+    /// Keep every receipt and unsuccessful copy in its exact position. Moving
+    /// only pending snapshots changes send order without changing their images.
+    func reorderPending(using order: LabelPrintOrder) throws {
+        try requireWritable()
+        let indices = entries.indices.filter { entries[$0].state == .pending }
+        guard indices.count > 1 else { return }
+        let pending = order.orderedEntries(indices.map { entries[$0] })
+        guard zip(indices, pending).contains(where: { entries[$0.0].id != $0.1.id }) else { return }
+        var next = entries
+        for (index, entry) in zip(indices, pending) { next[index] = entry }
         try commit(next)
     }
 

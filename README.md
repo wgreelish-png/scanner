@@ -26,6 +26,13 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 97 adds a saved [label print order](docs/LabelPrintOrder.md): card name
+(the existing preparation default), price ascending or price descending.
+Preparation and review use the selected order; an explicit Sort Labels action
+reorders only pending queue entries. Equal-price copies stay stable and blank
+prices stay last in both price orders. Receipts, artwork, inventory and transfer
+settings are preserved.
+
 Build 96 smooths enlarged on-screen label previews and aligns dimension-driven
 branded frame/divider strokes to the printer's native dot grid. The current
 wordmark, 4× supersampling, paper dimensions, text and saved preferences

@@ -3,6 +3,64 @@ import XCTest
 /// Automatic printer discovery is disabled for these offline UI fixtures.
 /// Queue files use the same isolated token as inventory and financial records.
 @MainActor final class InventoryLabelsUITests: XCTestCase {
+    func testInventoryPrintOrderSortsNumericPricesAndRemembersSelection() {
+        continueAfterFailure = false
+        let app = launch()
+        defer { app.terminate() }
+        tap(app.buttons["show.inventory"], app: app)
+        let stockAID = inventoryID(of: inventory("Stock A", app: app))
+        let stockBID = inventoryID(of: inventory("Stock B", app: app))
+        openBatch(app: app)
+        tap(app.buttons["labels.select." + stockAID], app: app)
+        tap(app.buttons["labels.select." + stockBID], app: app)
+        tap(app.buttons["labels.continueSelection"], app: app)
+
+        let configuration = app.collectionViews["labels.configuration"]
+        let order = configuration.buttons["labels.sortOrder"]
+        revealInPrintList(order, list: configuration)
+        assertPrintOrderChoice("Card Name", element: order)
+        order.tap()
+        tap(app.buttons["Price: Low to High"], app: app)
+        assertPrintOrderChoice("Price: Low to High", element: order)
+        app.buttons["labels.continueReview"].tap()
+
+        XCTAssertTrue(app.navigationBars["Review Labels"].waitForExistence(timeout: 5))
+        let review = app.collectionViews["labels.review"]
+        let reviewOrder = review.buttons["labels.review.sortOrder"]
+        revealInPrintList(reviewOrder, list: review)
+        assertPrintOrderChoice("Price: Low to High", element: reviewOrder)
+        let lowerPrice = review.staticTexts["labels.review.price." + stockBID]
+        let higherPrice = review.staticTexts["labels.review.price." + stockAID]
+        revealInPrintList(higherPrice, list: review)
+        assertContains("$5", element: lowerPrice)
+        assertContains("$35", element: higherPrice)
+        XCTAssertLessThan(lowerPrice.frame.minY, higherPrice.frame.minY,
+                          "Numeric price order must put $5 before $35, unlike alphabetical currency strings")
+        app.buttons["labels.prepare"].tap()
+        assertContains("0/2 completed", element: app.staticTexts["labelQueue.progress"])
+        assertForegroundQueueCardOrder(["Stock B", "Stock A"], app: app)
+
+        let queue = app.collectionViews["labelQueue.screen"]
+        let sortQueue = queue.buttons["labelQueue.sortOrder"]
+        revealInForegroundQueue(sortQueue, towardTop: true, app: app)
+        sortQueue.tap()
+        tap(app.buttons["Price: High to Low"], app: app)
+        assertForegroundQueueCardOrder(["Stock A", "Stock B"], app: app)
+        XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled, "Sorting cannot begin a hardware print")
+
+        backFromPrintScreen("Label Print Queue", app: app)
+        backFromPrintScreen("Review Labels", app: app)
+        backFromPrintScreen("Label Details", app: app)
+        XCTAssertTrue(app.navigationBars["Select Label Cards"].waitForExistence(timeout: 5))
+        tap(app.buttons["labels.clearSelection"], app: app)
+        tap(app.buttons["labels.select." + stockBID], app: app)
+        tap(app.buttons["labels.select." + stockAID], app: app)
+        tap(app.buttons["labels.continueSelection"], app: app)
+        revealInPrintList(order, list: configuration)
+        assertPrintOrderChoice("Price: High to Low", element: order)
+        assertNoBluetoothPrompt(app: app)
+    }
+
     func testLeavingUnprintedInventoryQueueClearsItAndAllowsPreparingAgain() {
         continueAfterFailure = false
         let app = launch()
@@ -1286,6 +1344,37 @@ import XCTest
         let bar = app.navigationBars[title]
         XCTAssertTrue(bar.waitForExistence(timeout: 5))
         UITestInteraction.tapToolbar(bar.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+    }
+
+    private func assertPrintOrderChoice(_ expected: String, element: XCUIElement,
+                                       file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(element.waitForExistence(timeout: 5), file: file, line: line)
+        let shown = element.label + " " + (element.value as? String ?? "")
+        XCTAssertTrue(shown.contains(expected), "Expected print order \(expected), received \(shown)", file: file, line: line)
+    }
+
+    private func revealInPrintList(_ element: XCUIElement, list: XCUIElement,
+                                   file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(list.waitForExistence(timeout: 5), file: file, line: line)
+        for _ in 0..<6 {
+            if element.exists && element.isHittable { break }
+            list.swipeUp()
+        }
+        XCTAssertTrue(element.exists && element.isHittable, "Expected a control in the foreground print list", file: file, line: line)
+    }
+
+    private func assertForegroundQueueCardOrder(_ expected: [String], app: XCUIApplication,
+                                                file: StaticString = #filePath, line: UInt = #line) {
+        let queue = app.collectionViews["labelQueue.screen"]
+        XCTAssertTrue(queue.waitForExistence(timeout: 5), file: file, line: line)
+        let entries = queue.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "labelQueue.entry."))
+        for _ in 0..<6 {
+            if entries.count == expected.count { break }
+            queue.swipeUp()
+        }
+        let rows = entries.allElementsBoundByIndex
+        XCTAssertEqual(rows.count, expected.count, "Every selected card must reach the prepared queue", file: file, line: line)
+        for (row, name) in zip(rows, expected) { assertContains(name, element: row, file: file, line: line) }
     }
 
     private func dismissInventoryPrintSheet(app: XCUIApplication) {

@@ -28,6 +28,136 @@ import XCTest
         LabelPrintQueue(url: location(), read: { _ in try storage.read() }, write: { data, _ in try storage.write(data) })
     }
 
+    private func pricedLabels(_ price: Decimal?, name: String, copies: Int = 1,
+                              marker: UInt8) throws -> [LabelQueueEntry] {
+        let card = CardCandidate(identity: .init(game: "Pokémon", productID: "sort:" + name, printing: "Normal"),
+            name: name, set: "Sort fixture", number: "1", marketPrice: price, confidence: 100, printings: ["Normal"])
+        var draft = InventoryLabelDraft(item: ShowInventoryItem(card: card, quantity: copies))
+        draft.copies = copies
+        let raster = LabelRaster(width: draft.paperSize.headDots, height: draft.paperSize.feedDots,
+                                 data: Data(repeating: marker, count: 12 * draft.paperSize.feedDots))
+        return try (1...copies).map { try LabelQueueEntry(draft: draft, raster: raster, copyNumber: $0) }
+    }
+
+    func testReorderPendingPersistsOnlyPendingPositionsAndPrinterUsesThatExactSavedOrder() async throws {
+        let high = try pricedLabels(100, name: "Card 100", marker: 0x80)[0]
+        let two = try pricedLabels(2, name: "Card 2", copies: 2, marker: 0x40)
+        let ten = try pricedLabels(10, name: "Card 10", marker: 0x20)[0]
+        let bulk = try pricedLabels(Decimal(string: "0.50"), name: "Bulk", marker: 0x10)[0]
+        let blank = try pricedLabels(nil, name: "Write in", marker: 0x08)[0]
+        var receipt = try pricedLabels(5, name: "Receipt", marker: 0x04)[0]
+        receipt.state = .completed
+        var uncertain = try pricedLabels(6, name: "Uncertain", marker: 0x02)[0]
+        uncertain.state = .uncertain; uncertain.lastIssue = .connectionLost
+        var failed = try pricedLabels(7, name: "Failed", marker: 0x01)[0]
+        failed.state = .failed; failed.lastIssue = .printerNotReady
+        let original = [high, receipt, two[0], uncertain, bulk, failed, two[1], blank, ten]
+        let expected = [bulk, receipt, two[0], uncertain, two[1], failed, ten, high, blank]
+        let storage = LabelQueueTestStorage(entries: original), queue = queue(storage)
+        let printer = LabelQueueTestBatchPrinter()
+        XCTAssertTrue(queue.canReorder)
+        try queue.reorderPending(using: .priceAscending)
+        XCTAssertEqual(queue.entries, expected, "Only pending slots move; every immutable snapshot and receipt is retained")
+        XCTAssertEqual(try storage.entries(), expected)
+        XCTAssertEqual(storage.writeAttempts, 1)
+        XCTAssertTrue(printer.rasters.isEmpty, "Choosing an order cannot start printing")
+        let restored = self.queue(storage)
+        XCTAssertEqual(restored.entries, expected)
+        let pending = [bulk, two[0], two[1], ten, high, blank]
+        printer.onSend = { page, raster in
+            XCTAssertEqual(raster, pending[page].raster)
+            XCTAssertEqual(try? storage.entries().filter { $0.state == .sending }.map(\.id), [pending[page].id])
+        }
+        await restored.start(using: printer)
+        XCTAssertEqual(printer.batches, [pending.map(\.raster)])
+        XCTAssertEqual(restored.entries[1], receipt)
+        XCTAssertEqual(restored.entries[3], uncertain)
+        XCTAssertEqual(restored.entries[5], failed)
+        XCTAssertFalse(restored.canReorder)
+    }
+
+    func testReorderPendingWithEqualNamesAndPricesKeepsCopyOrderAndSkipsUnneededSaves() throws {
+        let copies = try labels(copies: 3)
+        let original = [copies[2], copies[0], copies[1]]
+        let storage = LabelQueueTestStorage(entries: original), queue = queue(storage)
+        let bytes = storage.bytes
+        XCTAssertTrue(queue.canReorder)
+        for order in [LabelPrintOrder.cardName, .priceAscending, .priceDescending] {
+            try queue.reorderPending(using: order)
+            XCTAssertEqual(queue.entries, original)
+            XCTAssertEqual(queue.entries.map(\.copyNumber), [3, 1, 2])
+        }
+        XCTAssertEqual(storage.writeAttempts, 0)
+        XCTAssertEqual(storage.bytes, bytes)
+        let single = self.queue(LabelQueueTestStorage(entries: [copies[0]]))
+        XCTAssertFalse(single.canReorder)
+        XCTAssertNoThrow(try single.reorderPending(using: .priceDescending))
+        XCTAssertEqual(single.entries, [copies[0]])
+    }
+
+    func testReorderPendingRefusesUnreadableStorageAndActivePrintingWithoutChangingTheJob() async throws {
+        let unreadable = LabelQueueTestStorage(bytes: Data([0xff]))
+        let unloaded = queue(unreadable)
+        XCTAssertFalse(unloaded.canReorder)
+        XCTAssertThrowsError(try unloaded.reorderPending(using: .cardName)) {
+            XCTAssertEqual($0 as? LabelPrintQueueFailure, .notLoaded)
+        }
+        XCTAssertEqual(unreadable.bytes, Data([0xff]))
+        XCTAssertEqual(unreadable.writeAttempts, 0)
+        let original = try labels(copies: 3)
+        let storage = LabelQueueTestStorage(entries: original), queue = queue(storage)
+        let printer = LabelQueueTestPrinter()
+        printer.held = true
+        let job = Task { await queue.start(using: printer) }
+        defer { printer.finish(0, with: .uncertain(.cancelled)); job.cancel() }
+        try await printer.waitForSends(1)
+        let sending = queue.entries, saved = storage.bytes, writes = storage.writeAttempts
+        XCTAssertFalse(queue.canReorder)
+        XCTAssertThrowsError(try queue.reorderPending(using: .priceDescending)) {
+            XCTAssertEqual($0 as? LabelPrintQueueFailure, .printing)
+        }
+        XCTAssertEqual(queue.entries, sending)
+        XCTAssertEqual(storage.bytes, saved)
+        XCTAssertEqual(storage.writeAttempts, writes)
+        XCTAssertEqual(printer.rasters, [original[0].raster])
+        printer.finish(0, with: .notSent(.printerNotReady))
+        await job.value
+        XCTAssertEqual(queue.entries.map(\.id), original.map(\.id))
+        XCTAssertEqual(queue.entries.map(\.state), [.failed, .pending, .pending])
+    }
+
+    func testReorderSaveFailureKeepsInMemorySnapshotsAndRequiresReloadBeforeFurtherChanges() throws {
+        let low = try pricedLabels(2, name: "Low", marker: 0x80)[0]
+        let high = try pricedLabels(100, name: "High", marker: 0x40)[0]
+        let ten = try pricedLabels(10, name: "Ten", marker: 0x20)[0]
+        let original = [low, high, ten], expected = [high, ten, low]
+        for failAfterPersist in [false, true] {
+            let storage = LabelQueueTestStorage(entries: original), queue = queue(storage)
+            storage.failOnWrite = 1
+            storage.failAfterPersist = failAfterPersist
+            XCTAssertThrowsError(try queue.reorderPending(using: .priceDescending)) {
+                XCTAssertEqual($0 as? LabelPrintQueueFailure, .saveFailed)
+            }
+            XCTAssertEqual(queue.entries, original)
+            XCTAssertFalse(queue.isLoaded)
+            XCTAssertFalse(queue.canReorder)
+            XCTAssertFalse(queue.canStart)
+            XCTAssertNotNil(queue.error)
+            XCTAssertEqual(try storage.entries(), failAfterPersist ? expected : original)
+            XCTAssertThrowsError(try queue.reorderPending(using: .cardName)) {
+                XCTAssertEqual($0 as? LabelPrintQueueFailure, .notLoaded)
+            }
+            XCTAssertEqual(storage.writeAttempts, 1)
+            storage.failOnWrite = nil
+            queue.reload()
+            XCTAssertTrue(queue.isLoaded)
+            XCTAssertEqual(queue.entries, failAfterPersist ? expected : original)
+            try queue.reorderPending(using: .priceDescending)
+            XCTAssertEqual(queue.entries, expected)
+            XCTAssertEqual(try storage.entries(), expected)
+        }
+    }
+
     func testOfflinePreparationSavesCopiesWithoutStartingAndRestoresTheirSnapshots() throws {
         let storage = LabelQueueTestStorage(), printer = LabelQueueTestPrinter()
         let queue = queue(storage), entries = try labels()

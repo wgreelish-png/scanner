@@ -54,6 +54,95 @@ import UIKit
             lastPrintedTag: nil, lastPrintedAt: nil)
     }
 
+    func testLabelPriceOrderUsesTheActualPrintedPriceAndLeavesBlankOrInvalidDraftsLast() throws {
+        var two = InventoryLabelDraft(item: stock(price: 999, name: "Card 2"))
+        two.askingPriceText = "2"; two.copies = 3
+        var ten = InventoryLabelDraft(item: stock(price: 1, name: "Card 10"))
+        ten.askingPriceText = "10"
+        var hundred = InventoryLabelDraft(item: stock(price: 2, name: "Card 100"))
+        hundred.askingPriceText = "100"; hundred.copies = 2
+        let bulk = InventoryLabelDraft(item: stock(price: Decimal(string: "0.50"), name: "Deal"))
+        let blank = InventoryLabelDraft(item: stock(price: nil, name: "Write in"))
+        var invalid = InventoryLabelDraft(item: stock(price: 9, name: "Broken price"))
+        invalid.askingPriceText = "32.50"
+        XCTAssertThrowsError(try invalid.validate())
+        let original = [hundred, blank, ten, invalid, two, bulk]
+        XCTAssertEqual(LabelPrintOrder.priceAscending.orderedDrafts(original), [bulk, two, ten, hundred, invalid, blank])
+        XCTAssertEqual(LabelPrintOrder.priceDescending.orderedDrafts(original), [hundred, ten, two, bulk, invalid, blank])
+        XCTAssertEqual(original[0], hundred)
+        XCTAssertEqual(two.copies, 3)
+        XCTAssertEqual(hundred.copies, 2)
+        XCTAssertEqual(two.marketValue, 999, "Sorting printed prices must not reprice the saved market snapshot")
+        XCTAssertNil(invalid.tag, "Ordering cannot repair an invalid draft or silently make it printable")
+    }
+
+    func testLabelOrderUsesNaturalCardNamesAndKeepsExactTiesAndCopyQuantitiesStable() {
+        var ten = InventoryLabelDraft(item: stock(price: 10, name: "Card 10"))
+        var firstTwo = InventoryLabelDraft(item: stock(price: 10, name: "Card 2"))
+        var secondTwo = InventoryLabelDraft(item: stock(price: 10, name: "Card 2"))
+        var one = InventoryLabelDraft(item: stock(price: 10, name: "Card 1"))
+        ten.copies = 4; firstTwo.copies = 3; secondTwo.copies = 1; one.copies = 2
+        let input = [ten, firstTwo, secondTwo, one]
+        let expected = [one, firstTwo, secondTwo, ten]
+        for order in [LabelPrintOrder.cardName, .priceAscending, .priceDescending] {
+            XCTAssertEqual(order.orderedDrafts(input), expected)
+            XCTAssertEqual(order.orderedDrafts(input).map(\.copies), [2, 3, 1, 4])
+        }
+    }
+
+    func testQueuedLabelPriceOrderSeparatesBulkWriteInAndLegacyZeroWithoutChangingSnapshots() throws {
+        let raster = LabelRaster(width: 96, height: 240, data: Data(repeating: 0x80, count: 12 * 240))
+        let bulkDraft = InventoryLabelDraft(item: stock(price: Decimal(string: "0.50"), name: "Deal"))
+        let bulk = try LabelQueueEntry(draft: bulkDraft, raster: raster, copyNumber: 1)
+        let twoDraft = InventoryLabelDraft(item: stock(price: 2, name: "Card 2"))
+        let two = try LabelQueueEntry(draft: twoDraft, raster: raster, copyNumber: 1)
+        let tenDraft = InventoryLabelDraft(item: stock(price: 10, name: "Card 10"))
+        let ten = try LabelQueueEntry(draft: tenDraft, raster: raster, copyNumber: 1)
+        let blank = try LabelQueueEntry(customPriceCents: 0, raster: raster, copyNumber: 1, paperSize: .small30x14)
+        var legacyObject = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(blank)) as? [String: Any])
+        legacyObject.removeValue(forKey: "blankPrice")
+        legacyObject["id"] = UUID().uuidString
+        let legacy = try JSONDecoder().decode(LabelQueueEntry.self, from: JSONSerialization.data(withJSONObject: legacyObject))
+        XCTAssertEqual(legacy.stickerTag, .individual(0))
+        XCTAssertNil(blank.stickerTag)
+        let input = [ten, blank, bulk, two, legacy]
+        XCTAssertEqual(LabelPrintOrder.priceAscending.orderedEntries(input), [legacy, bulk, two, ten, blank])
+        XCTAssertEqual(LabelPrintOrder.priceDescending.orderedEntries(input), [ten, two, bulk, legacy, blank])
+        var copies = InventoryLabelDraft(item: stock(price: 2, name: "Copies"))
+        copies.copies = 3
+        let copyEntries = try [3, 1, 2].map { try LabelQueueEntry(draft: copies, raster: raster, copyNumber: $0) }
+        XCTAssertEqual(LabelPrintOrder.priceAscending.orderedEntries(copyEntries), copyEntries,
+                       "Equal names and prices preserve input copy order, identifiers and exact raster bytes")
+    }
+
+    func testLabelOrderPreferencePersistsInItsOwnNamespaceAndMalformedValuesDoNotRewriteSettings() throws {
+        let suite = "LabelPrintOrderPreferencesTests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let key = "isolated.labelPrintOrder"
+        defaults.set("transparent", forKey: "niimbotPaperMode")
+        defaults.set("left", forKey: "niimbotLabelPricePosition")
+        defaults.set(Data([1, 2, 3]), forKey: "inventory.fixture")
+        let preferences = LabelPrintOrderPreferences(defaults: defaults, key: key)
+        XCTAssertEqual(preferences.order, .cardName)
+        XCTAssertNil(defaults.object(forKey: key), "Opening the preference does not write a new setting")
+        for order in [LabelPrintOrder.cardName, .priceAscending, .priceDescending] {
+            preferences.order = order
+            XCTAssertEqual(LabelPrintOrderPreferences(defaults: defaults, key: key).order, order)
+        }
+        let malformed: [Any] = ["unknown", "", 7, true]
+        for invalid in malformed {
+            defaults.set(invalid, forKey: key)
+            let before = defaults.persistentDomain(forName: suite) as NSDictionary?
+            XCTAssertEqual(LabelPrintOrderPreferences(defaults: defaults, key: key).order, .cardName)
+            XCTAssertEqual(defaults.persistentDomain(forName: suite) as NSDictionary?, before)
+        }
+        XCTAssertEqual(defaults.string(forKey: "niimbotPaperMode"), "transparent")
+        XCTAssertEqual(defaults.string(forKey: "niimbotLabelPricePosition"), "left")
+        XCTAssertEqual(defaults.data(forKey: "inventory.fixture"), Data([1, 2, 3]))
+        XCTAssertNil(defaults.object(forKey: "labelPrintOrder"), "An injected fixture cannot write the app's normal key")
+    }
+
     func testDefaultsUseOneCopyAndWholeDollarSavedMarketWithoutMutatingStockOrActualCost() throws {
         let item = stock(), original = item
         var draft = InventoryLabelDraft(item: item)

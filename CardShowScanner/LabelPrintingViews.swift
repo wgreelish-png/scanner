@@ -287,6 +287,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     @State private var paper: InventoryLabelSize
     @State private var pricePosition: LabelPricePosition
     @State private var paperPreferences: LabelPaperPreferences
+    @State private var printOrderPreferences = LabelPrintOrderPreferences.shared
     @State private var editing: InventoryLabelDraft?
     @State private var queue = LabelPrintQueue.shared
     @State private var printer = NiimbotPrinter.shared
@@ -344,10 +345,10 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         }
     }
     private var orderedDrafts: [InventoryLabelDraft] {
-        drafts.sorted { $0.cardName.localizedStandardCompare($1.cardName) == .orderedAscending }
+        printOrderPreferences.order.orderedDrafts(drafts)
     }
     private var printableDrafts: [InventoryLabelDraft] {
-        drafts.filter { draft in
+        orderedDrafts.filter { draft in
             InventoryLabelBatch.shouldPrint(draft, approval: approvals.record(for: draft.id),
                 mode: mode, keepExisting: !draft.isBlankPrice && keepExistingStickerIDs.contains(draft.id))
         }
@@ -561,6 +562,11 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                     .font(.caption).foregroundStyle(.secondary)
                     .accessibilityIdentifier("labels.paperSource")
             }
+            Section {
+                printOrderPicker(identifier: "labels.sortOrder")
+            } footer: {
+                Text("Labels print in this order. Your choice is remembered; blank prices go last when sorting by price.")
+            }
             if let draft = printableDrafts.first {
                 Section("Print preview") {
                     InventoryLabelPreview(draft: draft)
@@ -665,6 +671,18 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         .accessibilityIdentifier("labels.prepare")
     }
 
+    private func printOrderPicker(identifier: String) -> some View {
+        Picker("Print order", selection: Binding(get: { printOrderPreferences.order }, set: { order in
+            printOrderPreferences.order = order
+        })) {
+            ForEach(LabelPrintOrder.allCases) { order in
+                Text(order.title).tag(order)
+            }
+        }.pickerStyle(.menu)
+            .disabled(preparing || queue.isPrinting)
+            .accessibilityIdentifier(identifier)
+    }
+
     private var review: some View {
         List {
             savedQueueSection
@@ -680,6 +698,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 LabeledContent("Paper", value: paper.title)
                 LabeledContent("Style", value: style.title)
                 if style == .priceOnly { LabeledContent("Price position", value: pricePosition.title) }
+                printOrderPicker(identifier: "labels.review.sortOrder")
                 Text(mode == .priceChanged
                      ? "Prepare labels for changed prices. Unchanged, already-labeled stickers are skipped. Printing starts when you tap Print Queued Labels."
                      : "Prepare the requested labels, including replacements for cards labeled before. Printing starts when you tap Print Queued Labels.")
@@ -1124,6 +1143,7 @@ private struct LabelActionBar<Content: View>: View {
     @State private var queue = LabelPrintQueue.shared
     @State private var printer = NiimbotPrinter.shared
     @State private var paperPreferences = LabelPaperPreferences.shared
+    @State private var printOrderPreferences = LabelPrintOrderPreferences.shared
     @State private var selected: Set<UUID> = []
     @State private var showingRetry = false
     @State private var acknowledged = false
@@ -1286,6 +1306,21 @@ private struct LabelActionBar<Content: View>: View {
             LabeledContent("Completed", value: queue.completedCount.formatted())
                 .accessibilityIdentifier("labelQueue.completedCount")
             LabeledContent("Queued", value: queue.pendingCount.formatted())
+            if queue.entries.count > 1 {
+                Menu {
+                    ForEach(LabelPrintOrder.allCases) { order in
+                        Button(order.title) {
+                            perform {
+                                try queue.reorderPending(using: order)
+                                printOrderPreferences.order = order
+                            }
+                        }
+                    }
+                } label: {
+                    Label("Sort Labels", systemImage: "arrow.up.arrow.down")
+                }.disabled(!queue.canReorder)
+                    .accessibilityIdentifier("labelQueue.sortOrder")
+            }
             if queue.failedCount > 0 { LabeledContent("Not printed", value: queue.failedCount.formatted()) }
             if queue.uncertainCount > 0 { LabeledContent("Check label", value: queue.uncertainCount.formatted()).foregroundStyle(.orange) }
             Text("Completed means the printer confirmed completion. Check the physical output before applying labels. Printing starts only when you tap Print Queued Labels.")
