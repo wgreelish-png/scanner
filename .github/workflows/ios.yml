@@ -26,6 +26,7 @@ on:
         options:
           - all
           - printer_transport
+          - label_controls
           - label_preview
           - label_queue
           - show_readiness
@@ -54,7 +55,7 @@ jobs:
         env:
           SCANNER_TEST_SCOPE: ${{ inputs.test_scope || 'all' }}
         run: |
-          if [ "$SCANNER_TEST_SCOPE" = printer_transport ]; then
+          if [ "$SCANNER_TEST_SCOPE" = printer_transport ] || [ "$SCANNER_TEST_SCOPE" = label_controls ]; then
             bash scripts/run_ios_tests.sh CardShowScannerTests/NiimbotProtocolTests CardShowScannerTests/ScannerDiagnosticsTests CardShowScannerTests/LabelPrintQueueTests CardShowScannerTests/NiimbotImageTransferPreferencesTests CardShowScannerTests/NiimbotRollReadCoordinatorTests CardShowScannerTests/NiimbotLabelCatalogTests CardShowScannerTests/NiimbotLabelProductResolverTests
           elif [ "$SCANNER_TEST_SCOPE" = label_preview ]; then
             bash scripts/run_ios_tests.sh CardShowScannerTests/InventoryLabelTests CardShowScannerTests/AdaptiveLabelRenderingTests CardShowScannerTests/CustomPriceTagTests CardShowScannerTests/CustomLabelQueueTests CardShowScannerTests/LabelPrintQueueTests CardShowScannerTests/NiimbotImageTransferPreferencesTests CardShowScannerTests/NiimbotRollReadCoordinatorTests CardShowScannerTests/NiimbotLabelCatalogTests CardShowScannerTests/ScannerDiagnosticsTests CardShowScannerTests/NiimbotLabelProductResolverTests CardShowScannerTests/ShowInventorySortTests CardShowScannerTests/InventoryLabelBatchTests
@@ -128,6 +129,15 @@ jobs:
               CardShowScannerUITests/ReviewPresentationUITests/testListLookupStaysVisibleAfterScrollingAndPreservesCardsAndOfferDraft \
               CardShowScannerUITests/ShowTransactionsUITests/testOwnedScannedListEntersInventoryOnceWithoutChangingShowCash \
               CardShowScannerUITests/InventoryLabelsUITests/testCustomPrintingShowsProgressWaitsForFinalAcknowledgementAndReturnsToPriceTags
+          elif [ "$SCANNER_TEST_SCOPE" = label_controls ]; then
+            bash scripts/run_ios_tests.sh \
+              CardShowScannerUITests/InventoryLabelsUITests/testPaperModeCanBeChosenOfflineAndPersistsAfterUnprintedQueueCleanup \
+              CardShowScannerUITests/InventoryLabelsUITests/testPauseDuringUploadKeepsEveryUnconfirmedCopyAvailableForReview \
+              CardShowScannerUITests/InventoryLabelsUITests/testPauseKeepsProgressForQueueReviewInsteadOfReturningToPriceTags \
+              CardShowScannerUITests/InventoryLabelsUITests/testPrintingFailureStaysAvailableForReviewWithoutAutomaticRetryOrNavigation \
+              CardShowScannerUITests/InventoryLabelsUITests/testSingleCardDraftIsIsolatedAndAcceptsZeroWithoutClampingCopies \
+              CardShowScannerUITests/InventoryLabelsUITests/testInventoryPrintOrderSortsNumericPricesAndRemembersSelection \
+              CardShowScannerUITests/InventoryLabelsUITests/testLeavingCustomAndBulkPrintQueuesClearsThemAndPreservesPreferences
           else
             bash scripts/run_ios_tests.sh CardShowScannerUITests
           fi
@@ -150,7 +160,7 @@ jobs:
             NativeTests.log
             NativeCrashSummary.log
   research_ui:
-    if: ${{ github.event_name != 'workflow_dispatch' || ((inputs.job_scope == 'all' || inputs.job_scope == 'research_ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || ((inputs.job_scope == 'all' || inputs.job_scope == 'research_ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness' && inputs.test_scope != 'label_controls') }}
     runs-on: macos-15-intel
     timeout-minutes: 120
     steps:
@@ -177,7 +187,7 @@ jobs:
             NativeTests.log
             NativeCrashSummary.log
   evidence_ui:
-    if: ${{ github.event_name != 'workflow_dispatch' || ((inputs.job_scope == 'all' || inputs.job_scope == 'evidence_ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || ((inputs.job_scope == 'all' || inputs.job_scope == 'evidence_ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness' && inputs.test_scope != 'label_controls') }}
     runs-on: macos-15-intel
     timeout-minutes: 120
     steps:
@@ -204,7 +214,7 @@ jobs:
             NativeTests.log
             NativeCrashSummary.log
   budget_ui:
-    if: ${{ github.event_name != 'workflow_dispatch' || ((inputs.job_scope == 'all' || inputs.job_scope == 'budget_ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || ((inputs.job_scope == 'all' || inputs.job_scope == 'budget_ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness' && inputs.test_scope != 'label_controls') }}
     runs-on: macos-15-intel
     timeout-minutes: 120
     steps:

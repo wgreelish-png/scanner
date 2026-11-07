@@ -48,7 +48,7 @@ elif args[:2] == ["simctl", "bootstatus"] and os.environ.get("SCANNER_FAIL_READY
 
 
 class UIRunnerFlowTests(unittest.TestCase):
-    def run_flow(self, target="CardShowScannerUITests", **settings):
+    def run_flow(self, target="CardShowScannerUITests", additional_targets=(), **settings):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             scripts, binary = root / "scripts", root / "bin"
@@ -62,9 +62,9 @@ class UIRunnerFlowTests(unittest.TestCase):
             events = root / "events.jsonl"
             environment = dict(os.environ, PATH=str(binary) + os.pathsep + os.environ["PATH"],
                                RUNNER_TEMP=directory, SCANNER_EVENT_LOG=str(events), **settings)
-            result = subprocess.run(["bash", "scripts/run_ios_tests.sh", target], cwd=root,
+            result = subprocess.run(["bash", "scripts/run_ios_tests.sh", target, *additional_targets], cwd=root,
                                     env=environment, text=True, capture_output=True, timeout=20)
-            commands = [json.loads(line) for line in events.read_text().splitlines()]
+            commands = [json.loads(line) for line in events.read_text().splitlines()] if events.exists() else []
             log = (root / "NativeTests.log").read_text() if (root / "NativeTests.log").exists() else ""
             return result, commands, log
 
@@ -131,20 +131,40 @@ class UIRunnerFlowTests(unittest.TestCase):
                                      "The simulator destination, not a hard-coded architecture, selects the build")
 
     def test_ui_navigation_has_a_bounded_longer_allowance_without_relaxing_native_test_limits(self):
+        label_targets = tuple("CardShowScannerUITests/InventoryLabelsUITests/" + name for name in (
+            "testPaperModeCanBeChosenOfflineAndPersistsAfterUnprintedQueueCleanup",
+            "testPauseDuringUploadKeepsEveryUnconfirmedCopyAvailableForReview",
+            "testPauseKeepsProgressForQueueReviewInsteadOfReturningToPriceTags",
+            "testPrintingFailureStaysAvailableForReviewWithoutAutomaticRetryOrNavigation",
+            "testSingleCardDraftIsIsolatedAndAcceptsZeroWithoutClampingCopies",
+            "testInventoryPrintOrderSortsNumericPricesAndRemembersSelection",
+            "testLeavingCustomAndBulkPrintQueuesClearsThemAndPreservesPreferences"))
         ui_arguments = None
-        for target, action, allowance in (("CardShowScannerUITests", "test-without-building", "360"),
-                                          ("CardShowScannerTests", "test", "180")):
-            with self.subTest(target=target):
-                result, commands, _ = self.run_flow(target=target)
+        for targets, action, allowance in ((("CardShowScannerUITests",), "test-without-building", "360"),
+                                           (("CardShowScannerTests",), "test", "180"),
+                                           (label_targets, "test-without-building", "360")):
+            with self.subTest(targets=targets):
+                result, commands, _ = self.run_flow(target=targets[0], additional_targets=targets[1:])
                 self.assertEqual(result.returncode, 0, result.stderr)
                 arguments = next(row["args"] for row in commands
                                  if row["tool"] == "xcodebuild" and row["args"][0] == action)
                 self.assertEqual(arguments[arguments.index("-test-timeouts-enabled") + 1], "YES")
                 for option in ("-default-test-execution-time-allowance", "-maximum-test-execution-time-allowance"):
                     self.assertEqual(arguments[arguments.index(option) + 1], allowance)
-                self.assertIn("-only-testing:" + target, arguments)
-                if target == "CardShowScannerUITests":
+                for target in targets:
+                    self.assertIn("-only-testing:" + target, arguments)
+                if targets == ("CardShowScannerUITests",):
                     ui_arguments = arguments
+                elif targets == label_targets:
+                    self.assertEqual([value for value in arguments if value.startswith("-only-testing:")],
+                                     ["-only-testing:" + target for target in label_targets])
+                    self.assertFalse(any(value.startswith("-skip-testing:") for value in arguments))
+
+        rejected, commands, _ = self.run_flow(target=label_targets[0],
+                                             additional_targets=(*label_targets[1:-1], label_targets[-1] + "Typo"))
+        self.assertEqual(rejected.returncode, 2)
+        self.assertIn("Unknown test target", rejected.stderr)
+        self.assertFalse(commands, "An unallowlisted method must fail before invoking any tool")
 
         root = Path(__file__).resolve().parents[1]
         workflow = (root / ".github/workflows/ios.yml").read_text()
@@ -177,6 +197,21 @@ class UIRunnerFlowTests(unittest.TestCase):
         self.assertIn("python3 -m unittest discover -s scripts -p 'test_ui_runner_flow.py'", job_blocks["ui"])
         self.assertLess(job_blocks["ui"].index("Validate UI runner timing"),
                         job_blocks["ui"].index("Build and run UI regression tests"))
+        options = workflow.split("      test_scope:\n", 1)[1].split("\nconcurrency:\n", 1)[0]
+        self.assertIn("          - label_controls\n", options)
+        self.assertNotIn("          - paper_mode\n", options)
+        controls_branch = re.search(r'elif \[ "\$SCANNER_TEST_SCOPE" = label_controls \]; then\n'
+                                    r'(.*?)(?=\n          (?:elif|else|fi)\b)', job_blocks["ui"], re.DOTALL)
+        self.assertIsNotNone(controls_branch)
+        self.assertEqual(controls_branch.group(1).replace("\\\n", " ").split(),
+                         ["bash", "scripts/run_ios_tests.sh", *label_targets])
+        self.assertIn('if [ "$SCANNER_TEST_SCOPE" = printer_transport ] || '
+                      '[ "$SCANNER_TEST_SCOPE" = label_controls ]; then', job_blocks["native"])
+        for name in ("research_ui", "evidence_ui", "budget_ui"):
+            self.assertIn("inputs.test_scope != 'label_controls'", job_blocks[name].splitlines()[0])
+        label_source = (root / "UITests/InventoryLabelsUITests.swift").read_text()
+        for target in label_targets:
+            self.assertRegex(label_source, r"\bfunc\s+" + target.rsplit("/", 1)[1] + r"\s*\(")
 
     def test_readiness_timeout_reports_bounded_progress_and_nonzero_status(self):
         failure = subprocess.TimeoutExpired(["xcrun", "simctl", "bootstatus"], 300,

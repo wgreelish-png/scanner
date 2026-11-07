@@ -1199,7 +1199,7 @@ import XCTest
         XCTAssertTrue(mode.waitForExistence(timeout: 5))
         tap(mode.buttons["Gap"], app: app)
         XCTAssertTrue(mode.buttons["Gap"].isSelected)
-        let connection = app.descendants(matching: .any)["labelPrinter.connection"]
+        let connection = app.staticTexts["labelPrinter.connection"]
         let status = app.staticTexts["labelPrinter.status"]
         let originalConnection = connection.label, originalStatus = status.label
         assertContains("not connected", element: connection)
@@ -1362,7 +1362,7 @@ import XCTest
         XCTAssertFalse(app.buttons["labelProgress.fixtureFinish"].exists)
         tap(app.buttons["labelProgress.reviewQueue"], app: app)
         assertContains("0/2 completed", element: app.staticTexts["labelQueue.progress"])
-        XCTAssertTrue(app.buttons["labelQueue.retrySelected"].exists)
+        assertManualRetryVisible(in: app)
         assertNoBluetoothPrompt(app: app)
     }
 
@@ -1398,7 +1398,7 @@ import XCTest
         tap(app.buttons["labelProgress.reviewQueue"], app: app)
         XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
         assertContains("0/2 completed", element: app.staticTexts["labelQueue.progress"])
-        XCTAssertTrue(app.buttons["labelQueue.retrySelected"].exists)
+        assertManualRetryVisible(in: app)
         assertNoBluetoothPrompt(app: app)
     }
 
@@ -1417,8 +1417,9 @@ import XCTest
         XCTAssertFalse(app.progressIndicators["labelProgress.uploadBar"].exists)
         tap(app.buttons["labelProgress.reviewQueue"], app: app)
         XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
+        assertContains("0/2 completed", element: app.staticTexts["labelQueue.progress"])
         XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled)
-        XCTAssertTrue(app.buttons["labelQueue.retrySelected"].exists)
+        assertManualRetryVisible(in: app)
         assertNoBluetoothPrompt(app: app)
     }
 
@@ -1513,6 +1514,24 @@ import XCTest
             if towardTop { queue.swipeDown() } else { queue.swipeUp() }
         }
         XCTAssertTrue(element.exists && element.isHittable, "Expected a control in the foreground queue")
+    }
+
+    private func assertManualRetryVisible(in app: XCUIApplication,
+                                          file: StaticString = #filePath, line: UInt = #line) {
+        let retry = app.buttons["labelQueue.retrySelected"]
+        let foregroundQueue = app.collectionViews["labelQueue.screen"]
+        XCTAssertTrue(foregroundQueue.waitForExistence(timeout: 5), file: file, line: line)
+        for _ in 0..<12 {
+            if retry.exists && retry.frame.height > 0 && foregroundQueue.frame.contains(retry.frame)
+                && retry.frame.maxY < app.staticTexts["labelQueue.progress"].frame.minY - 12 { break }
+            if retry.exists && retry.frame.height > 0 && retry.frame.minY < foregroundQueue.frame.minY { foregroundQueue.swipeDown() }
+            else { foregroundQueue.swipeUp() }
+        }
+        XCTAssertTrue(retry.exists, file: file, line: line)
+        XCTAssertTrue(retry.frame.height > 0 && foregroundQueue.frame.contains(retry.frame),
+                      "The retry control must occupy the foreground queue", file: file, line: line)
+        XCTAssertLessThan(retry.frame.maxY, app.staticTexts["labelQueue.progress"].frame.minY - 12,
+                          "The retry control must be visible above the fixed print footer", file: file, line: line)
     }
 
     private func failFixtureUploadAndReviewQueue(app: XCUIApplication) {
