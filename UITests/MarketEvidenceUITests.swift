@@ -60,19 +60,23 @@ import XCTest
         defer { app.terminate() }
         XCTAssertTrue(app.navigationBars["Research & Demand"].waitForExistence(timeout: 10))
         let windows = app.segmentedControls["research.historyPeriod"]
-        reveal(windows, in: app)
-        let days = app.staticTexts["research.evidenceDays"]
-        reveal(days, in: app)
-        assertReportedValue("3", title: "Reported days in this period", element: days)
-        let sales = app.staticTexts["research.evidenceSales"]
-        reveal(sales, in: app)
-        assertReportedValue("5", title: "Sales in returned days", element: sales)
-        UITestInteraction.tap(windows.buttons["30d"], in: app)
-        assertReportedValue("2", title: "Reported days in this period", element: days)
-        assertReportedValue("2", title: "Sales in returned days", element: sales)
-        UITestInteraction.tap(windows.buttons["All"], in: app)
-        assertReportedValue("4", title: "Reported days in this period", element: days)
-        assertReportedValue("6", title: "Sales in returned days", element: sales)
+        guard windows.waitForExistence(timeout: 5) else {
+            XCTFail("Missing research.historyPeriod: the evidence fixture must expose its history picker")
+            return
+        }
+        guard UITestInteraction.reveal(windows, in: app, identifier: "research.historyPeriod") else { return }
+        let days = app.descendants(matching: .any).matching(identifier: "research.evidenceDays").firstMatch
+        guard UITestInteraction.reveal(days, in: app, identifier: "research.evidenceDays"),
+              assertReportedValue("3", title: "Reported days in this period", element: days) else { return }
+        let sales = app.descendants(matching: .any).matching(identifier: "research.evidenceSales").firstMatch
+        guard UITestInteraction.reveal(sales, in: app, identifier: "research.evidenceSales"),
+              assertReportedValue("5", title: "Sales in returned days", element: sales) else { return }
+        guard UITestInteraction.tap(windows.buttons["30d"], in: app, identifier: "research.historyPeriod.30d"),
+              assertReportedValue("2", title: "Reported days in this period", element: days),
+              assertReportedValue("2", title: "Sales in returned days", element: sales) else { return }
+        guard UITestInteraction.tap(windows.buttons["All"], in: app, identifier: "research.historyPeriod.All"),
+              assertReportedValue("4", title: "Reported days in this period", element: days),
+              assertReportedValue("6", title: "Sales in returned days", element: sales) else { return }
         revealChart(app.descendants(matching: .any)["research.historyChart"], in: app)
         revealChart(app.descendants(matching: .any)["research.salesHistoryChart"], in: app)
         XCTAssertFalse(app.alerts.firstMatch.exists)
@@ -120,14 +124,19 @@ import XCTest
     // LabeledContent can expose its value as an independent text element or
     // combine it with its title. Both representations must retain the exact
     // expected value; substring matches would confuse 12 with 120 or 0.
+    @discardableResult
     private func assertReportedValue(_ expected: String, title: String, element: XCUIElement,
-                                     file: StaticString = #filePath, line: UInt = #line) {
+                                     file: StaticString = #filePath, line: UInt = #line) -> Bool {
         let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@ OR label == %@", expected, title + ", " + expected), object: element)
-        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 5), .completed,
-                       "The reported value must settle after a window change", file: file, line: line)
+        guard XCTWaiter.wait(for: [ready], timeout: 5) == .completed else {
+            XCTFail("The reported value must settle after a window change: \(element.identifier)", file: file, line: line)
+            return false
+        }
         let actual = element.label
-        XCTAssertTrue([expected, title + ", " + expected].contains(actual),
+        let matches = [expected, title + ", " + expected].contains(actual)
+        XCTAssertTrue(matches,
                       "Expected \(title): \(expected); got \(actual)", file: file, line: line)
+        return matches
     }
 
     private func launchEvidence(_ argument: String) -> XCUIApplication {

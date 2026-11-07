@@ -47,7 +47,7 @@ struct ResearchEvidenceView: View {
             }
             Text("Periods use calendar days ending today in UTC. Missing dates and values stay missing; a reported zero stays zero.")
                 .font(.caption).foregroundStyle(.secondary)
-        }.accessibilityIdentifier("research.evidence")
+        }
 
         Section("Daily sold average • USD") {
             if evidence.priceMarks.isEmpty {

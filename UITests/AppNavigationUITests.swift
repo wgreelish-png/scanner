@@ -314,8 +314,8 @@ import XCTest
 
     private func setFixtureDraft(price: String, in app: XCUIApplication) {
         let quantity = app.steppers["cardEditor.quantity"]
-        reveal(quantity, in: app)
-        _ = UITestInteraction.tap(quantity.buttons["Increment"], in: app)
+        _ = UITestInteraction.tap(quantity.buttons["Increment"], in: app,
+                                  identifier: "cardEditor.quantity.increment")
         tapVisible(app.buttons["cardEditor.adjustPrice"], in: app)
         let field = app.textFields["cardEditor.manualPrice"]
         _ = UITestInteraction.tap(field, in: app)
@@ -334,7 +334,9 @@ import XCTest
         reveal(amount, in: app, identifier: "cardEditor.manualPrice", file: file, line: line)
         XCTAssertEqual(amount.value as? String, price, file: file, line: line)
         let stepper = app.steppers["cardEditor.quantity"]
-        reveal(stepper, in: app, identifier: "cardEditor.quantity", file: file, line: line)
+        // UIKit exposes the stepper's actionable buttons as hittable; its
+        // composite parent may remain non-hittable while fully on screen.
+        reveal(stepper.buttons["Increment"], in: app, identifier: "cardEditor.quantity.increment", file: file, line: line)
         let value = String(quantity)
         XCTAssertTrue(stepper.value as? String == value || stepper.label.contains(value) ||
                       stepper.staticTexts[value].exists, "Expected draft quantity \(quantity)", file: file, line: line)
@@ -343,7 +345,7 @@ import XCTest
     private func assertMainTabs(in app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
         for title in ["Lists", "Scan", "Show", "Research", "Settings"] {
             let tab = app.tabBars.buttons[title]
-            XCTAssertTrue(tab.waitForExistence(timeout: 5), "Missing \(title) tab", file: file, line: line)
+            XCTAssertTrue(tab.exists || tab.waitForExistence(timeout: 5), "Missing \(title) tab", file: file, line: line)
             XCTAssertTrue(tab.isHittable, "\(title) must be usable without dismissing screens", file: file, line: line)
         }
     }

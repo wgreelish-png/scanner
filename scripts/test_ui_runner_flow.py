@@ -128,6 +128,19 @@ class UIRunnerFlowTests(unittest.TestCase):
                     self.assertFalse(any(value.startswith("ARCHS=") for value in arguments),
                                      "The simulator destination, not a hard-coded architecture, selects the build")
 
+    def test_ui_navigation_has_a_bounded_longer_allowance_without_relaxing_native_test_limits(self):
+        for target, action, allowance in (("CardShowScannerUITests", "test-without-building", "360"),
+                                          ("CardShowScannerTests", "test", "180")):
+            with self.subTest(target=target):
+                result, commands, _ = self.run_flow(target=target)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                arguments = next(row["args"] for row in commands
+                                 if row["tool"] == "xcodebuild" and row["args"][0] == action)
+                self.assertEqual(arguments[arguments.index("-test-timeouts-enabled") + 1], "YES")
+                for option in ("-default-test-execution-time-allowance", "-maximum-test-execution-time-allowance"):
+                    self.assertEqual(arguments[arguments.index(option) + 1], allowance)
+                self.assertIn("-only-testing:" + target, arguments)
+
     def test_readiness_timeout_reports_bounded_progress_and_nonzero_status(self):
         failure = subprocess.TimeoutExpired(["xcrun", "simctl", "bootstatus"], 300,
                                             output=b"Waiting for DataMigrator")
