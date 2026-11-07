@@ -95,7 +95,9 @@ import XCTest
         let queue = app.collectionViews["labelQueue.screen"]
         let sortQueue = queue.buttons["labelQueue.sortOrder"]
         revealInForegroundQueue(sortQueue, towardTop: true, app: app)
-        sortQueue.tap()
+        tapVisibleLabelControl(sortQueue, screen: "Label Print Queue", app: app)
+        attachLabelHierarchyIfMissing(app.buttons["Price: High to Low"],
+                                      name: "Queue sort options after visible-center tap", app: app)
         tap(app.buttons["Price: High to Low"], app: app)
         assertForegroundQueueCardOrder(["Stock A", "Stock B"], app: app)
         XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled, "Sorting cannot begin a hardware print")
