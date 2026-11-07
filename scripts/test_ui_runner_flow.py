@@ -4,8 +4,10 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import math
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -129,6 +131,7 @@ class UIRunnerFlowTests(unittest.TestCase):
                                      "The simulator destination, not a hard-coded architecture, selects the build")
 
     def test_ui_navigation_has_a_bounded_longer_allowance_without_relaxing_native_test_limits(self):
+        ui_arguments = None
         for target, action, allowance in (("CardShowScannerUITests", "test-without-building", "360"),
                                           ("CardShowScannerTests", "test", "180")):
             with self.subTest(target=target):
@@ -140,6 +143,40 @@ class UIRunnerFlowTests(unittest.TestCase):
                 for option in ("-default-test-execution-time-allowance", "-maximum-test-execution-time-allowance"):
                     self.assertEqual(arguments[arguments.index(option) + 1], allowance)
                 self.assertIn("-only-testing:" + target, arguments)
+                if target == "CardShowScannerUITests":
+                    ui_arguments = arguments
+
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/ios.yml").read_text()
+        job_blocks = dict(re.findall(r"(?ms)^  (\w+):\n(.*?)(?=^  \w+:\n|\Z)",
+                                     workflow.split("\njobs:\n", 1)[1]))
+        budgets = {name: int(re.search(r"(?m)^    timeout-minutes: (\d+)$", block).group(1))
+                   for name, block in job_blocks.items()}
+        # Derive the full selection from the actual runner arguments rather
+        # than letting a job deadline silently truncate later requested cases.
+        excluded = {argument.split("/", 1)[1] for argument in ui_arguments
+                    if argument.startswith("-skip-testing:CardShowScannerUITests/")}
+        selected_cases = 0
+        for path in (root / "UITests").glob("*UITests.swift"):
+            source = path.read_text()
+            classes = re.findall(r"\bclass\s+(\w+)\s*:\s*XCTestCase\b", source)
+            self.assertEqual(len(classes), 1, str(path))
+            if classes[0] not in excluded:
+                selected_cases += len(re.findall(r"(?m)^\s*func\s+test\w+\s*\(", source))
+        self.assertGreater(selected_cases, 0)
+        seconds_per_case = int(ui_arguments[ui_arguments.index("-maximum-test-execution-time-allowance") + 1])
+        self.assertGreaterEqual(budgets.pop("ui"), math.ceil(selected_cases * seconds_per_case / 60) + 30)
+        self.assertEqual(budgets, {"native": 90, "research_ui": 120, "evidence_ui": 120,
+                                   "budget_ui": 120, "release": 30})
+
+        concurrency = workflow.split("\nconcurrency:\n", 1)[1].split("\njobs:\n", 1)[0]
+        group = re.search(r"(?m)^  group: (.+)$", concurrency).group(1)
+        for dimension in ("${{ inputs.job_scope || 'all' }}", "${{ inputs.test_scope || 'all' }}"):
+            self.assertIn(dimension, group)
+        self.assertRegex(concurrency, r"(?m)^  cancel-in-progress: false$")
+        self.assertIn("python3 -m unittest discover -s scripts -p 'test_ui_runner_flow.py'", job_blocks["ui"])
+        self.assertLess(job_blocks["ui"].index("Validate UI runner timing"),
+                        job_blocks["ui"].index("Build and run UI regression tests"))
 
     def test_readiness_timeout_reports_bounded_progress_and_nonzero_status(self):
         failure = subprocess.TimeoutExpired(["xcrun", "simctl", "bootstatus"], 300,

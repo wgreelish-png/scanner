@@ -30,7 +30,7 @@ on:
           - label_queue
           - show_readiness
 concurrency:
-  group: ios-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}-${{ inputs.job_scope || 'all' }}
+  group: ios-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}-${{ inputs.job_scope || 'all' }}-${{ inputs.test_scope || 'all' }}
   # Let an active validation finish when another run is requested on this branch.
   cancel-in-progress: false
 jobs:
@@ -99,9 +99,12 @@ jobs:
   ui:
     if: ${{ github.event_name != 'workflow_dispatch' || ((inputs.job_scope == 'all' || inputs.job_scope == 'ui') && inputs.test_scope != 'printer_transport') }}
     runs-on: macos-15-intel
-    timeout-minutes: 120
+    # The full selection can use 39 bounded six-minute cases, plus cold setup.
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
+      - name: Validate UI runner timing and concurrency contracts
+        run: python3 -m unittest discover -s scripts -p 'test_ui_runner_flow.py'
       - name: Build and run UI regression tests
         id: ui_tests
         env:
