@@ -420,10 +420,11 @@ import XCTest
         XCTAssertNotNil(UUID(uuidString: firstID)); XCTAssertNotNil(UUID(uuidString: secondID))
         tap(first, app: app); tap(second, app: app)
         XCTAssertTrue(first.isSelected); XCTAssertTrue(second.isSelected)
-        let quantity = app.steppers["showInventory.selectionQuantity." + firstID]
-        let increment = quantity.buttons["Increment"]
+        let quantityID = "showInventory.selectionQuantity." + firstID
+        let quantity = app.steppers[quantityID]
+        let increment = quantity.buttons[quantityID + "-Increment"]
         guard UITestInteraction.reveal(increment, in: app,
-            identifier: "showInventory.selectionQuantity." + firstID + ".increment", towardTopWhenMissing: true) else { return }
+            identifier: quantityID + "-Increment", towardTopWhenMissing: true) else { return }
         tap(increment, app: app)
         assertContains("3 selected", element: app.staticTexts["showInventory.selectedQuantity"])
         assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
@@ -444,7 +445,7 @@ import XCTest
 
         tap(first, app: app)
         guard UITestInteraction.reveal(increment, in: app,
-            identifier: "showInventory.selectionQuantity." + firstID + ".increment", towardTopWhenMissing: true) else { return }
+            identifier: quantityID + "-Increment", towardTopWhenMissing: true) else { return }
         tap(increment, app: app)
         assertContains("3 selected", element: app.staticTexts["showInventory.selectedQuantity"])
         tap(action, app: app)

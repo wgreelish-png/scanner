@@ -166,8 +166,8 @@ import XCTest
         XCTAssertTrue(app.navigationBars["Card Details"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.staticTexts["cardEditor.name"].label, "Synthetic scan 3")
         let quantity = app.steppers["cardEditor.quantity"]
-        _ = UITestInteraction.reveal(quantity, in: app)
-        _ = UITestInteraction.tap(quantity.buttons["Increment"], in: app)
+        _ = UITestInteraction.tap(quantity.buttons["cardEditor.quantity-Increment"], in: app,
+                                  identifier: "cardEditor.quantity-Increment")
         _ = UITestInteraction.tapToolbar(app.buttons["cardEditor.save"], in: app)
         XCTAssertTrue(newest.waitForExistence(timeout: 5))
         XCTAssertTrue(newest.label.contains("Qty 2"), "Quick edits update the same scanned row")

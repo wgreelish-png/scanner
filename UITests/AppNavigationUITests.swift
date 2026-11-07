@@ -314,8 +314,8 @@ import XCTest
 
     private func setFixtureDraft(price: String, in app: XCUIApplication) {
         let quantity = app.steppers["cardEditor.quantity"]
-        _ = UITestInteraction.tap(quantity.buttons["Increment"], in: app,
-                                  identifier: "cardEditor.quantity.increment")
+        _ = UITestInteraction.tap(quantity.buttons["cardEditor.quantity-Increment"], in: app,
+                                  identifier: "cardEditor.quantity-Increment")
         tapVisible(app.buttons["cardEditor.adjustPrice"], in: app)
         let field = app.textFields["cardEditor.manualPrice"]
         _ = UITestInteraction.tap(field, in: app)
@@ -336,7 +336,7 @@ import XCTest
         let stepper = app.steppers["cardEditor.quantity"]
         // UIKit exposes the stepper's actionable buttons as hittable; its
         // composite parent may remain non-hittable while fully on screen.
-        reveal(stepper.buttons["Increment"], in: app, identifier: "cardEditor.quantity.increment", file: file, line: line)
+        reveal(stepper.buttons["cardEditor.quantity-Increment"], in: app, identifier: "cardEditor.quantity-Increment", file: file, line: line)
         let value = String(quantity)
         XCTAssertTrue(stepper.value as? String == value || stepper.label.contains(value) ||
                       stepper.staticTexts[value].exists, "Expected draft quantity \(quantity)", file: file, line: line)
