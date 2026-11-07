@@ -100,6 +100,7 @@ private struct ShowHomeRouteCard: View {
     @State private var visible = false
     @State private var store: ShowBudgetStore
     @State private var search = ""
+    @FocusState private var searchFocused: Bool
     @AppStorage("showInventorySort") private var sortPreference = ShowInventorySort.nameAscending.rawValue
     @State private var gamePreferences = InventoryGamePreferences.shared
     @State private var seedError: String?
@@ -199,9 +200,7 @@ private struct ShowHomeRouteCard: View {
         }
         .accessibilityIdentifier("showInventory.screen")
         .navigationTitle("Show Inventory").navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $search, prompt: "Name, set, or card number")
         .scrollDismissesKeyboard(.interactively)
-        .onSubmit(of: .search) { endSearchEditing() }
         .safeAreaInset(edge: .top, spacing: 0) { inventorySummary }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             TimelineView(ForegroundMinuteSchedule(enabled: visible && scenePhase == .active)) { _ in
@@ -252,6 +251,7 @@ private struct ShowHomeRouteCard: View {
                     Text(game).tag(game)
                 }
             }.pickerStyle(.menu).accessibilityIdentifier("showInventory.game")
+            inventoryLookup
             if selectingTransaction {
                 HStack {
                     Text("\(transactionQuantities.values.reduce(0, +).formatted()) selected")
@@ -274,6 +274,33 @@ private struct ShowHomeRouteCard: View {
         .padding(.horizontal, 16).padding(.vertical, 10)
         .background(.bar)
         .overlay(alignment: .bottom) { Divider() }
+    }
+
+    private var inventoryLookup: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            TextField("Name, set, or card number", text: $search)
+                .frame(minHeight: 44)
+                .focused($searchFocused)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                .submitLabel(.search).onSubmit { endSearchEditing() }
+                .accessibilityLabel("Look up inventory")
+                .accessibilityIdentifier("showInventory.search")
+            if !search.isEmpty {
+                Button {
+                    search = ""
+                    searchFocused = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        .frame(minWidth: 44, minHeight: 44)
+                }.buttonStyle(.plain)
+                    .accessibilityLabel("Clear inventory search")
+                    .accessibilityIdentifier("showInventory.clearSearch")
+            }
+        }
+        .padding(.horizontal, 10).frame(minHeight: 44)
+        .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10))
     }
 
     private var transactionAction: some View {
@@ -349,6 +376,7 @@ private struct ShowHomeRouteCard: View {
     }
 
     private func endSearchEditing() {
+        searchFocused = false
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 

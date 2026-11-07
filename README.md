@@ -26,6 +26,10 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 101 keeps the inventory lookup field in the fixed header, so name, set
+and card-number searches stay reachable while scrolling. Clear the query to
+restore the selected game’s stock; existing inventory sorting still applies.
+
 Build 100 adds a [shared, remembered game filter](docs/InventoryByGame.md) to
 Show Inventory and Price Tags. Inventory summaries and new label batches use
 the selected game; All Games retains the existing default. Existing label
