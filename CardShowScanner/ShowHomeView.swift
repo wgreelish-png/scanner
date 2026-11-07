@@ -390,8 +390,9 @@ private struct ShowInventoryTransactionSelectionStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View { configuration.label }
 }
 
-private struct ShowWorkingInventoryRow: View {
+@MainActor private struct ShowWorkingInventoryRow: View {
     let item: ShowInventoryItem
+    @State private var tagApprovals = TagApprovalStore.shared
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -410,6 +411,11 @@ private struct ShowWorkingInventoryRow: View {
                     Text("Qty \(item.quantity.formatted())").font(.caption.weight(.semibold)).monospacedDigit()
                         .foregroundStyle(.indigo)
                 }
+                if let tag = tagApprovals.record(for: item.id)?.lastPrintedTag {
+                    Label("Last printed: \(tag.displayText)", systemImage: "tag")
+                        .font(.caption.weight(.medium)).foregroundStyle(.secondary).monospacedDigit()
+                        .accessibilityIdentifier("showInventory.lastPrintedTag." + item.id.uuidString)
+                }
             }.frame(maxWidth: .infinity, alignment: .leading)
         }.padding(.vertical, 5)
     }
@@ -419,6 +425,7 @@ private struct ShowWorkingInventoryRow: View {
     @Environment(\.modelContext) private var context
     let itemID: UUID
     let store: ShowBudgetStore
+    @State private var tagApprovals = TagApprovalStore.shared
     @State private var showingCostEditor = false
     @State private var showingLabel = false
     @State private var returnToPriceTagsAfterPrinting = false
@@ -439,6 +446,10 @@ private struct ShowWorkingInventoryRow: View {
                         }
                     }.padding(.vertical, 5)
                     LabeledContent("Available quantity", value: item.quantity.formatted())
+                    if let tag = tagApprovals.record(for: item.id)?.lastPrintedTag {
+                        LabeledContent("Last printed tag", value: tag.displayText)
+                            .monospacedDigit().accessibilityIdentifier("inventory.lastPrintedTag")
+                    }
                 }
                 Section("Cost & acquisition") {
                     LabeledContent("Source", value: item.originTitle).accessibilityIdentifier("inventory.origin")

@@ -26,6 +26,10 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 102 shows the saved last printed tag value in inventory rows and card
+details, separately from market value. Preparing a different price keeps the
+previous printed value visible until its replacement is confirmed printed.
+
 Build 101 keeps the inventory lookup field in the fixed header, so name, set
 and card-number searches stay reachable while scrolling. Clear the query to
 restore the selected game’s stock; existing inventory sorting still applies.
