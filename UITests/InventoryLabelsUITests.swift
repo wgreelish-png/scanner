@@ -333,14 +333,14 @@ import XCTest
         assertContains("2 labels", element: app.staticTexts["labels.totalCount"])
         assertInitialInventoryPreview("$35", app: app)
 
-        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        backFromFocusedLabelScreen("Label Details", app: app)
         XCTAssertTrue(app.navigationBars["Select Label Cards"].waitForExistence(timeout: 5))
         tap(app.buttons["labels.select." + stockAID], app: app)
         tap(app.buttons["labels.continueSelection"], app: app)
         assertContains("1 labels", element: app.staticTexts["labels.totalCount"])
         assertInitialInventoryPreview("$5", app: app)
 
-        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        backFromFocusedLabelScreen("Label Details", app: app)
         XCTAssertTrue(app.navigationBars["Select Label Cards"].waitForExistence(timeout: 5))
         tap(app.buttons["labels.select." + stockAID], app: app)
         tap(app.buttons["labels.continueSelection"], app: app)
@@ -383,7 +383,7 @@ import XCTest
         assertUnstartedQueue(app: app)
         closeBatchToInventory(app: app)
         assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
-        UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+        backFromFocusedLabelScreen("Show Inventory", app: app)
         assertBalances(app: app)
 
         app.terminate()
@@ -421,7 +421,18 @@ import XCTest
         let review = app.collectionViews["labels.review"]
         let prepare = app.buttons["labels.prepare"]
         guard revealInReviewAboveFooter(keepSticker, list: review, footer: prepare, app: app) else { return }
-        keepSticker.tap()
+        let rowFrame = keepSticker.frame
+        let nativeSwitches = app.switches.matching(NSPredicate(format: "identifier == %@", "")).allElementsBoundByIndex.filter {
+            let frame = $0.frame
+            return frame.width > 0 && frame.height > 0 && rowFrame.contains(frame) && frame.width < rowFrame.width
+        }
+        guard nativeSwitches.count == 1, let nativeSwitch = nativeSwitches.first,
+              nativeSwitch.isEnabled, nativeSwitch.isHittable,
+              revealInReviewAboveFooter(nativeSwitch, list: review, footer: prepare, app: app) else {
+            XCTFail("Expected one visible native switch inside the Keep Existing Sticker row")
+            return
+        }
+        tapVisibleLabelControl(nativeSwitch, screen: "Review Labels", app: app)
         let retained = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "1"), object: keepSticker)
         XCTAssertEqual(XCTWaiter.wait(for: [retained], timeout: 5), .completed,
                        "Keep Existing Sticker must be on before saving label choices")
@@ -539,6 +550,8 @@ import XCTest
         tap(app.buttons["labels.setBatchPrice"], app: app)
         enter("6", field: app.textFields["labels.batchPrice.amount"], app: app)
         tap(app.buttons["labels.batchPrice.cancel"], app: app)
+        attachLabelHierarchyIfMissing(app.buttons["labels.edit." + stockAID],
+                                      name: "Individual edit after batch-price Cancel", app: app)
         assertContains("$35", element: app.buttons["labels.edit." + stockAID])
         assertContains("$5", element: app.buttons["labels.edit." + stockBID])
 
@@ -662,6 +675,7 @@ import XCTest
         }
         tap(app.buttons["labels.expandReview." + ids["Unavailable Stock"]!], app: app)
         let preview = app.images["labels.bitmapPreview"].firstMatch
+        attachLabelHierarchyIfMissing(preview, name: "Expanded unavailable-price label preview", app: app)
         reveal(preview, app: app)
         XCTAssertTrue((preview.value as? String ?? "").contains("Blank price · write in"))
         XCTAssertFalse((preview.value as? String ?? "").contains("$0"))
@@ -730,6 +744,7 @@ import XCTest
         assertContains("1", element: included)
         tap(app.buttons["labels.expandReview." + bulkID], app: app)
         let preview = app.images["labels.bitmapPreview"].firstMatch
+        attachLabelHierarchyIfMissing(preview, name: "Expanded bulk label preview", app: app)
         reveal(preview, app: app)
         XCTAssertTrue((preview.value as? String ?? "").contains("2 for $1"))
         XCTAssertTrue(app.buttons["labels.prepare"].isEnabled)
@@ -1024,9 +1039,9 @@ import XCTest
         tap(app.buttons["customLabels.prepare"], app: app)
         assertContains("0/2 completed", element: app.staticTexts["labelQueue.progress"])
         let entry = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "labelQueue.entry.")).firstMatch
-        reveal(entry, app: app)
+        revealInForegroundQueue(entry, app: app)
         let queuedID = entry.identifier
-        tap(entry, app: app)
+        entry.tap()
         XCTAssertTrue(app.navigationBars["Queued Label"].waitForExistence(timeout: 5))
         let queuedPreview = app.images["labels.bitmapPreview"].firstMatch
         reveal(queuedPreview, app: app)
@@ -1687,12 +1702,35 @@ import XCTest
 
     private func revealInForegroundQueue(_ element: XCUIElement, towardTop: Bool = false, app: XCUIApplication) {
         let queue = app.collectionViews["labelQueue.screen"]
-        XCTAssertTrue(queue.waitForExistence(timeout: 5))
-        for _ in 0..<12 {
-            if element.exists && element.isHittable { break }
-            if towardTop { queue.swipeDown() } else { queue.swipeUp() }
+        let navigationBar = app.navigationBars["Label Print Queue"]
+        let progress = app.staticTexts["labelQueue.progress"]
+        guard queue.waitForExistence(timeout: 5), navigationBar.waitForExistence(timeout: 5),
+              progress.waitForExistence(timeout: 5) else {
+            XCTFail("Expected the foreground queue and its fixed print footer")
+            return
         }
-        XCTAssertTrue(element.exists && element.isHittable, "Expected a control in the foreground queue")
+        for attempt in 0..<12 {
+            let window = app.windows.firstMatch.frame
+            let listFrame = queue.frame.intersection(window)
+            let top = max(listFrame.minY, navigationBar.frame.maxY) + 8
+            let bottom = min(listFrame.maxY, progress.frame.minY - 12)
+            let viewport = CGRect(x: listFrame.minX, y: top, width: listFrame.width,
+                                  height: max(0, bottom - top))
+            let frame = element.exists ? element.frame : .zero
+            if queue.isHittable, element.exists, element.isHittable,
+               frame.width > 0, frame.height > 0, viewport.contains(frame) { return }
+            guard attempt < 11, viewport.width > 0, viewport.height > 44 else { break }
+            let scrollTowardTop = frame.width > 0 && frame.height > 0
+                ? frame.midY < viewport.midY : towardTop
+            let origin = app.windows.firstMatch.coordinate(withNormalizedOffset: .zero)
+            let x = viewport.minX + viewport.width * 0.97 - window.minX
+            let upper = viewport.minY + viewport.height * 0.28 - window.minY
+            let lower = viewport.minY + viewport.height * 0.72 - window.minY
+            let start = origin.withOffset(CGVector(dx: x, dy: scrollTowardTop ? upper : lower))
+            let end = origin.withOffset(CGVector(dx: x, dy: scrollTowardTop ? lower : upper))
+            start.press(forDuration: 0.05, thenDragTo: end)
+        }
+        XCTFail("Expected the complete control above the foreground queue's fixed print footer")
     }
 
     private func assertManualRetryVisible(in app: XCUIApplication,
@@ -1817,6 +1855,19 @@ import XCTest
     private func clearQueue(_ identifier: String, app: XCUIApplication) {
         tap(app.buttons[identifier], app: app)
         tap(app.buttons[identifier + ".confirm"], app: app)
+        let deadline = ProcessInfo.processInfo.systemUptime + 5
+        while true {
+            let button = app.buttons[identifier]
+            let frame = button.exists ? button.frame : .zero
+            if !app.buttons[identifier + ".confirm"].exists, !app.buttons[identifier + ".cancel"].exists,
+               button.exists, !button.isEnabled, frame.width > 0, frame.height > 0,
+               app.windows.firstMatch.frame.contains(frame) { return }
+            guard ProcessInfo.processInfo.systemUptime < deadline else {
+                XCTFail("Clearing must dismiss confirmation and disable the visible empty-queue action")
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
     }
 
     private func chooseGame(_ game: String, picker: XCUIElement, app: XCUIApplication) {
@@ -1906,6 +1957,17 @@ import XCTest
         XCTAssertTrue(element.waitForExistence(timeout: 5), file: file, line: line)
         let text = element.label + " " + element.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " ")
         XCTAssertTrue(text.contains(value), "Expected \(value), received \(text)", file: file, line: line)
+    }
+
+    private func attachLabelHierarchyIfMissing(_ element: XCUIElement, name: String, app: XCUIApplication) {
+        guard !element.waitForExistence(timeout: 5) else { return }
+        let hierarchy = app.debugDescription
+        XCTContext.runActivity(named: name) { activity in
+            let attachment = XCTAttachment(string: hierarchy)
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            activity.add(attachment)
+        }
     }
 
     private func enter(_ value: String, field: XCUIElement, app: XCUIApplication) {

@@ -32,8 +32,9 @@ on:
           - show_readiness
           - navigation_price
 concurrency:
-  group: ios-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}-${{ inputs.job_scope || 'all' }}-${{ inputs.test_scope || 'all' }}
+  group: ios-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}-${{ inputs.job_scope || 'all' }}-${{ inputs.test_scope || 'all' }}-${{ github.event_name == 'workflow_dispatch' && github.sha || 'automatic' }}
   # Let an active validation finish when another run is requested on this branch.
+  # Manual checks for different commits also retain their own pending slot.
   cancel-in-progress: false
 jobs:
   native:

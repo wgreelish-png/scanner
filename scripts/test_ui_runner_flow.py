@@ -206,7 +206,8 @@ class UIRunnerFlowTests(unittest.TestCase):
 
         concurrency = workflow.split("\nconcurrency:\n", 1)[1].split("\njobs:\n", 1)[0]
         group = re.search(r"(?m)^  group: (.+)$", concurrency).group(1)
-        for dimension in ("${{ inputs.job_scope || 'all' }}", "${{ inputs.test_scope || 'all' }}"):
+        for dimension in ("${{ inputs.job_scope || 'all' }}", "${{ inputs.test_scope || 'all' }}",
+                          "${{ github.event_name == 'workflow_dispatch' && github.sha || 'automatic' }}"):
             self.assertIn(dimension, group)
         self.assertRegex(concurrency, r"(?m)^  cancel-in-progress: false$")
         self.assertIn("python3 -m unittest discover -s scripts -p 'test_ui_runner_flow.py'", job_blocks["ui"])
