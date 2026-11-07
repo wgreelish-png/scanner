@@ -46,6 +46,12 @@ struct TCGBridgeEnvelope: Decodable {
     var matchGap: Double?
     var issueReason: String?
     var sampleAgeMS: Double?
+    var resourceMode: String?
+    var captureState: String?
+    var targetFPS: Double?
+    var cameraFPS: Double?
+    var processingActive: Bool?
+    var constraintState: String?
 }
 
 /// Diagnostics have their own strict scalar schema. Neither recognition payloads
@@ -58,9 +64,23 @@ struct ScannerDiagnosticRecord {
     static func validated(_ message: TCGBridgeEnvelope) -> Self? {
         let allowed: Set<String> = ["bridge_ready", "bridge_stopped", "startup_started", "modules_ready", "index_ready", "pack_ready", "pack_cache_warning",
             "backend_ready", "camera_requested", "camera_acquired", "video_playing", "scanner_ready", "startup_failed",
-            "scan_stats", "border_retry", "recognition_snapshot", "scan_issue", "recognition_settled", "camera_interrupted", "camera_backgrounded", "javascript_error", "javascript_rejection"]
+            "scan_stats", "border_retry", "recognition_snapshot", "scan_issue", "recognition_settled", "camera_interrupted", "camera_backgrounded", "camera_workload", "javascript_error", "javascript_rejection"]
         guard message.kind == "diagnostic", let event = message.event, allowed.contains(event) else { return nil }
         var fields: [String: String] = [:]
+        if event == "camera_workload" {
+            for (key, value, allowed) in [
+                ("resource_mode", message.resourceMode, ["normal", "reduced", "cooling"]),
+                ("capture_state", message.captureState, ["live", "review", "manual", "prompt", "stopped"]),
+                ("constraint_state", message.constraintState, ["pending", "applied", "unsupported", "failed", "inactive"])
+            ] {
+                if let value, allowed.contains(value) { fields[key] = value }
+            }
+            if let fps = message.targetFPS, [0.0, 1, 10, 30].contains(fps) { fields["target_fps"] = String(Int(fps)) }
+            if let fps = message.cameraFPS, fps.isFinite, (0...240).contains(fps) {
+                fields["camera_fps"] = String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), fps)
+            }
+            if let active = message.processingActive { fields["processing_active"] = String(active) }
+        }
         if let stage = message.stage, ["modules", "index", "pack", "backend", "camera", "video", "scan"].contains(stage) { fields["stage"] = stage }
         if let backend = message.backend, ["worker", "main"].contains(backend) { fields["backend"] = backend }
         if let kind = message.errorKind, ["NotAllowedError", "NotFoundError", "NotReadableError", "AbortError", "SecurityError", "TypeError", "RangeError", "Error"].contains(kind) { fields["reason"] = kind }

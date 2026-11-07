@@ -1,6 +1,7 @@
 # Device health monitoring and heat protection
 
-Build 76, revision `device-health-protection`.
+Build 103, revision `scanner-workload-reduction`, extends the build 76
+`device-health-protection` controls.
 
 ## Recorded measurements
 
@@ -60,10 +61,16 @@ that a crash or hang never happened.
 
 Protection uses iOS resource notifications independently of diagnostic opt-out:
 
-- Normal thermal state keeps the existing card scanner scheduler.
-- Fair thermal state or Low Power Mode reduces the card scanner processing /
-  overlay scheduling cadence to at most approximately 10 Hz. The live preview
-  remains managed by the camera; this is not a claim about video FPS.
+- Normal thermal state keeps the existing recognition scheduler and requests
+  a maximum 30 FPS camera stream. Recognition resolution remains unchanged.
+- Fair thermal state or Low Power Mode limits the card scanner processing /
+  overlay scheduler to approximately 5 Hz (200 ms between frame requests) and
+  requests a maximum 10 FPS camera stream. Actual rates depend on camera support.
+- A held choose-card review, manual-search sheet or unresolved manual-search
+  prompt stops recognition/outline work and requests a 1 FPS camera stream.
+  The warm stream remains mounted to preserve the stable preview when returning;
+  the loaded database/backend and frozen review remain available. This reduces
+  hidden work without reopening the database or changing matching thresholds.
 - Serious or critical thermal state stops card recognition and camera capture
   and shows Cooling down. The loaded database/backend and frozen card review
   remain available. Capture can resume after cooling only when the scanner is
@@ -83,6 +90,40 @@ Camera use consumes energy, and heat also depends on charging, brightness,
 ambient conditions and other workloads. These changes provide evidence and
 reduce scanner demand when iOS reports pressure. Physical-device acceptance
 is still required before calling sustained operation verified.
+
+## Diagnostic 19 and build 103
+
+The affected build 102 run began scanning at 02:36:06 UTC on November 7. iOS
+reported fair heat at 02:38:49 and serious heat at 02:48:44, approximately
+12 minutes 38 seconds after scanner start. Serious began during a manual-search
+sheet. The run contains no printing events; earlier retained printer logs belong
+to another run. Native memory peaked at 104 MiB, and all samples reported zero
+memory warnings and heartbeat-lag counts. The native process sample excludes
+WebKit and camera work, so it cannot establish total phone load or the cause of
+heat. No crash report was present; report delivery can be delayed.
+
+Review previously froze result delivery while recognition continued behind its
+sheet. Manual search stopped recognition but retained a camera with no explicit
+frame-rate limit. Build 103 reduces both avoidable workloads. Camera constraint
+updates use one serialized pump, coalesce to the latest state and ignore retired
+stream callbacks. A pending browser constraint operation is not cancellable;
+serious/critical heat still stops its track immediately. Unsupported or rejected
+constraints are logged, never represented as measured success.
+
+`web.camera_workload` records transitions, not frames:
+
+| Field | Meaning |
+| --- | --- |
+| `resource_mode` | Normal, reduced or cooling policy |
+| `capture_state` | Live, review, manual, prompt or stopped |
+| `target_fps` | Requested cap (30, 10, 1 or 0 when inactive) |
+| `camera_fps` | Bounded frame rate reported by track settings, omitted if unavailable; not a measured energy value |
+| `processing_active` | Whether the recognition loop is active |
+| `constraint_state` | Pending, applied, unsupported, failed or inactive |
+
+These diagnostics keep the existing opt-out and scalar-only privacy limits.
+Comparisons should use the same phone and ordinary scanning conditions. Actual
+heat/battery improvement remains pending a sustained physical-device session.
 
 ## Phone acceptance
 
@@ -104,6 +145,11 @@ is still required before calling sustained operation verified.
    do not intentionally heat a physical device. On an organically warm phone,
    verify Cooling down stops capture, keeps saved data/review usable and
    respects user pause/manual-entry/background state during recovery.
+7. While choosing a match or entering a card manually, inspect the new workload
+   events for `processing_active=false` and the 1 FPS request. Return to scanning
+   and confirm the proper live cap returns without a repeated pack load, a preview
+   glitch or a stale match. In ordinary use at fair heat, check the 10 FPS camera
+   request and 200 ms recognition scheduler; send diagnostics after the session.
 
 The native regression tests cover metric bounds, cancellation, preference and
 battery ownership, heartbeat baselines, report aggregation/deduplication and
@@ -113,7 +159,16 @@ callbacks, foreground/manual gating and reduced-scheduler cancellation. Linux
 checks cannot execute the native iOS APIs or establish device battery/heat
 behavior; Xcode and an iPhone remain necessary for those checks.
 
-## Validation results
+## Build 103 validation
+
+All 182 app JavaScript tests passed, including ten new workload/lifecycle tests.
+Swift grammar passed for all 214 files, app-source membership passed for 115
+files, and the 47 pinned scanner assets passed integrity/dependency checks.
+Five native diagnostics tests cover bounded values, requested versus reported
+rates, privacy and opt-out. Native execution and sustained iPhone heat/battery
+results remain pending; GitHub iOS checks are started without waiting for them.
+
+## Build 76 validation (historical)
 
 The local portable suites passed: 172 app JavaScript tests, 59 research server
 tests, 49 Postman collection tests and 40 Python tooling tests (320 total).

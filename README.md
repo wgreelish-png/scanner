@@ -26,6 +26,12 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 103 reduces [scanner workload](docs/DeviceHealthMonitoring.md) behind
+card review and manual search, requests lower camera frame rates during those
+states, and applies stronger throttling when iOS reports warmth. Existing
+serious/critical heat protection stays enabled; sustained iPhone results are
+pending. New diagnostics distinguish requested and reported camera rates.
+
 Build 102 shows the saved last printed tag value in inventory rows and card
 details, separately from market value. Preparing a different price keeps the
 previous printed value visible until its replacement is confirmed printed.

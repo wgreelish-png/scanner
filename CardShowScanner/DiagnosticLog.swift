@@ -6,6 +6,16 @@ import OSLog
 /// enum-only even if another caller accidentally supplies arbitrary text.
 enum DiagnosticScanFields {
     static func accepts(_ key: String, _ value: String) -> Bool {
+        if key == "resource_mode" { return ["normal", "reduced", "cooling"].contains(value) }
+        if key == "capture_state" { return ["live", "review", "manual", "prompt", "stopped"].contains(value) }
+        if key == "constraint_state" { return ["pending", "applied", "unsupported", "failed", "inactive"].contains(value) }
+        if key == "processing_active" { return value == "true" || value == "false" }
+        if key == "target_fps" { return ["0", "1", "10", "30"].contains(value) }
+        if key == "camera_fps" {
+            guard value.range(of: #"\A(?:0|[1-9][0-9]{0,2})(?:\.[0-9]{1,3})?\z"#, options: .regularExpression) != nil,
+                  let fps = Double(value), fps.isFinite else { return false }
+            return (0...240).contains(fps)
+        }
         if key == "method" { return ["direct", "server"].contains(value) }
         if ["solid", "tracked", "border_retry", "border_retained"].contains(key) { return value == "true" || value == "false" }
         if key == "scan_stage" { return ["none", "one", "quick", "full"].contains(value) }
@@ -305,7 +315,8 @@ enum ServiceDiagnosticFields {
         "print_task", "native_groups", "native_copies", "image_packets", "request_count", "wire_bytes", "status_polls",
         "command_path", "printer_model", "protocol_version", "print_start_count", "print_end_count",
         "group_image_packets", "group_requests", "group_wire_bytes", "preparation_kind", "preparation_stage",
-        "render_count", "raster_reuse_count", "roll_read_source", "connection_end_source"])
+        "render_count", "raster_reuse_count", "roll_read_source", "connection_end_source",
+        "resource_mode", "capture_state", "target_fps", "camera_fps", "processing_active", "constraint_state"])
         .union(DiagnosticPrinterFields.timingKeys)
         .union(DiagnosticPrinterFields.batchingKeys)
         .union(DiagnosticPrinterFields.rollKeys)

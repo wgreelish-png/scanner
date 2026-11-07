@@ -632,6 +632,119 @@ import UniformTypeIdentifiers
         return try JSONDecoder().decode(TCGBridgeEnvelope.self, from: JSONSerialization.data(withJSONObject: object))
     }
 
+    func testCameraWorkloadKeepsRequestedRateSeparateFromConfirmedCaptureRate() throws {
+        var wire = try envelope(["event": "camera_workload", "resourceMode": "reduced", "captureState": "live",
+            "targetFPS": 10, "processingActive": true, "constraintState": "pending"])
+        let pending = try XCTUnwrap(ScannerDiagnosticRecord.validated(wire))
+        XCTAssertEqual(pending.event, "web.camera_workload")
+        XCTAssertEqual(pending.sampleEvery, 0, "State transitions must not wait for sampled scan statistics")
+        XCTAssertEqual(pending.fields, ["resource_mode": "reduced", "capture_state": "live", "target_fps": "10",
+            "processing_active": "true", "constraint_state": "pending"])
+        XCTAssertNil(pending.fields["camera_fps"], "A requested limit is not proof of an applied camera rate")
+
+        wire.cameraFPS = 9.9761; wire.constraintState = "applied"
+        let applied = try XCTUnwrap(ScannerDiagnosticRecord.validated(wire))
+        XCTAssertEqual(applied.fields["target_fps"], "10")
+        XCTAssertEqual(applied.fields["camera_fps"], "9.976")
+        XCTAssertEqual(applied.fields["constraint_state"], "applied")
+
+        wire.cameraFPS = 30; wire.constraintState = "unsupported"
+        let unsupported = try XCTUnwrap(ScannerDiagnosticRecord.validated(wire))
+        XCTAssertEqual(unsupported.fields["target_fps"], "10")
+        XCTAssertEqual(unsupported.fields["camera_fps"], "30.000",
+                       "Diagnostics retain a measured rate even when the camera did not honor the target")
+        XCTAssertEqual(unsupported.fields["constraint_state"], "unsupported")
+    }
+
+    func testCameraWorkloadRecognizesIdleReviewManualAndStoppedStatesWithoutInventingCameraMeasurements() throws {
+        let scenarios: [(String, String, Double, Bool, String)] = [
+            ("normal", "live", 30, true, "applied"),
+            ("reduced", "review", 10, false, "pending"),
+            ("reduced", "manual", 1, false, "applied"),
+            ("normal", "prompt", 1, false, "failed"),
+            ("cooling", "stopped", 0, false, "inactive")
+        ]
+        for (mode, state, target, processing, constraint) in scenarios {
+            let record = try XCTUnwrap(ScannerDiagnosticRecord.validated(envelope([
+                "event": "camera_workload", "resourceMode": mode, "captureState": state, "targetFPS": target,
+                "processingActive": processing, "constraintState": constraint])))
+            XCTAssertEqual(record.fields, ["resource_mode": mode, "capture_state": state,
+                "target_fps": String(Int(target)), "processing_active": String(processing), "constraint_state": constraint])
+            XCTAssertNil(record.fields["camera_fps"])
+        }
+        for measured in [0.0, 240.0] {
+            let record = try XCTUnwrap(ScannerDiagnosticRecord.validated(envelope([
+                "event": "camera_workload", "cameraFPS": measured])))
+            XCTAssertEqual(record.fields["camera_fps"], measured == 0 ? "0.000" : "240.000")
+        }
+    }
+
+    func testCameraWorkloadDropsFreeformStatesAndNonfiniteOutOfRangeOrUnsupportedRates() throws {
+        var wire = try envelope(["event": "camera_workload", "resourceMode": "PRIVATE_MODE",
+            "captureState": "PRIVATE_CARD", "constraintState": "PRIVATE_DEVICE", "message": "PRIVATE_CONTENT"])
+        for (target, camera) in [(-1.0, -1.0), (2, 240.001), (29.97, 241),
+                                  (.infinity, .infinity), (.nan, .nan)] {
+            wire.targetFPS = target; wire.cameraFPS = camera
+            let record = try XCTUnwrap(ScannerDiagnosticRecord.validated(wire))
+            XCTAssertTrue(record.fields.isEmpty)
+        }
+    }
+
+    func testCameraWorkloadWireFieldsCannotBeSmuggledThroughOtherDiagnosticEvents() throws {
+        for event in ["scan_stats", "pack_ready", "startup_failed", "recognition_snapshot"] {
+            let record = try XCTUnwrap(ScannerDiagnosticRecord.validated(envelope([
+                "event": event, "resourceMode": "reduced", "captureState": "manual", "targetFPS": 1,
+                "cameraFPS": 30, "processingActive": false, "constraintState": "applied",
+                "resource_mode": "PRIVATE_MODE", "camera_fps": "PRIVATE_VALUE"])))
+            XCTAssertTrue(record.fields.isEmpty, "Workload fields belong only to camera_workload, not \(event)")
+        }
+    }
+
+    func testCameraWorkloadStorageIndependentlyValidatesRedactsAndRespectsRecordingOptOut() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = "CameraWorkloadDiagnostics." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let log = DiagnosticLog(directory: directory, defaults: defaults)
+        let expected = ["resource_mode": "reduced", "capture_state": "manual", "target_fps": "1",
+            "camera_fps": "1.000", "processing_active": "false", "constraint_state": "applied"]
+        log.record("web.camera_workload", expected.merging(["image": "PRIVATE_IMAGE", "card_name": "PRIVATE_CARD",
+            "device_name": "PRIVATE_DEVICE", "body": "PRIVATE_RESPONSE", "token": "PRIVATE_TOKEN",
+            "resourceMode": "PRIVATE_WIRE_MODE"]) { _, value in value })
+        log.record("web.camera_workload", ["resource_mode": "PRIVATE_MODE", "capture_state": "PRIVATE_STATE",
+            "constraint_state": "PRIVATE_CONSTRAINT", "target_fps": "30.0", "camera_fps": "241",
+            "processing_active": "1"])
+        for value in ["-1", "+1", "nan", "NaN", "infinity", "241", "240.001", "1e1", "1E1", " 1", "1 ",
+                      "1.0000", "01", "00", "01.2", "1.", ".1", "1\n"] {
+            XCTAssertFalse(DiagnosticScanFields.accepts("camera_fps", value), "Invalid measured rate: \(value)")
+        }
+        for value in ["-1", "+1", "10.0", "1e1", " 10", "10 ", "01", "2", "29.97", "PRIVATE_RATE"] {
+            XCTAssertFalse(DiagnosticScanFields.accepts("target_fps", value), "Invalid target: \(value)")
+        }
+        for value in ["0", "0.000", "1", "1.0", "10.12", "30.000", "239.999", "240", "240.000"] {
+            XCTAssertTrue(DiagnosticScanFields.accepts("camera_fps", value))
+        }
+        for value in ["0", "1", "10", "30"] {
+            XCTAssertTrue(DiagnosticScanFields.accepts("target_fps", value))
+        }
+
+        let url = try log.export()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let content = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertFalse(content.contains("PRIVATE_"))
+        let samples = try diagnosticRows(content).filter { $0["event"] as? String == "web.camera_workload" }
+        XCTAssertEqual(samples.count, 2)
+        XCTAssertEqual(samples.first?["fields"] as? [String: String], expected)
+        XCTAssertEqual(samples.last?["fields"] as? [String: String], [:])
+
+        let current = directory.appendingPathComponent("current.jsonl")
+        let saved = try Data(contentsOf: current)
+        defaults.set(false, forKey: "diagnosticsEnabled")
+        log.record("web.camera_workload", expected)
+        XCTAssertEqual(try Data(contentsOf: current), saved, "Opting out prevents even sanitized workload records")
+    }
+
     func testCameraGeometryAndLightingDecodeIntoBoundedScalarFields() async throws {
         let wire = try envelope(["solid": true, "tracked": false, "borderRetry": true, "borderRetained": false, "scanStage": "full", "rawQuads": 12,
             "rejectedQuads": 3, "candidateQuads": 4, "selectedBase": 1, "quadSource": "selected",

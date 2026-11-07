@@ -105,12 +105,62 @@
     const cooling = () => resourceMode === 'cooling';
     const coolingMessage = 'Cooling down… Scanning resumes when your iPhone is ready.';
     const eligible = () => running && foreground && !manualSearchSuspended && !cooling() && !document.hidden;
+    const recognitionEligible = () => eligible() && !held && !manualPromptPending;
+    const stopRecognition = () => { loopGeneration++; stopLoop?.(); stopLoop = null; };
+    // One active track operation and one latest pending request. Camera promises
+    // cannot be cancelled; stream/owner fences prevent a retired completion from
+    // changing a replacement stream or announcing a stale setting as applied.
+    let cameraWorkload = null, pendingCameraWorkload = null, cameraWorkloadOwner = null;
+    const workloadFields = (request, constraintState) => {
+      const fields = { resourceMode: request.mode, captureState: request.state, targetFPS: request.fps,
+        processingActive: request.processing, constraintState };
+      try {
+        const actual = request.track?.getSettings?.().frameRate;
+        if (typeof actual === 'number' && Number.isFinite(actual) && actual >= 0 && actual <= 240) fields.cameraFPS = Math.round(actual * 1000) / 1000;
+      } catch (_) { /* Optional camera facts must never interrupt scanning. */ }
+      return fields;
+    };
+    const currentWorkload = request => running && cameraWorkload === request && stream === request.stream && request.track?.readyState !== 'ended';
+    const drainCameraWorkload = async () => {
+      if (cameraWorkloadOwner) return;
+      const owner = {}; cameraWorkloadOwner = owner;
+      try {
+        while (cameraWorkloadOwner === owner && pendingCameraWorkload) {
+          const request = pendingCameraWorkload; pendingCameraWorkload = null;
+          if (!currentWorkload(request)) continue;
+          if (typeof request.track?.applyConstraints !== 'function') {
+            diagnostic('camera_workload', workloadFields(request, 'unsupported')); continue;
+          }
+          try {
+            await request.track.applyConstraints({ frameRate: { ideal: request.fps, max: request.fps } });
+            if (currentWorkload(request)) diagnostic('camera_workload', workloadFields(request, 'applied'));
+          } catch (_) {
+            if (currentWorkload(request)) diagnostic('camera_workload', workloadFields(request, 'failed'));
+          }
+        }
+      } finally {
+        if (cameraWorkloadOwner === owner) cameraWorkloadOwner = null;
+      }
+    };
+    const updateCameraWorkload = () => {
+      const state = !running || !stream || cooling() || !foreground || document.hidden ? 'stopped'
+        : manualSearchSuspended ? 'manual' : held ? 'review' : manualPromptPending ? 'prompt' : 'live';
+      const fps = state === 'stopped' ? 0 : state !== 'live' ? 1 : resourceMode === 'reduced' ? 10 : 30;
+      const processing = !!stopLoop && recognitionEligible();
+      const key = [resourceMode, state, fps, processing].join('|');
+      if (cameraWorkload?.stream === stream && cameraWorkload.key === key) return;
+      const track = stream?.getVideoTracks?.()[0] ?? stream?.getTracks?.()[0] ?? null;
+      const request = { stream, track, mode: resourceMode, state, fps, processing, key };
+      cameraWorkload = request; pendingCameraWorkload = fps > 0 ? request : null;
+      diagnostic('camera_workload', workloadFields(request, fps > 0 ? 'pending' : 'inactive'));
+      if (fps > 0) void drainCameraWorkload();
+    };
     // The existing frame seam bounds capture, motion analysis, recognition and
     // overlay work together. Normal mode keeps the runtime's own scheduler.
     const reducedFrame = (source, callback) => {
       let cancelled = false, cancelFrame = () => {};
       const timer = setTimeout(() => {
-        if (cancelled || !eligible()) return;
+        if (cancelled || !recognitionEligible()) return;
         if (typeof source.requestVideoFrameCallback === 'function') {
           const id = source.requestVideoFrameCallback(callback);
           cancelFrame = () => source.cancelVideoFrameCallback(id);
@@ -118,7 +168,7 @@
           const id = requestAnimationFrame(callback);
           cancelFrame = () => cancelAnimationFrame(id);
         }
-      }, 100);
+      }, 200);
       return () => { cancelled = true; clearTimeout(timer); cancelFrame(); };
     };
     // Follow a continuously observed card, not camera-open time. Brief tracking
@@ -129,8 +179,8 @@
       steadyCardBorder = enabled;
       // The option can be changed during startup, before a loop exists. Later
       // changes re-arm geometry in the same already-authorized camera stream.
-      if (eligible() && stream && beginLoop && backend) {
-        pending = null; clearManualAttempt(); stopLoop?.(); backend?.reset?.(); stopLoop = beginLoop();
+      if (recognitionEligible() && stream && beginLoop && backend) {
+        pending = null; clearManualAttempt(); stopRecognition(); backend?.reset?.(); stopLoop = beginLoop(); updateCameraWorkload();
       }
     };
     const endRemovalWait = (rearm = false) => {
@@ -140,8 +190,8 @@
         // The upstream loop can still hold the saved art for 2.5 seconds and
         // emit only same:true for the next copy/reprint. A verified absence is
         // a new physical episode: require a fresh full candidate payload.
-        pending = null; stopLoop?.(); backend?.reset?.();
-        if (eligible() && stream && beginLoop) stopLoop = beginLoop();
+        pending = null; stopRecognition(); backend?.reset?.();
+        if (recognitionEligible() && stream && beginLoop) { stopLoop = beginLoop(); updateCameraWorkload(); }
       }
       post({ kind: 'hide' });
     };
@@ -160,6 +210,7 @@
         attempt.queued = false;
         if (!eligible() || !stream || held || awaitingRemoval || manualPromptPending || clock() - attempt.last > 1000) return;
         attempt.offered = true; manualPromptPending = true; pending = null;
+        stopRecognition(); updateCameraWorkload();
         post({ kind: 'manualSearchSuggested' });
       });
     };
@@ -210,8 +261,10 @@
       const promptPending = preserveReview && manualPromptPending;
       clearManualAttempt(); manualPromptPending = promptPending; removalAbsentSince = null;
       if (!preserveReview) { heldRef = removalRef = null; heldScan = null; }
-      stopLoop?.(); stopLoop = null; stream?.getTracks().forEach(t => t.stop()); stream = null;
-      video.srcObject = null; overlay?.destroy?.(); overlay = null; latestScan = null;
+      stopRecognition(); stream?.getTracks().forEach(t => t.stop()); stream = null;
+      // A hung browser operation on a stopped track cannot block its replacement.
+      cameraWorkloadOwner = null; pendingCameraWorkload = null;
+      video.srcObject = null; overlay?.destroy?.(); overlay = null; latestScan = null; updateCameraWorkload();
     };
     const visibility = () => {
       if (document.hidden) {
@@ -223,13 +276,13 @@
       }
     };
     document.addEventListener('visibilitychange', visibility);
-    dispose = () => { diagnostic('bridge_stopped'); running = false; pending = null; stopCamera(); backend?.dispose(); backend = null; pack = null; root.remove(); document.removeEventListener('visibilitychange', visibility); window.removeEventListener?.('error', onError); window.removeEventListener?.('unhandledrejection', onRejection); };
+    dispose = () => { diagnostic('bridge_stopped'); pending = null; stopCamera(); running = false; backend?.dispose(); backend = null; pack = null; root.remove(); document.removeEventListener('visibilitychange', visibility); window.removeEventListener?.('error', onError); window.removeEventListener?.('unhandledrejection', onRejection); };
     suspendForManualSearch = expectedNonce => {
       if (!running || (expectedNonce !== undefined && expectedNonce !== config.nonce)) return false;
       manualSearchSuspended = true; resumeRequested = false; loopGeneration++;
       clearManualAttempt(); pending = null; held = false; heldRef = removalRef = removalAbsentSince = null;
       heldScan = latestScan = null; awaitingRemoval = false;
-      stopLoop?.(); stopLoop = null; backend?.reset?.(); overlay?.clear();
+      stopRecognition(); backend?.reset?.(); overlay?.clear(); updateCameraWorkload();
       // Startup can still be awaiting camera playback. Retire that acquisition;
       // a ready preview stays mounted and keeps its already-authorized stream.
       if (starting) { retiredPlayback = stream !== null; stopCamera(); }
@@ -244,7 +297,7 @@
       if (document.hidden || !foreground) { resumeRequested = true; return true; }
       if (starting) { resumeRequested = true; return true; }
       if (stream && beginLoop && backend) {
-        stopLoop?.(); backend.reset?.(); stopLoop = beginLoop();
+        stopRecognition(); backend.reset?.(); if (recognitionEligible()) stopLoop = beginLoop(); updateCameraWorkload();
       } else await button.onclick();
       return true;
     };
@@ -260,8 +313,9 @@
       } else if ((previous === 'cooling' || !wasForeground) && thermalResumePending) {
         if (eligible() && !startupFailed) void resumeAfterManualSearch(config.nonce);
       } else if (previous !== mode && eligible() && stream && beginLoop && backend) {
-        pending = null; stopLoop?.(); backend.reset?.(); stopLoop = beginLoop();
+        pending = null; stopRecognition(); backend.reset?.(); if (recognitionEligible()) stopLoop = beginLoop();
       }
+      updateCameraWorkload();
       return true;
     };
     report('Ready. Saved databases are reused; the first download may be large.');
@@ -314,11 +368,22 @@
         if (!eligible()) { if (cooling()) report(coolingMessage); return; }
         stage = 'camera'; began = clock(); diagnostic('camera_requested');
         report('Starting rear camera…');
-        const captured = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
+        const acquisitionFPS = held || manualPromptPending ? 1 : resourceMode === 'reduced' ? 10 : 30;
+        const cameraOptions = { audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: acquisitionFPS, max: acquisitionFPS } } };
+        let captured;
+        try { captured = await navigator.mediaDevices.getUserMedia(cameraOptions); }
+        catch (error) {
+          // Older camera implementations may reject a maximum frame rate. Only
+          // that constraint may relax; permission/device failures still fail.
+          if (error?.name !== 'OverconstrainedError' || error.constraint !== 'frameRate') throw error;
+          if (!eligible()) return;
+          captured = await navigator.mediaDevices.getUserMedia({ ...cameraOptions,
+            video: { ...cameraOptions.video, frameRate: { ideal: acquisitionFPS } } });
+        }
         if (!eligible()) { captured.getTracks().forEach(t => t.stop()); return; }
         diagnostic('camera_acquired', { elapsedMS: clock() - began });
         stage = 'video'; began = clock();
-        stream = captured;
+        stream = captured; updateCameraWorkload();
         for (const track of stream.getTracks()) track.addEventListener?.('ended', () => {
           if (stream !== captured) return;
           diagnostic('camera_interrupted'); recover();
@@ -337,7 +402,7 @@
         };
         beginLoop = () => {
           const generation = ++loopGeneration;
-          const current = () => eligible() && generation === loopGeneration;
+          const current = () => recognitionEligible() && generation === loopGeneration;
           const liveOverlay = {
             setSource: (...args) => { if (current()) scanOverlay.setSource(...args); },
             clear: () => { if (current()) scanOverlay.clear(); },
@@ -383,6 +448,7 @@
             held = true;
             heldRef = pending.ref;
             heldScan = latestScan ? { at: latestScan.at, fields: { ...latestScan.fields } } : null;
+            stopRecognition(); updateCameraWorkload();
             diagnostic('recognition_settled', { elapsedMS: now - pending.since, frames: pending.observations });
             diagnostic('recognition_snapshot', issueFields());
             post(pending.result);
@@ -426,8 +492,9 @@
           } });
         };
         resetRecognition = () => {
-          clearManualAttempt(); pending = null; held = false; heldRef = removalRef = removalAbsentSince = null; heldScan = null; latestScan = null; awaitingRemoval = false; stopLoop?.(); backend?.reset?.();
-          if (eligible() && stream) stopLoop = beginLoop();
+          clearManualAttempt(); pending = null; held = false; heldRef = removalRef = removalAbsentSince = null; heldScan = null; latestScan = null; awaitingRemoval = false; stopRecognition(); backend?.reset?.();
+          if (recognitionEligible() && stream) stopLoop = beginLoop();
+          updateCameraWorkload();
         };
         releaseReview = ref => {
           if (awaitingRemoval) return;
@@ -435,20 +502,23 @@
           removalRef = typeof ref === 'string' && referencePattern.test(ref) ? ref : heldRef;
           heldRef = null; removalAbsentSince = null;
           held = false; heldScan = null; awaitingRemoval = true;
-          // The upstream loop may already have advanced while native review was
-          // held. Re-arm full payloads without reopening the authorized camera.
-          stopLoop?.(); backend?.reset?.();
-          if (eligible() && stream) stopLoop = beginLoop();
+          // Re-arm full payloads after the frozen review without reopening the
+          // mounted, already-authorized camera or reloading the database.
+          stopRecognition(); backend?.reset?.();
+          if (recognitionEligible() && stream) stopLoop = beginLoop();
+          updateCameraWorkload();
         };
         resumeAfterManualSearchPrompt = () => {
           manualPromptPending = false; pending = null;
           // A match reached while the popup was open may now emit only partial
           // same:true updates. Re-arm the loop for a full payload, retaining this
           // attempt's offered flag and the already-authorized camera stream.
-          stopLoop?.(); backend?.reset?.();
-          if (eligible() && stream) stopLoop = beginLoop();
+          stopRecognition(); backend?.reset?.();
+          if (recognitionEligible() && stream) stopLoop = beginLoop();
+          updateCameraWorkload();
         };
-        if (eligible()) stopLoop = beginLoop();
+        if (recognitionEligible()) stopLoop = beginLoop();
+        updateCameraWorkload();
         thermalResumePending = false;
         diagnostic('scanner_ready');
         button.hidden = true; report(cacheWarning ? 'Camera ready. Database could not be saved; it may download again next time.' : 'Live camera ready — hold a card steady.'); hint.hidden = true;

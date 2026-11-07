@@ -9,12 +9,13 @@ function deferred() {
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
-function harness({ denyCamera = false, cacheState = 'ok', beforePackReady, acquireCamera, playVideo } = {}) {
+function harness({ denyCamera = false, cacheState = 'ok', beforePackReady, acquireCamera, playVideo,
+  cameraConstraintsSupported = false, applyCameraConstraints, cameraSettings } = {}) {
   const messages = [], elements = [], events = new Map(), windowEvents = new Map(), trackEvents = new Map(), draws = [];
   let overlayDestroyed = 0;
-  const packOptions = [];
+  const packOptions = [], cameraTracks = [], cameraConstraintCalls = [];
   const timers = new Map(), frames = new Map(); let scheduleID = 0;
-  let captureOptions, scannerOptions, scannerStarts = 0, cameraRequests = 0, stopped = 0, disposed = 0, now = 0;
+  let captureOptions, scannerOptions, scannerStarts = 0, activeLoops = 0, cameraRequests = 0, stopped = 0, disposed = 0, now = 0;
   const element = tag => {
     const e = { tag, style: {}, children: [], append(...items) { this.children.push(...items); }, setAttribute() {},
       remove() { this.removed = true; }, async play() { await playVideo?.(); } };
@@ -34,13 +35,25 @@ function harness({ denyCamera = false, cacheState = 'ok', beforePackReady, acqui
     } },
     'app/scan-backends.js': { createBackend: async () => backend },
     'core/overlay.js': { createOverlay: () => ({ draw(options) { draws.push(options); }, clear() {}, setSource() {}, destroy() { overlayDestroyed++; } }) },
-    'app/quickscan.js': { startQuickScan(options) { scannerStarts++; scannerOptions = options; return () => { stopped++; }; } },
+    'app/quickscan.js': { startQuickScan(options) { scannerStarts++; activeLoops++; scannerOptions = options; let active = true; return () => { if (active) { active = false; activeLoops--; stopped++; } }; } },
     'app/shared.js': { useScope(scope) { assert.equal(scope, 'price'); }, catalogDetail() {} }
   };
   const sandbox = { URL, console, document, performance: { now: () => now },
     setTimeout(fn, delay) { const id = ++scheduleID; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); },
     requestAnimationFrame(fn) { const id = ++scheduleID; frames.set(id, fn); return id; }, cancelAnimationFrame(id) { frames.delete(id); },
-    navigator: { mediaDevices: { async getUserMedia(options) { cameraRequests++; if (denyCamera) throw new Error("Camera permission denied"); captureOptions = options; await acquireCamera?.(); return { getTracks: () => [{ stop() { stopped++; }, addEventListener(name, fn) { trackEvents.set(name, fn); } }] }; } } },
+    navigator: { mediaDevices: { async getUserMedia(options) {
+      cameraRequests++; if (denyCamera) throw new Error("Camera permission denied"); captureOptions = options; await acquireCamera?.(options);
+      const track = { kind: 'video', readyState: 'live', fps: options.video.frameRate?.ideal ?? 30,
+        stop() { this.readyState = 'ended'; stopped++; }, addEventListener(name, fn) { trackEvents.set(name, fn); },
+        getSettings() { return cameraSettings ? cameraSettings(this) : { frameRate: this.fps }; } };
+      if (cameraConstraintsSupported || applyCameraConstraints) track.applyConstraints = async constraints => {
+        cameraConstraintCalls.push({ track, constraints: clean(constraints) });
+        await applyCameraConstraints?.(constraints, track);
+        if (track.readyState !== 'ended') track.fps = constraints.frameRate.ideal;
+      };
+      cameraTracks.push(track);
+      return { getTracks: () => [track], getVideoTracks: () => [track] };
+    } } },
     window: { addEventListener(name, fn) { windowEvents.set(name, fn); }, removeEventListener(name) { windowEvents.delete(name); }, webkit: { messageHandlers: { scanResult: { postMessage: m => messages.push(JSON.parse(JSON.stringify(m))) } } } }
   };
   const context = vm.createContext(sandbox);
@@ -55,7 +68,7 @@ function harness({ denyCamera = false, cacheState = 'ok', beforePackReady, acqui
     flushTimers() { const pending = [...timers.values()]; timers.clear(); for (const timer of pending) timer.fn(); },
     flushFrames() { const pending = [...frames.values()]; frames.clear(); for (const frame of pending) frame(); },
     get overlayDestroyed() { return overlayDestroyed; }, advance(ms) { now += ms; },
-    packOptions, get scannerOptions() { return scannerOptions; }, get scannerStarts() { return scannerStarts; }, get cameraRequests() { return cameraRequests; }, get captureOptions() { return captureOptions; }, get stopped() { return stopped; }, get disposed() { return disposed; } };
+    packOptions, cameraTracks, cameraConstraintCalls, get activeLoops() { return activeLoops; }, get scannerOptions() { return scannerOptions; }, get scannerStarts() { return scannerStarts; }, get cameraRequests() { return cameraRequests; }, get captureOptions() { return captureOptions; }, get stopped() { return stopped; }, get disposed() { return disposed; } };
 }
 const tuple = (id = 123, variants = [{ id: 10, label: 'Normal', nm: 1.25, primary: true }, { id: 11, label: 'Holofoil', nm: 2.5 }]) =>
   [`p:${id}`, `Sample ${id}`, '1/10', 'DEMO', 'Demo Set', '', 'https://cdn.tcgtracking.com/test.jpg', variants];
@@ -784,6 +797,11 @@ async function waitForScannerStarts(h, count) {
   assert.equal(h.scannerStarts, count);
 }
 
+async function waitForCameraReady(h, count) {
+  for (let i = 0; i < 100 && h.messages.filter(message => message.event === 'scanner_ready').length < count; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.messages.filter(message => message.event === 'scanner_ready').length, count);
+}
+
 test('normal resource mode preserves the default scheduler; reduced mode bounds all frame work with cancellation', async () => {
   const h = harness(); await h.bridge.install({ nonce: 'resources', game: 'tcgp:3', autoStart: true });
   assert.equal(Object.hasOwn(h.scannerOptions, 'frame'), false);
@@ -791,7 +809,7 @@ test('normal resource mode preserves the default scheduler; reduced mode bounds 
   assert.equal(h.cameraRequests, 1); assert.equal(h.packOptions.length, 1);
   const schedule = h.scannerOptions.frame; let ticks = 0;
   const cancel = schedule({}, () => ticks++);
-  assert.deepEqual([...h.timers.values()].map(timer => timer.delay), [100]);
+  assert.deepEqual([...h.timers.values()].map(timer => timer.delay), [200]);
   assert.equal(ticks, 0); h.flushTimers(); assert.equal(ticks, 0);
   h.flushFrames(); assert.equal(ticks, 1); cancel();
   const cancelBeforeTimer = schedule({}, () => ticks++); cancelBeforeTimer(); h.flushTimers(); h.flushFrames();
@@ -822,7 +840,9 @@ test('cooling releases capture but retains the frozen review and saved-card iden
   assert.ok(h.stopped > stopped); assert.equal(h.disposed, 0); assert.equal(scans(), 1);
   oldLoop.onShow({ ref: tuple(124), accepted: true, confidence: 96 }); oldLoop.onHide();
   assert.equal(scans(), 1);
-  h.bridge.setResourceMode('reduced', 'held-heat'); await waitForScannerStarts(h, 2);
+  h.bridge.setResourceMode('reduced', 'held-heat'); await waitForCameraReady(h, 2);
+  assert.equal(h.scannerStarts, 1, 'Cooling recovery cannot restart recognition under a frozen review');
+  assert.equal(h.activeLoops, 0);
   assert.equal(h.packOptions.length, 1); assert.equal(h.disposed, 0);
   settle(h, { ref: tuple(124), accepted: true, confidence: 96 });
   assert.equal(scans(), 1, 'A frozen review still owns recognition after cooling');
@@ -890,10 +910,190 @@ test('cooling recovery preserves an unresolved manual-search prompt until its ex
   const h = harness(); await h.bridge.install({ nonce: 'prompt-heat', game: 'tcgp:3', autoStart: true });
   await waitOnCard(h); assert.equal(manualSuggestions(h).length, 1);
   h.bridge.setResourceMode('cooling', 'prompt-heat');
-  h.bridge.setResourceMode('normal', 'prompt-heat'); await waitForScannerStarts(h, 2);
+  h.bridge.setResourceMode('normal', 'prompt-heat'); await waitForCameraReady(h, 2);
+  assert.equal(h.scannerStarts, 1, 'Cooling recovery cannot restart recognition under the unresolved prompt');
+  assert.equal(h.activeLoops, 0);
   settle(h, { ref: tuple(124), accepted: true, confidence: 96 });
   assert.equal(h.messages.filter(message => message.kind === 'scan').length, 0);
   h.bridge.resumeAfterManualSearchPrompt();
   settle(h, { ref: tuple(124), accepted: true, confidence: 96 });
   assert.equal(h.messages.filter(message => message.kind === 'scan').length, 1); h.bridge.stop();
+});
+
+const cameraWorkloads = h => h.messages.filter(message => message.event === 'camera_workload');
+const finishCameraWork = () => new Promise(resolve => setImmediate(resolve));
+
+test('camera acquisition bounds actual frame-rate requests without changing resolution or normal recognition scheduling', async () => {
+  for (const [mode, fps] of [['normal', 30], ['reduced', 10]]) {
+    const h = harness({ cameraConstraintsSupported: true });
+    await h.bridge.install({ nonce: mode, game: 'tcgp:3', autoStart: true, resourceMode: mode });
+    await finishCameraWork();
+    assert.deepEqual(clean(h.captureOptions.video.frameRate), { ideal: fps, max: fps });
+    assert.deepEqual(clean(h.captureOptions.video.width), { ideal: 1920 });
+    assert.deepEqual(clean(h.captureOptions.video.height), { ideal: 1080 });
+    assert.equal(Object.hasOwn(h.scannerOptions, 'frame'), mode === 'reduced');
+    const applied = cameraWorkloads(h).at(-1);
+    assert.equal(applied.constraintState, 'applied'); assert.equal(applied.cameraFPS, fps);
+    assert.equal(applied.targetFPS, fps); assert.equal(applied.captureState, 'live');
+    assert.equal(applied.processingActive, true); assert.equal(h.activeLoops, 1);
+    h.bridge.stop();
+  }
+});
+
+test('a frozen native review stops all recognition callbacks and stays stopped across resource changes', async () => {
+  const h = harness({ cameraConstraintsSupported: true });
+  await h.bridge.install({ nonce: 'review-load', game: 'tcgp:3', autoStart: true });
+  const oldLoop = h.scannerOptions;
+  settle(h, { ref: tuple(), accepted: true, confidence: 96 });
+  assert.equal(h.activeLoops, 0); const starts = h.scannerStarts;
+  const stats = h.messages.filter(message => message.event === 'scan_stats').length;
+  const draws = h.draws.length;
+  oldLoop.onStats({ kind: 'worker', scanMs: 20 }); oldLoop.onHint('Late hidden work');
+  oldLoop.onShow({ ref: tuple(999), accepted: true, confidence: 96 });
+  oldLoop.overlay.draw({ quad: [[0, 0]] });
+  assert.equal(h.messages.filter(message => message.event === 'scan_stats').length, stats);
+  assert.equal(h.draws.length, draws);
+  h.bridge.setResourceMode('reduced', 'review-load'); h.bridge.setResourceMode('normal', 'review-load');
+  await finishCameraWork();
+  assert.equal(h.scannerStarts, starts); assert.equal(h.activeLoops, 0);
+  assert.equal(h.cameraTracks[0].fps, 1); assert.equal(cameraWorkloads(h).at(-1).processingActive, false);
+  assert.equal(cameraWorkloads(h).at(-1).captureState, 'review');
+  assert.equal(h.cameraRequests, 1); assert.equal(h.packOptions.length, 1);
+  h.bridge.releaseReview(); assert.equal(h.activeLoops, 1);
+  settle(h, { ref: tuple(124), accepted: true, confidence: 96 });
+  assert.deepEqual(h.messages.filter(message => message.kind === 'scan').map(message => message.candidates[0].ref), ['p:123', 'p:124']);
+  h.bridge.stop();
+});
+
+test('a pending manual-search prompt stops work until the existing decision resumes scanning', async () => {
+  const h = harness({ cameraConstraintsSupported: true });
+  await h.bridge.install({ nonce: 'prompt-load', game: 'tcgp:3', autoStart: true });
+  await waitOnCard(h); await finishCameraWork();
+  assert.equal(manualSuggestions(h).length, 1); assert.equal(h.activeLoops, 0);
+  assert.equal(h.cameraTracks[0].fps, 1); const starts = h.scannerStarts;
+  h.bridge.setResourceMode('reduced', 'prompt-load'); await finishCameraWork();
+  assert.equal(h.scannerStarts, starts); assert.equal(h.activeLoops, 0);
+  assert.equal(cameraWorkloads(h).at(-1).captureState, 'prompt');
+  h.bridge.resumeAfterManualSearchPrompt(); await finishCameraWork();
+  assert.equal(h.activeLoops, 1); assert.equal(h.cameraTracks[0].fps, 10);
+  assert.equal(manualSuggestions(h).length, 1); assert.equal(h.cameraRequests, 1);
+  h.bridge.stop();
+});
+
+test('manual entry lowers capture while retaining its mounted warm stream and reuses database on return', async () => {
+  const h = harness({ cameraConstraintsSupported: true });
+  await h.bridge.install({ nonce: 'manual-load', game: 'tcgp:3', autoStart: true });
+  const video = h.elements.find(element => element.tag === 'video'), stream = video.srcObject;
+  h.bridge.suspendForManualSearch('manual-load'); await finishCameraWork();
+  assert.equal(h.activeLoops, 0); assert.equal(video.srcObject, stream);
+  assert.equal(h.cameraTracks[0].readyState, 'live'); assert.equal(h.cameraTracks[0].fps, 1);
+  h.bridge.setResourceMode('reduced', 'manual-load'); await finishCameraWork();
+  assert.equal(h.activeLoops, 0); assert.equal(h.cameraTracks[0].fps, 1);
+  await h.bridge.resumeAfterManualSearch('manual-load'); await finishCameraWork();
+  assert.equal(h.activeLoops, 1); assert.equal(h.cameraTracks[0].fps, 10);
+  assert.equal(video.srcObject, stream); assert.equal(h.cameraRequests, 1);
+  assert.equal(h.packOptions.length, 1); assert.equal(h.disposed, 0);
+  h.bridge.stop();
+});
+
+test('camera constraints are serialized with one latest pending target and no stale applied announcement', async () => {
+  const first = deferred(); let entered = 0, active = 0, peak = 0;
+  const h = harness({ applyCameraConstraints: async () => {
+    peak = Math.max(peak, ++active);
+    try { if (++entered === 1) await first.promise; } finally { active--; }
+  } });
+  await h.bridge.install({ nonce: 'serial-load', game: 'tcgp:3', autoStart: true });
+  assert.equal(h.cameraConstraintCalls.length, 1);
+  h.bridge.setResourceMode('reduced', 'serial-load'); h.bridge.suspendForManualSearch('serial-load');
+  assert.equal(h.cameraConstraintCalls.length, 1, 'Readiness changes cannot launch concurrent operations');
+  first.resolve(); await finishCameraWork();
+  assert.equal(peak, 1);
+  assert.deepEqual(h.cameraConstraintCalls.map(call => call.constraints.frameRate.ideal), [30, 1]);
+  assert.equal(h.cameraTracks[0].fps, 1); assert.equal(h.activeLoops, 0);
+  const applied = cameraWorkloads(h).filter(message => message.constraintState === 'applied');
+  assert.deepEqual(applied.map(message => [message.captureState, message.targetFPS]), [['manual', 1]]);
+  h.bridge.stop();
+});
+
+test('cooling immediately retires capture and a hung old constraint cannot block or mutate the replacement stream', async () => {
+  const oldOperation = deferred(); let calls = 0;
+  const h = harness({ applyCameraConstraints: async () => { if (++calls === 1) await oldOperation.promise; } });
+  await h.bridge.install({ nonce: 'retired-load', game: 'tcgp:3', autoStart: true });
+  const oldTrack = h.cameraTracks[0];
+  h.bridge.setResourceMode('cooling', 'retired-load');
+  assert.equal(oldTrack.readyState, 'ended'); assert.equal(h.activeLoops, 0);
+  assert.equal(cameraWorkloads(h).at(-1).captureState, 'stopped');
+  h.bridge.setResourceMode('reduced', 'retired-load'); await waitForCameraReady(h, 2); await finishCameraWork();
+  const newTrack = h.cameraTracks[1]; assert.equal(newTrack.fps, 10); assert.equal(h.activeLoops, 1);
+  const before = cameraWorkloads(h).length;
+  oldOperation.resolve(); await finishCameraWork();
+  assert.equal(cameraWorkloads(h).length, before, 'A stopped-track callback cannot announce its obsolete target');
+  assert.equal(newTrack.fps, 10); assert.equal(h.cameraTracks.length, 2);
+  h.bridge.stop();
+});
+
+test('unsupported and rejected camera limits stay observable without claiming lower effective capture', async () => {
+  for (const failure of ['unsupported', 'failed']) {
+    const h = harness({ cameraSettings: () => ({ frameRate: 30 }),
+      ...(failure === 'failed' ? { applyCameraConstraints: async () => { throw new Error('PRIVATE_CAMERA_ERROR'); } } : {}) });
+    await h.bridge.install({ nonce: failure, game: 'tcgp:3', autoStart: true, resourceMode: 'reduced' });
+    await finishCameraWork();
+    const event = cameraWorkloads(h).at(-1);
+    assert.equal(event.constraintState, failure); assert.equal(event.targetFPS, 10); assert.equal(event.cameraFPS, 30);
+    assert.equal(event.processingActive, true); assert.equal(h.activeLoops, 1);
+    assert.equal(cameraWorkloads(h).some(message => message.constraintState === 'applied'), false);
+    assert.equal(JSON.stringify(cameraWorkloads(h)).includes('PRIVATE_CAMERA_ERROR'), false);
+    h.bridge.stop();
+  }
+});
+
+test('camera facts are finite bounded scalars and terminal stop invalidates pending constraint work', async () => {
+  const pending = deferred();
+  const h = harness({ applyCameraConstraints: () => pending.promise, cameraSettings: () => ({ frameRate: NaN, deviceId: 'PRIVATE_ID' }) });
+  await h.bridge.install({ nonce: 'bounded-load', game: 'tcgp:3', autoStart: true });
+  assert.equal(cameraWorkloads(h).some(message => Object.hasOwn(message, 'cameraFPS')), false);
+  h.bridge.stop(); const count = h.messages.length;
+  pending.resolve(); await finishCameraWork();
+  assert.equal(h.messages.length, count); assert.equal(h.activeLoops, 0);
+  assert.equal(h.cameraTracks[0].readyState, 'ended');
+  assert.equal(JSON.stringify(cameraWorkloads(h)).includes('PRIVATE_ID'), false);
+});
+
+test('only a rejected acquisition frame-rate maximum gets one ideal-only compatibility retry', async () => {
+  let attempts = 0; const requested = [];
+  const h = harness({ cameraSettings: () => ({ frameRate: 60 }), acquireCamera: options => {
+    requested.push(clean(options));
+    if (++attempts === 1) throw Object.assign(new Error('Unsupported camera maximum'), { name: 'OverconstrainedError', constraint: 'frameRate' });
+  } });
+  await h.bridge.install({ nonce: 'compatible-rate', game: 'tcgp:3', autoStart: true, resourceMode: 'reduced' });
+  assert.equal(h.cameraRequests, 2); assert.equal(h.activeLoops, 1);
+  assert.deepEqual(requested[0].video.frameRate, { ideal: 10, max: 10 });
+  assert.deepEqual(requested[1].video.frameRate, { ideal: 10 });
+  assert.deepEqual(requested[1].video.width, requested[0].video.width);
+  assert.deepEqual(requested[1].video.height, requested[0].video.height);
+  assert.equal(cameraWorkloads(h).at(-1).cameraFPS, 60);
+  assert.equal(cameraWorkloads(h).at(-1).constraintState, 'unsupported'); h.bridge.stop();
+  for (const [name, constraint] of [['OverconstrainedError', 'width'], ['NotAllowedError', 'frameRate'], ['NotReadableError', 'frameRate']]) {
+    const failed = harness({ acquireCamera: () => { throw Object.assign(new Error('Camera cannot start'), { name, constraint }); } });
+    await failed.bridge.install({ nonce: name, game: 'tcgp:3', autoStart: true });
+    assert.equal(failed.cameraRequests, 1); assert.equal(failed.scannerStarts, 0);
+    assert.equal(failed.messages.filter(message => message.event === 'startup_failed').length, 1); failed.bridge.stop();
+  }
+});
+
+test('cooling or terminal stop during unsupported camera acquisition cannot trigger its compatibility retry', async () => {
+  for (const action of ['cooling', 'stop']) {
+    const gate = deferred(), entered = deferred();
+    const h = harness({ acquireCamera: async () => { entered.resolve(); await gate.promise;
+      throw Object.assign(new Error('Unsupported camera maximum'), { name: 'OverconstrainedError', constraint: 'frameRate' });
+    } });
+    const startup = h.bridge.install({ nonce: 'retired-fallback', game: 'tcgp:3', autoStart: true });
+    await entered.promise;
+    if (action === 'cooling') h.bridge.setResourceMode('cooling', 'retired-fallback');
+    else h.bridge.stop();
+    gate.resolve(); await startup;
+    assert.equal(h.cameraRequests, 1); assert.equal(h.scannerStarts, 0);
+    assert.equal(h.messages.filter(message => message.event === 'startup_failed').length, 0);
+    if (action === 'cooling') h.bridge.stop();
+  }
 });
