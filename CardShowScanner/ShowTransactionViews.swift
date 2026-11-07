@@ -1067,12 +1067,10 @@ import UIKit
                 receiptSection(receipt)
                 moneySection(receipt)
                 if !receipt.incoming.isEmpty {
-                    cardsSection("Cards acquired", receipt: receipt, lines: receipt.incoming, acquired: true, expanded: $incomingCardsExpanded,
-                                 identifier: "acquiredCards")
+                    cardsSection("Cards acquired", receipt: receipt, lines: receipt.incoming, acquired: true, expanded: $incomingCardsExpanded)
                 }
                 if !receipt.outgoing.isEmpty {
-                    cardsSection("Cards released", receipt: receipt, lines: receipt.outgoing, acquired: false, expanded: $outgoingCardsExpanded,
-                                 identifier: "releasedCards")
+                    cardsSection("Cards released", receipt: receipt, lines: receipt.outgoing, acquired: false, expanded: $outgoingCardsExpanded)
                 }
                 if !receipt.draft.note.isEmpty { Section("Note") { Text(receipt.draft.note) } }
                 if let error {
@@ -1119,8 +1117,7 @@ import UIKit
         }
     }
 
-    private func cardsSection(_ title: String, receipt: ShowTransactionReceipt, lines: [ShowTransactionCardLine], acquired: Bool, expanded: Binding<Bool>,
-                              identifier: String) -> some View {
+    private func cardsSection(_ title: String, receipt: ShowTransactionReceipt, lines: [ShowTransactionCardLine], acquired: Bool, expanded: Binding<Bool>) -> some View {
         Section {
             DisclosureGroup(isExpanded: expanded) {
                 if expanded.wrappedValue {
@@ -1139,7 +1136,7 @@ import UIKit
                     Text("\(lines.reduce(0) { $0 + $1.quantity }) cards · \(lines.count) rows")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-            }.accessibilityIdentifier("showTransaction.receipt." + identifier)
+            }
         }
     }
 

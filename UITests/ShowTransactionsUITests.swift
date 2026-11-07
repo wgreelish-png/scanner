@@ -131,7 +131,7 @@ import XCTest
         assertRevealedContains("$7.00", identifier: "showTransaction.receipt.cost", app: app)
         assertRevealedContains("$0.00", identifier: "showTransaction.receipt.fees", app: app)
         assertRevealedContains("$3.00", identifier: "showTransaction.receipt.profit", app: app)
-        tap(app.descendants(matching: .any)["showTransaction.receipt.releasedCards"], app: app)
+        tap(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Cards released")).firstMatch, app: app)
         tap(app.buttons["showTransaction.receipt.source." + inventoryID], app: app)
         assertRevealedContains("$7.00", identifier: "showTransaction.receipt.paid", app: app)
         _ = UITestInteraction.tapToolbar(app.navigationBars.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
@@ -146,7 +146,7 @@ import XCTest
         tap(app.buttons["show.history"], app: app)
         tap(app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "showHistory.receipt.")).firstMatch, app: app)
         assertRevealedContains("$10.00", identifier: "showTransaction.receipt.received", app: app)
-        tap(app.descendants(matching: .any)["showTransaction.receipt.releasedCards"], app: app)
+        tap(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Cards released")).firstMatch, app: app)
         let source = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "showTransaction.receipt.source.")).firstMatch
         reveal(source, app: app)
         let inventoryID = String(source.identifier.dropFirst("showTransaction.receipt.source.".count))
@@ -719,7 +719,7 @@ import XCTest
         assertContains("$14.00", element: paid)
         XCTAssertTrue(paid.isHittable, "Receipt money is shown before the collapsed acquired cards")
         XCTAssertFalse(app.staticTexts["Market reference: $20.00 each"].exists)
-        tap(app.descendants(matching: .any)["showTransaction.receipt.acquiredCards"], app: app)
+        tap(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Cards acquired")).firstMatch, app: app)
         let undo = app.buttons["showTransaction.undo"]
         for _ in 0..<3 {
             _ = UITestInteraction.scrollContent(in: app, towardTop: false)
