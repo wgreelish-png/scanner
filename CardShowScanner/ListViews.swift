@@ -1039,7 +1039,7 @@ struct CardEditorView: View {
                     .keyboardType(.decimalPad).focused($focusedField, equals: .market)
                     .accessibilityIdentifier("cardEditor.manualPrice")
                 Text("USD per card. Leave blank when unknown.").font(.caption).foregroundStyle(.secondary)
-            }.font(.subheadline).accessibilityIdentifier("cardEditor.adjustPrice")
+            }.font(.subheadline)
         }
     }
 

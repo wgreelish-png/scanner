@@ -3,12 +3,7 @@ import XCTest
 @MainActor final class ShowBudgetUITests: XCTestCase {
     func testGrossSaleFeesPurchaseAndRelaunchPreserveBuyingAndPersonalFunds() async throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        if let path = ProcessInfo.processInfo.environment["DYLD_FALLBACK_LIBRARY_PATH"] {
-            app.launchEnvironment["DYLD_FALLBACK_LIBRARY_PATH"] = path
-        }
-        app.launchArguments = ["-autoDatabaseUpdates", "NO", "-betaAutomaticIPAllowlist", "NO", "--uitest-show-budget", "--budget-test-id", UUID().uuidString]
-        app.launch()
+        let app = launch()
         defer { app.terminate() }
         tapVisible(app.buttons["budget.setup"], in: app)
         enter("300", into: app.textFields["budget.starting"], in: app)
@@ -46,10 +41,7 @@ import XCTest
         assertMoney("$320.00", title: "Available to buy", element: app.staticTexts["budget.available"])
         assertMoney("$70.00", title: "Saved for you", element: app.staticTexts["budget.saved"])
         assertMoney("$390.00", title: "Cash on hand", element: app.staticTexts["budget.cashOnHand"])
-        let entries = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "budget.entry."))
-        _ = UITestInteraction.reveal(entries.firstMatch, in: app)
-        let entryIDs = entries.allElementsBoundByIndex.map(\.identifier).sorted()
-        XCTAssertEqual(entryIDs.count, 2)
+        let entryIDs = historyEntryIDs(in: app)
 
         app.terminate(); app.launch()
         _ = UITestInteraction.reveal(app.staticTexts["budget.showDates"], in: app)
@@ -60,6 +52,29 @@ import XCTest
         assertMoney("$70.00", title: "Saved for you", element: app.staticTexts["budget.saved"])
         assertMoney("$300.00", title: "Starting cash on hand", element: app.staticTexts["budget.startingCash"])
         assertMoney("$390.00", title: "Cash on hand", element: app.staticTexts["budget.cashOnHand"])
+        XCTAssertEqual(historyEntryIDs(in: app), entryIDs,
+                       "Both recorded entries persist across relaunch")
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+    }
+
+    func testEditingStartingCashPreservesRecordedHistoryAndPersonalFundsAcrossRelaunch() {
+        continueAfterFailure = false
+        // Recording through the sale/purchase UI is covered above. This case
+        // starts with isolated, persisted history to bound the edit scenario.
+        let app = launch(arguments: ["--budget-history-fixture"])
+        defer { app.terminate() }
+        assertMoney("$300.00", title: "Starting cash on hand", element: app.staticTexts["budget.startingCash"])
+        assertMoney("$390.00", title: "Cash on hand", element: app.staticTexts["budget.cashOnHand"])
+        assertMoney("$320.00", title: "Available to buy", element: app.staticTexts["budget.available"])
+        assertMoney("$70.00", title: "Saved for you", element: app.staticTexts["budget.saved"])
+        let dates = app.staticTexts["budget.showDates"]
+        _ = UITestInteraction.reveal(dates, in: app, towardTopWhenMissing: true)
+        XCTAssertTrue(dates.waitForExistence(timeout: 5))
+        let showDates = dates.label
+        XCTAssertTrue(["Active today", "Status, Active today"].contains(app.staticTexts["budget.scheduleStatus"].label))
+        let entryIDs = historyEntryIDs(in: app)
+        guard UITestInteraction.reveal(app.buttons["budget.editStartingCash"], in: app,
+                                       towardTopWhenMissing: true) else { return }
 
         tapVisible(app.buttons["budget.editStartingCash"], in: app)
         enter("400", into: app.textFields["budget.starting"], in: app)
@@ -88,10 +103,31 @@ import XCTest
         assertMoney("$490.00", title: "Cash on hand", element: app.staticTexts["budget.cashOnHand"])
         assertMoney("$420.00", title: "Available to buy", element: app.staticTexts["budget.available"])
         assertMoney("$70.00", title: "Saved for you", element: app.staticTexts["budget.saved"])
-        _ = UITestInteraction.reveal(entries.firstMatch, in: app)
-        XCTAssertEqual(entries.allElementsBoundByIndex.map(\.identifier).sorted(), entryIDs,
+        XCTAssertEqual(historyEntryIDs(in: app), entryIDs,
                        "Changing starting cash preserves both the sale and purchase records")
         XCTAssertFalse(app.alerts.firstMatch.exists)
+    }
+
+    private func launch(arguments: [String] = []) -> XCUIApplication {
+        let app = XCUIApplication()
+        if let path = ProcessInfo.processInfo.environment["DYLD_FALLBACK_LIBRARY_PATH"] {
+            app.launchEnvironment["DYLD_FALLBACK_LIBRARY_PATH"] = path
+        }
+        app.launchArguments = ["-autoDatabaseUpdates", "NO", "-betaAutomaticIPAllowlist", "NO",
+                               "--uitest-show-budget", "--budget-test-id", UUID().uuidString] + arguments
+        app.launch()
+        return app
+    }
+
+    private func historyEntryIDs(in app: XCUIApplication, file: StaticString = #filePath,
+                                 line: UInt = #line) -> [String] {
+        let entries = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "budget.entry."))
+        // History is lazy; materialize the expected second row before counting.
+        guard UITestInteraction.reveal(entries.element(boundBy: 1), in: app,
+                                       file: file, line: line) else { return [] }
+        let identifiers = entries.allElementsBoundByIndex.map(\.identifier).sorted()
+        XCTAssertEqual(identifiers.count, 2, file: file, line: line)
+        return identifiers
     }
 
     private func enter(_ value: String, into field: XCUIElement, in app: XCUIApplication,

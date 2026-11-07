@@ -139,10 +139,14 @@ class UIRunnerFlowTests(unittest.TestCase):
             "testSingleCardDraftIsIsolatedAndAcceptsZeroWithoutClampingCopies",
             "testInventoryPrintOrderSortsNumericPricesAndRemembersSelection",
             "testLeavingCustomAndBulkPrintQueuesClearsThemAndPreservesPreferences"))
+        navigation_targets = tuple("CardShowScannerUITests/AppNavigationUITests/" + name for name in (
+            "testEditableCardRetainsMainTabsAndUnsavedDraftThroughResearchAndConnection",
+            "testEditableCardSavesOnlyWhenExplicitlySavedAfterSwitchingTabs"))
         ui_arguments = None
         for targets, action, allowance in ((("CardShowScannerUITests",), "test-without-building", "360"),
                                            (("CardShowScannerTests",), "test", "180"),
-                                           (label_targets, "test-without-building", "360")):
+                                           (label_targets, "test-without-building", "360"),
+                                           (navigation_targets, "test-without-building", "360")):
             with self.subTest(targets=targets):
                 result, commands, _ = self.run_flow(target=targets[0], additional_targets=targets[1:])
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -155,16 +159,17 @@ class UIRunnerFlowTests(unittest.TestCase):
                     self.assertIn("-only-testing:" + target, arguments)
                 if targets == ("CardShowScannerUITests",):
                     ui_arguments = arguments
-                elif targets == label_targets:
+                elif targets in (label_targets, navigation_targets):
                     self.assertEqual([value for value in arguments if value.startswith("-only-testing:")],
-                                     ["-only-testing:" + target for target in label_targets])
+                                     ["-only-testing:" + target for target in targets])
                     self.assertFalse(any(value.startswith("-skip-testing:") for value in arguments))
 
-        rejected, commands, _ = self.run_flow(target=label_targets[0],
-                                             additional_targets=(*label_targets[1:-1], label_targets[-1] + "Typo"))
-        self.assertEqual(rejected.returncode, 2)
-        self.assertIn("Unknown test target", rejected.stderr)
-        self.assertFalse(commands, "An unallowlisted method must fail before invoking any tool")
+        for targets in (label_targets, navigation_targets):
+            rejected, commands, _ = self.run_flow(target=targets[0],
+                                                 additional_targets=(*targets[1:-1], targets[-1] + "Typo"))
+            self.assertEqual(rejected.returncode, 2)
+            self.assertIn("Unknown test target", rejected.stderr)
+            self.assertFalse(commands, "An unallowlisted method must fail before invoking any tool")
 
         root = Path(__file__).resolve().parents[1]
         workflow = (root / ".github/workflows/ios.yml").read_text()
@@ -176,18 +181,22 @@ class UIRunnerFlowTests(unittest.TestCase):
         # than letting a job deadline silently truncate later requested cases.
         excluded = {argument.split("/", 1)[1] for argument in ui_arguments
                     if argument.startswith("-skip-testing:CardShowScannerUITests/")}
-        selected_cases = 0
+        class_cases = {}
         for path in (root / "UITests").glob("*UITests.swift"):
             source = path.read_text()
             classes = re.findall(r"\bclass\s+(\w+)\s*:\s*XCTestCase\b", source)
             self.assertEqual(len(classes), 1, str(path))
-            if classes[0] not in excluded:
-                selected_cases += len(re.findall(r"(?m)^\s*func\s+test\w+\s*\(", source))
+            class_cases[classes[0]] = len(re.findall(r"(?m)^\s*func\s+test\w+\s*\(", source))
+        selected_cases = sum(count for name, count in class_cases.items() if name not in excluded)
         self.assertGreater(selected_cases, 0)
         seconds_per_case = int(ui_arguments[ui_arguments.index("-maximum-test-execution-time-allowance") + 1])
         self.assertGreaterEqual(budgets.pop("ui"), math.ceil(selected_cases * seconds_per_case / 60) + 30)
+        budget_classes = set(re.findall(r"CardShowScannerUITests/(\w+)", job_blocks["budget_ui"]))
+        self.assertTrue(budget_classes)
+        budget_cases = sum(class_cases[name] for name in budget_classes)
+        self.assertGreaterEqual(budgets.pop("budget_ui"), math.ceil(budget_cases * seconds_per_case / 60) + 30)
         self.assertEqual(budgets, {"native": 90, "research_ui": 120, "evidence_ui": 120,
-                                   "budget_ui": 120, "release": 30})
+                                   "release": 30})
 
         concurrency = workflow.split("\nconcurrency:\n", 1)[1].split("\njobs:\n", 1)[0]
         group = re.search(r"(?m)^  group: (.+)$", concurrency).group(1)
@@ -199,6 +208,7 @@ class UIRunnerFlowTests(unittest.TestCase):
                         job_blocks["ui"].index("Build and run UI regression tests"))
         options = workflow.split("      test_scope:\n", 1)[1].split("\nconcurrency:\n", 1)[0]
         self.assertIn("          - label_controls\n", options)
+        self.assertIn("          - navigation_price", options.splitlines())
         self.assertNotIn("          - paper_mode\n", options)
         controls_branch = re.search(r'elif \[ "\$SCANNER_TEST_SCOPE" = label_controls \]; then\n'
                                     r'(.*?)(?=\n          (?:elif|else|fi)\b)', job_blocks["ui"], re.DOTALL)
@@ -209,9 +219,37 @@ class UIRunnerFlowTests(unittest.TestCase):
                       '[ "$SCANNER_TEST_SCOPE" = label_controls ]; then', job_blocks["native"])
         for name in ("research_ui", "evidence_ui", "budget_ui"):
             self.assertIn("inputs.test_scope != 'label_controls'", job_blocks[name].splitlines()[0])
+        for name in ("ui", "research_ui", "budget_ui"):
+            self.assertIn("inputs.test_scope != 'navigation_price'", job_blocks[name].splitlines()[0])
+        self.assertNotIn("inputs.test_scope != 'navigation_price'", job_blocks["evidence_ui"].splitlines()[0])
+        evidence_command = re.search(r"(?ms)^        run: \|\n(.*?)(?=^      - name:)",
+                                     job_blocks["evidence_ui"]).group(1)
+        with tempfile.TemporaryDirectory() as directory:
+            scripts = Path(directory) / "scripts"
+            scripts.mkdir()
+            (scripts / "run_ios_tests.sh").write_text('printf "%s\\n" "$@"\n')
+            for scope, expected in (("navigation_price", navigation_targets),
+                                    ("all", ("CardShowScannerUITests/MarketEvidenceUITests",
+                                             "CardShowScannerUITests/AppNavigationUITests",
+                                             "CardShowScannerUITests/ReviewPresentationUITests",
+                                             "CardShowScannerUITests/ListBulkDeletionUITests"))):
+                selected = subprocess.run(["bash", "-c", evidence_command], cwd=directory,
+                                          env=dict(os.environ, SCANNER_TEST_SCOPE=scope),
+                                          text=True, capture_output=True, timeout=5)
+                self.assertEqual(selected.returncode, 0, selected.stderr)
+                self.assertEqual(selected.stdout.splitlines(), list(expected))
+            rejected = subprocess.run(["bash", "-c", evidence_command], cwd=directory,
+                                      env=dict(os.environ, SCANNER_TEST_SCOPE="navigation_priceTypo"),
+                                      text=True, capture_output=True, timeout=5)
+            self.assertEqual(rejected.returncode, 2)
+            self.assertEqual(rejected.stdout, "", "Unknown scopes cannot start the test runner")
+            self.assertIn("Unknown evidence UI test scope", rejected.stderr)
         label_source = (root / "UITests/InventoryLabelsUITests.swift").read_text()
         for target in label_targets:
             self.assertRegex(label_source, r"\bfunc\s+" + target.rsplit("/", 1)[1] + r"\s*\(")
+        navigation_source = (root / "UITests/AppNavigationUITests.swift").read_text()
+        for target in navigation_targets:
+            self.assertRegex(navigation_source, r"\bfunc\s+" + target.rsplit("/", 1)[1] + r"\s*\(")
 
     def test_readiness_timeout_reports_bounded_progress_and_nonzero_status(self):
         failure = subprocess.TimeoutExpired(["xcrun", "simctl", "bootstatus"], 300,

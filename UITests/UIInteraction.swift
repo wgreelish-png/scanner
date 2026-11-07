@@ -19,7 +19,10 @@ import XCTest
             guard tap(done, in: app, identifier: doneIdentifier, file: file, line: line) else { return false }
         } else {
             let submit = app.keyboards.buttons.matching(NSPredicate(format: "label ==[c] %@", "search")).firstMatch
-            guard waitUntilTouchable(submit, in: app, timeout: 5) else {
+            // The keyboard key is intentionally outside the content viewport.
+            guard wait(timeout: 5, until: {
+                submit.exists && submit.isEnabled && submit.isHittable && visibleFrame(submit.frame, in: app)
+            }) else {
                 XCTFail("The search keyboard must expose Done or its native Search action", file: file, line: line)
                 return false
             }
@@ -148,7 +151,12 @@ import XCTest
     }
 
     private static func touchable(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
-        element.exists && element.isHittable && visibleFrame(element.frame, in: app)
+        guard element.exists, element.isHittable, visibleFrame(element.frame, in: app) else { return false }
+        // SwiftUI can expose a lazy row as hittable even when a safe-area
+        // control covers it. Scroll body controls into the unobscured content.
+        let bars = fixedBars(in: app)
+        if belongsToFixedBar(element, in: app, bars: bars) { return true }
+        return contentViewport(in: app, bars: bars).contains(CGPoint(x: element.frame.midX, y: element.frame.midY))
     }
 
     private static func visibleFrame(_ frame: CGRect, in app: XCUIApplication) -> Bool {
@@ -162,30 +170,34 @@ import XCTest
     }
 
     private static func fixedBars(in app: XCUIApplication) -> [XCUIElement] {
-        (app.navigationBars.allElementsBoundByIndex + app.tabBars.allElementsBoundByIndex +
-         app.toolbars.allElementsBoundByIndex).filter {
+        let pinned = app.otherElements.matching(NSPredicate(format: "identifier IN %@", [
+            "showTransaction.checkoutBar", "showTransaction.receiptActions"
+        ])).allElementsBoundByIndex
+        return (app.navigationBars.allElementsBoundByIndex + app.tabBars.allElementsBoundByIndex +
+         app.toolbars.allElementsBoundByIndex + pinned).filter {
             $0.exists && visibleFrame($0.frame, in: app) &&
                 ($0.isHittable || $0.buttons.allElementsBoundByIndex.contains { $0.exists && $0.isHittable })
         }
     }
 
-    private static func belongsToFixedBar(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
+    private static func belongsToFixedBar(_ element: XCUIElement, in app: XCUIApplication,
+                                         bars: [XCUIElement]? = nil) -> Bool {
         guard element.exists, visibleFrame(element.frame, in: app) else { return false }
         let center = CGPoint(x: element.frame.midX, y: element.frame.midY)
         let identifier = element.identifier
-        return fixedBars(in: app).contains { bar in
+        return (bars ?? fixedBars(in: app)).contains { bar in
             guard bar.frame.contains(center) else { return false }
             if identifier.isEmpty { return element.isHittable }
             return bar.descendants(matching: .any).matching(identifier: identifier).firstMatch.exists
         }
     }
 
-    private static func contentViewport(in app: XCUIApplication) -> CGRect {
+    private static func contentViewport(in app: XCUIApplication, bars: [XCUIElement]? = nil) -> CGRect {
         let window = app.windows.firstMatch
         guard window.exists else { return .zero }
         let bounds = window.frame.insetBy(dx: 6, dy: 6)
         var top = bounds.minY, bottom = bounds.maxY
-        for bar in fixedBars(in: app) {
+        for bar in bars ?? fixedBars(in: app) {
             let frame = bar.frame
             if frame.midY < window.frame.midY { top = max(top, frame.maxY) }
             else { bottom = min(bottom, frame.minY) }
@@ -195,8 +207,10 @@ import XCTest
         // instead of the foreground list whose row needs to become visible.
         for keyboard in app.keyboards.allElementsBoundByIndex where keyboard.exists {
             let frame = keyboard.frame.intersection(window.frame)
-            if !frame.isNull, !frame.isEmpty, frame.minY > bounds.minY,
-               frame.maxY >= bounds.maxY, frame.width >= bounds.width * 0.5 {
+            // Docked keyboards can exclude the home-indicator area from their
+            // AX frame, so they need not reach the window's bottom edge.
+            if !frame.isNull, !frame.isEmpty, frame.minY > bounds.midY,
+               frame.width >= bounds.width * 0.5 {
                 bottom = min(bottom, frame.minY)
             }
         }

@@ -333,11 +333,15 @@ import XCTest
         XCTAssertTrue(source.exists, file: file, line: line)
     }
 
+    private func priceAdjustment(in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label == %@", "Adjust market price")).firstMatch
+    }
+
     private func setFixtureDraft(price: String, in app: XCUIApplication) {
         let quantity = app.steppers["cardEditor.quantity"]
         _ = UITestInteraction.tap(quantity.buttons["cardEditor.quantity-Increment"], in: app,
                                   identifier: "cardEditor.quantity-Increment")
-        tapVisible(app.buttons["cardEditor.adjustPrice"], in: app)
+        tapVisible(priceAdjustment(in: app), in: app)
         let field = app.textFields["cardEditor.manualPrice"]
         _ = UITestInteraction.tap(field, in: app)
         let existing = field.value as? String ?? ""
@@ -349,7 +353,7 @@ import XCTest
     private func assertDraft(price: String, quantity: Int, in app: XCUIApplication,
                              file: StaticString = #filePath, line: UInt = #line) {
         let amount = app.textFields["cardEditor.manualPrice"]
-        let disclosure = app.buttons["cardEditor.adjustPrice"]
+        let disclosure = priceAdjustment(in: app)
         reveal(disclosure, in: app, identifier: "cardEditor.adjustPrice", file: file, line: line)
         if !amount.exists { _ = UITestInteraction.tap(disclosure, in: app) }
         reveal(amount, in: app, identifier: "cardEditor.manualPrice", file: file, line: line)

@@ -140,7 +140,22 @@ private struct EvidenceFixtureResearch: ResearchProviding {
     init(id: UUID) {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let url = support.appendingPathComponent("uitest-budget-" + id.uuidString + ".json")
-        _store = State(initialValue: ShowBudgetStore(url: url))
+        let store = ShowBudgetStore(url: url)
+        if ProcessInfo.processInfo.arguments.contains("--budget-history-fixture"),
+           store.isLoaded, store.book.shows.isEmpty {
+            do {
+                let today = store.calendar.startOfDay(for: store.currentDate)
+                let showID = try store.create(name: "Synthetic budget history", startingCents: 30_000,
+                                              startDate: today, endDate: today)
+                try store.record(ShowBudgetEntry(kind: .sale, grossReceivedCents: 20_000, feeCents: 1_000,
+                                                recordedAt: store.currentDate), showID: showID)
+                try store.record(ShowBudgetEntry(kind: .purchase, paidCents: 10_000,
+                                                recordedAt: store.currentDate), showID: showID)
+            } catch {
+                preconditionFailure("Could not prepare isolated budget history fixture: \(error)")
+            }
+        }
+        _store = State(initialValue: store)
     }
     var body: some View {
         NavigationStack { ShowBudgetView(store: store) }

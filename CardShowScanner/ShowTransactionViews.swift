@@ -134,7 +134,9 @@ import UIKit
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    if !selectingInventory && !editingIncomingList { Button("Cancel") { dismiss() } }
+                    if !selectingInventory && !editingIncomingList {
+                        Button("Cancel") { dismiss() }.accessibilityIdentifier("showTransaction.cancel")
+                    }
                 }
                 ToolbarItemGroup(placement: .keyboard) {
                     if !selectingInventory && !editingIncomingList && !editingCashAmount && editingIncomingCost == nil {
@@ -218,6 +220,8 @@ import UIKit
             }.buttonStyle(.borderedProminent).disabled(!canRecord(preview: preview, accounting: accounting))
                 .accessibilityIdentifier("showTransaction.record")
         }.padding(.horizontal, 16).padding(.vertical, 10).background(.regularMaterial)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("showTransaction.checkoutBar")
     }
 
     private func endEditing() {
@@ -331,7 +335,8 @@ import UIKit
                     Text(error ?? "This list is unavailable. Return to the list and try again.")
                         .foregroundStyle(.secondary)
                 }
-            }.accessibilityIdentifier("showTransaction.incomingCards")
+            }.accessibilityElement(children: .contain)
+                .accessibilityIdentifier("showTransaction.incomingCards")
         } else {
             genericIncomingSection(accounting)
         }
@@ -1091,6 +1096,8 @@ import UIKit
                     Text("Review the stock and cash reversal before confirming. The original receipt remains in history.")
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding(.horizontal, 16).padding(.vertical, 10).background(.regularMaterial)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("showTransaction.receiptActions")
             }
         }
         .sheet(isPresented: $confirmingUndo) {

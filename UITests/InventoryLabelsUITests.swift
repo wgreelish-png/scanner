@@ -279,7 +279,7 @@ import XCTest
         tap(app.buttons["Card details"], app: app)
 
         let edit = app.buttons["labels.edit." + inventoryID]
-        tap(edit, app: app)
+        guard openInventoryLabelEditor(edit, app: app) else { return }
         assertNoPrintingPricePrompts(app: app)
         XCTAssertEqual(app.textFields["labels.editor.price"].value as? String, "35")
         XCTAssertEqual(app.textFields["labels.editor.copies"].value as? String, "1")
@@ -287,7 +287,7 @@ import XCTest
         tap(app.buttons["labels.editor.cancel"], app: app)
         assertContains("$35", element: edit)
 
-        tap(edit, app: app)
+        guard openInventoryLabelEditor(edit, app: app) else { return }
         enter("", field: app.textFields["labels.editor.price"], app: app)
         XCTAssertTrue(app.buttons["labels.editor.save"].isEnabled, "An empty asking price leaves a write-in area")
         enter("0", field: app.textFields["labels.editor.price"], app: app)
@@ -1444,6 +1444,45 @@ import XCTest
             list.swipeUp()
         }
         XCTAssertTrue(element.exists && element.isHittable, "Expected a control in the foreground print list", file: file, line: line)
+    }
+
+    /// A lazy edit row can be reported hittable while its tap point is behind
+    /// Review Details or Prepare Labels. Keep the complete row above both actions.
+    private func openInventoryLabelEditor(_ edit: XCUIElement, app: XCUIApplication,
+                                          file: StaticString = #filePath, line: UInt = #line) -> Bool {
+        let navigationBar = app.navigationBars["Label Details"]
+        let list = app.collectionViews["labels.configuration"]
+        let footer = app.buttons["labels.continueReview"]
+        guard navigationBar.waitForExistence(timeout: 5), list.waitForExistence(timeout: 5),
+              footer.waitForExistence(timeout: 5), list.isHittable, footer.isHittable else {
+            XCTFail("Expected the foreground Label Details list and its fixed Review Details action", file: file, line: line)
+            return false
+        }
+        for attempt in 0...8 {
+            let window = app.windows.firstMatch.frame
+            let listFrame = list.frame.intersection(window)
+            let top = max(listFrame.minY, navigationBar.frame.maxY)
+            let bottom = min(listFrame.maxY, footer.frame.minY) - 8
+            let viewport = CGRect(x: listFrame.minX, y: top, width: listFrame.width, height: max(0, bottom - top))
+            if edit.exists, edit.isHittable, edit.frame.width > 0, edit.frame.height > 0,
+               viewport.contains(edit.frame) {
+                edit.tap()
+                guard app.navigationBars["Edit Label"].waitForExistence(timeout: 5),
+                      app.textFields["labels.editor.price"].waitForExistence(timeout: 5) else {
+                    XCTFail("Selecting the visible card row must open Edit Label and its price field", file: file, line: line)
+                    return false
+                }
+                return true
+            }
+            guard attempt < 8, viewport.width > 100, viewport.height > 100 else { break }
+            let origin = app.coordinate(withNormalizedOffset: .zero)
+            let x = viewport.minX + viewport.width * 0.97
+            let start = origin.withOffset(CGVector(dx: x, dy: viewport.minY + viewport.height * 0.77))
+            let end = origin.withOffset(CGVector(dx: x, dy: viewport.minY + viewport.height * 0.24))
+            start.press(forDuration: 0.05, thenDragTo: end)
+        }
+        XCTFail("The card edit row must be fully visible above the fixed Review Details action", file: file, line: line)
+        return false
     }
 
     /// XCTest can call a List switch hittable while its tap point is beneath a

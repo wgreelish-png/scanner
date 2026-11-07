@@ -85,6 +85,26 @@ import SwiftData
                 context.insert(row); list.cards.append(row)
             }
             try! context.save()
+            // Seed only the prerequisite for a focused UI scenario. The purchase,
+            // sale and undo controls each have their own test; every receipt and
+            // balance here is produced by the same durable APIs as those controls.
+            // Staying inside the empty-fixture branch preserves edits on relaunch.
+            if ProcessInfo.processInfo.arguments.contains("--show-cost-profit-ui-fixture"),
+               let stage = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--show-cost-profit-stage=") }),
+               let list = try! context.fetch(FetchDescriptor<CardList>()).first(where: { $0.name == "Profit Example" }),
+               let showID = store.activeShow?.id {
+                let purchased = "--show-cost-profit-stage=purchased", sold = "--show-cost-profit-stage=sold"
+                precondition(stage == purchased || stage == sold, "Unknown cost/profit fixture stage")
+                let snapshot = try! ShowTransactionListService.incomingSnapshot(for: list, kind: .purchase, context: context)
+                let purchase = try! ShowTransactionListService.record(.init(kind: .purchase,
+                    incomingListID: snapshot.listID, incomingListName: snapshot.name, incoming: snapshot.cards,
+                    incomingValueCents: 700), showID: showID, context: context, store: store)
+                if stage == sold {
+                    _ = try! store.recordTransaction(.init(kind: .sale,
+                        outgoing: [.init(inventoryID: purchase.incoming[0].inventoryID, quantity: 1)],
+                        saleReceivedCents: 1_000), showID: showID)
+                }
+            }
         }
     }
     private static func card(_ name: String, price: Decimal?, game: String = "Pokémon") -> CardCandidate {
