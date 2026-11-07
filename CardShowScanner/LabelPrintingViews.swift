@@ -1429,6 +1429,12 @@ private struct LabelActionBar<Content: View>: View {
 
     private func finishProgressPresentation() {
         guard progress.didSucceed, !queue.isPrinting else { return }
+        do {
+            guard try progress.completePresentation(queue: queue) else { return }
+        } catch {
+            actionError = error.localizedDescription
+            return
+        }
         if let onPrintingCompleted { onPrintingCompleted() }
         else { showingPriceTagsAfterPrint = true }
     }

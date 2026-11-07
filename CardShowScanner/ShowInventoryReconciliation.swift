@@ -121,7 +121,7 @@ enum ShowInventoryReconciliationMath {
             removed = Dictionary(uniqueKeysWithValues: try removals(desired: desired, inventory: inventory,
                 mode: mode ?? .replace, legacyLocalOverlap: legacyLocalOverlap).map { ($0.inventoryID, $0.quantity) })
         } else { removed = [:] }
-        let local = Dictionary(grouping: inventory.filter { $0.acquiredByTransactionID != nil && $0.quantity > 0 }, by: { $0.card.identity })
+        let local = Dictionary(grouping: inventory.filter { $0.isLocalAcquisition && $0.quantity > 0 }, by: { $0.card.identity })
         var visited = Set<CardIdentity>(), result: [Addition] = []
         for source in seeds.sorted(by: { $0.sourceInventoryID < $1.sourceInventoryID }) {
             let identity = source.card.identity
@@ -191,7 +191,7 @@ enum ShowInventoryReconciliationMath {
         for (addition, id) in zip(additions, event.createdInventoryIDs) {
             var cost: Int64?
             if let origin = addition.adoptedFrom {
-                guard let index = positions[origin], result[index].acquiredByTransactionID != nil,
+                guard let index = positions[origin], result[index].isLocalAcquisition,
                       result[index].card.identity == addition.source.card.identity,
                       result[index].quantity >= addition.quantity else { throw ShowTransactionFailure.invalidInventory }
                 let item = result[index]
@@ -218,7 +218,7 @@ enum ShowInventoryReconciliationMath {
                                          legacyLocalOverlap: [UUID: Int] = [:]) -> [ShowInventoryItem] {
         guard mode == .merge else { return inventory }
         return inventory.compactMap { item in
-            guard item.acquiredByTransactionID != nil else { return item }
+            guard item.isLocalAcquisition else { return item }
             let quantity = overlapQuantity(item, legacyLocalOverlap)
             guard quantity > 0 else { return nil }
             var managed = item; managed.quantity = quantity
@@ -247,7 +247,7 @@ extension ShowBudgetBook {
     /// purchases made afterward must remain independently available locally.
     func legacyLocalOverlapForNextImport() -> [UUID: Int] {
         guard let event = inventoryReconciliations.last, event.mode == nil else { return [:] }
-        let localIDs = Set(inventory.filter { $0.acquiredByTransactionID != nil }.map(\.id))
+        let localIDs = Set(inventory.filter { $0.isLocalAcquisition }.map(\.id))
         var states = Dictionary(uniqueKeysWithValues: costLedgerBaseline.map { ($0.id, $0.quantity) })
         for mutation in costMutations {
             for change in mutation.changes { states[change.after.id] = change.after.quantity }
@@ -273,7 +273,7 @@ extension ShowBudgetBook {
             }
         }
         return try costLedgerBaseline.compactMap { state -> ShowInventorySeed? in
-            guard let item = stock[state.id], item.acquiredByTransactionID == nil,
+            guard let item = stock[state.id], !item.isLocalAcquisition,
                   item.acquiredByReconciliationID == nil, let sourceID = item.sourceInventoryID else { return nil }
             let quantity = state.quantity.addingReportingOverflow(legacyConsumed[item.id] ?? 0)
             guard !quantity.overflow, (0...Self.maximumQuantity).contains(quantity.partialValue) else {
@@ -290,7 +290,7 @@ extension ShowBudgetBook {
         let affected = Set(receipt.incoming.map { $0.card.identity } + receipt.outgoing.map { $0.card.identity })
         let stock = Dictionary(uniqueKeysWithValues: inventory.map { ($0.id, $0) })
         let sourceAffected = Set((receipt.incoming + receipt.outgoing).compactMap { line -> CardIdentity? in
-            guard let item = stock[line.inventoryID], item.acquiredByTransactionID == nil else { return nil }
+            guard let item = stock[line.inventoryID], !item.isLocalAcquisition else { return nil }
             return line.card.identity
         })
         let affectedIDs = Set((receipt.incoming + receipt.outgoing).map(\.inventoryID))

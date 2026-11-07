@@ -315,6 +315,7 @@ struct ListDeletionConfirmationView: View {
     @State private var reviewDestination: ReviewDestination?
     @State private var destinationSession: ScanSession?
     @State private var search = ""
+    @FocusState private var searchFocused: Bool
     @State private var sort = "Scan Order"
     @State private var rename = false
     @State private var name = ""
@@ -335,6 +336,9 @@ struct ListDeletionConfirmationView: View {
     @State private var newTransactionKind: ShowTransactionKind?
     @State private var transactionOfferContext: ShowTransactionOfferContext?
     @State private var receiptRoute: ReceiptRoute?
+    @State private var confirmingOwnedInventory = false
+    @State private var showingWorkingInventory = false
+    @State private var ownedInventoryMessage: String?
 
     init(list: CardList, session: ScanSession? = nil,
          onContinueScanning: (() -> Void)? = nil, transactionEditing: Bool = false,
@@ -359,12 +363,12 @@ struct ListDeletionConfirmationView: View {
         List {
             if reviewSection == .cards { cardRows }
             else { offerSection }
-        }.navigationTitle(reviewSession == nil ? list.name : "Review & Offer").searchable(text: $search)
+        }.navigationTitle(reviewSession == nil ? list.name : "Review & Offer")
             .scrollDismissesKeyboard(.interactively)
             .safeAreaInset(edge: .top) { reviewSummary }
             .safeAreaInset(edge: .bottom) { reviewActions }
             .onChange(of: reviewSection) { _, _ in
-                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                endListSearchEditing()
             }
             .onAppear {
                 isVisible = true; openingScanner = false
@@ -403,6 +407,14 @@ struct ListDeletionConfirmationView: View {
                 }
             }
             .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    if searchFocused {
+                        Spacer()
+                        Button("Done") { endListSearchEditing() }
+                            .fixedSize().frame(minWidth: 64, minHeight: 44)
+                            .accessibilityIdentifier("list.keyboardDone")
+                    }
+                }
                 if !list.isCardShowInventory {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Search & Add Card", systemImage: "magnifyingglass") { showingCatalogSearch = true }
@@ -427,7 +439,7 @@ struct ListDeletionConfirmationView: View {
                         }
                         if !transactionEditing {
                             Button("Clear List Outcome", systemImage: "arrow.uturn.backward") { recordOutcome(nil) }
-                                .disabled(list.transactionOutcomeData == nil || savingOutcome || pendingOutcomeBudget || inventoryTransaction != nil)
+                                .disabled(list.transactionOutcomeData == nil || savingOutcome || pendingOutcomeBudget || inventoryTransaction != nil || transactionStore.hasOwnedInventory(forListID: list.id))
                                 .accessibilityIdentifier("list.clearOutcome")
                         }
                     } label: {
@@ -446,6 +458,14 @@ struct ListDeletionConfirmationView: View {
             .navigationDestination(item: $selectedCard) { item in
                 CardResearchView(card: item.snapshot, initialSection: .market,
                     context: list.isCardShowInventory ? .importedCard(item) : .savedCard(item))
+            }
+            .navigationDestination(isPresented: $showingWorkingInventory) {
+                ShowWorkingInventoryView(store: transactionStore, initialGame: "")
+            }
+            .confirmationDialog("Add cards you already own?", isPresented: $confirmingOwnedInventory) {
+                Button("Add \(ownedInventoryPendingQuantity.formatted()) \(ownedInventoryPendingQuantity == 1 ? "Card" : "Cards") to Inventory") { addOwnedInventory() }
+            } message: {
+                Text("Adds this list's new cards to local inventory. Cost starts as unknown and can be set later. For a purchase or trade, use Record Transaction instead.")
             }
             .sheet(isPresented: $showingOfferRates) {
                 if let session = reviewSession { SessionRatesView(session: session) }
@@ -491,6 +511,7 @@ struct ListDeletionConfirmationView: View {
         }
         Picker("Sort", selection: $sort) { ForEach(["Scan Order", "Name", "Value"], id: \.self) { Text($0 == "Scan Order" && list.isCardShowInventory ? "Import Order" : $0).tag($0) } }
         if list.cards.isEmpty { ContentUnavailableView("No cards yet", systemImage: "rectangle.stack", description: Text(list.isCardShowInventory ? "Your last imported location is empty. Refresh inventory to check for changes." : "Open the scanner to add cards.")) }
+        else if filtered.isEmpty { ContentUnavailableView.search(text: search) }
         ForEach(filtered) { item in
             Button {
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
@@ -582,7 +603,38 @@ struct ListDeletionConfirmationView: View {
             Picker("List section", selection: $reviewSection) {
                 ForEach(ReviewSection.allCases, id: \.self) { Text($0.rawValue).tag($0) }
             }.pickerStyle(.segmented).accessibilityIdentifier("list.section")
+            if reviewSection == .cards { listLookup }
         }.padding(.horizontal, 16).padding(.vertical, 10).background(.regularMaterial)
+    }
+
+    private var listLookup: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            TextField("Search cards in this list", text: $search)
+                .frame(minHeight: 44).focused($searchFocused)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                .submitLabel(.search).onSubmit { endListSearchEditing() }
+                .accessibilityLabel("Search cards in this list")
+                .accessibilityIdentifier("list.search")
+            if !search.isEmpty {
+                Button {
+                    search = ""
+                    searchFocused = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        .frame(minWidth: 44, minHeight: 44)
+                }.buttonStyle(.plain)
+                    .accessibilityLabel("Clear list search")
+                    .accessibilityIdentifier("list.clearSearch")
+            }
+        }.padding(.horizontal, 10).frame(minHeight: 44)
+            .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func endListSearchEditing() {
+        searchFocused = false
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
     @ViewBuilder private var reviewActions: some View {
@@ -594,11 +646,30 @@ struct ListDeletionConfirmationView: View {
                 .accessibilityIdentifier("list.manageCardShowInventory")
                 .padding(.horizontal, 16).padding(.vertical, 10).background(.regularMaterial)
         } else {
-            Group {
-                if dynamicTypeSize.isAccessibilitySize {
-                    VStack(spacing: 8) { primaryReviewActions }
-                } else {
-                    HStack(spacing: 12) { primaryReviewActions }
+            VStack(spacing: 8) {
+                if !transactionEditing && reviewSection == .cards && inventoryTransaction == nil && recordedTransaction == nil,
+                   ownedInventoryPendingQuantity > 0 {
+                    Button {
+                        searchFocused = false
+                        confirmingOwnedInventory = true
+                    } label: {
+                        Label("Add to Inventory", systemImage: "shippingbox")
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                    }.buttonStyle(.bordered)
+                        .disabled(!transactionStore.isLoaded || transactionStore.isSaving || savingOutcome || pendingOutcomeBudget)
+                        .accessibilityIdentifier("list.addOwnedInventory")
+                        .accessibilityHint("Add cards you already own without recording a purchase.")
+                }
+                Group {
+                    if dynamicTypeSize.isAccessibilitySize {
+                        VStack(spacing: 8) { primaryReviewActions }
+                    } else {
+                        HStack(spacing: 12) { primaryReviewActions }
+                    }
+                }
+                if let ownedInventoryMessage {
+                    Text(ownedInventoryMessage).font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("list.inventoryAdded")
                 }
             }.padding(.horizontal, 16).padding(.vertical, 10).background(.regularMaterial)
         }
@@ -617,15 +688,36 @@ struct ListDeletionConfirmationView: View {
     private var recordTransactionButton: some View {
         Button {
             if let receipt = inventoryTransaction { receiptRoute = ReceiptRoute(id: receipt.id) }
+            else if transactionStore.hasOwnedInventory(forListID: list.id) { showingWorkingInventory = true }
             else { openTransactionCheckout() }
         } label: {
-            Label(inventoryTransaction == nil ? (recordedTransaction?.title ?? "Record Transaction") : "View Transaction",
+            Label(inventoryTransaction == nil
+                  ? (transactionStore.hasOwnedInventory(forListID: list.id) ? "View Inventory" : (recordedTransaction?.title ?? "Record Transaction"))
+                  : "View Transaction",
                   systemImage: inventoryTransaction == nil && recordedTransaction == nil ? "checkmark.circle" : "checkmark.circle.fill")
                 .frame(maxWidth: .infinity, minHeight: 44)
         }.buttonStyle(.borderedProminent)
             .disabled(savingOutcome || pendingOutcomeBudget)
             .accessibilityIdentifier("list.recordTransaction")
-            .accessibilityHint("Review a purchase or trade using this scanned list.")
+            .accessibilityHint(transactionStore.hasOwnedInventory(forListID: list.id)
+                ? "Open the cards already added to your local inventory."
+                : "Review a purchase or trade using this scanned list.")
+    }
+
+    private var ownedInventoryPendingQuantity: Int {
+        let addedRows = Set(transactionStore.inventoryListAdditions.filter { $0.listID == list.id }
+            .flatMap { $0.rows.map(\.sourceRowID) })
+        return list.cards.filter { !addedRows.contains($0.id) && (1...ShowBudgetBook.maximumQuantity).contains($0.quantity) }
+            .reduce(0) { $0 + $1.quantity }
+    }
+
+    private func addOwnedInventory() {
+        do {
+            let result = try ShowOwnedInventoryListService.add(list, context: context, store: transactionStore)
+            ownedInventoryMessage = result.addedQuantity == 0
+                ? "These cards are already in inventory."
+                : "\(result.addedQuantity.formatted()) \(result.addedQuantity == 1 ? "card" : "cards") added · Cost unknown"
+        } catch { self.error = error.localizedDescription }
     }
 
     private func openTransactionCheckout() {
@@ -702,7 +794,7 @@ struct ListDeletionConfirmationView: View {
                       ? "checkmark.circle.fill" : "minus.circle")
                     .frame(maxWidth: .infinity, minHeight: 44)
             }.buttonStyle(.bordered).tint(list.outcomeRecord?.kind == .nothingHappened ? Color.orange : Color.gray)
-                .disabled(savingOutcome || pendingOutcomeBudget || inventoryTransaction != nil)
+                .disabled(savingOutcome || pendingOutcomeBudget || inventoryTransaction != nil || transactionStore.hasOwnedInventory(forListID: list.id))
                 .accessibilityIdentifier("list.nothingHappened")
                 .accessibilityHint("Record that this deal did not go ahead.")
 

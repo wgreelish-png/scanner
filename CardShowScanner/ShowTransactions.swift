@@ -100,7 +100,7 @@ enum ShowTransactionKind: String, Codable, CaseIterable, Identifiable, Sendable 
 enum ShowTransactionFailure: LocalizedError, Equatable, Sendable {
     case invalidDraft, invalidInventory, insufficientStock, inventoryLocationConflict, transactionNotFound
     case incomingListAlreadyUsed, legacyListOutcomeExists, inventoryLinkedEntry, dependentStockUsed
-    case invalidCost, costAllocationRequired, inventoryReconciled
+    case invalidCost, costAllocationRequired, inventoryReconciled, ownedListAlreadyAdded
 
     var errorDescription: String? {
         switch self {
@@ -115,6 +115,7 @@ enum ShowTransactionFailure: LocalizedError, Equatable, Sendable {
         case .dependentStockUsed: return "Cards acquired by this transaction were used in a later transaction. Undo those transactions first."
         case .invalidCost: return "Enter a valid total cost for the remaining copies. Sold receipts keep their recorded cost."
         case .costAllocationRequired: return "Review the incoming card costs. Entered costs must fit the actual total, and remaining cards need usable allocation weights."
+        case .ownedListAlreadyAdded: return "This list has already been added as owned inventory. Use a new list for a purchase or trade so the same cards are not added twice."
         case .inventoryReconciled: return "A later website import changed this card’s stock. No inventory or cash was reversed. Review the current inventory and this transaction’s receipt."
         }
     }
@@ -129,12 +130,16 @@ struct ShowInventoryItem: Codable, Equatable, Identifiable, Sendable {
     var acquiredByTransactionID: UUID?
     /// Import-created copies have unknown acquisition cost and their own audit origin.
     var acquiredByReconciliationID: UUID?
+    /// Explicitly added already-owned stock, independent of show cash or a purchase.
+    var acquiredByListAdditionID: UUID? = nil
     var acquiredAt: Date
     /// Total actual cost of the copies still in this lot. Nil means unknown.
     var remainingCostCents: Int64?
     /// A website-managed copy adopted from a local purchase/trade lot. The
     /// original lot and receipt remain immutable acquisition provenance.
     var adoptedFromInventoryID: UUID? = nil
+
+    var isLocalAcquisition: Bool { acquiredByTransactionID != nil || acquiredByListAdditionID != nil }
 
     var originTitle: String {
         sourceInventoryID != nil || sourceLocationID != nil || acquiredByReconciliationID != nil
@@ -144,13 +149,14 @@ struct ShowInventoryItem: Codable, Equatable, Identifiable, Sendable {
     init(id: UUID = UUID(), card: CardCandidate, quantity: Int, sourceInventoryID: Int? = nil,
          sourceLocationID: Int? = nil, acquiredByTransactionID: UUID? = nil, acquiredAt: Date = Date(),
          remainingCostCents: Int64? = nil, acquiredByReconciliationID: UUID? = nil,
-         adoptedFromInventoryID: UUID? = nil) {
+         adoptedFromInventoryID: UUID? = nil, acquiredByListAdditionID: UUID? = nil) {
         self.id = id; self.card = card; self.quantity = quantity; self.sourceInventoryID = sourceInventoryID
         self.sourceLocationID = sourceLocationID; self.acquiredByTransactionID = acquiredByTransactionID
         self.acquiredAt = acquiredAt
         self.remainingCostCents = remainingCostCents
         self.acquiredByReconciliationID = acquiredByReconciliationID
         self.adoptedFromInventoryID = adoptedFromInventoryID
+        self.acquiredByListAdditionID = acquiredByListAdditionID
     }
 }
 
@@ -158,6 +164,39 @@ struct ShowInventorySeed: Codable, Equatable, Sendable {
     var sourceInventoryID: Int
     var card: CardCandidate
     var quantity: Int
+}
+
+/// One atomic addition of previously owned cards. Source row IDs are retained
+/// after sale/import adoption so retrying a list cannot recreate physical stock.
+struct ShowOwnedInventoryAddition: Codable, Equatable, Identifiable, Sendable {
+    struct Row: Codable, Equatable, Sendable {
+        let sourceRowID: UUID
+        let inventoryID: UUID
+        let card: CardCandidate
+        let quantity: Int
+    }
+    let id: UUID
+    let listID: UUID
+    let listName: String
+    let recordedAt: Date
+    let rows: [Row]
+
+    func validate() throws {
+        guard !listName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, listName.count <= 500,
+              recordedAt.timeIntervalSince1970.isFinite,
+              !rows.isEmpty, rows.count <= ShowBudgetBook.maximumTransactionCards,
+              Set(rows.map(\.sourceRowID)).count == rows.count,
+              Set(rows.map(\.inventoryID)).count == rows.count,
+              rows.allSatisfy({ (1...ShowBudgetBook.maximumQuantity).contains($0.quantity) && ShowTransactionMath.validCard($0.card) }) else {
+            throw ShowTransactionFailure.invalidInventory
+        }
+    }
+}
+
+struct ShowOwnedInventoryAdditionSummary: Equatable, Sendable {
+    let addedQuantity: Int
+    let addedLots: Int
+    let alreadyAddedQuantity: Int
 }
 
 struct ShowIncomingCard: Codable, Equatable, Identifiable, Sendable {
@@ -553,7 +592,7 @@ struct ShowCostStockChange: Codable, Equatable, Sendable {
 /// validation of consumed costs against the lot at recording, including edits
 /// and out-of-order Undo, without reconstructing historical unknown costs.
 struct ShowCostLedgerMutation: Codable, Equatable, Sendable {
-    enum Kind: String, Codable, Sendable { case record, undo, adjustment, reconciliation }
+    enum Kind: String, Codable, Sendable { case record, undo, adjustment, reconciliation, listAddition }
     let kind: Kind
     let operationID: UUID
     let recordedAt: Date
@@ -573,7 +612,7 @@ struct ShowCostLedgerMutation: Codable, Equatable, Sendable {
 
 extension ShowBudgetBook {
     func validateCostLedger() throws {
-        let maximumMutations = Self.maximumTransactions * 2 + Self.maximumCostAdjustments + Self.maximumInventoryReconciliations
+        let maximumMutations = Self.maximumTransactions * 2 + Self.maximumCostAdjustments + Self.maximumInventoryReconciliations + Self.maximumInventoryListAdditions
         guard costLedgerBaseline.count <= Self.maximumInventoryItems, costMutations.count <= maximumMutations else {
             throw ShowBudgetFailure.capacityExceeded
         }
@@ -587,6 +626,7 @@ extension ShowBudgetBook {
         let receipts = Dictionary(uniqueKeysWithValues: transactions.map { ($0.id, $0) })
         let adjustments = Dictionary(uniqueKeysWithValues: costAdjustments.map { ($0.id, $0) })
         let reconciliations = Dictionary(uniqueKeysWithValues: inventoryReconciliations.map { ($0.id, $0) })
+        let listAdditions = Dictionary(uniqueKeysWithValues: inventoryListAdditions.map { ($0.id, $0) })
         let reinvestmentPercents = Dictionary(uniqueKeysWithValues: shows.flatMap(\.entries).compactMap { entry in
             entry.transactionID.map { ($0, entry.reinvestmentPercent) }
         })
@@ -599,18 +639,19 @@ extension ShowBudgetBook {
         for state in costLedgerBaseline {
             try state.validate()
             guard let item = stock[state.id], state.remainingCostCents == nil,
-                  item.acquiredByReconciliationID == nil,
+                  item.acquiredByReconciliationID == nil, item.acquiredByListAdditionID == nil,
                   item.acquiredByTransactionID.map({ legacy.contains($0) }) ?? true else { throw ShowBudgetFailure.invalidBook }
             states[state.id] = state
         }
         let baselineIDs = Set(costLedgerBaseline.map(\.id))
         guard inventory.allSatisfy({ item in
-            let needsBaseline = item.acquiredByReconciliationID == nil &&
+            let needsBaseline = item.acquiredByReconciliationID == nil && item.acquiredByListAdditionID == nil &&
                 (item.acquiredByTransactionID.map({ legacy.contains($0) }) ?? true)
             return baselineIDs.contains(item.id) == needsBaseline
         }) else { throw ShowBudgetFailure.invalidBook }
         var recorded = Set<UUID>(), undone = Set<UUID>(), adjusted = Set<UUID>()
         var reconciled = Set<UUID>(), reconciliationOrder: [UUID] = []
+        var addedLists = Set<UUID>(), additionOrder: [UUID] = []
         var recordPositions = Dictionary(uniqueKeysWithValues: legacy.map { ($0, -1) })
         var lastReconciliationPositions: [CardIdentity: Int] = [:]
         var lastSourceReconciliationPositions: [CardIdentity: Int] = [:]
@@ -633,6 +674,15 @@ extension ShowBudgetBook {
             }
             let expected: [ShowCostStockChange]
             switch mutation.kind {
+            case .listAddition:
+                guard addedLists.insert(mutation.operationID).inserted,
+                      let addition = listAdditions[mutation.operationID], addition.recordedAt == mutation.recordedAt else {
+                    throw ShowBudgetFailure.invalidBook
+                }
+                expected = addition.rows.map { row in
+                    .init(before: nil, after: .init(id: row.inventoryID, quantity: row.quantity, remainingCostCents: nil))
+                }
+                additionOrder.append(addition.id)
             case .record:
                 guard !legacy.contains(mutation.operationID), recorded.insert(mutation.operationID).inserted,
                       let receipt = receipts[mutation.operationID], receipt.recordedAt == mutation.recordedAt,
@@ -678,7 +728,7 @@ extension ShowBudgetBook {
                 }
                 let affected = receipt.incoming.map { $0.card.identity } + receipt.outgoing.map { $0.card.identity }
                 let sourceAffected = (receipt.incoming + receipt.outgoing).compactMap { line -> CardIdentity? in
-                    guard let item = stock[line.inventoryID], item.acquiredByTransactionID == nil else { return nil }
+                    guard let item = stock[line.inventoryID], !item.isLocalAcquisition else { return nil }
                     return line.card.identity
                 }
                 let affectedIDs = (receipt.incoming + receipt.outgoing).map(\.inventoryID)
@@ -751,7 +801,7 @@ extension ShowBudgetBook {
                 }
                 previousSourceRows = event.sourceRows
                 legacyLocalOverlap = event.mode == nil ? Dictionary(uniqueKeysWithValues:
-                    plan.inventory.filter { $0.acquiredByTransactionID != nil && $0.quantity > 0 }.map { ($0.id, $0.quantity) }) : [:]
+                    plan.inventory.filter { $0.isLocalAcquisition && $0.quantity > 0 }.map { ($0.id, $0.quantity) }) : [:]
                 reconciliationOrder.append(event.id)
             }
             guard mutation.changes == expected else { throw ShowBudgetFailure.invalidBook }
@@ -761,6 +811,7 @@ extension ShowBudgetBook {
         let expectedUndone = Set(transactions.filter { $0.reversedAt != nil }.map(\.id)).subtracting(legacyReversed)
         guard recorded == expectedRecorded, undone == expectedUndone, adjusted == Set(adjustments.keys),
               reconciled == Set(reconciliations.keys), reconciliationOrder == inventoryReconciliations.map(\.id),
+              addedLists == Set(listAdditions.keys), additionOrder == inventoryListAdditions.map(\.id),
               states.count == inventory.count,
               inventory.allSatisfy({ states[$0.id] == ShowCostStockState($0) }) else { throw ShowBudgetFailure.invalidBook }
     }

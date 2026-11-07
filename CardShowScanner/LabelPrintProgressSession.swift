@@ -13,6 +13,8 @@ import Observation
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var startWhenPresented: (@MainActor () -> Void)?
     @ObservationIgnored private var generation = UUID()
+    @ObservationIgnored private var successfulEntries: [LabelQueueEntry] = []
+    @ObservationIgnored private var presentationCompleted = false
 
     deinit { task?.cancel() }
 
@@ -46,6 +48,8 @@ import Observation
         didSucceed = false
         didRequestStop = false
         issue = nil
+        successfulEntries = []
+        presentationCompleted = false
         if deferUntilPresented {
             startWhenPresented = { [weak self] in
                 self?.launch(queue: queue, using: sender, ids: ids, generation: current, canFinish: canFinish)
@@ -81,6 +85,7 @@ import Observation
                 && queue.isLoaded && queue.error == nil && ids.isSubset(of: completedIDs)
                 && queue.entries.allSatisfy { $0.state == .completed }
             if self.didSucceed {
+                self.successfulEntries = queue.entries.filter { ids.contains($0.id) }
                 self.isPresented = false
             } else {
                 self.issue = queue.error ?? (self.didRequestStop
@@ -105,6 +110,22 @@ import Observation
     func close() {
         guard !isRunning else { return }
         isPresented = false
+    }
+
+    /// Cleanup follows dismissal, so the final confirmed counter stays visible
+    /// until the printer's terminal acknowledgement has closed progress.
+    @discardableResult
+    func completePresentation(queue: LabelPrintQueue) throws -> Bool {
+        guard didSucceed, !isRunning, !isPresented, !presentationCompleted else { return false }
+        let custom = successfulEntries.filter { $0.source == .custom }
+        do {
+            if !custom.isEmpty { try queue.removeConfirmedCustomLabels(custom) }
+            presentationCompleted = true
+            return true
+        } catch {
+            issue = error.localizedDescription
+            throw error
+        }
     }
 
     func waitUntilFinished() async {

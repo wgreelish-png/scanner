@@ -295,6 +295,7 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
     static let maximumTransactions = 20_000
     static let maximumCostAdjustments = 50_000
     static let maximumInventoryReconciliations = 20_000
+    static let maximumInventoryListAdditions = 50_000
     static let maximumQuantity = 1_000_000
     var version: Int
     var shows: [ShowBudgetEvent]
@@ -309,13 +310,15 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
     var legacyTransactionIDs: [UUID]
     var legacyReversedTransactionIDs: [UUID]
     var inventoryReconciliations: [ShowInventoryReconciliation]
+    var inventoryListAdditions: [ShowOwnedInventoryAddition]
 
-    init(version: Int = 5, shows: [ShowBudgetEvent] = [], activeShowID: UUID? = nil,
+    init(version: Int = 6, shows: [ShowBudgetEvent] = [], activeShowID: UUID? = nil,
          listOutcomeUpdates: [BudgetListOutcomeUpdate]? = nil, inventory: [ShowInventoryItem] = [],
          transactions: [ShowTransactionReceipt] = [], inventorySourceLocationID: Int? = nil,
          costAdjustments: [ShowInventoryCostAdjustment] = [], costLedgerBaseline: [ShowCostStockState] = [],
          costMutations: [ShowCostLedgerMutation] = [], legacyTransactionIDs: [UUID] = [],
-         legacyReversedTransactionIDs: [UUID] = [], inventoryReconciliations: [ShowInventoryReconciliation] = []) {
+         legacyReversedTransactionIDs: [UUID] = [], inventoryReconciliations: [ShowInventoryReconciliation] = [],
+         inventoryListAdditions: [ShowOwnedInventoryAddition] = []) {
         self.version = version; self.shows = shows; self.activeShowID = activeShowID
         self.listOutcomeUpdates = listOutcomeUpdates
         self.inventory = inventory; self.transactions = transactions; self.inventorySourceLocationID = inventorySourceLocationID
@@ -323,10 +326,11 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
         self.costLedgerBaseline = costLedgerBaseline; self.costMutations = costMutations
         self.legacyTransactionIDs = legacyTransactionIDs; self.legacyReversedTransactionIDs = legacyReversedTransactionIDs
         self.inventoryReconciliations = inventoryReconciliations
+        self.inventoryListAdditions = inventoryListAdditions
     }
 
     func validate() throws {
-        guard version == 5 else { throw ShowBudgetFailure.invalidVersion }
+        guard version == 6 else { throw ShowBudgetFailure.invalidVersion }
         guard shows.count <= Self.maximumStoredShows,
               shows.filter({ $0.deletedAt == nil }).count <= Self.maximumShows,
               shows.reduce(0, { $0 + $1.entries.count }) <= Self.maximumEntriesTotal else { throw ShowBudgetFailure.capacityExceeded }
@@ -364,12 +368,12 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case version, shows, activeShowID, listOutcomeUpdates, inventory, transactions, inventorySourceLocationID, costAdjustments,
-             costLedgerBaseline, costMutations, legacyTransactionIDs, legacyReversedTransactionIDs, inventoryReconciliations
+             costLedgerBaseline, costMutations, legacyTransactionIDs, legacyReversedTransactionIDs, inventoryReconciliations, inventoryListAdditions
     }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         let storedVersion = try values.decode(Int.self, forKey: .version)
-        guard (1...5).contains(storedVersion) else { throw ShowBudgetFailure.invalidVersion }
+        guard (1...6).contains(storedVersion) else { throw ShowBudgetFailure.invalidVersion }
         shows = try values.decode([ShowBudgetEvent].self, forKey: .shows)
         activeShowID = try values.decodeIfPresent(UUID.self, forKey: .activeShowID)
         listOutcomeUpdates = try values.decodeIfPresent([BudgetListOutcomeUpdate].self, forKey: .listOutcomeUpdates)
@@ -386,7 +390,7 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
             legacyReversedTransactionIDs = try values.decode([UUID].self, forKey: .legacyReversedTransactionIDs)
         } else {
             let unsupportedJournal = try values.decodeIfPresent([ShowCostLedgerMutation].self, forKey: .costMutations) ?? []
-            guard !unsupportedJournal.contains(where: { $0.kind == .reconciliation }) else {
+            guard !unsupportedJournal.contains(where: { $0.kind == .reconciliation || $0.kind == .listAddition }) else {
                 throw ShowBudgetFailure.invalidVersion
             }
             costLedgerBaseline = inventory.map(ShowCostStockState.init)
@@ -394,7 +398,7 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
             legacyTransactionIDs = transactions.map(\.id)
             legacyReversedTransactionIDs = transactions.filter { $0.reversedAt != nil }.map(\.id)
         }
-        if storedVersion == 5 {
+        if storedVersion >= 5 {
             // Required even when empty: removing v5 audit metadata is damage,
             // not a request to migrate a fresh baseline.
             inventoryReconciliations = try values.decode([ShowInventoryReconciliation].self, forKey: .inventoryReconciliations)
@@ -405,6 +409,16 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
                 throw ShowBudgetFailure.invalidVersion
             }
             inventoryReconciliations = []
+        }
+        if storedVersion >= 6 {
+            inventoryListAdditions = try values.decode([ShowOwnedInventoryAddition].self, forKey: .inventoryListAdditions)
+        } else {
+            let unexpected = try values.decodeIfPresent([ShowOwnedInventoryAddition].self, forKey: .inventoryListAdditions) ?? []
+            guard unexpected.isEmpty, inventory.allSatisfy({ $0.acquiredByListAdditionID == nil }),
+                  !costMutations.contains(where: { $0.kind == .listAddition }) else {
+                throw ShowBudgetFailure.invalidVersion
+            }
+            inventoryListAdditions = []
         }
         if storedVersion == 1 {
             guard (listOutcomeUpdates ?? []).isEmpty,
@@ -423,7 +437,7 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
                 throw ShowBudgetFailure.invalidVersion
             }
         }
-        version = 5
+        version = 6
         try validate()
     }
     func encode(to encoder: Encoder) throws {
@@ -442,6 +456,7 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
         try values.encode(legacyTransactionIDs, forKey: .legacyTransactionIDs)
         try values.encode(legacyReversedTransactionIDs, forKey: .legacyReversedTransactionIDs)
         try values.encode(inventoryReconciliations, forKey: .inventoryReconciliations)
+        try values.encode(inventoryListAdditions, forKey: .inventoryListAdditions)
     }
 
     private func validateTransactions() throws {
@@ -460,6 +475,20 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
             guard event.sourceLocationID == inventorySourceLocationID else { throw ShowTransactionFailure.inventoryLocationConflict }
         }
         guard Set(costAdjustments.map(\.id)).count == costAdjustments.count else { throw ShowBudgetFailure.duplicateIdentity }
+        guard inventoryListAdditions.count <= Self.maximumInventoryListAdditions,
+              Set(inventoryListAdditions.map(\.id)).count == inventoryListAdditions.count else {
+            throw ShowBudgetFailure.capacityExceeded
+        }
+        var ownedRows: [UUID: (ShowOwnedInventoryAddition, ShowOwnedInventoryAddition.Row)] = [:]
+        var listRows: [UUID: Set<UUID>] = [:]
+        for addition in inventoryListAdditions {
+            try addition.validate()
+            for row in addition.rows {
+                guard listRows[addition.listID, default: []].insert(row.sourceRowID).inserted,
+                      ownedRows[row.inventoryID] == nil else { throw ShowBudgetFailure.duplicateIdentity }
+                ownedRows[row.inventoryID] = (addition, row)
+            }
+        }
         guard Set(inventory.map(\.id)).count == inventory.count,
               Set(transactions.map(\.id)).count == transactions.count else { throw ShowBudgetFailure.invalidBook }
         let stock = Dictionary(uniqueKeysWithValues: inventory.map { ($0.id, $0) })
@@ -484,8 +513,14 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
                   item.acquiredAt.timeIntervalSince1970.isFinite else { throw ShowTransactionFailure.invalidInventory }
             if let transaction = item.acquiredByTransactionID {
                 guard item.sourceInventoryID == nil, item.sourceLocationID == nil, item.acquiredByReconciliationID == nil,
-                      let receipt = receipts[transaction], item.acquiredAt == receipt.recordedAt,
+                      item.acquiredByListAdditionID == nil, let receipt = receipts[transaction], item.acquiredAt == receipt.recordedAt,
                       receipt.incoming.contains(where: { $0.inventoryID == item.id && $0.card == item.card }) else {
+                    throw ShowTransactionFailure.invalidInventory
+                }
+            } else if let additionID = item.acquiredByListAdditionID {
+                guard item.sourceInventoryID == nil, item.sourceLocationID == nil, item.acquiredByReconciliationID == nil,
+                      let (addition, row) = ownedRows[item.id], addition.id == additionID,
+                      item.acquiredAt == addition.recordedAt, item.card == row.card else {
                     throw ShowTransactionFailure.invalidInventory
                 }
             } else if let operation = item.acquiredByReconciliationID {
@@ -501,12 +536,24 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
             if let adoptedFrom = item.adoptedFromInventoryID {
                 guard adoptedFrom != item.id, item.acquiredByReconciliationID != nil,
                       item.acquiredByTransactionID == nil, let origin = stock[adoptedFrom],
-                      origin.acquiredByTransactionID != nil, origin.card.identity == item.card.identity else {
+                      origin.isLocalAcquisition, origin.card.identity == item.card.identity else {
                     throw ShowTransactionFailure.invalidInventory
                 }
             }
         }
         guard sources.count <= Self.maximumInventorySeeds else { throw ShowBudgetFailure.capacityExceeded }
+        guard ownedRows.allSatisfy({ id, origin in stock[id]?.acquiredByListAdditionID == origin.0.id }) else {
+            throw ShowBudgetFailure.invalidBook
+        }
+        let ownedLists = Set(inventoryListAdditions.map(\.listID))
+        guard !transactions.contains(where: { $0.reversedAt == nil && $0.incomingListID.map(ownedLists.contains) == true }),
+              !entries.contains(where: { $0.1.transactionID == nil && $0.1.voidedAt == nil &&
+                $0.1.listID.map(ownedLists.contains) == true &&
+                ($0.1.paidCents > 0 || $0.1.grossReceivedCents > 0 || $0.1.kind == .purchase || $0.1.kind == .trade) }),
+              !(listOutcomeUpdates ?? []).contains(where: { ownedLists.contains($0.listID) &&
+                ($0.outcomeKind == .purchase || $0.outcomeKind == .trade || $0.outcomeKind == .tradeAndPurchase) }) else {
+            throw ShowBudgetFailure.invalidBook
+        }
         for receipt in transactions {
             guard let (showID, entry) = cash[receipt.id], showID == receipt.showID,
                   entry.transactionID == receipt.id, entry.kind == receipt.kind.budgetKind,
@@ -531,6 +578,9 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
                           let position = positions[receipt.id], priorPosition < position,
                           receipt.recordedAt >= prior.recordedAt,
                           receipt.reversedAt != nil || prior.reversedAt == nil else { throw ShowBudgetFailure.invalidBook }
+                }
+                if let (addition, _) = ownedRows[line.inventoryID] {
+                    guard receipt.recordedAt >= addition.recordedAt else { throw ShowBudgetFailure.invalidBook }
                 }
                 if receipt.reversedAt == nil {
                     let count = (consumed[line.inventoryID] ?? 0).addingReportingOverflow(line.quantity)
@@ -559,6 +609,10 @@ struct ShowBudgetBook: Codable, Equatable, Sendable {
                let line = receipt.incoming.first(where: { $0.inventoryID == item.id }) {
                 let original = receipt.reversedAt == nil ? line.quantity : 0
                 let authoritative = original.addingReportingOverflow(reconciledQuantities[item.id] ?? 0)
+                guard !authoritative.overflow, authoritative.partialValue >= used,
+                      item.quantity == authoritative.partialValue - used else { throw ShowTransactionFailure.invalidInventory }
+            } else if let (_, row) = ownedRows[item.id] {
+                let authoritative = row.quantity.addingReportingOverflow(reconciledQuantities[item.id] ?? 0)
                 guard !authoritative.overflow, authoritative.partialValue >= used,
                       item.quantity == authoritative.partialValue - used else { throw ShowTransactionFailure.invalidInventory }
             } else {

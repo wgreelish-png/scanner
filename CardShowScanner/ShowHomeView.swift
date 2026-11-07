@@ -101,6 +101,7 @@ private struct ShowHomeRouteCard: View {
     @State private var store: ShowBudgetStore
     @State private var search = ""
     @FocusState private var searchFocused: Bool
+    @State private var initialGameOverride: String?
     @AppStorage("showInventorySort") private var sortPreference = ShowInventorySort.nameAscending.rawValue
     @State private var gamePreferences = InventoryGamePreferences.shared
     @State private var seedError: String?
@@ -108,15 +109,19 @@ private struct ShowHomeRouteCard: View {
     @State private var selectingTransaction = false
     @State private var transactionQuantities: [UUID: Int] = [:]
 
-    init(store: ShowBudgetStore = .shared) { _store = State(initialValue: store) }
+    init(store: ShowBudgetStore = .shared, initialGame: String? = nil) {
+        _store = State(initialValue: store)
+        _initialGameOverride = State(initialValue: initialGame)
+    }
 
     private var available: [ShowInventoryItem] {
         store.inventory.filter { $0.quantity > 0 }
     }
 
     private var selectedSort: ShowInventorySort { ShowInventorySort(preference: sortPreference) }
+    private var selectedInventoryGame: String { initialGameOverride ?? gamePreferences.selectedGame }
     private var gameInventory: [ShowInventoryItem] {
-        InventoryGameFilter.filtered(available, game: gamePreferences.selectedGame)
+        InventoryGameFilter.filtered(available, game: selectedInventoryGame)
     }
 
     private var filtered: [ShowInventoryItem] {
@@ -242,12 +247,13 @@ private struct ShowHomeRouteCard: View {
 
     private var inventorySummary: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Picker("Game", selection: Binding(get: { gamePreferences.selectedGame }, set: { game in
+            Picker("Game", selection: Binding(get: { selectedInventoryGame }, set: { game in
                 endSearchEditing()
+                initialGameOverride = nil
                 gamePreferences.selectedGame = game
             })) {
                 Text("All Games").tag("")
-                ForEach(InventoryGameFilter.games(in: available, including: gamePreferences.selectedGame), id: \.self) { game in
+                ForEach(InventoryGameFilter.games(in: available, including: selectedInventoryGame), id: \.self) { game in
                     Text(game).tag(game)
                 }
             }.pickerStyle(.menu).accessibilityIdentifier("showInventory.game")

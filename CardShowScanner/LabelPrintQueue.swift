@@ -631,6 +631,20 @@ private struct LabelQueueFile: Codable {
         try commit(entries.filter { $0.state != .completed })
     }
 
+    /// Retire only this successful custom job's exact completion snapshots.
+    /// Inventory receipts and labels prepared by another screen stay intact.
+    func removeConfirmedCustomLabels(_ confirmed: [LabelQueueEntry]) throws {
+        try requireWritable()
+        let ids = Set(confirmed.map(\.id))
+        let current = Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0) })
+        guard lastRunCompletedSuccessfully, !confirmed.isEmpty, ids.count == confirmed.count,
+              confirmed.allSatisfy({ $0.source == .custom && $0.state == .completed && current[$0.id] == $0 }) else {
+            throw LabelPrintQueueFailure.invalidSelection
+        }
+        try commit(entries.filter { !ids.contains($0.id) })
+        DiagnosticLog.shared.record("label.queue_cleanup", ["source": "custom", "quantity": String(ids.count)])
+    }
+
     func clear() throws {
         try requireWritable()
         try commit([])

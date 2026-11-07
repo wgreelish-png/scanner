@@ -1,6 +1,46 @@
 import XCTest
 
 @MainActor final class ReviewPresentationUITests: XCTestCase {
+    func testListLookupStaysVisibleAfterScrollingAndPreservesCardsAndOfferDraft() async throws {
+        continueAfterFailure = false
+        let app = launch(arguments: ["--uitest-long-review"])
+        defer { app.terminate() }
+        let search = app.textFields["list.search"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        XCTAssertTrue(search.isHittable)
+        let searchY = search.frame.midY
+        for _ in 0..<3 {
+            _ = UITestInteraction.scrollContent(in: app, towardTop: false)
+            XCTAssertTrue(search.isHittable, "List lookup must stay in the fixed header")
+            XCTAssertEqual(search.frame.midY, searchY, accuracy: 1)
+        }
+        _ = UITestInteraction.tap(search, in: app)
+        search.typeText("Synthetic card 79")
+        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "list.card."))
+        let matching = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 1"), object: rows)
+        await fulfillment(of: [matching], timeout: 5)
+        XCTAssertTrue(rows.firstMatch.label.contains("Synthetic card 79"))
+        _ = UITestInteraction.tap(app.buttons["list.keyboardDone"], in: app)
+        let dismissed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.keyboards.firstMatch)
+        await fulfillment(of: [dismissed], timeout: 5)
+        XCTAssertEqual(search.value as? String, "Synthetic card 79")
+        XCTAssertEqual(app.staticTexts["list.quantity"].label, "80 cards", "Filtering cannot remove cards from the saved list")
+
+        let sections = app.segmentedControls["list.section"]
+        sections.buttons["Offer"].tap()
+        XCTAssertFalse(search.exists, "Offer controls retain their compact layout")
+        sections.buttons["Cards"].tap()
+        XCTAssertTrue(search.isHittable)
+        XCTAssertEqual(search.value as? String, "Synthetic card 79")
+        XCTAssertEqual(rows.count, 1)
+        _ = UITestInteraction.tap(app.buttons["list.clearSearch"], in: app)
+        _ = UITestInteraction.tap(app.buttons["list.keyboardDone"], in: app)
+        let restored = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count > 1"), object: rows)
+        await fulfillment(of: [restored], timeout: 5)
+        XCTAssertEqual(app.staticTexts["list.quantity"].label, "80 cards")
+        XCTAssertTrue(app.buttons["list.searchAndAdd"].exists, "Catalog add remains a separate action from filtering this list")
+    }
+
     func testReviewKeepsExportAndRatesInOptionsAndOutcomesInsideOffer() async throws {
         continueAfterFailure = false
         let app = launch()

@@ -510,7 +510,7 @@ import XCTest
             let historical = Disk(); historical.data = bytes
             let migrated = store(historical)
             XCTAssertTrue(migrated.isLoaded)
-            XCTAssertEqual(migrated.book.version, 5)
+            XCTAssertEqual(migrated.book.version, 6)
             XCTAssertEqual(migrated.book.shows, [original])
             XCTAssertEqual(try totals(migrated), try original.totals())
             XCTAssertTrue(migrated.book.inventory.isEmpty)
@@ -531,7 +531,7 @@ import XCTest
         let disk = Disk(); disk.data = try legacyVersionThreeBytes(value)
         let migrated = store(disk)
         XCTAssertTrue(migrated.isLoaded)
-        XCTAssertEqual(migrated.book.version, 5)
+        XCTAssertEqual(migrated.book.version, 6)
         XCTAssertEqual(try totals(migrated), oldCash)
         XCTAssertEqual(migrated.transaction(forListID: listID)?.incomingListName, "Original incoming list")
         XCTAssertEqual(migrated.transactions.map(\.id), [bought.id, sold.id])
@@ -588,7 +588,7 @@ import XCTest
         let disk = Disk(); disk.data = bytes
         let migrated = store(disk)
         XCTAssertTrue(migrated.isLoaded)
-        XCTAssertEqual(migrated.book.version, 5)
+        XCTAssertEqual(migrated.book.version, 6)
         XCTAssertEqual(migrated.book, original)
         XCTAssertEqual(try item(value.stockID, in: migrated).quantity, 2)
         XCTAssertEqual(try item(value.stockID, in: migrated).remainingCostCents, 666)
@@ -604,7 +604,7 @@ import XCTest
 
         try migrated.select(showID: nil)
         let written = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(disk.data)) as? [String: Any])
-        XCTAssertEqual(written["version"] as? Int, 5)
+        XCTAssertEqual(written["version"] as? Int, 6)
         XCTAssertEqual(disk.writes, 1)
         let restarted = store(disk)
         XCTAssertTrue(restarted.isLoaded)

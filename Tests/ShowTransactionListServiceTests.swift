@@ -60,6 +60,47 @@ import SwiftData
             store: store, showID: showID, list: list)
     }
 
+    func testOwnedListAddsStockWithoutCashAndCannotAlsoBecomeAPurchase() throws {
+        let fixture = try fixture()
+        let originalShows = fixture.store.book.shows
+        let originalListRows = fixture.list.orderedCards.map { ($0.id, $0.quantity, $0.data) }
+        let result = try ShowOwnedInventoryListService.add(fixture.list, context: fixture.context, store: fixture.store)
+        XCTAssertEqual(result.addedQuantity, 2)
+        XCTAssertEqual(result.addedLots, 1)
+        XCTAssertEqual(fixture.store.inventory.count, 1)
+        XCTAssertEqual(fixture.store.inventory.first?.quantity, 2)
+        XCTAssertNil(fixture.store.inventory.first?.remainingCostCents)
+        XCTAssertEqual(fixture.store.book.shows, originalShows)
+        XCTAssertTrue(fixture.store.transactions.isEmpty)
+        XCTAssertEqual(ShowTransactionListService.outcomeTitle(for: fixture.list, store: fixture.store), "Added to Inventory")
+        XCTAssertEqual(fixture.list.orderedCards.map(\.id), originalListRows.map { $0.0 })
+        XCTAssertEqual(fixture.list.orderedCards.map(\.quantity), originalListRows.map { $0.1 })
+        XCTAssertEqual(fixture.list.orderedCards.map(\.data), originalListRows.map { $0.2 })
+        XCTAssertFalse(fixture.context.hasChanges)
+        let writes = fixture.disk.writes
+        XCTAssertEqual(try ShowOwnedInventoryListService.add(fixture.list, context: fixture.context, store: fixture.store).addedQuantity, 0)
+        XCTAssertEqual(fixture.disk.writes, writes)
+        assertRejected(try purchase(fixture.list), as: .alreadyInInventory, in: fixture)
+    }
+
+    func testOwnedListRequiresSavedRowsAndRefusesAListAlreadyPurchased() throws {
+        let fixture = try fixture()
+        fixture.list.name = "Unsaved owned list"
+        let before = fixture.store.book
+        XCTAssertThrowsError(try ShowOwnedInventoryListService.add(fixture.list, context: fixture.context, store: fixture.store)) {
+            XCTAssertEqual($0 as? ShowTransactionListFailure, .unsavedChanges)
+        }
+        XCTAssertEqual(fixture.store.book, before)
+        try fixture.context.save()
+        _ = try ShowTransactionListService.record(purchase(fixture.list), showID: fixture.showID,
+            context: fixture.context, store: fixture.store)
+        let purchased = fixture.store.book
+        XCTAssertThrowsError(try ShowOwnedInventoryListService.add(fixture.list, context: fixture.context, store: fixture.store)) {
+            XCTAssertEqual($0 as? ShowTransactionListFailure, .alreadyRecorded)
+        }
+        XCTAssertEqual(fixture.store.book, purchased)
+    }
+
     private func purchase(_ list: CardList) throws -> ShowTransactionDraft {
         .init(kind: .purchase, incomingListID: list.id, incomingListName: list.name,
             incoming: try ShowTransactionListService.incomingCards(for: list), incomingValueCents: 14_000)

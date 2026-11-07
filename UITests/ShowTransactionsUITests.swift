@@ -1,6 +1,44 @@
 import XCTest
 
 @MainActor final class ShowTransactionsUITests: XCTestCase {
+    func testOwnedScannedListEntersInventoryOnceWithoutChangingShowCash() {
+        continueAfterFailure = false
+        let app = launch(arguments: ["--show-offer-checkout-fixture", "--inventory-games-fixture"])
+        defer { app.terminate() }
+        assertStock("6", app: app)
+        assertBalances(available: "$300.00", saved: "$0.00", app: app)
+        tap(app.buttons["show.inventory"], app: app)
+        tap(app.buttons["showInventory.game"], app: app)
+        tap(app.buttons["Yu-Gi-Oh!"], app: app)
+        returnToShow(app: app)
+        tap(app.buttons["showFixture.reviewOffer"], app: app)
+        tap(app.buttons["list.addOwnedInventory"], app: app)
+        tap(app.buttons["Add 1 Card to Inventory"], app: app)
+        assertContains("1 card added", element: app.staticTexts["list.inventoryAdded"])
+        assertContains("1 cards", element: app.staticTexts["list.quantity"])
+        assertContains("Added to Inventory", element: app.staticTexts["list.outcomeValue"])
+        XCTAssertFalse(app.buttons["list.addOwnedInventory"].exists)
+        assertContains("View Inventory", element: app.buttons["list.recordTransaction"])
+        tap(app.buttons["list.recordTransaction"], app: app)
+        assertContains("7 cards available", element: app.staticTexts["showInventory.quantity"])
+        XCTAssertTrue(app.buttons["showInventory.game"].label.contains("All Games") ||
+                      (app.buttons["showInventory.game"].value as? String)?.contains("All Games") == true)
+        tap(inventory("Trade 5", app: app), app: app)
+        openInventoryDetails(app: app)
+        assertRevealedContains("Cost unknown", identifier: "inventory.cost", app: app)
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.navigationBars["Show"].waitForExistence(timeout: 10))
+        assertStock("7", app: app)
+        assertBalances(available: "$300.00", saved: "$0.00", app: app)
+        tap(app.buttons["show.inventory"], app: app)
+        assertContains("2 cards available", element: app.staticTexts["showInventory.quantity"])
+        returnToShow(app: app)
+        tap(app.buttons["showFixture.reviewOffer"], app: app)
+        XCTAssertFalse(app.buttons["list.addOwnedInventory"].exists)
+        assertContains("View Inventory", element: app.buttons["list.recordTransaction"])
+        assertContains("1 cards", element: app.staticTexts["list.quantity"])
+    }
+
     func testPurchasedCostQuickSaleProfitAndUndoPersistAcrossRelaunch() {
         continueAfterFailure = false
         let app = launch(arguments: ["--show-cost-profit-ui-fixture"])

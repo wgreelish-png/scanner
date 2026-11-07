@@ -864,7 +864,7 @@ import XCTest
         let migrated = store(disk)
 
         XCTAssertTrue(migrated.isLoaded)
-        XCTAssertEqual(migrated.book.version, 5)
+        XCTAssertEqual(migrated.book.version, 6)
         XCTAssertNil(migrated.lastInventorySnapshotID)
         XCTAssertTrue(migrated.inventoryReconciliations.isEmpty)
         XCTAssertEqual(total(migrated), 2)

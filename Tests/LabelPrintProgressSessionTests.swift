@@ -11,11 +11,15 @@ import XCTest
         }
     }
 
-    private func queue(_ rows: [LabelQueueEntry]) throws -> LabelPrintQueue {
+    private func queue(_ rows: [LabelQueueEntry], storage providedStorage: ProgressQueueStorage? = nil) throws -> LabelPrintQueue {
         let bytes = try JSONEncoder().encode(ProgressQueueDocument(version: 1, entries: rows))
-        let storage = ProgressQueueStorage(bytes: bytes)
+        let storage = providedStorage ?? ProgressQueueStorage(bytes: bytes)
+        storage.bytes = bytes
         return LabelPrintQueue(url: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString),
-            read: { _ in storage.bytes }, write: { data, _ in storage.bytes = data })
+            read: { _ in storage.bytes }, write: { data, _ in
+                if storage.failsWrites { throw ProgressStorageFailure.injected }
+                storage.bytes = data
+            })
     }
 
     private func waitForFinalAcknowledgement(_ sender: ProgressGatedSender) async {
@@ -43,6 +47,89 @@ import XCTest
         XCTAssertEqual(queue.entries.count, 2, "Successful navigation preserves all completion receipts")
     }
 
+    func testCustomCompletionClearsOnlyAfterFinalAcknowledgementAndPresentationDismissal() async throws {
+        let queue = try queue(entries(2)), sender = ProgressGatedSender(), session = LabelPrintProgressSession()
+        session.start(queue: queue, using: sender)
+        await waitForFinalAcknowledgement(sender)
+        XCTAssertFalse(try session.completePresentation(queue: queue))
+        XCTAssertEqual(queue.completedCount, 2, "A full counter alone cannot clear labels")
+        sender.finish()
+        await session.waitUntilFinished()
+        XCTAssertEqual(session.completed(in: queue.entries), 2, "The final counter stays visible until progress dismisses")
+        XCTAssertTrue(try session.completePresentation(queue: queue))
+        XCTAssertTrue(queue.entries.isEmpty)
+        queue.reload()
+        XCTAssertTrue(queue.entries.isEmpty, "Successful custom cleanup must survive relaunch")
+        XCTAssertFalse(try session.completePresentation(queue: queue), "Repeated sheet dismissal cannot repeat cleanup or navigation")
+    }
+
+    func testSuccessfulMixedJobRetiresOnlyItsCustomCopiesAndKeepsInventoryAndUnrelatedReceipts() async throws {
+        let card = CardCandidate(identity: .init(game: "Pokémon", productID: "p:1", printing: "Normal"),
+            name: "Inventory proof", set: "Fixture", number: "1", marketPrice: 5, confidence: 100, printings: ["Normal"])
+        let draft = InventoryLabelDraft(item: .init(card: card, quantity: 1))
+        let custom = try entries(1)[0]
+        let inventory = try LabelQueueEntry(draft: draft, raster: custom.raster, copyNumber: 1)
+        var priorReceipt = try entries(1)[0]
+        priorReceipt.state = .completed
+        let queue = try queue([priorReceipt, custom, inventory]), sender = ProgressGatedSender()
+        let session = LabelPrintProgressSession()
+        session.start(queue: queue, using: sender)
+        await waitForFinalAcknowledgement(sender)
+        sender.finish(); await session.waitUntilFinished()
+        let retained = queue.entries.filter { $0.id != custom.id }
+        XCTAssertTrue(try session.completePresentation(queue: queue))
+        XCTAssertEqual(queue.entries, retained, "Inventory proof and custom receipts from an earlier job are unrelated")
+        XCTAssertEqual(queue.entries.map(\.id), [priorReceipt.id, inventory.id])
+        XCTAssertTrue(queue.entries.allSatisfy { $0.state == .completed })
+    }
+
+    func testBulkAndWriteInCustomLabelsClearAfterConfirmedCompletionWithoutApprovalProof() async throws {
+        let sample = try entries(1)[0]
+        for bulk in [false, true] {
+            let entry = try LabelQueueEntry(customPriceCents: 0, raster: sample.raster, copyNumber: 1,
+                paperSize: sample.paperSize, isBulk: bulk)
+            let queue = try queue([entry]), sender = ProgressImmediateSender(), session = LabelPrintProgressSession()
+            session.start(queue: queue, using: sender); await session.waitUntilFinished()
+            XCTAssertTrue(session.didSucceed)
+            XCTAssertEqual(queue.completedCount, 1)
+            XCTAssertTrue(try session.completePresentation(queue: queue))
+            XCTAssertTrue(queue.entries.isEmpty)
+        }
+    }
+
+    func testStaleSuccessfulPresentationCannotClearAReplacementQueue() async throws {
+        let queue = try queue(entries(1)), sender = ProgressImmediateSender(), session = LabelPrintProgressSession()
+        session.start(queue: queue, using: sender); await session.waitUntilFinished()
+        let replacement = try entries(2)
+        try queue.replace(with: replacement)
+        XCTAssertThrowsError(try session.completePresentation(queue: queue)) {
+            XCTAssertEqual($0 as? LabelPrintQueueFailure, .invalidSelection)
+        }
+        XCTAssertEqual(queue.entries, replacement)
+        XCTAssertEqual(sender.sends, 1, "Cleanup never sends another label")
+    }
+
+    func testCustomCleanupSaveFailureKeepsConfirmedReceiptsAndAllowsReviewWithoutPrintingAgain() async throws {
+        let storage = ProgressQueueStorage(bytes: nil)
+        let queue = try queue(entries(1), storage: storage), sender = ProgressImmediateSender()
+        let session = LabelPrintProgressSession()
+        session.start(queue: queue, using: sender); await session.waitUntilFinished()
+        let completed = queue.entries, saved = storage.bytes
+        storage.failsWrites = true
+        XCTAssertThrowsError(try session.completePresentation(queue: queue)) {
+            XCTAssertEqual($0 as? LabelPrintQueueFailure, .saveFailed)
+        }
+        XCTAssertEqual(queue.entries, completed)
+        XCTAssertEqual(storage.bytes, saved)
+        XCTAssertFalse(queue.isLoaded)
+        XCTAssertNotNil(session.issue)
+        XCTAssertEqual(sender.sends, 1)
+        storage.failsWrites = false; queue.reload()
+        XCTAssertTrue(try session.completePresentation(queue: queue))
+        XCTAssertTrue(queue.entries.isEmpty)
+        XCTAssertEqual(sender.sends, 1)
+    }
+
     func testParentStopAtTheFullCounterCannotBeMistakenForSuccessfulCompletion() async throws {
         let queue = try queue(entries(1)), sender = ProgressGatedSender(), session = LabelPrintProgressSession()
         session.start(queue: queue, using: sender)
@@ -55,6 +142,9 @@ import XCTest
         XCTAssertFalse(session.didSucceed)
         XCTAssertTrue(session.isPresented, "A stopped job stays available for review even when buffered output completed")
         XCTAssertNotNil(session.issue)
+        let kept = queue.entries
+        XCTAssertFalse(try session.completePresentation(queue: queue))
+        XCTAssertEqual(queue.entries, kept, "An interrupted custom job must remain reviewable")
         XCTAssertEqual(sender.cancels, 1)
         session.close()
         XCTAssertFalse(session.isPresented)
@@ -71,6 +161,9 @@ import XCTest
         XCTAssertEqual(session.completed(in: queue.entries), 0)
         XCTAssertEqual(queue.uncertainCount, 1)
         XCTAssertNotNil(session.issue)
+        let kept = queue.entries
+        XCTAssertFalse(try session.completePresentation(queue: queue))
+        XCTAssertEqual(queue.entries, kept, "Uncertain custom labels are never auto-cleared")
     }
 
     func testFinalAcknowledgementFailureKeepsReviewOpenAfterEveryPhysicalCopyWasConfirmed() async throws {
@@ -199,8 +292,10 @@ import XCTest
 private struct ProgressQueueDocument: Codable { let version: Int; let entries: [LabelQueueEntry] }
 @MainActor private final class ProgressQueueStorage {
     var bytes: Data?
-    init(bytes: Data) { self.bytes = bytes }
+    var failsWrites = false
+    init(bytes: Data?) { self.bytes = bytes }
 }
+private enum ProgressStorageFailure: Error { case injected }
 
 @MainActor private final class ProgressImmediateSender: LabelPrinterSending {
     var sends = 0

@@ -41,6 +41,7 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
     var inventorySourceLocationID: Int? { book.inventorySourceLocationID }
     var costAdjustments: [ShowInventoryCostAdjustment] { book.costAdjustments }
     var inventoryReconciliations: [ShowInventoryReconciliation] { book.inventoryReconciliations }
+    var inventoryListAdditions: [ShowOwnedInventoryAddition] { book.inventoryListAdditions }
     var lastInventorySnapshotID: Data? { book.inventoryReconciliations.last?.snapshotID }
 
     var activeShow: ShowBudgetEvent? {
@@ -278,6 +279,65 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
         try commit(next)
     }
 
+    func hasOwnedInventory(forListID listID: UUID) -> Bool {
+        book.inventoryListAdditions.contains { $0.listID == listID }
+    }
+
+    /// Already-owned physical cards add stock without a purchase or show cash.
+    /// Exact source row proof survives sales and source adoption; appended rows
+    /// can be added later, while edits to a previously transferred row conflict.
+    @discardableResult
+    func addOwnedInventory(listID: UUID, listName: String, rows: [ShowIncomingCard]) throws -> ShowOwnedInventoryAdditionSummary {
+        try requireWritable()
+        let name = listName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.count <= 500, !rows.isEmpty,
+              rows.count <= ShowBudgetBook.maximumTransactionCards,
+              Set(rows.map(\.id)).count == rows.count,
+              rows.allSatisfy({ (1...ShowBudgetBook.maximumQuantity).contains($0.quantity) && ShowTransactionMath.validCard($0.card) }) else {
+            throw ShowTransactionFailure.invalidInventory
+        }
+        guard transaction(forListID: listID) == nil else { throw ShowTransactionFailure.incomingListAlreadyUsed }
+        let legacyCash = book.shows.flatMap(\.entries).contains {
+            $0.transactionID == nil && $0.listID == listID && $0.voidedAt == nil &&
+                ($0.paidCents > 0 || $0.grossReceivedCents > 0 || $0.kind == .purchase || $0.kind == .trade)
+        }
+        let legacyOutcome = (book.listOutcomeUpdates ?? []).contains {
+            $0.listID == listID && ($0.outcomeKind == .purchase || $0.outcomeKind == .trade || $0.outcomeKind == .tradeAndPurchase)
+        }
+        guard !legacyCash, !legacyOutcome else { throw ShowTransactionFailure.legacyListOutcomeExists }
+        let prior = Dictionary(uniqueKeysWithValues: book.inventoryListAdditions.filter { $0.listID == listID }
+            .flatMap(\.rows).map { ($0.sourceRowID, $0) })
+        var newRows: [ShowIncomingCard] = [], alreadyAdded = 0
+        for row in rows {
+            if let original = prior[row.id] {
+                guard original.card == row.card, original.quantity == row.quantity else { throw ShowBudgetStoreFailure.conflictingEntry }
+                alreadyAdded += row.quantity
+            } else { newRows.append(row) }
+        }
+        guard !newRows.isEmpty else { return .init(addedQuantity: 0, addedLots: 0, alreadyAddedQuantity: alreadyAdded) }
+        guard newRows.count <= ShowBudgetBook.maximumInventoryItems - book.inventory.count,
+              book.inventoryListAdditions.count < ShowBudgetBook.maximumInventoryListAdditions else {
+            throw ShowBudgetFailure.capacityExceeded
+        }
+        let timestamp = max(now(), book.costMutations.map(\.recordedAt).max() ?? .distantPast)
+        let addition = ShowOwnedInventoryAddition(id: UUID(), listID: listID, listName: name,
+            recordedAt: timestamp, rows: newRows.map {
+                .init(sourceRowID: $0.id, inventoryID: UUID(), card: $0.card, quantity: $0.quantity)
+            })
+        try addition.validate()
+        var next = book
+        let stock = addition.rows.map { ShowInventoryItem(id: $0.inventoryID, card: $0.card, quantity: $0.quantity,
+            acquiredAt: timestamp, acquiredByListAdditionID: addition.id) }
+        next.inventory.append(contentsOf: stock)
+        next.inventoryListAdditions.append(addition)
+        next.costMutations.append(try .capturing(kind: .listAddition, operationID: addition.id,
+            recordedAt: timestamp, itemIDs: stock.map(\.id), before: book.inventory, after: next.inventory))
+        try commit(next)
+        let quantity = newRows.reduce(0) { $0 + $1.quantity }
+        DiagnosticLog.shared.record("show_inventory.owned_added", ["records": String(stock.count), "quantity": String(quantity)])
+        return .init(addedQuantity: quantity, addedLots: stock.count, alreadyAddedQuantity: alreadyAdded)
+    }
+
     /// Import a remote inventory mirror once. Keep sold-out lots so a later
     /// screen refresh cannot resurrect stock or overwrite local transactions.
     func seedInventory(_ seeds: [ShowInventorySeed], sourceLocationID: Int) throws {
@@ -446,6 +506,7 @@ enum ShowBudgetStoreFailure: LocalizedError, Equatable, Sendable {
         var accounting = try ShowTransactionMath.preview(draft, inventory: book.inventory,
             saleReinvestmentPercent: show.reinvestmentPercent)
         if let listID = draft.incomingListID {
+            guard !hasOwnedInventory(forListID: listID) else { throw ShowTransactionFailure.ownedListAlreadyAdded }
             guard transaction(forListID: listID) == nil else { throw ShowTransactionFailure.incomingListAlreadyUsed }
             let legacyCash = book.shows.flatMap(\.entries).contains {
                 $0.transactionID == nil && $0.listID == listID && $0.voidedAt == nil &&

@@ -2,7 +2,7 @@ import Foundation
 import SwiftData
 
 enum ShowTransactionListFailure: LocalizedError, Equatable {
-    case unsavedChanges, listUnavailable, sourceChanged, inventoryRefreshRequired, invalidCards, invalidOffer, alreadyRecorded
+    case unsavedChanges, listUnavailable, sourceChanged, inventoryRefreshRequired, invalidCards, invalidOffer, alreadyRecorded, alreadyInInventory
     var errorDescription: String? {
         switch self {
         case .unsavedChanges: return "Finish or cancel your card edits before recording a transaction."
@@ -12,6 +12,7 @@ enum ShowTransactionListFailure: LocalizedError, Equatable {
         case .invalidCards: return "Choose a nonempty scanned list with valid cards and quantities."
         case .invalidOffer: return "The list’s offer settings are invalid. Review its percentages and per-card values."
         case .alreadyRecorded: return "This list already has a recorded transaction. Review or undo that transaction before recording it again."
+        case .alreadyInInventory: return "This list was added as cards you already own. Open Inventory to sell or trade those cards."
         }
     }
 }
@@ -119,6 +120,7 @@ enum ShowTransactionListFailure: LocalizedError, Equatable {
         }
         guard !context.hasChanges else { throw ShowTransactionListFailure.unsavedChanges }
         if let listID = draft.incomingListID {
+            guard !store.hasOwnedInventory(forListID: listID) else { throw ShowTransactionListFailure.alreadyInInventory }
             guard let list = try context.fetch(FetchDescriptor<CardList>(predicate: #Predicate { $0.id == listID })).first,
                   !list.isCardShowInventory else { throw ShowTransactionListFailure.listUnavailable }
             guard sameCards(try incomingCards(for: list), draft.incoming), list.name == draft.incomingListName else {
@@ -139,9 +141,31 @@ enum ShowTransactionListFailure: LocalizedError, Equatable {
 
     static func outcomeTitle(for list: CardList, store: ShowBudgetStore = .shared) -> String {
         if let receipt = store.transaction(forListID: list.id) { return receipt.kind.title }
+        if store.hasOwnedInventory(forListID: list.id) { return "Added to Inventory" }
         if let reversed = store.transactions.filter({ $0.incomingListID == list.id }).compactMap(\.reversedAt).max(),
            list.outcomeRecord.map({ $0.recordedAt < reversed }) ?? true { return "Transaction undone" }
         return list.outcomeTitle
+    }
+}
+
+/// Owned stock enters the local ledger without inventing a purchase, payment or
+/// acquisition cost. The source list remains available as its scan record.
+@MainActor enum ShowOwnedInventoryListService {
+    static func add(_ list: CardList, context: ModelContext,
+                    store: ShowBudgetStore = .shared) throws -> ShowOwnedInventoryAdditionSummary {
+        guard !context.hasChanges else { throw ShowTransactionListFailure.unsavedChanges }
+        let listID = list.id
+        guard let saved = try context.fetch(FetchDescriptor<CardList>(predicate: #Predicate { $0.id == listID })).first,
+              saved === list, !saved.isCardShowInventory else { throw ShowTransactionListFailure.listUnavailable }
+        guard store.transaction(forListID: listID) == nil,
+              saved.transactionOutcomeData == nil || saved.outcomeRecord?.kind == .nothingHappened else {
+            throw ShowTransactionListFailure.alreadyRecorded
+        }
+        let result = try store.addOwnedInventory(listID: listID, listName: saved.name,
+            rows: ShowTransactionListService.incomingCards(for: saved))
+        DiagnosticLog.shared.record("show_inventory.list_added", ["quantity": String(result.addedQuantity),
+            "records": String(result.addedLots), "reason": "owned_cards"])
+        return result
     }
 }
 

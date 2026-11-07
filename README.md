@@ -26,6 +26,12 @@ Build 28 combines Market and Graded Research in [one card page](docs/CombinedCar
 
 ## Build and tests
 
+Build 104 fixes completed custom-label queue cleanup and pins search in saved
+lists. **Add to Inventory** adds already-owned scanned cards as local stock
+with unknown cost, without a purchase or cash movement. The source list stays
+intact and repeated adds cannot duplicate its existing rows. See the
+[show-day checks](docs/ShowReadiness104.md).
+
 Build 103 reduces [scanner workload](docs/DeviceHealthMonitoring.md) behind
 card review and manual search, requests lower camera frame rates during those
 states, and applies stronger throttling when iOS reports warmth. Existing
