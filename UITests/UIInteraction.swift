@@ -169,23 +169,33 @@ import XCTest
             visible.width >= min(24, frame.width) && visible.height >= min(24, frame.height)
     }
 
-    private static func fixedBars(in app: XCUIApplication) -> [XCUIElement] {
+    private static func fixedBars(in app: XCUIApplication,
+                                  containing target: (center: CGPoint, identifier: String)? = nil) -> [XCUIElement] {
         let pinned = app.otherElements.matching(NSPredicate(format: "identifier IN %@", [
             "showTransaction.checkoutBar", "showTransaction.receiptActions"
         ])).allElementsBoundByIndex
         return (app.navigationBars.allElementsBoundByIndex + app.tabBars.allElementsBoundByIndex +
-         app.toolbars.allElementsBoundByIndex + pinned).filter {
-            $0.exists && visibleFrame($0.frame, in: app) &&
-                ($0.isHittable || $0.buttons.allElementsBoundByIndex.contains { $0.exists && $0.isHittable })
+         app.toolbars.allElementsBoundByIndex + pinned).filter { bar in
+            guard bar.exists, visibleFrame(bar.frame, in: app) else { return false }
+            // Classifying a known control need not probe buttons in unrelated
+            // covered bars. Matched bars retain the full visibility fallback.
+            if let target {
+                guard bar.frame.contains(target.center),
+                      bar.descendants(matching: .any).matching(identifier: target.identifier).firstMatch.exists else { return false }
+            }
+            return bar.isHittable || bar.buttons.allElementsBoundByIndex.contains { $0.exists && $0.isHittable }
         }
     }
 
     private static func belongsToFixedBar(_ element: XCUIElement, in app: XCUIApplication,
                                          bars: [XCUIElement]? = nil) -> Bool {
-        guard element.exists, visibleFrame(element.frame, in: app) else { return false }
-        let center = CGPoint(x: element.frame.midX, y: element.frame.midY)
+        guard element.exists else { return false }
+        let frame = element.frame
+        guard visibleFrame(frame, in: app) else { return false }
+        let center = CGPoint(x: frame.midX, y: frame.midY)
         let identifier = element.identifier
-        return (bars ?? fixedBars(in: app)).contains { bar in
+        let target = identifier.isEmpty ? nil : (center: center, identifier: identifier)
+        return (bars ?? fixedBars(in: app, containing: target)).contains { bar in
             guard bar.frame.contains(center) else { return false }
             if identifier.isEmpty { return element.isHittable }
             return bar.descendants(matching: .any).matching(identifier: identifier).firstMatch.exists
