@@ -1334,6 +1334,8 @@ private struct LabelActionBar<Content: View>: View {
                     }
                 } label: {
                     Label("Sort Labels", systemImage: "arrow.up.arrow.down")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                 }.disabled(!queue.canReorder)
                     .accessibilityIdentifier("labelQueue.sortOrder")
             }

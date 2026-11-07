@@ -169,8 +169,7 @@ import XCTest
         app.buttons["customLabels.prepare"].tap()
         assertContains("0/1 completed", element: app.staticTexts["labelQueue.progress"])
         XCUIDevice.shared.press(.home)
-        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 3)
-                      || app.wait(for: .runningBackgroundSuspended, timeout: 3))
+        XCTAssertTrue(waitForBackground(app), "Leaving the print screen must keep the app running in the background")
         app.activate()
         assertEmptyPrintQueue(app: app)
         backFromPrintScreen("Label Print Queue", app: app)
@@ -1427,6 +1426,18 @@ import XCTest
         let bar = app.navigationBars[title]
         XCTAssertTrue(bar.waitForExistence(timeout: 5))
         UITestInteraction.tapToolbar(bar.buttons.element(boundBy: 0), in: app, identifier: "navigation.back")
+    }
+
+    /// Observe both valid background states for the whole wait. Sequential
+    /// waits can miss background arriving while only suspension is being checked.
+    private func waitForBackground(_ app: XCUIApplication, timeout: TimeInterval = 10) -> Bool {
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        while true {
+            let state = app.state
+            if state == .runningBackground || state == .runningBackgroundSuspended { return true }
+            guard state != .notRunning, ProcessInfo.processInfo.systemUptime < deadline else { return false }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
     }
 
     private func assertPrintOrderChoice(_ expected: String, element: XCUIElement,
