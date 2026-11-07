@@ -263,7 +263,7 @@ import XCTest
         assertContains("$3.00", element: concession)
     }
 
-    func testInventorySearchDoneDismissesKeyboardAndReturnsToPinnedCheckout() {
+    func testInventorySearchSubmissionDismissesKeyboardAndReturnsToPinnedCheckout() {
         continueAfterFailure = false
         let app = launch()
         defer { app.terminate() }
@@ -271,7 +271,17 @@ import XCTest
         tap(app.buttons["showTransaction.selectInventory"], app: app)
         let search = app.searchFields.firstMatch
         tap(search, app: app); search.typeText("Stock A")
-        tap(app.buttons["showInventorySelection.keyboardDone"], app: app)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "Inventory search opens the keyboard before submission")
+        let keyboardDone = app.buttons["showInventorySelection.keyboardDone"]
+        if keyboardDone.exists && keyboardDone.isHittable {
+            tap(keyboardDone, app: app)
+        } else {
+            // Native searchable can own its accessory row. Its Search return
+            // action still invokes the screen's existing onSubmit handler.
+            let submit = app.keyboards.buttons.matching(NSPredicate(format: "label ==[c] %@", "search")).firstMatch
+            XCTAssertTrue(submit.waitForExistence(timeout: 5), "The native search keyboard must expose its submit action")
+            tap(submit, app: app)
+        }
         let dismissed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.keyboards.firstMatch)
         XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
         XCTAssertEqual(search.value as? String, "Stock A")
@@ -376,7 +386,6 @@ import XCTest
         assertBlankCashField("incoming", app: app)
         enter("12", field: app.textFields["showTransaction.amount.incoming"], app: app)
         tap(app.buttons["showTransaction.incomingCashEditor.done"], app: app)
-        _ = UITestInteraction.scrollContent(in: app, towardTop: true)
         tap(app.buttons["showTransaction.editIncomingList"], app: app)
         XCTAssertFalse(app.buttons["list.recordTransaction"].exists)
         let options = app.navigationBars.buttons["list.options"]
@@ -412,7 +421,10 @@ import XCTest
         tap(first, app: app); tap(second, app: app)
         XCTAssertTrue(first.isSelected); XCTAssertTrue(second.isSelected)
         let quantity = app.steppers["showInventory.selectionQuantity." + firstID]
-        tap(quantity.buttons["Increment"], app: app)
+        let increment = quantity.buttons["Increment"]
+        guard UITestInteraction.reveal(increment, in: app,
+            identifier: "showInventory.selectionQuantity." + firstID + ".increment", towardTopWhenMissing: true) else { return }
+        tap(increment, app: app)
         assertContains("3 selected", element: app.staticTexts["showInventory.selectedQuantity"])
         assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
         tap(action, app: app)
@@ -431,7 +443,9 @@ import XCTest
         XCTAssertEqual(action.label, "Confirm Transaction", "Returning to inventory keeps the edited transaction selection")
 
         tap(first, app: app)
-        tap(quantity.buttons["Increment"], app: app)
+        guard UITestInteraction.reveal(increment, in: app,
+            identifier: "showInventory.selectionQuantity." + firstID + ".increment", towardTopWhenMissing: true) else { return }
+        tap(increment, app: app)
         assertContains("3 selected", element: app.staticTexts["showInventory.selectedQuantity"])
         tap(action, app: app)
         assertRevealedContains("3", identifier: "showTransaction.selectedQuantity", app: app)
@@ -486,6 +500,12 @@ import XCTest
         }
         XCTAssertFalse(app.staticTexts["Transaction preview"].exists)
         let amount = app.buttons["showTransaction.editOfferCashAmount"]
+        guard amount.waitForExistence(timeout: 5) else {
+            XCTFail("Offer checkout must present its selected-list cash controls on the first opening")
+            return
+        }
+        XCTAssertFalse(app.buttons["showTransaction.editIncomingAmount"].exists,
+                       "The offered list must not fall back to the general purchase form")
         XCTAssertEqual(amount.value as? String, "Not entered")
         XCTAssertFalse(app.buttons["showTransaction.record"].isEnabled)
         let calculated = app.buttons["showTransaction.useCalculatedOffer"]
@@ -544,6 +564,10 @@ import XCTest
         XCTAssertTrue(app.navigationBars["Confirm Transaction"].waitForExistence(timeout: 5))
         let cash = app.buttons["showTransaction.editOfferCashAmount"]
         let calculated = app.buttons["showTransaction.useCalculatedOffer"]
+        guard cash.waitForExistence(timeout: 5) else {
+            XCTFail("Long-list checkout must retain the calculated offer context on the first opening")
+            return
+        }
         XCTAssertTrue(cash.isHittable, "Actual cash entry precedes the long selected-card list")
         XCTAssertTrue(calculated.isHittable, "The calculated offer is usable immediately without scrolling")
         XCTAssertEqual(cash.value as? String, "Not entered")
@@ -592,7 +616,8 @@ import XCTest
         XCTAssertEqual(app.buttons["showTransaction.editIncomingAmount"].value as? String, "14")
 
         let incoming = app.descendants(matching: .any)["showTransaction.incomingCards"]
-        XCTAssertTrue(incoming.waitForExistence(timeout: 5))
+        reveal(incoming, app: app)
+        XCTAssertTrue(incoming.exists)
         XCTAssertFalse(app.staticTexts["Market reference: $20.00 each"].exists,
                        "Incoming rows start collapsed so the agreed amount stays close to the list picker")
         tap(incoming, app: app)

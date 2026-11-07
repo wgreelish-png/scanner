@@ -296,6 +296,10 @@ struct ListDeletionConfirmationView: View {
         case savedOffers(UUID)
     }
     private struct ReceiptRoute: Identifiable { let id: UUID }
+    private struct OfferCheckoutRoute: Identifiable {
+        let id = UUID()
+        let context: ShowTransactionOfferContext
+    }
     @Bindable var list: CardList
     @Environment(\.modelContext) private var context
     @Environment(\.scenePhase) private var scenePhase
@@ -333,8 +337,7 @@ struct ListDeletionConfirmationView: View {
     @State private var pendingOutcomeBudget = false
     @State private var isVisible = false
     @State private var transactionStore: ShowBudgetStore
-    @State private var newTransactionKind: ShowTransactionKind?
-    @State private var transactionOfferContext: ShowTransactionOfferContext?
+    @State private var offerCheckoutRoute: OfferCheckoutRoute?
     @State private var receiptRoute: ReceiptRoute?
     @State private var confirmingOwnedInventory = false
     @State private var showingWorkingInventory = false
@@ -470,9 +473,9 @@ struct ListDeletionConfirmationView: View {
             .sheet(isPresented: $showingOfferRates) {
                 if let session = reviewSession { SessionRatesView(session: session) }
             }
-            .sheet(item: $newTransactionKind) { kind in
-                ShowTransactionForm(store: transactionStore, initialKind: kind, initialListID: list.id,
-                    offerContext: transactionOfferContext)
+            .sheet(item: $offerCheckoutRoute) { route in
+                ShowTransactionForm(store: transactionStore, initialKind: route.context.kind, initialListID: list.id,
+                    offerContext: route.context)
             }
             .sheet(item: $receiptRoute) { route in
                 NavigationStack {
@@ -721,7 +724,7 @@ struct ListDeletionConfirmationView: View {
     }
 
     private func openTransactionCheckout() {
-        guard newTransactionKind == nil else { return }
+        guard offerCheckoutRoute == nil else { return }
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         do {
             restoreOfferInputs()
@@ -733,8 +736,9 @@ struct ListDeletionConfirmationView: View {
             let input = TradeTransactionInput(mode: offerTransactionMode,
                 myCardPrice: offerTransactionMode == .cashOnly ? nil : price)
             let checkout = try ShowTransactionOfferContext.make(totals: currentOfferTotals, input: input)
-            transactionOfferContext = checkout
-            newTransactionKind = checkout.kind
+            // Present the exact offer snapshot with its route. Independent
+            // state could leave the first sheet with a stale nil context.
+            offerCheckoutRoute = OfferCheckoutRoute(context: checkout)
         } catch { self.error = error.localizedDescription }
     }
 

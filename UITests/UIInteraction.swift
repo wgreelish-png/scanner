@@ -6,7 +6,7 @@ import XCTest
 @MainActor enum UITestInteraction {
     @discardableResult
     static func reveal(_ element: XCUIElement, in app: XCUIApplication,
-                       identifier: String? = nil, file: StaticString = #filePath,
+                       identifier: String? = nil, towardTopWhenMissing: Bool = false, file: StaticString = #filePath,
                        line: UInt = #line) -> Bool {
         if waitUntilTouchable(element, in: app, timeout: 1) { return true }
         if element.exists, belongsToFixedBar(element, in: app) {
@@ -14,17 +14,13 @@ import XCTest
                         identifier: identifier, file: file, line: line)
         }
 
-        // Lazy List rows may not exist until scrolled into view. Search upward
-        // first only when the current position is unknown, then downward.
-        if !element.exists {
-            for _ in 0..<3 {
-                guard scrollContent(in: app, towardTop: true, file: file, line: line) else { return false }
-                if touchable(element, in: app) { return true }
-            }
-        }
+        // A missing lazy row is normally below the initial viewport. Pulling
+        // down blindly at the top of a sheet can dismiss it and start scrolling
+        // the screen underneath. Callers seeking an earlier virtualized row
+        // explicitly choose the upward direction instead.
         for _ in 0..<8 {
             if touchable(element, in: app) { return true }
-            let towardTop = element.exists && element.frame.midY < contentViewport(in: app).midY
+            let towardTop = element.exists ? element.frame.midY < contentViewport(in: app).midY : towardTopWhenMissing
             guard scrollContent(in: app, towardTop: towardTop, file: file, line: line) else { return false }
         }
         if waitUntilTouchable(element, in: app, timeout: 1) { return true }
@@ -165,6 +161,16 @@ import XCTest
             let frame = bar.frame
             if frame.midY < window.frame.midY { top = max(top, frame.maxY) }
             else { bottom = min(bottom, frame.minY) }
+        }
+        // A number pad has no accessory bar in some forms. Exclude its actual
+        // docked frame as well, otherwise reveal gestures land on keyboard keys
+        // instead of the foreground list whose row needs to become visible.
+        for keyboard in app.keyboards.allElementsBoundByIndex where keyboard.exists {
+            let frame = keyboard.frame.intersection(window.frame)
+            if !frame.isNull, !frame.isEmpty, frame.minY > bounds.minY,
+               frame.maxY >= bounds.maxY, frame.width >= bounds.width * 0.5 {
+                bottom = min(bottom, frame.minY)
+            }
         }
         return CGRect(x: bounds.minX, y: top, width: bounds.width, height: max(0, bottom - top))
     }

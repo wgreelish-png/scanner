@@ -26,7 +26,9 @@ import XCTest
         let status = app.staticTexts["budget.scheduleStatus"]
         XCTAssertTrue(status.waitForExistence(timeout: 5))
         XCTAssertTrue(["Active today", "Status, Active today"].contains(status.label))
-        XCTAssertTrue(app.buttons["budget.sell"].isEnabled)
+        let sell = app.buttons["budget.sell"]
+        guard UITestInteraction.reveal(sell, in: app) else { return }
+        XCTAssertTrue(sell.isEnabled)
 
         tapVisible(app.buttons["budget.sell"], in: app)
         enter("200", into: app.textFields["budget.amount"], in: app)
@@ -103,7 +105,13 @@ import XCTest
 
     private func assertMoney(_ expected: String, title: String, element: XCUIElement,
                              file: StaticString = #filePath, line: UInt = #line) {
-        _ = UITestInteraction.reveal(element, in: XCUIApplication(), file: file, line: line)
+        // Reading a lazy row does not require it to be touchable. Avoid moving
+        // the dashboard for every balance assertion while the value is already
+        // in the accessibility tree; explicitly search upward when it is not.
+        if !element.exists {
+            guard UITestInteraction.reveal(element, in: XCUIApplication(), towardTopWhenMissing: true,
+                                           file: file, line: line) else { return }
+        }
         XCTAssertTrue(element.waitForExistence(timeout: 5), file: file, line: line)
         let value = element.label
         XCTAssertTrue([expected, title + ", " + expected].contains(value),
