@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from report_xcode_test_summary import main, notice, summaries, MAX_AGGREGATES, MAX_FAILED_CASES
+from report_xcode_test_summary import main, notice, summaries, MAX_AGGREGATES, MAX_FAILED_CASES, MAX_MIGRATION_CASES, RESTART
 
 
 class XcodeTestSummaryTests(unittest.TestCase):
@@ -63,7 +63,52 @@ Test case 'MigrationTests.testReleasedV2StoreMigratesToV3WithoutChangingInventor
         aggregates = ''.join(f"Test Suite 'All tests' passed at 12:00\n Executed {i} tests, with 0 failures (0 unexpected) in 0.1 seconds\n" for i in range(20))
         output = summaries(aggregates)
         self.assertEqual(sum('XCTest aggregate:' in item for item in output), MAX_AGGREGATES)
-        self.assertIn('executed 19 tests', output[-2])
+        self.assertIn('executed 19 tests', [item for item in output if 'XCTest aggregate:' in item][-1])
+
+    def test_real_execution_allowance_and_restart_records_are_reported_separately(self):
+        # Record formats from Actions run 42348609106, job 128331705971.
+        timeout = ("Test Case '-[CardShowScannerUITests.InventoryLabelsUITests testInventoryPrintOrderSortsNumericPricesAndRemembersSelection]' "
+                   "exceeded execution time allowance of 6 minutes. The test may have hung; check Xcode's test report for additional diagnostics.")
+        output = summaries(timeout + '\n' + RESTART + '\n' + RESTART)
+        self.assertTrue(any('timed-out case result records: 1;' in item for item in output))
+        self.assertTrue(any('runner restart records: 2 ' in item for item in output))
+        self.assertEqual(sum('failed case:' in item for item in output), 1)
+        self.assertTrue(any('InventoryLabelsUITests.testInventoryPrintOrderSortsNumericPricesAndRemembersSelection.' in item for item in output))
+        self.assertFalse(any(' passed' in item for item in output))
+
+    def test_zero_test_success_is_not_reported_as_a_pass(self):
+        log = "Test Suite 'Selected tests' passed at 12:00\n Executed 0 tests, with 0 failures (0 unexpected) in 0.1 seconds\n"
+        output = summaries(log + RESTART)
+        self.assertTrue(any('executed 0 tests' in item for item in output))
+        self.assertTrue(any('do not verify test execution or success' in item for item in output))
+        self.assertFalse(any(' passed' in item for item in output))
+
+    def test_timeout_then_retry_pass_does_not_erase_migration_failure(self):
+        prefix = "Test Case '-[Tests.MigrationTests testLegacyUnversionedStoreMigrationPreservesDataWithoutCreatingBatch]' "
+        output = summaries(prefix + 'timed out (6 seconds).\n' + prefix + 'passed (1 second).')
+        migration = next(item for item in output if 'migration case:' in item)
+        self.assertIn('timed out (multiple outcomes recorded)', migration)
+        self.assertNotIn('passed', migration)
+        self.assertEqual(sum('failed case:' in item for item in output), 1)
+
+    def test_runtime_timeout_diagnostics_do_not_invent_case_outcomes(self):
+        log = """error: test timed out
+[General] CA Telemetry timedout after 20 seconds due to app launch
+A diagnostic mentioning Restarting after unexpected exit, crash, or test timeout
+Test Case '-[Tests.Example testName]' exceeded execution time allowance of unknown duration
+Test Suite 'All tests' passed at 12:00
+unrelated diagnostic
+ Executed 2 tests, with 0 failures
+"""
+        self.assertEqual(summaries(log), ['No XCTest aggregate execution counts found; test completion is unverified from this log.'])
+
+    def test_timeout_and_migration_notice_output_is_bounded(self):
+        log = ''.join(f"Test Case '-[Tests.Migration{i} testLegacyUnversionedStoreMigrationPreservesDataWithoutCreatingBatch]' exceeded execution time allowance of 360 seconds.\n{RESTART}\n" for i in range(100))
+        output = summaries(log)
+        self.assertEqual(sum('migration case:' in item for item in output), MAX_MIGRATION_CASES)
+        self.assertEqual(sum('failed case:' in item for item in output), MAX_FAILED_CASES)
+        self.assertTrue(any('timed-out case result records: 100;' in item for item in output))
+        self.assertTrue(any('runner restart records: 100 ' in item for item in output))
 
     def test_workflow_commands_escape_and_bound_untrusted_text(self):
         command = notice('100%\n::error::injected\rtext')

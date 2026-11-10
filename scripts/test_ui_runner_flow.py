@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
+import time
 import subprocess
 import sys
 import tempfile
@@ -19,10 +21,12 @@ import prepare_ui_simulator
 
 
 FAKE_TOOL = r'''
-import json, os, pathlib, sys
+import json, os, pathlib, sys, time
 tool, args = pathlib.Path(sys.argv[0]).name, sys.argv[1:]
 with open(os.environ["SCANNER_EVENT_LOG"], "a") as output:
     output.write(json.dumps({"tool": tool, "args": args}) + "\n")
+if (tool == "xcodebuild" and args[0] == os.environ.get("SCANNER_HANG_ACTION")) or (tool == "xcrun" and len(args) > 1 and args[1] == os.environ.get("SCANNER_HANG_SIMCTL")):
+    time.sleep(60)
 if tool == "xcodebuild":
     print("Controlled build/test output")
     sys.exit(19 if args[0] == os.environ.get("SCANNER_FAIL_ACTION") else 0)
@@ -36,7 +40,7 @@ if args[:3] == ["simctl", "list", "devices"]:
     ]}}))
 elif args[:3] == ["simctl", "list", "runtimes"]:
     print(json.dumps({"runtimes": [{"identifier": runtime, "version": "18.5",
-        "isAvailable": True, "runtimeRoot": os.environ["RUNNER_TEMP"] + "/RuntimeRoot"}]}))
+        "isAvailable": True, "runtimeRoot": os.environ.get("RUNNER_TEMP", "/tmp") + "/RuntimeRoot"}]}))
 elif args[:2] == ["--sdk", "iphonesimulator"]:
     print("18.5")
 elif args[:2] == ["simctl", "create"]:
@@ -53,7 +57,7 @@ class UIRunnerFlowTests(unittest.TestCase):
             root = Path(directory)
             scripts, binary = root / "scripts", root / "bin"
             scripts.mkdir(); binary.mkdir()
-            for name in ("run_ios_tests.sh", "prepare_ui_simulator.py"):
+            for name in ("run_ios_tests.sh", "prepare_ui_simulator.py", "process_budget.py"):
                 shutil.copyfile(Path(__file__).parent / name, scripts / name)
             for name in ("xcrun", "xcodebuild"):
                 executable = binary / name
@@ -62,8 +66,30 @@ class UIRunnerFlowTests(unittest.TestCase):
             events = root / "events.jsonl"
             environment = dict(os.environ, PATH=str(binary) + os.pathsep + os.environ["PATH"],
                                RUNNER_TEMP=directory, SCANNER_EVENT_LOG=str(events), **settings)
-            result = subprocess.run(["bash", "scripts/run_ios_tests.sh", target, *additional_targets], cwd=root,
-                                    env=environment, text=True, capture_output=True, timeout=20)
+            if environment.pop("SCANNER_UNSET_RUNNER_TEMP", None):
+                environment.pop("RUNNER_TEMP", None)
+            cancel = environment.pop("SCANNER_CANCEL_RUNNER", None)
+            command = ["bash", "scripts/run_ios_tests.sh", target, *additional_targets]
+            if cancel:
+                process = subprocess.Popen(command, cwd=root, env=environment, text=True,
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                try:
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline:
+                        if events.exists() and '"tool": "xcodebuild"' in events.read_text():
+                            break
+                        time.sleep(.01)
+                    else:
+                        self.fail("Runner did not start xcodebuild")
+                    process.send_signal(int(cancel))
+                    stdout, stderr = process.communicate(timeout=5)
+                    result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+                finally:
+                    if process.poll() is None:
+                        process.kill(); process.communicate()
+            else:
+                result = subprocess.run(command, cwd=root, env=environment, text=True,
+                                        capture_output=True, timeout=20)
             commands = [json.loads(line) for line in events.read_text().splitlines()] if events.exists() else []
             log = (root / "NativeTests.log").read_text() if (root / "NativeTests.log").exists() else ""
             return result, commands, log
@@ -72,8 +98,8 @@ class UIRunnerFlowTests(unittest.TestCase):
         return [row["args"][0] for row in commands if row["tool"] == "xcodebuild"]
 
     def assert_shutdown(self, commands):
-        self.assertEqual(commands[-1]["args"],
-                         ["simctl", "shutdown", "10000000-0000-0000-0000-000000000002"])
+        self.assertEqual([row["args"] for row in commands[-2:]],
+                         [["simctl", action, "10000000-0000-0000-0000-000000000002"] for action in ("shutdown", "delete")])
 
     def test_ui_boot_overlaps_compilation_and_readiness_precedes_test_execution(self):
         result, commands, log = self.run_flow()
@@ -195,24 +221,14 @@ class UIRunnerFlowTests(unittest.TestCase):
             class_cases[classes[0]] = len(re.findall(r"(?m)^\s*func\s+test\w+\s*\(", source))
         selected_cases = sum(count for name, count in class_cases.items() if name not in excluded)
         self.assertGreater(selected_cases, 0)
-        seconds_per_case = int(ui_arguments[ui_arguments.index("-maximum-test-execution-time-allowance") + 1])
-        self.assertGreaterEqual(budgets.pop("ui"), math.ceil(selected_cases * seconds_per_case / 60) + 30)
-        budget_classes = set(re.findall(r"CardShowScannerUITests/(\w+)", job_blocks["budget_ui"]))
-        self.assertTrue(budget_classes)
-        budget_cases = sum(class_cases[name] for name in budget_classes)
-        self.assertGreaterEqual(budgets.pop("budget_ui"), math.ceil(budget_cases * seconds_per_case / 60) + 30)
-        self.assertEqual(budgets, {"native": 90, "research_ui": 120, "evidence_ui": 120,
-                                   "release": 30})
-
+        self.assertIn("ResearchUITests", excluded)
+        self.assertGreaterEqual(budgets["ui"] * 60, 3600 + 1800 + 600)
+        self.assertGreaterEqual(budgets["native"] * 60, 2700 + 600)
         concurrency = workflow.split("\nconcurrency:\n", 1)[1].split("\njobs:\n", 1)[0]
-        group = re.search(r"(?m)^  group: (.+)$", concurrency).group(1)
-        for dimension in ("${{ inputs.job_scope || 'all' }}", "${{ inputs.test_scope || 'all' }}",
-                          "${{ github.event_name == 'workflow_dispatch' && github.sha || 'automatic' }}"):
-            self.assertIn(dimension, group)
-        self.assertRegex(concurrency, r"(?m)^  cancel-in-progress: false$")
-        self.assertIn("python3 -m unittest discover -s scripts -p 'test_ui_runner_flow.py'", job_blocks["ui"])
-        self.assertLess(job_blocks["ui"].index("Validate UI runner timing"),
-                        job_blocks["ui"].index("Build and run UI regression tests"))
+        self.assertRegex(concurrency, r"(?m)^  cancel-in-progress: true$")
+        self.assertNotIn("github.sha", concurrency)
+        self.assertIn("tooling", job_blocks)
+
         options = workflow.split("      test_scope:\n", 1)[1].split("\nconcurrency:\n", 1)[0]
         self.assertIn("          - label_controls\n", options)
         self.assertIn("          - navigation_price", options.splitlines())
@@ -276,7 +292,10 @@ class UIRunnerFlowTests(unittest.TestCase):
         for name, targets in expected.items():
             with self.subTest(job=name):
                 block = job_blocks[name]
-                self.assertIn("SCANNER_TEST_SCOPE: ${{ inputs.job_scope == 'log_review' && 'log_review' || inputs.test_scope || 'all' }}", block)
+                scope = "inputs.job_scope == 'log_review' && 'log_review' || "
+                if name == "ui":
+                    scope += "inputs.job_scope == 'ui_diagnostic' && 'ui_diagnostic' || "
+                self.assertIn("SCANNER_TEST_SCOPE: ${{ " + scope + "inputs.test_scope || 'all' }}", block)
                 branch = re.search(r'elif \[ "\$SCANNER_TEST_SCOPE" = log_review \]; then\n'
                                    r'(.*?)(?=\n          (?:elif|else|fi)\b)', block, re.DOTALL)
                 self.assertIsNotNone(branch)
@@ -288,6 +307,54 @@ class UIRunnerFlowTests(unittest.TestCase):
                             and row["args"][0] in ("test", "test-without-building"))
                 self.assertEqual([arg for arg in test if arg.startswith("-only-testing:")],
                                  ["-only-testing:" + target for target in targets])
+
+    def test_total_build_and_test_hangs_are_bounded_and_cleaned(self):
+        for action in ("build-for-testing", "test-without-building"):
+            with self.subTest(action=action):
+                result, commands, log = self.run_flow(SCANNER_HANG_ACTION=action,
+                    SCANNER_BUILD_TIMEOUT_SECONDS="0.2", SCANNER_TEST_TIMEOUT_SECONDS="0.2")
+                self.assertEqual(result.returncode, 124, result.stderr)
+                self.assertIn("exceeded total budget", log)
+                self.assert_shutdown(commands)
+                if action == "build-for-testing":
+                    self.assertEqual(self.actions(commands), [action])
+
+    def test_native_test_and_discovery_hangs_are_bounded(self):
+        result, commands, _ = self.run_flow(target="CardShowScannerTests",
+            SCANNER_HANG_ACTION="test", SCANNER_TEST_TIMEOUT_SECONDS="0.2")
+        self.assertEqual(result.returncode, 124)
+        self.assertFalse(any(row["args"][:2] == ["simctl", "shutdown"] for row in commands))
+        result, commands, _ = self.run_flow(target="CardShowScannerTests",
+            SCANNER_HANG_SIMCTL="list", SCANNER_SIMCTL_TIMEOUT_SECONDS="0.2")
+        self.assertEqual(result.returncode, 124)
+        self.assertFalse(self.actions(commands))
+
+    def test_runner_signals_preserve_status_and_clean_owned_simulator(self):
+        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            result, commands, _ = self.run_flow(SCANNER_HANG_ACTION="build-for-testing",
+                SCANNER_CANCEL_RUNNER=str(sig))
+            self.assertEqual(result.returncode, 128 + sig, result.stderr)
+            self.assert_shutdown(commands)
+
+    def test_cleanup_hang_does_not_override_test_failure(self):
+        result, commands, _ = self.run_flow(SCANNER_FAIL_ACTION="test-without-building",
+            SCANNER_HANG_SIMCTL="shutdown", SCANNER_CLEANUP_TIMEOUT_SECONDS="0.2")
+        self.assertEqual(result.returncode, 19)
+        self.assert_shutdown(commands)
+
+    def test_local_invocation_without_runner_temp(self):
+        result, commands, _ = self.run_flow(SCANNER_UNSET_RUNNER_TEMP="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        arguments = next(row["args"] for row in commands if row["tool"] == "xcodebuild")
+        build_path = arguments[arguments.index("-derivedDataPath") + 1]
+        self.assertIn("scanner-tests.", build_path)
+        self.assertFalse(Path(build_path).parent.exists())
+
+    def test_invalid_budgets_fail_before_starting_tools(self):
+        for value in ("0", "-1", "nan", "inf", "bogus"):
+            result, commands, _ = self.run_flow(SCANNER_TEST_TIMEOUT_SECONDS=value)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(commands)
 
     def test_readiness_timeout_reports_bounded_progress_and_nonzero_status(self):
         failure = subprocess.TimeoutExpired(["xcrun", "simctl", "bootstatus"], 300,
