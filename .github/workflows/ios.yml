@@ -54,6 +54,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install portable checker dependencies
+        run: python3 -m pip install --disable-pip-version-check -r scripts/requirements-ci.txt
       - run: node --experimental-vm-modules --test Tests/JavaScript/*.cjs
       - run: node --test server/research/tests/*.test.mjs
       - run: node --test postman/test_*.mjs

@@ -50,6 +50,17 @@ class CIWorkflowTests(unittest.TestCase):
         self.assertEqual(selected_jobs(job="all", test="printer_transport"), {"tooling", "native", "release"})
         self.assertEqual(selected_jobs(job="all", test="navigation_price"), {"tooling", "native", "evidence_ui", "release"})
 
+    def test_linux_project_checker_dependencies_are_installed_before_checks(self):
+        tooling = JOBS["tooling"]
+        setup = tooling.index("uses: actions/setup-python@v5")
+        install = tooling.index("python3 -m pip install --disable-pip-version-check -r scripts/requirements-ci.txt")
+        self.assertIn("python-version: '3.12'", tooling)
+        self.assertLess(setup, install)
+        self.assertLess(install, tooling.index("python3 -m unittest discover"))
+        self.assertLess(install, tooling.index("python3 scripts/check_xcode_sources.py"))
+        requirements = (Path(__file__).parent / "requirements-ci.txt").read_text()
+        self.assertRegex(requirements, r"(?m)^openstep-parser==2\.0\.3$")
+
     def test_push_and_pr_do_not_duplicate_work_branch_runs(self):
         push = WORKFLOW.split("  push:\n", 1)[1].split("  pull_request:", 1)[0]
         self.assertEqual(re.findall(r"^      - (.+)$", push, re.M), ["main"])

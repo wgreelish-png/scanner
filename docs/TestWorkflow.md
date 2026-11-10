@@ -94,3 +94,26 @@ replay reports 25 timeout records and 25 restart records, with zero-test records
 explicitly unverified. Linux has no Xcode; native/Release compilation and fresh
 simulator execution have not been verified locally. The diagnostic scope is
 available but has not been run for this change.
+
+
+## Linux checker dependencies
+
+The Ubuntu tooling job explicitly selects Python 3.12 and installs
+`scripts/requirements-ci.txt` before running Python checks. The pinned
+`openstep-parser` package is required by the Xcode project checker on Linux;
+macOS uses its built-in `plutil`. For local Linux checks, first run:
+
+```sh
+python3 -m pip install -r scripts/requirements-ci.txt
+```
+
+The first CI run at `ae772ef` passed JavaScript and all 66 Python tests, then
+failed the project checker because this Linux-only dependency had not been
+installed. The provisioning correction adds a regression check that setup and
+installation precede the checks; it does not skip the source-membership check.
+
+Correction validation: a fresh isolated environment installed the pinned package,
+all 67 Python tests passed, and that parser read the actual project and matched
+its source lists to all 115 app, 86 native-test and 14 UI-test Swift filenames in
+the repository tree. Bash syntax, workflow YAML and whitespace checks passed.
+The replacement GitHub run remains the verification of the full Ubuntu job.
