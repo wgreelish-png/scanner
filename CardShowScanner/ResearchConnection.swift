@@ -118,6 +118,11 @@ struct ResearchConnectionStore: Sendable {
 
 struct ConfiguredResearchProvider: ResearchProviding {
     func research(for card: CardCandidate, forceRefresh: Bool) async throws -> ResearchProductDetails {
+        try Task.checkCancellation()
+        guard let category = OpenAPIMarketPricing.categoryID(card.identity.game),
+              BetaAPIGameSupport.contains(category), OpenAPIMarketPricing.productID(card.identity.productID) != nil else {
+            throw ResearchFailure.unsupportedCard
+        }
         let store = ResearchConnectionStore()
         let method = try ResearchAccessMethod.selected(store: store)
         await ServiceDiagnosticFields.record("research.provider_selected", method: method, phase: .setup)

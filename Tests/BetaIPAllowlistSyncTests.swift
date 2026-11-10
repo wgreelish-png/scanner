@@ -20,6 +20,9 @@ import XCTest
     private final class Clock {
         var value = Date(timeIntervalSince1970: 1_800_000_000)
     }
+    private final class Thermal {
+        var state = ProcessInfo.ThermalState.nominal
+    }
     private final class Sleeper {
         var durations: [Duration] = []
         var pending: [CheckedContinuation<Void, Error>] = []
@@ -47,7 +50,7 @@ import XCTest
         let runner = Runner(), clock = Clock()
         runner.reply = .init(status: .saved, ip: "8.8.8.8")
         let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct },
-                                      now: { clock.value }, automaticPolling: false)
+                                      now: { clock.value }, thermalState: { .nominal }, automaticPolling: false)
         await sync.prepareForDirectRequest()
         XCTAssertEqual(runner.calls, 0)
         sync.setForeground(true)
@@ -63,9 +66,9 @@ import XCTest
 
     func testDisabledPreferenceSurvivesRelaunchAndMakesNoWebsiteRequests() async {
         let preferences = defaults(), runner = Runner()
-        let first = BetaIPAllowlistSync(runner: runner, defaults: preferences, configuration: { .direct }, automaticPolling: false)
+        let first = BetaIPAllowlistSync(runner: runner, defaults: preferences, configuration: { .direct }, thermalState: { .nominal }, automaticPolling: false)
         first.setEnabled(false)
-        let reopened = BetaIPAllowlistSync(runner: runner, defaults: preferences, configuration: { .direct }, automaticPolling: false)
+        let reopened = BetaIPAllowlistSync(runner: runner, defaults: preferences, configuration: { .direct }, thermalState: { .nominal }, automaticPolling: false)
         reopened.setForeground(true)
         reopened.checkNow(); reopened.networkChanged()
         await reopened.prepareForDirectRequest()
@@ -76,7 +79,7 @@ import XCTest
     func testServerMissingCredentialsAndUnreadableConfigurationNeverModifyAllowlist() async {
         for configuration in [BetaIPAllowlistSync.Configuration.server, .missing, .unavailable] {
             let runner = Runner()
-            let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { configuration }, automaticPolling: false)
+            let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { configuration }, thermalState: { .nominal }, automaticPolling: false)
             sync.setForeground(true); sync.checkNow(); sync.networkChanged()
             await sync.prepareForDirectRequest()
             XCTAssertEqual(runner.calls, 0)
@@ -88,7 +91,7 @@ import XCTest
     func testReturningToForegroundRechecksEvenAfterRecentSuccess() async {
         let runner = Runner()
         runner.reply = .init(status: .alreadyCurrent, ip: "1.1.1.1")
-        let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct }, automaticPolling: false)
+        let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct }, thermalState: { .nominal }, automaticPolling: false)
         sync.setForeground(true); await sync.prepareForDirectRequest()
         sync.setForeground(false)
         runner.reply = .init(status: .saved, ip: "8.8.4.4")
@@ -99,7 +102,7 @@ import XCTest
 
     func testBackgroundCancelsAndCannotPublishLateSuccess() async {
         let runner = Runner()
-        let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct }, automaticPolling: false)
+        let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct }, thermalState: { .nominal }, automaticPolling: false)
         sync.setForeground(true)
         await waitUntil { runner.calls == 1 }
         sync.setForeground(false)
@@ -115,7 +118,7 @@ import XCTest
 
     func testDisablingCancelsAndCannotPublishLateSuccess() async {
         let runner = Runner()
-        let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct }, automaticPolling: false)
+        let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct }, thermalState: { .nominal }, automaticPolling: false)
         sync.setForeground(true); await waitUntil { runner.calls == 1 }
         sync.setEnabled(false)
         runner.complete(.init(status: .saved, ip: "8.8.8.8"))
@@ -128,7 +131,7 @@ import XCTest
 
     func testNetworkChangesCoalesceAndRetirePreviousRouteBeforePublishingNewIP() async {
         let runner = Runner()
-        let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct }, automaticPolling: false,
+        let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct }, thermalState: { .nominal }, automaticPolling: false,
                                       wait: { _ in await Task.yield(); try Task.checkCancellation() })
         sync.setForeground(true); await waitUntil { runner.calls == 1 }
         sync.networkChanged(); sync.networkChanged(); sync.networkChanged()
@@ -145,7 +148,7 @@ import XCTest
 
     func testManualDoubleTapsShareOnePendingSave() async {
         let runner = Runner()
-        let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct }, automaticPolling: false)
+        let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct }, thermalState: { .nominal }, automaticPolling: false)
         sync.setForeground(true); await waitUntil { runner.calls == 1 }
         sync.checkNow(); sync.checkNow(); sync.checkNow()
         XCTAssertEqual(runner.calls, 1)
@@ -158,7 +161,7 @@ import XCTest
         let runner = Runner(), clock = Clock()
         runner.reply = .init(status: .rateLimited, retryAfterSeconds: 120)
         let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct },
-                                      now: { clock.value }, automaticPolling: false,
+                                      now: { clock.value }, thermalState: { .nominal }, automaticPolling: false,
                                       wait: { _ in await Task.yield(); try Task.checkCancellation() })
         sync.setForeground(true); await sync.prepareForDirectRequest()
         sync.checkNow(); sync.networkChanged(); await sync.prepareForDirectRequest()
@@ -179,7 +182,7 @@ import XCTest
         for reply in [BetaAllowlistSyncResult(status: .saveFailed), .init(status: .saved),
                       .init(status: .alreadyCurrent, ip: "192.168.1.2"), .init(status: .saved, ip: "not-an-ip")] {
             let runner = Runner(); runner.reply = reply
-            let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct }, automaticPolling: false)
+            let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct }, thermalState: { .nominal }, automaticPolling: false)
             sync.setForeground(true); await sync.prepareForDirectRequest()
             XCTAssertNil(sync.lastIP)
             XCTAssertNil(sync.lastCheckedAt)
@@ -190,10 +193,13 @@ import XCTest
     func testSignInAndAccountMismatchRequestMatchingLoginWithoutRetryLoop() async {
         for failure in [BetaAllowlistSyncResult.Status.signInRequired, .accountMismatch] {
             let runner = Runner(); runner.reply = .init(status: failure)
-            let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct }, automaticPolling: false)
+            let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct }, thermalState: { .nominal }, automaticPolling: false)
             sync.setForeground(true); await sync.prepareForDirectRequest()
             XCTAssertTrue(sync.needsSignIn)
-            sync.checkNow(); await sync.prepareForDirectRequest()
+            // Repeated automatic preflights, network hints and activation must
+            // not keep opening a page whose recovery requires a person.
+            sync.networkChanged(); sync.setForeground(false); sync.setForeground(true)
+            await sync.prepareForDirectRequest()
             XCTAssertEqual(runner.calls, 1)
             runner.reply = .init(status: .saved, ip: "8.8.8.8")
             sync.connectionChanged(); await sync.prepareForDirectRequest()
@@ -203,10 +209,147 @@ import XCTest
         }
     }
 
+    func testAuthenticationPauseDoesNotReopenAfterManyMinuteIntervalsAndExplicitCheckCanRetry() async {
+        let runner = Runner(), clock = Clock()
+        runner.reply = .init(status: .signInRequired)
+        let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct },
+            now: { clock.value }, thermalState: { .nominal }, automaticPolling: false)
+        sync.setForeground(true); await sync.prepareForDirectRequest()
+        XCTAssertTrue(sync.needsSignIn)
+        for _ in 0..<10 {
+            clock.value = clock.value.addingTimeInterval(61)
+            sync.networkChanged(); sync.setForeground(true)
+            await sync.prepareForDirectRequest()
+        }
+        XCTAssertEqual(runner.calls, 1)
+        XCTAssertFalse(sync.busy)
+        runner.reply = .init(status: .alreadyCurrent, ip: "8.8.8.8")
+        sync.checkNow(); await sync.prepareForDirectRequest()
+        XCTAssertEqual(runner.calls, 2)
+        XCTAssertFalse(sync.needsSignIn)
+        XCTAssertEqual(sync.lastIP, "8.8.8.8")
+    }
+
+    func testExplicitAuthenticationRetryCanRunImmediatelyWithoutChangingPreference() async {
+        let runner = Runner(), clock = Clock(), preferences = defaults()
+        runner.reply = .init(status: .signInRequired)
+        let sync = BetaIPAllowlistSync(runner: runner, defaults: preferences, configuration: { .direct },
+            now: { clock.value }, thermalState: { .nominal }, automaticPolling: false)
+        sync.setForeground(true); await sync.prepareForDirectRequest()
+        let failedAt = clock.value
+        runner.reply = .init(status: .saved, ip: "8.8.8.8")
+        sync.checkNow(); await sync.prepareForDirectRequest()
+        XCTAssertEqual(clock.value, failedAt)
+        XCTAssertEqual(runner.calls, 2); XCTAssertFalse(sync.needsSignIn)
+        XCTAssertTrue(sync.enabled)
+        XCTAssertNil(preferences.object(forKey: BetaIPAllowlistSync.enabledKey), "Retry must not change a stored preference")
+    }
+
+    func testAuthenticationFailureCancelsExistingPollingBeforeAnotherSleepOrPage() async {
+        let runner = Runner(), sleeper = Sleeper()
+        runner.reply = .init(status: .signInRequired)
+        let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct },
+            thermalState: { .nominal }, wait: { try await sleeper.wait($0) })
+        sync.setForeground(true)
+        await waitUntil { sync.needsSignIn && !sync.busy }
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(runner.calls, 1)
+        XCTAssertTrue(sleeper.durations.isEmpty, "Authentication pause must stop the polling loop, not just skip page loads")
+        sync.setForeground(false)
+    }
+
+    func testCoolingDefersAutomaticAndExplicitWebsiteChecksButAllowsDirectPreflightToReturn() async {
+        for hot in [ProcessInfo.ThermalState.serious, .critical] {
+            let runner = Runner(), thermal = Thermal()
+            thermal.state = hot
+            runner.reply = .init(status: .saved, ip: "8.8.8.8")
+            let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct },
+                thermalState: { thermal.state }, automaticPolling: false)
+            sync.setForeground(true); sync.checkNow(); sync.networkChanged()
+            await sync.prepareForDirectRequest()
+            XCTAssertTrue(sync.isCoolingPaused)
+            XCTAssertFalse(sync.busy); XCTAssertEqual(runner.calls, 0)
+            thermal.state = .fair
+            sync.thermalStateChanged(); await sync.prepareForDirectRequest()
+            XCTAssertFalse(sync.isCoolingPaused)
+            XCTAssertEqual(runner.calls, 1)
+            XCTAssertEqual(sync.lastIP, "8.8.8.8")
+        }
+    }
+
+    func testCoolingCancelsInFlightWebsiteReadAndRetiresLateReplyBeforeRecovery() async {
+        let runner = Runner(), thermal = Thermal()
+        let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct },
+            thermalState: { thermal.state }, automaticPolling: false)
+        sync.setForeground(true); await waitUntil { runner.calls == 1 }
+        thermal.state = .serious; sync.thermalStateChanged()
+        XCTAssertFalse(sync.busy); XCTAssertEqual(runner.cancellations, 1)
+        runner.complete(.init(status: .saved, ip: "8.8.8.8"))
+        for _ in 0..<5 { await Task.yield() }
+        XCTAssertNil(sync.lastIP)
+        thermal.state = .nominal
+        runner.reply = .init(status: .saved, ip: "1.1.1.1")
+        sync.thermalStateChanged(); await sync.prepareForDirectRequest()
+        XCTAssertEqual(runner.calls, 2); XCTAssertEqual(sync.lastIP, "1.1.1.1")
+    }
+
+    func testThermalNotificationResumesDeferredForegroundWorkWithoutPolling() async {
+        let runner = Runner(), thermal = Thermal()
+        thermal.state = .serious
+        runner.reply = .init(status: .alreadyCurrent, ip: "8.8.8.8")
+        let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct },
+            thermalState: { thermal.state }, automaticPolling: false)
+        sync.setForeground(true)
+        XCTAssertEqual(runner.calls, 0)
+        thermal.state = .nominal
+        NotificationCenter.default.post(name: ProcessInfo.thermalStateDidChangeNotification, object: nil)
+        await waitUntil { runner.calls == 1 && !sync.busy }
+        XCTAssertFalse(sync.isCoolingPaused)
+        XCTAssertEqual(sync.lastIP, "8.8.8.8")
+        sync.setForeground(false)
+    }
+
+    func testCoolingRecoveryPreservesAuthenticationPauseAndCannotRunWhileBackgrounded() async {
+        let runner = Runner(), thermal = Thermal()
+        runner.reply = .init(status: .accountMismatch)
+        let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct },
+            thermalState: { thermal.state }, automaticPolling: false)
+        sync.setForeground(true); await sync.prepareForDirectRequest()
+        thermal.state = .serious; sync.thermalStateChanged()
+        sync.checkNow()
+        XCTAssertTrue(sync.needsSignIn)
+        sync.setForeground(false)
+        thermal.state = .nominal; sync.thermalStateChanged()
+        await sync.prepareForDirectRequest()
+        XCTAssertEqual(runner.calls, 1)
+        sync.setForeground(true); await sync.prepareForDirectRequest()
+        XCTAssertTrue(sync.needsSignIn); XCTAssertEqual(runner.calls, 1)
+        runner.reply = .init(status: .saved, ip: "8.8.8.8")
+        sync.connectionChanged(); await sync.prepareForDirectRequest()
+        XCTAssertEqual(runner.calls, 2)
+    }
+
+    func testCoolingRecoveryAndManualChecksPreserveServerRetryAfter() async {
+        let runner = Runner(), thermal = Thermal(), clock = Clock()
+        runner.reply = .init(status: .rateLimited, retryAfterSeconds: 120)
+        let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct },
+            now: { clock.value }, thermalState: { thermal.state }, automaticPolling: false)
+        sync.setForeground(true); await sync.prepareForDirectRequest()
+        thermal.state = .critical; sync.thermalStateChanged()
+        clock.value = clock.value.addingTimeInterval(60)
+        thermal.state = .nominal; sync.thermalStateChanged()
+        sync.checkNow(); await sync.prepareForDirectRequest()
+        XCTAssertEqual(runner.calls, 1)
+        clock.value = clock.value.addingTimeInterval(60)
+        runner.reply = .init(status: .alreadyCurrent, ip: "8.8.8.8")
+        sync.checkNow(); await sync.prepareForDirectRequest()
+        XCTAssertEqual(runner.calls, 2)
+    }
+
     func testChangingToServerCancelsPendingPhoneUpdateAndClearsConfirmedMetadata() async {
         var method = BetaIPAllowlistSync.Configuration.direct
         let runner = Runner(); runner.reply = .init(status: .saved, ip: "8.8.8.8")
-        let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { method }, automaticPolling: false)
+        let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { method }, thermalState: { .nominal }, automaticPolling: false)
         sync.setForeground(true); await sync.prepareForDirectRequest()
         runner.reply = nil
         sync.checkNow(); await waitUntil { runner.calls == 2 }
@@ -221,7 +364,7 @@ import XCTest
 
     func testDirectRequestWaitsForOneExistingSynchronization() async {
         let runner = Runner()
-        let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct }, automaticPolling: false)
+        let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct }, thermalState: { .nominal }, automaticPolling: false)
         sync.setForeground(true); await waitUntil { runner.calls == 1 }
         var finished = false
         let preflight = Task { await sync.prepareForDirectRequest(); finished = true }
@@ -237,7 +380,7 @@ import XCTest
     func testPeriodicPollingIsCanceledOnBackgroundAndLateTimerCannotStartWork() async {
         let runner = Runner(), sleeper = Sleeper()
         runner.reply = .init(status: .alreadyCurrent, ip: "8.8.8.8")
-        let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct },
+        let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct }, thermalState: { .nominal },
                                       wait: { try await sleeper.wait($0) })
         sync.setForeground(true); await sync.prepareForDirectRequest()
         await waitUntil { sleeper.pending.count == 1 }
@@ -252,7 +395,7 @@ import XCTest
     func testDebouncedNetworkCheckCannotStartAfterAppBecomesInactive() async {
         let runner = Runner(), sleeper = Sleeper()
         runner.reply = .init(status: .alreadyCurrent, ip: "8.8.8.8")
-        let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct }, automaticPolling: false,
+        let sync = BetaIPAllowlistSync(runner: runner, defaults: defaults(), configuration: { .direct }, thermalState: { .nominal }, automaticPolling: false,
                                       wait: { try await sleeper.wait($0) })
         sync.setForeground(true); await sync.prepareForDirectRequest()
         sync.networkChanged()

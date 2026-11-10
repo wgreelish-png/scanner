@@ -27,6 +27,7 @@ import UIKit
     @State private var pendingManualSearchFromReview = false
     @State private var manualSearchTransitionReady = false
     @State private var selectedRecentCard: InventoryCard?
+    @State private var manualPromptPolicy = ScannerManualSearchPromptPolicy()
     init(session: ScanSession, list: CardList, draft: ScanBatchDraft? = nil, model: ScannerViewModel? = nil) {
         self.session = session; self.list = list; self.draft = draft
         _game = State(initialValue: session.game ?? "Pokémon")
@@ -60,6 +61,13 @@ import UIKit
                                   !pendingManualSearchFromReview, selectedRecentCard == nil else {
                                 live.resumeAfterManualSearchPrompt(); return
                             }
+                            guard manualPromptPolicy.shouldPresent(at: ProcessInfo.processInfo.systemUptime) else {
+                                // The bridge has paused this attempt for the
+                                // suggestion. Suppression must release it too.
+                                live.resumeAfterManualSearchPrompt()
+                                DiagnosticLog.shared.record("scanner.manual_search_prompt_suppressed", ["reason": "cooldown"], sampleEvery: 15)
+                                return
+                            }
                             showingManualSearchPrompt = true
                         }
                     }
@@ -79,6 +87,7 @@ import UIKit
                         Button("Search Manually") { openManualSearch() }
                         Button("Keep Scanning", role: .cancel) {
                             DiagnosticLog.shared.activity(.action, screen: .scanner, action: .continueFlow, state: activityState)
+                            manualPromptPolicy.declined(at: ProcessInfo.processInfo.systemUptime)
                             model.liveProvider?.resumeAfterManualSearchPrompt()
                             DiagnosticLog.shared.record("scanner.manual_search_declined")
                         }
@@ -117,7 +126,6 @@ import UIKit
             DiagnosticLog.shared.record("navigation.scanner_disappeared")
         }
         .onChange(of: scenePhase) { _, phase in
-            DiagnosticLog.shared.record("app.scene", ["phase": phase == .active ? "active" : (phase == .background ? "background" : "inactive")])
             if phase == .active { startIfReady() }
             else if phase == .background { showingManualSearchPrompt = false; model.stop() }
         }
@@ -243,10 +251,14 @@ import UIKit
         return VStack(spacing: detailsCollapsed ? 6 : 10) {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("\(totals.quantity) cards • \(totals.market.money) market").font(.subheadline.bold())
+                    Text(totals.quantity > 0 && totals.unpricedQuantity == totals.quantity
+                         ? "\(totals.quantity) cards • unpriced"
+                         : "\(totals.quantity) cards • \(totals.market.money) \(totals.unpricedQuantity > 0 ? "known" : "market")")
+                        .font(.subheadline.bold())
                         .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("scanner.totals")
                     if totals.unpricedQuantity > 0 {
-                        Text("\(totals.unpricedQuantity) unpriced • partial total").font(.caption).foregroundStyle(.orange)
+                        Text(totals.unpricedQuantity == totals.quantity ? "Market prices unavailable" : "\(totals.unpricedQuantity) unpriced • partial total")
+                            .font(.caption).foregroundStyle(.orange)
                             .accessibilityIdentifier("scanner.unpriced")
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)

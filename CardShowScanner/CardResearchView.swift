@@ -107,7 +107,7 @@ struct CardResearchView: View {
                 .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
             }.listRowBackground(Color.indigo.opacity(0.07))
             if model.section == .market {
-                MarketInsightsContent(model: model.market, window: $model.marketWindow)
+                MarketInsightsContent(model: model.market, window: $model.marketWindow, onConnection: openConnection)
             } else {
                 GradedResearchContent(model: model.graded)
             }
@@ -158,10 +158,7 @@ struct CardResearchView: View {
                     Button { showingInfo = true } label: { Image(systemName: "info.circle") }
                         .accessibilityLabel("Research data information").accessibilityIdentifier("cardResearch.info")
                 }
-                Button {
-                    DiagnosticLog.shared.activity(.action, screen: .cardResearch, action: .openConnection)
-                    showingConnection = true
-                } label: { Image(systemName: "gearshape") }
+                Button(action: openConnection) { Image(systemName: "gearshape") }
                     .accessibilityLabel("TCGTracking API Connection").accessibilityIdentifier("cardResearch.connection")
             }
         }
@@ -190,6 +187,11 @@ struct CardResearchView: View {
             if visible && phase == .active { model.start() } else { model.stop() }
         }
         .onChange(of: inputCard.identity) { _, _ in model.changeCard(inputCard) }
+    }
+
+    private func openConnection() {
+        DiagnosticLog.shared.activity(.action, screen: .cardResearch, action: .openConnection)
+        showingConnection = true
     }
 
     @ViewBuilder private func cardDetails(_ context: CardResearchContext) -> some View {

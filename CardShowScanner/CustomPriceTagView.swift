@@ -3,10 +3,12 @@ import SwiftUI
 /// Standalone stickers work without stock, a saved show or tag approvals.
 @MainActor struct CustomPriceTagView: View {
     private let onPrintingCompleted: (() -> Void)?
+    @Environment(\.dismiss) private var dismiss
     @State private var model: CustomPriceTagModel
     @State private var paperPreferences: LabelPaperPreferences
     @State private var queue = LabelPrintQueue.shared
     @State private var printer = NiimbotPrinter.shared
+    @State private var printing = LabelDirectPrintController()
     @State private var showingQueue = false
     @State private var bitmap: InventoryLabelBitmap?
     @State private var previewDraft: CustomPriceTagDraft?
@@ -16,15 +18,16 @@ import SwiftUI
 
     private var activityState: DiagnosticActivityState {
         let blocked: DiagnosticActivityBlockReason = !queue.isLoaded ? .queueUnavailable
-            : queue.isPrinting ? .printerBusy
+            : queue.isPrinting || printing.isBusy ? .printerBusy
             : model.preparing ? .preparing
-            : (!queue.entries.isEmpty && !model.hasPreparedQueue) ? .unfinishedQueue
+            : (queue.entries.contains { $0.state != .completed } && !model.hasPreparedQueue) ? .unfinishedQueue
             : (!model.hasPreparedQueue && printer.isReadingRoll) ? .rollReading
-            : model.draft == nil ? .invalidInput : .ready
+            : model.draft == nil ? .invalidInput
+            : !printing.printerReady(printer) ? .printerDisconnected : .ready
         return DiagnosticActivityState(labelCount: model.draft?.copies,
             pendingCount: queue.pendingCount, completedCount: queue.completedCount,
             failedCount: queue.failedCount, uncertainCount: queue.uncertainCount,
-            previewReady: bitmap != nil && previewDraft == model.draft, isPreparing: model.preparing,
+            previewReady: bitmap != nil && previewDraft == model.artworkDraft, isPreparing: model.preparing,
             canProceed: blocked == .ready, printerConnected: printer.isConnected,
             rollReading: printer.isReadingRoll, blockReason: blocked)
     }
@@ -84,7 +87,7 @@ import SwiftUI
                     .accessibilityIdentifier("customLabels.paperSource")
             }
             Section("Preview") {
-                if let bitmap, let previewDraft, previewDraft == model.draft {
+                if let bitmap, let previewDraft, previewDraft == model.artworkDraft {
                     Image(uiImage: bitmap.previewImage).resizable().interpolation(.high).scaledToFit()
                         .frame(maxWidth: .infinity).padding(12).background(.white)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -98,7 +101,7 @@ import SwiftUI
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
-            if !queue.isLoaded || (!queue.entries.isEmpty && !model.hasPreparedQueue) {
+            if !queue.isLoaded || (queue.entries.contains { $0.state != .completed } && !model.hasPreparedQueue) {
                 Section("Saved print queue") {
                     Text(queue.isLoaded
                          ? "Review or clear the saved queue before preparing new labels."
@@ -117,6 +120,7 @@ import SwiftUI
             if let error = model.error {
                 Section { Text(error).font(.footnote).foregroundStyle(.orange) }
             }
+            LabelEditorPrinterStatus(controller: printing, printer: printer)
         }
         .navigationTitle("Custom Price Tag").navigationBarTitleDisplayMode(.inline)
         .scrollDismissesKeyboard(.interactively)
@@ -124,29 +128,37 @@ import SwiftUI
             LabelPrintQueueView(onPrintingCompleted: onPrintingCompleted)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            HStack {
-                Text("\(model.copies) labels").font(.subheadline).monospacedDigit()
-                Spacer(minLength: 12)
-                Button(model.hasPreparedQueue ? "View Queue" : "Prepare Labels") {
-                    DiagnosticLog.shared.activity(.action, screen: .customLabels,
-                        action: model.hasPreparedQueue ? .openQueue : .prepareLabels, state: activityState)
-                    guard model.hasPreparedQueue || !printer.isReadingRoll else { return }
-                    focused = nil
-                    model.paperSize = paperPreferences.size
-                    model.pricePosition = paperPreferences.pricePosition
-                    let prepared = model.prepare()
-                    if prepared { showingQueue = true }
-                    DiagnosticLog.shared.activity(.outcome, screen: .customLabels, action: .prepareLabels,
-                        state: DiagnosticActivityState(labelCount: model.draft?.copies,
-                            pendingCount: queue.pendingCount, completedCount: queue.completedCount,
-                            failedCount: queue.failedCount, uncertainCount: queue.uncertainCount,
-                            succeeded: prepared))
+            VStack(spacing: 10) {
+                HStack {
+                    Text("\(model.copies) labels").font(.subheadline).monospacedDigit()
+                    Spacer(minLength: 12)
+                    Button("Review Queue") {
+                        DiagnosticLog.shared.activity(.action, screen: .customLabels,
+                            action: model.hasPreparedQueue ? .openQueue : .prepareLabels, state: activityState)
+                        guard model.hasPreparedQueue || !printer.isReadingRoll else { return }
+                        focused = nil
+                        model.paperSize = paperPreferences.size
+                        model.pricePosition = paperPreferences.pricePosition
+                        let prepared = model.prepare()
+                        if prepared { showingQueue = true }
+                        DiagnosticLog.shared.activity(.outcome, screen: .customLabels, action: .prepareLabels,
+                            state: DiagnosticActivityState(labelCount: model.draft?.copies,
+                                pendingCount: queue.pendingCount, completedCount: queue.completedCount,
+                                failedCount: queue.failedCount, uncertainCount: queue.uncertainCount,
+                                succeeded: prepared))
+                    }
+                    .font(.subheadline).buttonStyle(.plain)
+                    .disabled(model.draft == nil || model.preparing || queue.isPrinting || printing.isBusy || !queue.isLoaded
+                              || (!model.hasPreparedQueue && printer.isReadingRoll)
+                              || (queue.entries.contains { $0.state != .completed } && !model.hasPreparedQueue))
+                    .accessibilityIdentifier("customLabels.prepare")
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(model.draft == nil || model.preparing || queue.isPrinting || !queue.isLoaded
-                          || (!model.hasPreparedQueue && printer.isReadingRoll)
-                          || (!queue.entries.isEmpty && !model.hasPreparedQueue))
-                .accessibilityIdentifier("customLabels.prepare")
+                Button("Print \(model.draft?.copies ?? 0) Labels") { startPrinting() }
+                    .buttonStyle(.borderedProminent).controlSize(.large).frame(maxWidth: .infinity)
+                    .disabled(model.draft == nil || model.preparing || queue.isPrinting || printing.isBusy || !queue.isLoaded
+                              || printer.isReadingRoll || !printing.printerReady(printer)
+                              || (model.hasPreparedQueue ? !queue.canStart : queue.entries.contains { $0.state != .completed }))
+                    .accessibilityIdentifier("customLabels.print")
             }.padding(16).background(.bar)
         }
         .toolbar {
@@ -160,6 +172,7 @@ import SwiftUI
             }
         }
         .onAppear {
+            if !printing.usesFixturePrinter { printer.startPriceTagsConnection() }
             model.paperSize = paperPreferences.size
             model.pricePosition = paperPreferences.pricePosition
             DiagnosticLog.shared.activity(.screen, screen: .customLabels, state: activityState)
@@ -174,18 +187,31 @@ import SwiftUI
             DiagnosticLog.shared.activity(.action, screen: .customLabels, action: .changeLayout)
             focused = nil
         }
-        .task(id: model.draft) {
+        .modifier(LabelDirectPrintPresentation(controller: printing, queue: queue, printer: printer,
+            onSuccess: { if let onPrintingCompleted { onPrintingCompleted() } else { dismiss() } },
+            onReview: { showingQueue = true }))
+        .task(id: model.artworkDraft) {
             bitmap = nil; previewDraft = nil; previewError = nil
-            guard let draft = model.draft else { return }
+            guard let draft = model.artworkDraft else { return }
             do {
                 try await Task.sleep(for: .milliseconds(120))
                 try Task.checkCancellation()
-                guard model.draft == draft else { return }
+                guard model.artworkDraft == draft else { return }
                 let raster = try model.previewRaster(for: draft)
                 bitmap = InventoryLabelBitmap(raster: raster,
                     previewImage: try InventoryLabelRenderer.image(raster: raster, paper: draft.paperSize))
                 previewDraft = draft
             } catch is CancellationError {} catch { previewError = error.localizedDescription }
         }
+    }
+
+    private func startPrinting() {
+        guard !printing.isBusy,
+              printing.printerReady(printer), !printer.isReadingRoll else { return }
+        focused = nil
+        model.paperSize = paperPreferences.size; model.pricePosition = paperPreferences.pricePosition
+        DiagnosticLog.shared.activity(.action, screen: .customLabels, action: .printLabels, state: activityState)
+        guard model.prepare() else { return }
+        if !printing.start(queue: queue, printer: printer) { showingQueue = true }
     }
 }

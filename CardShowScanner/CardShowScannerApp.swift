@@ -6,6 +6,7 @@ import SwiftData
     private let startupError: String?
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("diagnosticsEnabled") private var diagnosticsEnabled = true
+    @State private var sceneDiagnostics = AppSceneDiagnostics()
     init() {
         DiagnosticLog.shared.record("app.launch", [
             "app_version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
@@ -19,9 +20,9 @@ import SwiftData
     var body: some Scene {
         WindowGroup {
             rootView
-                .onAppear { updateHealthMonitoring() }
-                .onChange(of: scenePhase) { _, _ in updateHealthMonitoring() }
-                .onChange(of: diagnosticsEnabled) { _, _ in updateHealthMonitoring() }
+                .onAppear { sceneDiagnostics.record(scenePhase); updateHealthMonitoring() }
+                .onChange(of: scenePhase) { _, phase in sceneDiagnostics.record(phase); updateHealthMonitoring() }
+                .onChange(of: diagnosticsEnabled) { _, _ in sceneDiagnostics.record(scenePhase); updateHealthMonitoring() }
         }
     }
 
@@ -75,6 +76,28 @@ import SwiftData
     @ViewBuilder private var standardView: some View {
         if let container { HomeView().modelContainer(container) }
         else { StorageFailureView(message: startupError ?? "Unknown storage error") }
+    }
+}
+
+/// The app root sees settings, printing and other screens too. Repeated view
+/// appearances cannot masquerade as new application lifecycle transitions.
+@MainActor final class AppSceneDiagnostics {
+    private let log: DiagnosticLog
+    private var lastPhase: ScenePhase?
+
+    init(log: DiagnosticLog = .shared) { self.log = log }
+
+    func record(_ phase: ScenePhase) {
+        guard log.enabled, phase != lastPhase else { return }
+        let value: String
+        switch phase {
+        case .active: value = "active"
+        case .inactive: value = "inactive"
+        case .background: value = "background"
+        @unknown default: value = "unknown"
+        }
+        lastPhase = phase
+        log.record("app.scene", ["phase": value])
     }
 }
 

@@ -43,6 +43,9 @@ import Observation
         fetchPrice(forceRefresh: false)
     }
 
+    /// Ordinary confirmation uses the shared daily cache; explicit Refresh
+    /// asks the provider to validate a newer quote.
+    func loadInitialPrice() { fetchPrice(forceRefresh: false) }
     func refreshPrice() { fetchPrice(forceRefresh: true) }
     func pricingSourceChanged() { fetchPrice(forceRefresh: true) }
 

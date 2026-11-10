@@ -11,6 +11,15 @@ import Observation
     private(set) var activityLoading = false
     private(set) var publicMessage: String?
     private(set) var activityMessage: String?
+    private(set) var activityFailure: OpportunitiesFailure?
+
+    var activityNeedsConnection: Bool {
+        guard let activityFailure else { return false }
+        switch activityFailure {
+        case .notConfigured, .directNotConfigured, .authorizationRequired, .directAuthorizationRequired, .accessDenied: return true
+        default: return false
+        }
+    }
 
     private let publicPricing: any MarketPricing
     private let opportunities: any OpportunitiesProviding
@@ -57,7 +66,7 @@ import Observation
 
     func refreshActivity(forceRefresh: Bool = true) {
         cancelActivity()
-        activityDetails = nil; activityMessage = nil; activityLoading = true
+        activityDetails = nil; activityMessage = nil; activityFailure = nil; activityLoading = true
         let requestedCard = card, requestID = activityRequestID
         DiagnosticLog.shared.record("market_details.activity_started", ["phase": "opportunities"])
         activityLookup = Task { [weak self, opportunities] in
@@ -70,6 +79,7 @@ import Observation
             } catch {
                 guard let self, !Task.isCancelled, self.activityRequestID == requestID else { return }
                 self.activityLoading = false; self.activityLookup = nil
+                self.activityFailure = error as? OpportunitiesFailure
                 self.activityMessage = (error as? OpportunitiesFailure)?.errorDescription
                     ?? "Market activity could not connect. Check your connection and retry."
                 DiagnosticLog.shared.record("market_details.activity_failed", ServiceDiagnosticFields.failure(error)
@@ -81,7 +91,7 @@ import Observation
     func changeCard(_ card: CardCandidate, refresh: Bool = true) {
         cancel()
         self.card = card
-        publicDetails = nil; activityDetails = nil; publicMessage = nil; activityMessage = nil
+        publicDetails = nil; activityDetails = nil; publicMessage = nil; activityMessage = nil; activityFailure = nil
         if refresh { self.refresh(forceRefresh: false) }
     }
 

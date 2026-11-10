@@ -26,6 +26,7 @@ struct ResearchClient: ResearchProviding {
         try Task.checkCancellation()
         guard Self.validBaseURL(baseURL) else { throw ResearchFailure.notConfigured }
         guard let category = OpenAPIMarketPricing.categoryID(card.identity.game),
+              BetaAPIGameSupport.contains(category),
               let productText = OpenAPIMarketPricing.productID(card.identity.productID),
               let product = Int(productText), product > 0 else { throw ResearchFailure.unsupportedCard }
         guard let group = try await resolver.setID(for: card), group > 0 else { throw ResearchFailure.catalogUnavailable }

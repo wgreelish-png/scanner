@@ -2,6 +2,13 @@ import XCTest
 @testable import CardShowScanner
 
 @MainActor final class DirectResearchTests: XCTestCase {
+    func testConfiguredResearchRejectsUnsupportedBetaGameBeforeReadingConnection() async throws {
+        do {
+            _ = try await ConfiguredResearchProvider().research(for: card(game: "Riftbound"), forceRefresh: false)
+            XCTFail("Unsupported Beta coverage must not ask for credentials")
+        } catch { XCTAssertEqual(error as? ResearchFailure, .unsupportedCard) }
+    }
+
     private let credentials = DirectResearchCredentials(shipperID: "fixture-shipper", apiKey: "fixture-api-key")
     private let instant = Date(timeIntervalSince1970: 1_790_000_000)
 
@@ -84,6 +91,26 @@ import XCTest
         do { try await unsafe.testConnection(); XCTFail("Unsafe credentials") }
         catch { XCTAssertEqual(error as? ResearchFailure, .directNotConfigured) }
         let requests = await loader.requests; XCTAssertTrue(requests.isEmpty)
+    }
+
+    func testKnownPublicCatalogGamesOutsideBetaCoverageFailBeforeResolutionOrHTTP() async throws {
+        for (game, category) in [("Riftbound", 89), ("One Piece", 68), ("Pokémon Japan", 85)] {
+            XCTAssertEqual(OpenAPIMarketPricing.categoryID(game), category, "This must exercise a known catalog game")
+            for usesCadence in [false, true] {
+                let loader = DirectLoader([]), resolver = UnsupportedResearchResolver()
+                let client = DirectResearchClient(credentials: credentials, resolver: resolver, loader: loader,
+                    cache: DirectResearchSetCache(), cadence: usesCadence ? BetaAPICadence() : nil)
+                for force in [false, true] {
+                    do {
+                        _ = try await client.research(for: card(game: game), forceRefresh: force)
+                        XCTFail("Unsupported Beta coverage must fail explicitly")
+                    } catch { XCTAssertEqual(error as? ResearchFailure, .unsupportedCard, game) }
+                }
+                let requests = await loader.requests, resolutions = await resolver.calls
+                XCTAssertTrue(requests.isEmpty, "Unsupported games must not request metadata or shards")
+                XCTAssertEqual(resolutions, 0, "Do not load an unsupported game's catalog set")
+            }
+        }
     }
 
     func testDirectAuthCoverageSchemaIdentityAndRedirectFailuresStayExplicit() async throws {
@@ -384,6 +411,10 @@ private struct DirectResolver: OpenAPISetResolving {
     let group: Int?
     init(_ group: Int?) { self.group = group }
     func setID(for card: CardCandidate) async throws -> Int? { group }
+}
+private actor UnsupportedResearchResolver: OpenAPISetResolving {
+    private(set) var calls = 0
+    func setID(for card: CardCandidate) async throws -> Int? { calls += 1; return 1430 }
 }
 private actor DirectLoader: ResearchHTTPDataLoading {
     struct Reply: Sendable {

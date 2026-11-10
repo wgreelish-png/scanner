@@ -2,6 +2,14 @@ import XCTest
 @testable import CardShowScanner
 
 @MainActor final class OpportunitiesTests: XCTestCase {
+    func testConfiguredActivityRejectsUnsupportedBetaGameBeforeReadingConnection() async throws {
+        var selected = card(); selected.identity.game = "Riftbound"
+        do {
+            _ = try await ConfiguredOpportunitiesProvider().opportunities(for: selected, forceRefresh: false)
+            XCTFail("Unsupported Beta coverage must not ask for credentials")
+        } catch { XCTAssertEqual(error as? OpportunitiesFailure, .unsupportedCard) }
+    }
+
     private let credentials = DirectResearchCredentials(shipperID: "fixture-shipper", apiKey: "fixture-api-key")
     private let instant = Date(timeIntervalSince1970: 1_790_000_000)
 
@@ -381,6 +389,27 @@ import XCTest
         let requests = await loader.requests; XCTAssertTrue(requests.isEmpty)
     }
 
+    func testKnownGamesOutsideBetaCoverageAreUnsupportedRatherThanMisconfigured() async throws {
+        for (game, category) in [("Riftbound", 89), ("One Piece", 68), ("Pokémon Japan", 85)] {
+            XCTAssertEqual(OpenAPIMarketPricing.categoryID(game), category, "Public pricing coverage remains independent")
+            for usesCadence in [false, true] {
+                let loader = OpportunitiesLoader([]), resolver = UnsupportedActivityResolver()
+                let client = DirectOpportunitiesClient(credentials: credentials, resolver: resolver, loader: loader,
+                    cache: OpportunitiesSetCache(), cadence: usesCadence ? BetaAPICadence() : nil)
+                var selected = card(); selected.identity.game = game
+                for force in [false, true] {
+                    do {
+                        _ = try await client.opportunities(for: selected, forceRefresh: force)
+                        XCTFail("Unsupported Beta coverage must fail explicitly")
+                    } catch { XCTAssertEqual(error as? OpportunitiesFailure, .unsupportedCard, game) }
+                }
+                let requests = await loader.requests, resolutions = await resolver.calls
+                XCTAssertTrue(requests.isEmpty, "No metadata, shard request or credential retry can add coverage")
+                XCTAssertEqual(resolutions, 0)
+            }
+        }
+    }
+
     func testServerUsesOnlyOriginBoundDeviceTokenAndNormalizesSameExactSKU() async throws {
         let token = String(repeating: "d", count: 32), loader = OpportunitiesLoader([.init(data: try fixture(normalized: true))])
         let client = OpportunitiesClient(baseURL: URL(string: "https://server.example")!, token: token,
@@ -491,6 +520,10 @@ private struct OpportunitiesResolver: OpenAPISetResolving {
     let group: Int?
     init(_ group: Int?) { self.group = group }
     func setID(for card: CardCandidate) async throws -> Int? { group }
+}
+private actor UnsupportedActivityResolver: OpenAPISetResolving {
+    private(set) var calls = 0
+    func setID(for card: CardCandidate) async throws -> Int? { calls += 1; return 1430 }
 }
 
 private final class OpportunitiesClock: @unchecked Sendable {

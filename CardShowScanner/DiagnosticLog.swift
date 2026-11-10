@@ -29,6 +29,7 @@ enum DiagnosticActivityAction: String, CaseIterable, Sendable {
     case previewLabel, finish, recordTransaction, confirmTransaction, addCards, removeCard
     case save, saved, failed, saveSucceeded, saveFailed, undoTransaction, openHistory, changeQuantity, markIssue
     case copyDiagnostics, exportDiagnostics, clearDiagnostics
+    case refreshMissingPrices
 }
 
 enum DiagnosticActivityBlockReason: String, CaseIterable, Sendable {

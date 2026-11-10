@@ -8,6 +8,10 @@ protocol OpportunitiesProviding: Sendable {
 struct ConfiguredOpportunitiesProvider: OpportunitiesProviding {
     func opportunities(for card: CardCandidate, forceRefresh: Bool) async throws -> OpportunitiesDetails {
         try Task.checkCancellation()
+        guard let category = OpenAPIMarketPricing.categoryID(card.identity.game),
+              BetaAPIGameSupport.contains(category), OpenAPIMarketPricing.productID(card.identity.productID) != nil else {
+            throw OpportunitiesFailure.unsupportedCard
+        }
         let store = ResearchConnectionStore()
         let method = try ResearchAccessMethod.selected(store: store)
         await ServiceDiagnosticFields.record("opportunities.provider_selected", method: method, phase: .setup)
@@ -157,6 +161,7 @@ private struct OpportunitiesRequestIdentity: Sendable {
     static func resolve(_ card: CardCandidate, using resolver: any OpenAPISetResolving) async throws -> Self {
         guard card.requiresPrintingSelection != true,
               let category = OpenAPIMarketPricing.categoryID(card.identity.game),
+              BetaAPIGameSupport.contains(category),
               let product = OpenAPIMarketPricing.productID(card.identity.productID).flatMap(Int.init), product > 0,
               (1...250).contains(card.identity.printing.count), !OpportunitiesIdentity.normalized(card.identity.printing).isEmpty,
               OpportunitiesIdentity.language(card.identity.language) != nil,

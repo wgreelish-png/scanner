@@ -4,6 +4,11 @@ import CryptoKit
 
 enum BetaAPIFamily: String, Sendable { case opportunities, research }
 
+/// Beta Research/Opps coverage is narrower than public Open API pricing.
+enum BetaAPIGameSupport {
+    static func contains(_ category: Int) -> Bool { [1, 2, 3].contains(category) }
+}
+
 enum BetaAPICadenceFailure: Error, Equatable, Sendable {
     case invalidRequest, invalidResponse, unsupportedIndex, responseTooLarge, networkUnavailable, httpStatus(Int)
 }
@@ -221,7 +226,7 @@ actor BetaAPICadence {
     func setInfo(family: BetaAPIFamily, category: Int, group: Int, forceRefresh: Bool = false,
                  credentials: DirectResearchCredentials, loader: any ResearchHTTPDataLoading) async throws -> BetaAPISetInfo {
         try Task.checkCancellation()
-        guard TCGGameRegistry.isProductCategory(category), group > 0 else { throw BetaAPICadenceFailure.invalidRequest }
+        guard BetaAPIGameSupport.contains(category), group > 0 else { throw BetaAPICadenceFailure.invalidRequest }
         let key = Self.account(for: credentials) + ":" + family.rawValue
         if forceRefresh { unsupportedIndices[key] = nil }
         else if let rejectedAt = unsupportedIndices[key] {

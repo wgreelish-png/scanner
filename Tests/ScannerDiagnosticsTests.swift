@@ -1,8 +1,33 @@
 import XCTest
 import UniformTypeIdentifiers
+import SwiftUI
 @testable import CardShowScanner
 
 @MainActor final class ScannerDiagnosticsTests: XCTestCase {
+    func testAppRootSceneTransitionsAreDeduplicatedAndRespectRecordingOptOut() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = "AppRootSceneDiagnostics." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "diagnosticsEnabled")
+        let log = DiagnosticLog(directory: directory, defaults: defaults)
+        let scene = AppSceneDiagnostics(log: log)
+        scene.record(.active); scene.record(.active)
+        scene.record(.inactive); scene.record(.inactive)
+        scene.record(.background); scene.record(.background)
+        defaults.set(false, forKey: "diagnosticsEnabled")
+        scene.record(.active)
+        defaults.set(true, forKey: "diagnosticsEnabled")
+        scene.record(.active); scene.record(.active)
+        let file = try log.exportForCopy()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let rows = try diagnosticRows(String(contentsOf: file, encoding: .utf8)).filter { $0["event"] as? String == "app.scene" }
+        XCTAssertEqual(rows.compactMap { ($0["fields"] as? [String: String])?["phase"] },
+            ["active", "inactive", "background", "active"])
+        XCTAssertTrue(rows.allSatisfy { ($0["fields"] as? [String: String])?.count == 1 })
+    }
+
     func testFileForCopyIncludesEnvironmentAndSanitizedEvents() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

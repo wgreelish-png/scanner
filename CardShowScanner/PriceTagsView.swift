@@ -30,6 +30,7 @@ import SwiftUI
         InventoryGameFilter.filtered(store.inventory, game: gamePreferences.selectedGame)
     }
     private var available: [ShowInventoryItem] { gameInventory.filter { $0.quantity > 0 } }
+    private var outstandingQueueCount: Int { queue.entries.filter { $0.state != .completed }.count }
     private var changedIDs: Set<UUID> {
         InventoryLabelBatch.selectedIDs(mode: .priceChanged, inventory: gameInventory,
             store: approvals)
@@ -89,10 +90,11 @@ import SwiftUI
                         HStack {
                             Label("Saved Print Queue", systemImage: "tray.full")
                             Spacer()
-                            Text(queue.isLoaded ? queue.entries.count.formatted() : "Needs attention")
+                            Text(queue.isLoaded ? outstandingQueueCount.formatted() : "Needs attention")
                                 .foregroundStyle(.secondary)
                         }
-                    }.accessibilityIdentifier("priceTags.queue")
+                    }.accessibilityValue(queue.isLoaded ? outstandingQueueCount.formatted() : "Needs attention")
+                        .accessibilityIdentifier("priceTags.queue")
                     Divider().padding(.vertical, 14)
                     Button {
                         DiagnosticLog.shared.activity(.action, screen: .priceTags, action: .openPrinterSettings, state: activityState)

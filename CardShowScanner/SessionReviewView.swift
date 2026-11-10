@@ -10,13 +10,13 @@ struct SessionReviewView: View {
 
 private struct OfferMetricCard: View {
     let title: String
-    let amount: Decimal
+    let amount: Decimal?
     let caption: String
     var accent: Color = .primary
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
-            Text(amount.money).font(.title2.bold()).monospacedDigit().foregroundStyle(accent)
+            Text(amount?.money ?? "Unavailable").font(.title2.bold()).monospacedDigit().foregroundStyle(accent)
                 .fixedSize(horizontal: false, vertical: true)
             Text(caption).font(.caption).foregroundStyle(.secondary)
         }.frame(maxWidth: .infinity, alignment: .leading).padding(14)
@@ -36,13 +36,13 @@ struct OfferBreakdownView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Collector's Cards").font(.headline)
-            OfferMetricCard(title: "Market Value", amount: totals.market,
-                            caption: "\(totals.quantity) cards • known market value")
+            OfferMetricCard(title: "Market Value", amount: OfferValuePresentation.amount(totals.market, totals: totals),
+                            caption: OfferValuePresentation.marketCaption(totals))
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), alignment: .top), count: dynamicTypeSize.isAccessibilitySize ? 1 : 2), alignment: .leading, spacing: 12) {
-                OfferMetricCard(title: "Trade Credit", amount: totals.trade,
+                OfferMetricCard(title: "Trade Credit", amount: OfferValuePresentation.amount(totals.trade, totals: totals),
                                 caption: "\(CSVExportService.number(rates.trade))% base rate", accent: .blue)
                 OfferMetricCard(title: transactionMode == .cashOnly ? "Cash Offer" : "Cash Value",
-                                amount: cashTotal,
+                                amount: OfferValuePresentation.amount(cashTotal, totals: totals, hasExplicitValue: customCashOffer != nil),
                                 caption: usesCustomCash ? "Custom whole-list amount" : "\(CSVExportService.number(rates.cash))% base rate", accent: .green)
             }
             if let customCashOffer, customCashOffer != cashTotal {
@@ -55,15 +55,16 @@ struct OfferBreakdownView: View {
             }
             DisclosureGroup("Offer details") {
                 VStack(alignment: .leading, spacing: 10) {
-                    LabeledContent("Calculated cash", value: totals.cash.money)
-                    LabeledContent("Cash valuation used", value: cashTotal.money)
+                    LabeledContent("Calculated cash", value: OfferValuePresentation.text(totals.cash, totals: totals))
+                    LabeledContent("Cash valuation used", value: OfferValuePresentation.text(cashTotal, totals: totals,
+                        hasExplicitValue: customCashOffer != nil))
                     if let customCashOffer {
                         LabeledContent("Custom cash offer", value: customCashOffer.money)
                         LabeledContent(customCashOffer >= totals.cash ? "Above calculated cash" : "Below calculated cash",
                                        value: abs(customCashOffer - totals.cash).money)
                     }
-                    LabeledContent("Maximum buy (\(CSVExportService.number(rates.maximum))%)", value: totals.maximum.money)
-                    LabeledContent("Market minus cash offer", value: (totals.market - cashTotal).money)
+                    LabeledContent("Maximum buy (\(CSVExportService.number(rates.maximum))%)", value: OfferValuePresentation.text(totals.maximum, totals: totals))
+                    LabeledContent("Market minus cash offer", value: OfferValuePresentation.text(totals.market - cashTotal, totals: totals))
                     Text(customCashOffer == nil
                          ? "Base rates and per-card overrides determine calculated offers."
                          : "Base rates and per-card overrides determine calculated offers. This saved custom cash amount supplied the full-list cash value and the payout for unused trade value.")
@@ -85,6 +86,10 @@ private struct TradeTransactionSummary: View {
     private var hasHistoricalCashBasis: Bool {
         transaction.cashValuation == nil && transaction.mode != .cashOnly && customCashOffer != nil
     }
+    private var hasExplicitCashValue: Bool {
+        customCashOffer != nil && (transaction.mode == .cashOnly || transaction.cashValuation != nil)
+    }
+    private var needsMarketPrices: Bool { OfferValuePresentation.hasOnlyUnpriced(totals) && !hasExplicitCashValue }
     private func percentage(_ amount: Decimal) -> String {
         guard let percent = TradeTransactionCalculator.effectivePercentage(valuation: amount, market: totals.market,
                                                                            unpricedQuantity: totals.unpricedQuantity) else { return "Not available" }
@@ -117,8 +122,10 @@ private struct TradeTransactionSummary: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(transaction.mode.title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            Label(title, systemImage: symbol).font(.headline).foregroundStyle(accent)
-            Text(transaction.finalAmount.money).font(.largeTitle.bold()).monospacedDigit()
+            Label(needsMarketPrices ? "Estimate unavailable" : title, systemImage: needsMarketPrices ? "questionmark.circle" : symbol)
+                .font(.headline).foregroundStyle(accent)
+            Text(OfferValuePresentation.text(transaction.finalAmount, totals: totals, hasExplicitValue: hasExplicitCashValue))
+                .font(.largeTitle.bold()).monospacedDigit()
                 .fixedSize(horizontal: false, vertical: true).foregroundStyle(accent)
             if transaction.mode != .cashOnly {
                 if let price = transaction.myCardPrice { LabeledContent("Your Card", value: price.money) }
@@ -132,7 +139,7 @@ private struct TradeTransactionSummary: View {
             }
             DisclosureGroup("Transaction math") {
                 VStack(alignment: .leading, spacing: 10) {
-                    LabeledContent("Market value", value: totals.market.money)
+                    LabeledContent("Market value", value: OfferValuePresentation.text(totals.market, totals: totals))
                     if transaction.mode != .cashOnly {
                         LabeledContent("Trade percentage · base", value: CSVExportService.number(rates.trade) + "%")
                         LabeledContent("Trade percentage · applied", value: percentage(totals.trade))
@@ -419,9 +426,12 @@ struct SavedOffersView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(estimate.savedAt, format: .dateTime)
                         if let transaction = estimate.tradeTransaction {
-                            Text("\(transaction.mode.title) • \(transaction.finalAmount.money)").font(.subheadline.weight(.semibold))
+                            let explicitCash = estimate.customCashOffer != nil && (transaction.mode == .cashOnly || transaction.cashValuation != nil)
+                            Text("\(transaction.mode.title) • \(OfferValuePresentation.text(transaction.finalAmount, totals: estimate.totals, hasExplicitValue: explicitCash))")
+                                .font(.subheadline.weight(.semibold))
                         }
-                        Text("\(estimate.totals.quantity) cards • \(estimate.selectedCashOffer.money) cash • \(estimate.totals.trade.money) trade").font(.caption).foregroundStyle(.secondary)
+                        Text("\(estimate.totals.quantity) cards • \(OfferValuePresentation.text(estimate.selectedCashOffer, totals: estimate.totals, hasExplicitValue: estimate.customCashOffer != nil)) cash • \(OfferValuePresentation.text(estimate.totals.trade, totals: estimate.totals)) trade")
+                            .font(.caption).foregroundStyle(.secondary)
                         if estimate.customCashOffer != nil { Text("Custom cash offer").font(.caption).foregroundStyle(.secondary) }
                     }
                 }

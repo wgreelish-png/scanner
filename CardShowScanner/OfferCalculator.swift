@@ -103,3 +103,65 @@ enum CustomOfferAmount {
         return amount
     }
 }
+
+/// New per-copy USD overrides must also be accepted by transaction checkout.
+/// An untouched legacy value stays byte-for-byte intact when another field is edited.
+enum OfferOverrideInput {
+    static func parse(_ text: String) -> Decimal? { CustomOfferAmount.parse(text) }
+
+    static func isValidEdit(_ text: String, preserving original: String?) -> Bool {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty || unchangedLegacy(text, original: original) || parse(text) != nil
+    }
+
+    static func storedText(_ text: String, preserving original: String?) -> String? {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        if unchangedLegacy(text, original: original) { return original }
+        return parse(text).map { NSDecimalNumber(decimal: $0).stringValue }
+    }
+
+    private static func unchangedLegacy(_ text: String, original: String?) -> Bool {
+        guard let original else { return false }
+        let saved = original.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text == saved && MoneyInput.parse(saved) != nil
+    }
+}
+
+enum OfferOverrideFeedback {
+    static func badge(hasOverrides: Bool, marketPrice: Decimal?) -> String? {
+        guard hasOverrides else { return nil }
+        return hasKnownPrice(marketPrice) ? "Applied" : "Not included"
+    }
+
+    static func explanation(hasOverrides: Bool, marketPrice: Decimal?) -> String? {
+        guard hasOverrides, !hasKnownPrice(marketPrice) else { return nil }
+        return "Offer overrides are not included until this card has a market price. Your entered amounts are kept."
+    }
+
+    private static func hasKnownPrice(_ price: Decimal?) -> Bool {
+        price.map { !$0.isNaN && $0 >= 0 } ?? false
+    }
+}
+
+/// Display missing market-based valuations without changing any calculation or
+/// historical inputs. An explicit full-list amount remains known independently.
+enum OfferValuePresentation {
+    static func hasOnlyUnpriced(_ totals: OfferTotals) -> Bool {
+        totals.quantity > 0 && totals.unpricedQuantity >= totals.quantity
+    }
+
+    static func amount(_ amount: Decimal, totals: OfferTotals, hasExplicitValue: Bool = false) -> Decimal? {
+        hasOnlyUnpriced(totals) && !hasExplicitValue ? nil : amount
+    }
+
+    static func text(_ amount: Decimal, totals: OfferTotals, hasExplicitValue: Bool = false) -> String {
+        self.amount(amount, totals: totals, hasExplicitValue: hasExplicitValue)?.money ?? "Unavailable"
+    }
+
+    static func marketCaption(_ totals: OfferTotals) -> String {
+        if hasOnlyUnpriced(totals) { return "\(totals.quantity) cards • prices unavailable" }
+        if totals.unpricedQuantity > 0 { return "\(totals.quantity - totals.unpricedQuantity) of \(totals.quantity) cards priced" }
+        return "\(totals.quantity) cards • known market value"
+    }
+}

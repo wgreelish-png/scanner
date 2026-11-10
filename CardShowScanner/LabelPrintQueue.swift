@@ -283,7 +283,8 @@ private struct LabelQueueFile: Codable {
 
     /// Only an explicit user action calls this method. Failure pauses the whole
     /// batch; neither reconnecting nor retrying selected entries starts it.
-    func start(using printer: any LabelPrinterSending) async {
+    func start(using printer: any LabelPrinterSending,
+               onStarted: (@MainActor (UUID) -> Void)? = nil) async {
         lastRunCompletedSuccessfully = false
         guard canStart, !Task.isCancelled else { return }
         let requestedIDs = Set(entries.filter { $0.state == .pending }.map(\.id))
@@ -307,6 +308,7 @@ private struct LabelQueueFile: Codable {
             stopRequested = false
             if clearUnprintedOnExit { try? clearIfUnprinted() }
         }
+        onStarted?(sessionID)
 
         if let validator = printer as? any LabelStockValidating {
             let papers = entries.filter { $0.state == .pending }.map(\.paperSize)
@@ -599,7 +601,8 @@ private struct LabelQueueFile: Codable {
         }
     }
 
-    func stop(using printer: any LabelPrinterSending) {
+    func stop(using printer: any LabelPrinterSending, runID: UUID? = nil) {
+        if let runID, activeSessionID != runID { return }
         guard isPrinting, !stopRequested else { return }
         stopRequested = true
         // The active transport owns the in-flight result; a passed-in stale

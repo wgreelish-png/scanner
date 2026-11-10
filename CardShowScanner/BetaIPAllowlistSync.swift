@@ -42,6 +42,7 @@ struct BetaAllowlistSyncResult: Equatable, Sendable {
     @Published private(set) var status = "The current public IP is checked while the app is open."
     @Published private(set) var busy = false
     @Published private(set) var needsSignIn = false
+    @Published private(set) var isCoolingPaused = false
     @Published private(set) var lastIP: String?
     @Published private(set) var lastCheckedAt: Date?
 
@@ -49,6 +50,7 @@ struct BetaAllowlistSyncResult: Equatable, Sendable {
     private let defaults: UserDefaults
     private let configuration: @MainActor () -> Configuration
     private let now: @MainActor () -> Date
+    private let thermalState: @MainActor () -> ProcessInfo.ThermalState
     private let wait: @MainActor (Duration) async throws -> Void
     private let automaticPolling: Bool
     private var foreground = false
@@ -59,16 +61,29 @@ struct BetaAllowlistSyncResult: Equatable, Sendable {
     private var generation = UUID()
     private var debounceGeneration = UUID()
     private var pollingGeneration = UUID()
+    private var thermalObserver: NSObjectProtocol?
+    private var authenticationMessage = "Sign in to TCGTracking to update your allowed IP automatically."
 
     init(runner: any BetaAllowlistSyncRunning, defaults: UserDefaults = .standard,
          configuration: @escaping @MainActor () -> Configuration,
          now: @escaping @MainActor () -> Date = { .now },
+         thermalState: @escaping @MainActor () -> ProcessInfo.ThermalState = { ProcessInfo.processInfo.thermalState },
          automaticPolling: Bool = true,
          wait: @escaping @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.runner = runner; self.defaults = defaults; self.configuration = configuration
-        self.now = now; self.automaticPolling = automaticPolling; self.wait = wait
+        self.now = now; self.thermalState = thermalState; self.automaticPolling = automaticPolling; self.wait = wait
         enabled = defaults.object(forKey: Self.enabledKey) as? Bool ?? true
         if !enabled { status = "Automatic IP updates are off." }
+        isCoolingPaused = Self.requiresCooling(thermalState())
+        thermalObserver = NotificationCenter.default.addObserver(
+            forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.thermalStateChanged() }
+        }
+    }
+
+    deinit {
+        if let thermalObserver { NotificationCenter.default.removeObserver(thermalObserver) }
     }
 
     func setEnabled(_ value: Bool) {
@@ -87,11 +102,12 @@ struct BetaAllowlistSyncResult: Equatable, Sendable {
     /// NWPath changes are hints, not public IP measurements. Retire the old
     /// result immediately and let the new route settle before opening the page.
     func networkChanged() {
-        guard canRun else { return }
+        guard connectionEligible else { return }
         cancelWork(); cancelDebounce()
         lastIP = nil; lastCheckedAt = nil
-        status = "Network changed. Checking the new public IP…"
         policy.resetForForeground()
+        guard canRun else { reconsider(); return }
+        status = "Network changed. Checking the new public IP…"
         let id = UUID(); debounceGeneration = id
         let delay = wait
         debounce = Task { [weak self] in
@@ -106,7 +122,25 @@ struct BetaAllowlistSyncResult: Equatable, Sendable {
     /// Explicit checks may bypass a recent success, but not server retry delays.
     func checkNow() {
         guard work == nil else { return }
-        cancelDebounce(); policy.resetForForeground()
+        guard connectionEligible, !Self.requiresCooling(thermalState()) else { reconsider(); return }
+        cancelDebounce()
+        if needsSignIn {
+            // An explicit retry is the only path besides an authentication
+            // change that may retry a known sign-in failure immediately.
+            needsSignIn = false
+            policy = BetaAllowlistSyncPolicy()
+        } else { policy.resetForForeground() }
+        reconsider()
+    }
+
+    /// Optional website work pauses while the device cools. Notifications wake
+    /// recovery; there is no extra timer and no paused polling loop.
+    func thermalStateChanged() {
+        let cooling = Self.requiresCooling(thermalState())
+        guard cooling != isCoolingPaused else { return }
+        isCoolingPaused = cooling
+        if !cooling { policy.resetForForeground() }
+        DiagnosticLog.shared.record("beta_allowlist.thermal_changed", ["reason": cooling ? "cooling" : "resumed"])
         reconsider()
     }
 
@@ -132,9 +166,17 @@ struct BetaAllowlistSyncResult: Equatable, Sendable {
         if let work { await work.value }
     }
 
-    private var canRun: Bool { foreground && enabled && configuration() == .direct }
+    private var connectionEligible: Bool { foreground && enabled && configuration() == .direct }
+    private var canRun: Bool {
+        connectionEligible && !needsSignIn && !Self.requiresCooling(thermalState())
+    }
+
+    private static func requiresCooling(_ state: ProcessInfo.ThermalState) -> Bool {
+        state == .serious || state == .critical
+    }
 
     private func reconsider() {
+        isCoolingPaused = Self.requiresCooling(thermalState())
         guard enabled else {
             cancelAll(); status = "Automatic IP updates are off."; return
         }
@@ -149,6 +191,14 @@ struct BetaAllowlistSyncResult: Equatable, Sendable {
         case .unavailable:
             cancelAll(); status = "API connection settings could not be read. Unlock this iPhone and retry."; return
         case .direct: break
+        }
+        guard !needsSignIn else {
+            cancelAll(); status = authenticationMessage + " Automatic checks are paused until sign-in changes or you tap Check IP Now."
+            return
+        }
+        guard !isCoolingPaused else {
+            cancelAll(); status = "IP checks are paused while this iPhone cools. Direct API requests remain available."
+            return
         }
         checkIfDue(); ensurePolling()
     }
@@ -198,11 +248,13 @@ struct BetaAllowlistSyncResult: Equatable, Sendable {
         case .signInRequired:
             policy.recordFailure(at: current)
             needsSignIn = true
-            status = "Sign in to TCGTracking to update your allowed IP automatically."
+            authenticationMessage = "Sign in to TCGTracking to update your allowed IP automatically."
+            status = authenticationMessage + " Automatic checks are paused until sign-in changes or you tap Check IP Now."
         case .accountMismatch:
             policy.recordFailure(at: current)
             needsSignIn = true
-            status = "Sign in to the TCGTracking account that matches your saved Beta Shipper ID. The allowlist was not changed."
+            authenticationMessage = "Sign in to the TCGTracking account that matches your saved Beta Shipper ID. The allowlist was not changed."
+            status = authenticationMessage + " Automatic checks are paused until sign-in changes or you tap Check IP Now."
         case .pageChanged:
             policy.recordFailure(at: current)
             status = "The website’s IP settings could not be verified. IP access is unconfirmed."
@@ -219,6 +271,7 @@ struct BetaAllowlistSyncResult: Equatable, Sendable {
             policy.recordFailure(at: current, retryAfterSeconds: result.retryAfterSeconds)
             status = "The IP check could not finish. It will retry while the app is open."
         }
+        if needsSignIn { cancelDebounce(); cancelPolling() }
         DiagnosticLog.shared.record("beta_allowlist.check_finished", ["reason": result.status.rawValue])
     }
 
@@ -231,6 +284,7 @@ struct BetaAllowlistSyncResult: Equatable, Sendable {
                 // Start the next minute after completion rather than racing an
                 // in-flight check at the edge of its minimum interval.
                 if let work = self?.work { await work.value }
+                guard !Task.isCancelled, self?.canRun == true, self?.pollingGeneration == id else { return }
                 do { try await delay(.seconds(BetaAllowlistSyncPolicy.checkInterval)) } catch { return }
                 guard let self, !Task.isCancelled, self.canRun, self.pollingGeneration == id else { return }
                 self.checkIfDue()

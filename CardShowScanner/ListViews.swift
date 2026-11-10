@@ -347,16 +347,47 @@ struct ListDeletionConfirmationView: View {
     @State private var confirmingOwnedInventory = false
     @State private var showingWorkingInventory = false
     @State private var ownedInventoryMessage: String?
+    @State private var missingPrices: MissingListPricesModel
+    @State private var showingMissingPriceStatus = false
 
     init(list: CardList, session: ScanSession? = nil,
          onContinueScanning: (() -> Void)? = nil, transactionEditing: Bool = false,
-         transactionStore: ShowBudgetStore = .shared) {
+         transactionStore: ShowBudgetStore = .shared, missingPricesModel: MissingListPricesModel? = nil) {
         self.list = list; self.session = session
         self.onContinueScanning = onContinueScanning; self.transactionEditing = transactionEditing
         _transactionStore = State(initialValue: transactionStore)
+        _missingPrices = State(initialValue: missingPricesModel ?? MissingListPricesModel())
     }
     private var inventoryTransaction: ShowTransactionReceipt? { transactionStore.transaction(forListID: list.id) }
     private var reviewSession: ScanSession? { session ?? sessions.first { $0.listID == list.id } }
+    private var missingPriceStatus: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                if missingPrices.isRunning {
+                    Text("Checking \(missingPrices.completed) of \(missingPrices.total) entries")
+                        .font(.caption.weight(.semibold))
+                        .accessibilityIdentifier("list.priceRefresh.progress")
+                    ProgressView(value: missingPrices.progress).accessibilityLabel("Refreshing missing prices")
+                } else {
+                    Text(missingPrices.summary ?? "No missing prices to refresh.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("list.priceRefresh.status")
+                    if let error = missingPrices.error {
+                        Text(error).font(.caption).foregroundStyle(.orange)
+                            .accessibilityIdentifier("list.priceRefresh.error")
+                    }
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            if missingPrices.isRunning {
+                Button("Cancel") { missingPrices.cancel() }
+                    .accessibilityIdentifier("list.priceRefresh.cancel")
+            } else {
+                Button { showingMissingPriceStatus = false } label: { Image(systemName: "xmark.circle") }
+                    .accessibilityLabel("Dismiss price refresh summary")
+                    .accessibilityIdentifier("list.priceRefresh.dismiss")
+            }
+        }.padding(.horizontal, 16).padding(.vertical, 10).background(.bar)
+    }
     var filtered: [InventoryCard] {
         list.orderedCards.filter { search.isEmpty || [$0.snapshot.name, $0.snapshot.set, $0.snapshot.number, $0.snapshot.identity.productID].contains { $0.localizedCaseInsensitiveContains(search) } }
             .sorted {
@@ -373,7 +404,12 @@ struct ListDeletionConfirmationView: View {
             else { offerSection }
         }.navigationTitle(reviewSession == nil ? list.name : "Review & Offer")
             .scrollDismissesKeyboard(.interactively)
-            .safeAreaInset(edge: .top) { reviewSummary }
+            .safeAreaInset(edge: .top) {
+                VStack(spacing: 0) {
+                    reviewSummary
+                    if showingMissingPriceStatus { missingPriceStatus }
+                }
+            }
             .safeAreaInset(edge: .bottom) { reviewActions }
             .onChange(of: reviewSection) { _, _ in
                 DiagnosticLog.shared.activity(.action, screen: .listReview, action: .changeSection,
@@ -389,13 +425,17 @@ struct ListDeletionConfirmationView: View {
             }
             .onDisappear {
                 DiagnosticLog.shared.activity(.exit, screen: .listReview, state: .init(cardCount: list.quantity))
+                missingPrices.cancel()
                 isVisible = false
             }
             .onChange(of: list.quantity) { _, count in
                 guard isVisible else { return }
                 DiagnosticLog.shared.activity(.state, screen: .listReview, state: .init(cardCount: count))
             }
-            .onChange(of: scenePhase) { _, phase in if isVisible && phase == .active { synchronizeBudgetOutcomes() } }
+            .onChange(of: scenePhase) { _, phase in
+                if isVisible && phase == .active { synchronizeBudgetOutcomes() }
+                if phase == .background { missingPrices.cancel() }
+            }
             .confirmationDialog("Continue this list?", isPresented: $confirmContinue) {
                 Button("Continue Scanning") {
                     guard reviewDestination == nil else { return }
@@ -446,6 +486,16 @@ struct ListDeletionConfirmationView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         if !list.isCardShowInventory { Button("Rename") { name = list.name; rename = true } }
+                        if !list.isCardShowInventory {
+                            Button("Refresh Missing Prices", systemImage: "arrow.clockwise") {
+                                endListSearchEditing()
+                                showingMissingPriceStatus = true
+                                DiagnosticLog.shared.activity(.action, screen: .listReview, action: .refreshMissingPrices,
+                                    state: .init(cardCount: list.quantity))
+                                _ = missingPrices.start(list: list, context: context)
+                            }.disabled(missingPrices.isRunning || list.unpricedQuantity == 0)
+                                .accessibilityIdentifier("list.refreshMissingPrices")
+                        }
                         Button("Export CSV to Files", systemImage: "square.and.arrow.up") { exportCSV() }
                             .disabled(list.cards.isEmpty || exporting || shareURL != nil).accessibilityIdentifier("list.exportCSV")
                         Button("Share CSV", systemImage: "paperplane") { share() }
@@ -556,7 +606,9 @@ struct ListDeletionConfirmationView: View {
                     Text("\(item.snapshot.identity.printing) • \(item.snapshot.identity.condition) • \(item.snapshot.identity.language)").font(.caption)
                     Text("Qty \(item.quantity) • \(item.snapshot.marketPrice.map { ($0 * Decimal(item.quantity)).money } ?? "Price unavailable")")
                     if item.cashOverrideText != nil || item.tradeOverrideText != nil || item.maximumOverrideText != nil {
-                        Text("Per-copy offer overrides applied").font(.caption).foregroundStyle(.secondary)
+                        Text(OfferOverrideFeedback.badge(hasOverrides: true, marketPrice: item.snapshot.marketPrice) == "Applied"
+                             ? "Per-copy offer overrides applied" : "Offer overrides saved · excluded while unpriced")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                     }.foregroundStyle(.primary).frame(maxWidth: .infinity, alignment: .leading)
                 }.frame(maxWidth: .infinity, minHeight: 74, alignment: .leading)
@@ -578,11 +630,11 @@ struct ListDeletionConfirmationView: View {
                     showsContinueAction: false)
                     .buttonStyle(.borderless)
             } else {
-                LabeledContent("Known market subtotal", value: list.knownValue.money)
+                LabeledContent("Known market subtotal", value: OfferValuePresentation.text(list.knownValue, totals: currentOfferTotals))
                 if list.unpricedQuantity > 0 {
                     Text("Partial valuation: \(list.unpricedQuantity) copies have no price.").foregroundStyle(.orange)
                 }
-                LabeledContent("Calculated cash offer", value: currentOfferTotals.cash.money)
+                LabeledContent("Calculated cash offer", value: OfferValuePresentation.text(currentOfferTotals.cash, totals: currentOfferTotals))
                 if !transactionEditing { listOutcomeActions(totals: currentOfferTotals, transaction: nil) }
                 if !list.isCardShowInventory {
                     Picker("Game for continued scanning", selection: $continueGame) {
@@ -937,9 +989,20 @@ struct CardEditorView: View {
     }
 
     private var hasOfferOverrides: Bool { !cashOverride.isEmpty || !tradeOverride.isEmpty || !maximumOverride.isEmpty }
+    private var overrideInputs: [(String, String?)] {
+        [(cashOverride, item.cashOverrideText), (tradeOverride, item.tradeOverrideText), (maximumOverride, item.maximumOverrideText)]
+    }
+    private var overridesValid: Bool {
+        overrideInputs.allSatisfy { OfferOverrideInput.isValidEdit($0.0, preserving: $0.1) }
+    }
+    private var hasLegacyOverridePrecision: Bool {
+        overrideInputs.contains { text, original in
+            !text.isEmpty && text == original && MoneyInput.parse(text) != nil && OfferOverrideInput.parse(text) == nil
+        }
+    }
     private var activityState: DiagnosticActivityState {
-        .init(isPreparing: saving, canProceed: !pricing.priceLoading && !saving,
-              blockReason: saving ? .saving : (pricing.priceLoading ? .preparing : .ready), cardCount: quantity)
+        .init(isPreparing: saving, canProceed: !pricing.priceLoading && !saving && overridesValid,
+              blockReason: saving ? .saving : (pricing.priceLoading ? .preparing : (overridesValid ? .ready : .invalidInput)), cardCount: quantity)
     }
     var body: some View {
         Form {
@@ -1000,7 +1063,7 @@ struct CardEditorView: View {
                 }.disabled(saving).accessibilityIdentifier("cardEditor.cancel")
             }
             ToolbarItem(placement: .confirmationAction) {
-                Button("Save") { save() }.disabled(pricing.priceLoading || saving)
+                Button("Save") { save() }.disabled(pricing.priceLoading || saving || !overridesValid)
                     .accessibilityIdentifier("cardEditor.save")
             }
             if focusedField != nil {
@@ -1107,11 +1170,25 @@ struct CardEditorView: View {
                 TextField("Maximum buy", text: $maximumOverride).keyboardType(.decimalPad).focused($focusedField, equals: .maximum)
                     .accessibilityIdentifier("cardEditor.maximumOverride")
                 Text("USD per card. Leave blank to use session rates.").font(.caption).foregroundStyle(.secondary)
+                if let explanation = OfferOverrideFeedback.explanation(hasOverrides: hasOfferOverrides, marketPrice: pricing.card.marketPrice) {
+                    Text(explanation).font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("cardEditor.overrideStatus")
+                }
+                if !overridesValid {
+                    Text("Use nonnegative USD amounts with at most two decimal places, or leave blank.")
+                        .font(.caption).foregroundStyle(.orange)
+                        .accessibilityIdentifier("cardEditor.overrideValidation")
+                } else if hasLegacyOverridePrecision {
+                    Text("A saved override uses fractions of a cent. Change it to at most two decimal places before recording a transaction.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
             } label: {
                 HStack {
                     Text("Offer overrides")
                     Spacer()
-                    if hasOfferOverrides { Text("Applied").font(.caption).foregroundStyle(.indigo) }
+                    if let badge = OfferOverrideFeedback.badge(hasOverrides: hasOfferOverrides, marketPrice: pricing.card.marketPrice) {
+                        Text(badge).font(.caption).foregroundStyle(.indigo)
+                    }
                 }
             }.accessibilityIdentifier("cardEditor.offerOverrides")
         }
@@ -1150,12 +1227,12 @@ struct CardEditorView: View {
         guard text.isEmpty || (text.range(of: #"^[0-9]+(?:\.[0-9]{1,6})?$"#, options: .regularExpression) != nil && parsed != nil && parsed! >= 0) else {
             error = "Enter a nonnegative USD price or leave it blank."; return
         }
-        guard [cashOverride, tradeOverride, maximumOverride].allSatisfy({ $0.isEmpty || MoneyInput.parse($0) != nil }) else {
-            error = "Offer overrides must be nonnegative USD amounts or blank."; return
+        guard overridesValid else {
+            error = "Offer overrides must be nonnegative USD amounts with at most two decimal places, or blank."; return
         }
-        let cashText = cashOverride.isEmpty ? nil : CSVExportService.number(MoneyInput.parse(cashOverride))
-        let tradeText = tradeOverride.isEmpty ? nil : CSVExportService.number(MoneyInput.parse(tradeOverride))
-        let maximumText = maximumOverride.isEmpty ? nil : CSVExportService.number(MoneyInput.parse(maximumOverride))
+        let cashText = OfferOverrideInput.storedText(cashOverride, preserving: item.cashOverrideText)
+        let tradeText = OfferOverrideInput.storedText(tradeOverride, preserving: item.tradeOverrideText)
+        let maximumText = OfferOverrideInput.storedText(maximumOverride, preserving: item.maximumOverrideText)
         saving = true
         defer { saving = false }
         do {

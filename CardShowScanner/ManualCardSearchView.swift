@@ -231,7 +231,7 @@ private struct ManualCardConfirmationView: View {
                 }
                 .task {
                     guard !hasRequestedPrice else { return }
-                    hasRequestedPrice = true; model.pricing.refreshPrice()
+                    hasRequestedPrice = true; model.pricing.loadInitialPrice()
                 }
                 .onDisappear {
                     DiagnosticLog.shared.activity(.exit, screen: .manualConfirmation, state: activityState)

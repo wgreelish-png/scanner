@@ -1,6 +1,24 @@
 import XCTest
 
 @MainActor final class ReviewPresentationUITests: XCTestCase {
+    func testMissingPricesRefreshUpdatesUnknownCardAndPreservesKnownZero() async throws {
+        continueAfterFailure = false
+        let app = launch(arguments: ["--uitest-missing-prices"])
+        defer { app.terminate() }
+        _ = UITestInteraction.tapToolbar(app.buttons["list.options"], in: app)
+        _ = UITestInteraction.tap(app.buttons["list.refreshMissingPrices"], in: app)
+        let summary = app.staticTexts["list.priceRefresh.status"]
+        XCTAssertTrue(summary.waitForExistence(timeout: 8))
+        XCTAssertTrue(summary.label.contains("Updated 1 of 1 entries"))
+        XCTAssertTrue(summary.label.contains("0 still have no price"))
+        XCTAssertEqual(app.staticTexts["list.quantity"].label, "2 cards")
+        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "list.card."))
+        XCTAssertTrue(rows.allElementsBoundByIndex.contains { $0.label.contains("Synthetic card 1") && $0.label.contains("$17") })
+        XCTAssertTrue(rows.allElementsBoundByIndex.contains { $0.label.contains("Synthetic card 2") && $0.label.contains("$0") })
+        _ = UITestInteraction.tapToolbar(app.buttons["list.options"], in: app)
+        XCTAssertFalse(app.buttons["list.refreshMissingPrices"].isEnabled)
+    }
+
     func testSuccessfulManualAddClosesBothSheetsAndCommitsOneRow() async throws {
         continueAfterFailure = false
         let app = launchManualAdd()
