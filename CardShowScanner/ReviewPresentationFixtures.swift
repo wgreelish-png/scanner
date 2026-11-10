@@ -44,6 +44,70 @@ import SwiftData
     }
 }
 
+/// Exercises both manual-add sheets against the real save path without network.
+@MainActor struct ManualCardAddFixtureScreen: View {
+    @State private var fixture = ManualCardAddFixtureStore()
+    @State private var showingSearch = false
+    @State private var savedRows = 0
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Text("Cards: \(fixture.list.quantity)").accessibilityIdentifier("manualAdd.quantity")
+                Text("Saved rows: \(savedRows)").accessibilityIdentifier("manualAdd.savedRows")
+                Button("Search & Add") { showingSearch = true }
+                    .accessibilityIdentifier("manualAdd.open")
+                ForEach(fixture.list.orderedCards) { row in
+                    Text(row.snapshot.name).accessibilityIdentifier("manualAdd.card")
+                }
+            }.navigationTitle("Manual Add Fixture")
+                .sheet(isPresented: $showingSearch) {
+                    ManualCardSearchView(list: fixture.list, game: "Pokémon", allowsGameChange: false,
+                        catalog: ManualAddFixtureCatalog(), pricing: ManualAddFixturePricing())
+                }
+                .onChange(of: showingSearch) { _, presented in
+                    if !presented { savedRows = fixture.savedRowCount() }
+                }
+        }.modelContainer(fixture.container)
+    }
+}
+
+@MainActor private final class ManualCardAddFixtureStore {
+    let container: ModelContainer
+    let list: CardList
+
+    init() {
+        container = try! ModelContainer(for: CardList.self, InventoryCard.self, ScanSession.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        container.mainContext.autosaveEnabled = false
+        list = CardList(name: "Manual add fixture")
+        container.mainContext.insert(list)
+        try! container.mainContext.save()
+    }
+
+    func savedRowCount() -> Int {
+        // A fresh context verifies that Add committed, rather than only appending
+        // an unsaved row to the relationship visible in the presenting screen.
+        (try? ModelContext(container).fetchCount(FetchDescriptor<InventoryCard>())) ?? -1
+    }
+}
+
+private struct ManualAddFixtureCatalog: CardCatalogSearching {
+    func search(_ query: String, game: String, limit: Int) async throws -> [CardCandidate] {
+        try Task.checkCancellation()
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+        return [CardCandidate(identity: CardIdentity(game: "Pokémon", productID: "mock:manual-add:1", printing: "Normal"),
+            name: "Synthetic manual card", set: "Synthetic test set", number: "1", confidence: 100, printings: ["Normal"])]
+    }
+}
+
+private struct ManualAddFixturePricing: MarketPricing {
+    func quote(for card: CardCandidate) async throws -> MarketQuote? {
+        try Task.checkCancellation()
+        return MarketQuote(marketPrice: 12, skuID: "manual-add-1")
+    }
+}
+
 /// Exercises the scanner's recent-card drawer without camera or timer races.
 @MainActor struct ScannerRecentCardsFixtureScreen: View {
     @State private var fixture = ScannerRecentCardsFixtureStore()

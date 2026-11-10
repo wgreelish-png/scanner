@@ -258,6 +258,37 @@ class UIRunnerFlowTests(unittest.TestCase):
         for target in navigation_targets:
             self.assertRegex(navigation_source, r"\bfunc\s+" + target.rsplit("/", 1)[1] + r"\s*\(")
 
+    def test_log_review_job_uses_only_its_focused_native_and_ui_selections(self):
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/ios.yml").read_text()
+        job_blocks = dict(re.findall(r"(?ms)^  (\w+):\n(.*?)(?=^  \w+:\n|\Z)", workflow.split("\njobs:\n", 1)[1]))
+        expected = {
+            "native": tuple("CardShowScannerTests/" + name for name in (
+                "ManualCardSearchTests", "OpenAPIMarketPricingTests", "TCGGameRegistryTests", "TCGGamePricingTests",
+                "CardEditorPricingTests", "ScannerPageRecoveryTests", "ScannerManualSearchLifecycleTests",
+                "NiimbotRollReadCoordinatorTests", "ScannerDiagnosticsTests")),
+            "ui": tuple("CardShowScannerUITests/ReviewPresentationUITests/" + name for name in (
+                "testSuccessfulManualAddClosesBothSheetsAndCommitsOneRow",
+                "testCancellingManualConfirmationKeepsSearchAndDoesNotSave"))
+        }
+        for name, block in job_blocks.items():
+            self.assertEqual("inputs.job_scope == 'log_review'" in block.splitlines()[0], name in expected)
+        for name, targets in expected.items():
+            with self.subTest(job=name):
+                block = job_blocks[name]
+                self.assertIn("SCANNER_TEST_SCOPE: ${{ inputs.job_scope == 'log_review' && 'log_review' || inputs.test_scope || 'all' }}", block)
+                branch = re.search(r'elif \[ "\$SCANNER_TEST_SCOPE" = log_review \]; then\n'
+                                   r'(.*?)(?=\n          (?:elif|else|fi)\b)', block, re.DOTALL)
+                self.assertIsNotNone(branch)
+                self.assertEqual(branch.group(1).replace("\\\n", " ").split(),
+                                 ["bash", "scripts/run_ios_tests.sh", *targets])
+                result, commands, _ = self.run_flow(target=targets[0], additional_targets=targets[1:])
+                self.assertEqual(result.returncode, 0, result.stderr)
+                test = next(row["args"] for row in commands if row["tool"] == "xcodebuild"
+                            and row["args"][0] in ("test", "test-without-building"))
+                self.assertEqual([arg for arg in test if arg.startswith("-only-testing:")],
+                                 ["-only-testing:" + target for target in targets])
+
     def test_readiness_timeout_reports_bounded_progress_and_nonzero_status(self):
         failure = subprocess.TimeoutExpired(["xcrun", "simctl", "bootstatus"], 300,
                                             output=b"Waiting for DataMigrator")

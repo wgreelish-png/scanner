@@ -270,7 +270,7 @@ import AudioToolbox
             } catch {
                 guard let self, !Task.isCancelled, self.priceRequestID == requestID else { return }
                 self.priceLoading = false
-                DiagnosticLog.shared.failure("pricing.failed", error)
+                DiagnosticLog.shared.record("pricing.failed", ServiceDiagnosticFields.failure(error))
                 self.priceMessage = (error as? MarketPricingFailure)?.errorDescription
                     ?? (error as? OpenAPIPricingFailure)?.errorDescription
                     ?? "Price unavailable. You can still add the card."

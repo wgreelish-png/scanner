@@ -45,6 +45,8 @@ import SwiftData
             CardShowInventoryFixtureScreen()
         } else if ProcessInfo.processInfo.arguments.contains("--uitest-streamlined-review") {
             ReviewPresentationFixtureScreen()
+        } else if ProcessInfo.processInfo.arguments.contains("--uitest-manual-add") {
+            ManualCardAddFixtureScreen()
         } else if ProcessInfo.processInfo.arguments.contains("--uitest-scanner-recents") {
             ScannerRecentCardsFixtureScreen()
         } else if ProcessInfo.processInfo.arguments.contains("--uitest-persistent-navigation") {

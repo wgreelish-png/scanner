@@ -11,18 +11,22 @@ struct ManualCardSearchView: View {
     let allowsGameChange: Bool
     let draft: ScanBatchDraft?
     let focusSearchOnAppear: Bool
+    private let pricing: any MarketPricing
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var model: ManualCardSearchModel
     @State private var selection: ManualSearchSelection?
-    @State private var lastAdded: String?
+    @State private var didAddCard = false
     @State private var isVisible = false
     @FocusState private var searchFocused: Bool
     init(list: CardList, game: String, allowsGameChange: Bool, draft: ScanBatchDraft? = nil,
-         focusSearchOnAppear: Bool = false) {
+         focusSearchOnAppear: Bool = false,
+         catalog: any CardCatalogSearching = CachedCardCatalog.shared,
+         pricing: any MarketPricing = StandardMarketPricing()) {
         self.list = list; self.allowsGameChange = allowsGameChange; self.draft = draft
         self.focusSearchOnAppear = focusSearchOnAppear
-        _model = State(initialValue: ManualCardSearchModel(game: TCGGameRegistry.scannerKey(for: game) != nil ? game : "Pokémon"))
+        self.pricing = pricing
+        _model = State(initialValue: ManualCardSearchModel(game: TCGGameRegistry.scannerKey(for: game) != nil ? game : "Pokémon", catalog: catalog))
     }
     var body: some View {
         NavigationStack {
@@ -39,7 +43,6 @@ struct ManualCardSearchView: View {
                         .accessibilityIdentifier("catalog.query")
                     Text("Search saved \(model.game) cards. Add a number or set to narrow the five closest matches.")
                         .font(.caption).foregroundStyle(.secondary)
-                    if let lastAdded { Label("Added \(lastAdded)", systemImage: "checkmark.circle.fill").font(.subheadline).foregroundStyle(.green) }
                 }
                 if model.isSearching {
                     ProgressView(model.query.isEmpty ? "Opening saved catalog…" : "Searching…")
@@ -69,7 +72,7 @@ struct ManualCardSearchView: View {
                 .scrollDismissesKeyboard(.interactively)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Done") { isVisible = false; searchFocused = false; dismiss() }
+                        Button("Done") { closeSearch() }
                     }
                     ToolbarItemGroup(placement: .keyboard) {
                         Spacer()
@@ -79,10 +82,13 @@ struct ManualCardSearchView: View {
                     }
                 }
                 .sheet(item: $selection, onDismiss: {
-                    if focusSearchOnAppear, isVisible, selection == nil { searchFocused = true }
+                    // Finish the confirmation's dismissal before closing its
+                    // presenter. The scanner resumes only after this sheet ends.
+                    if didAddCard { closeSearch() }
+                    else if focusSearchOnAppear, isVisible, selection == nil { searchFocused = true }
                 }) { selected in
-                    ManualCardConfirmationView(card: selected.card, list: list, draft: draft) { card in
-                        lastAdded = card.name; selection = nil
+                    ManualCardConfirmationView(card: selected.card, list: list, draft: draft, pricing: pricing) { _ in
+                        didAddCard = true; searchFocused = false; selection = nil
                     }
                 }
                 .onAppear { isVisible = true }
@@ -97,6 +103,10 @@ struct ManualCardSearchView: View {
                 }
                 .onDisappear { isVisible = false; searchFocused = false; model.cancel() }
         }
+    }
+    private func closeSearch() {
+        isVisible = false; searchFocused = false; model.cancel()
+        dismiss()
     }
 }
 
@@ -141,8 +151,10 @@ private struct ManualCardConfirmationView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var model: ManualCardAddModel
     @State private var hasRequestedPrice = false
-    init(card: CardCandidate, list: CardList, draft: ScanBatchDraft?, onAdded: @escaping (CardCandidate) -> Void) {
-        self.list = list; self.draft = draft; self.onAdded = onAdded; _model = State(initialValue: ManualCardAddModel(card: card))
+    init(card: CardCandidate, list: CardList, draft: ScanBatchDraft?, pricing: any MarketPricing,
+         onAdded: @escaping (CardCandidate) -> Void) {
+        self.list = list; self.draft = draft; self.onAdded = onAdded
+        _model = State(initialValue: ManualCardAddModel(card: card, pricing: pricing))
     }
     private var validPrinting: Bool {
         model.pricing.card.printings.isEmpty || model.pricing.card.printings.contains(model.pricing.card.identity.printing)

@@ -15,6 +15,7 @@ on:
           - all
           - native
           - ui
+          - log_review
           - research_ui
           - evidence_ui
           - budget_ui
@@ -38,7 +39,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   native:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job_scope == 'all' || inputs.job_scope == 'native' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job_scope == 'all' || inputs.job_scope == 'native' || inputs.job_scope == 'log_review' }}
     runs-on: macos-15-intel
     timeout-minutes: 90
     steps:
@@ -55,7 +56,7 @@ jobs:
       - name: Build and run native regression tests
         id: native_tests
         env:
-          SCANNER_TEST_SCOPE: ${{ inputs.test_scope || 'all' }}
+          SCANNER_TEST_SCOPE: ${{ inputs.job_scope == 'log_review' && 'log_review' || inputs.test_scope || 'all' }}
         run: |
           if [ "$SCANNER_TEST_SCOPE" = printer_transport ] || [ "$SCANNER_TEST_SCOPE" = label_controls ]; then
             bash scripts/run_ios_tests.sh CardShowScannerTests/NiimbotProtocolTests CardShowScannerTests/ScannerDiagnosticsTests CardShowScannerTests/LabelPrintQueueTests CardShowScannerTests/NiimbotImageTransferPreferencesTests CardShowScannerTests/NiimbotRollReadCoordinatorTests CardShowScannerTests/NiimbotLabelCatalogTests CardShowScannerTests/NiimbotLabelProductResolverTests
@@ -78,6 +79,17 @@ jobs:
               CardShowScannerTests/ScannerPageRecoveryTests \
               CardShowScannerTests/DeviceHealthMonitorTests \
               CardShowScannerTests/DeviceHealthValuesTests
+          elif [ "$SCANNER_TEST_SCOPE" = log_review ]; then
+            bash scripts/run_ios_tests.sh \
+              CardShowScannerTests/ManualCardSearchTests \
+              CardShowScannerTests/OpenAPIMarketPricingTests \
+              CardShowScannerTests/TCGGameRegistryTests \
+              CardShowScannerTests/TCGGamePricingTests \
+              CardShowScannerTests/CardEditorPricingTests \
+              CardShowScannerTests/ScannerPageRecoveryTests \
+              CardShowScannerTests/ScannerManualSearchLifecycleTests \
+              CardShowScannerTests/NiimbotRollReadCoordinatorTests \
+              CardShowScannerTests/ScannerDiagnosticsTests
           else
             bash scripts/run_ios_tests.sh CardShowScannerTests
           fi
@@ -100,7 +112,7 @@ jobs:
             NativeTests.log
             NativeCrashSummary.log
   ui:
-    if: ${{ github.event_name != 'workflow_dispatch' || ((inputs.job_scope == 'all' || inputs.job_scope == 'ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'navigation_price') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || ((inputs.job_scope == 'all' || inputs.job_scope == 'ui' || inputs.job_scope == 'log_review') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'navigation_price') }}
     runs-on: macos-15-intel
     # The full selection can use 42 bounded six-minute cases, plus cold setup.
     timeout-minutes: 300
@@ -111,7 +123,7 @@ jobs:
       - name: Build and run UI regression tests
         id: ui_tests
         env:
-          SCANNER_TEST_SCOPE: ${{ inputs.test_scope || 'all' }}
+          SCANNER_TEST_SCOPE: ${{ inputs.job_scope == 'log_review' && 'log_review' || inputs.test_scope || 'all' }}
         run: |
           if [ "$SCANNER_TEST_SCOPE" = label_preview ]; then
             bash scripts/run_ios_tests.sh \
@@ -143,6 +155,10 @@ jobs:
               CardShowScannerUITests/InventoryLabelsUITests/testSingleCardDraftCancelPreservesInventoryAndBudget \
               CardShowScannerUITests/InventoryLabelsUITests/testInventoryPrintOrderSortsNumericPricesAndRemembersSelection \
               CardShowScannerUITests/InventoryLabelsUITests/testLeavingCustomAndBulkPrintQueuesClearsThemAndPreservesPreferences
+          elif [ "$SCANNER_TEST_SCOPE" = log_review ]; then
+            bash scripts/run_ios_tests.sh \
+              CardShowScannerUITests/ReviewPresentationUITests/testSuccessfulManualAddClosesBothSheetsAndCommitsOneRow \
+              CardShowScannerUITests/ReviewPresentationUITests/testCancellingManualConfirmationKeepsSearchAndDoesNotSave
           else
             bash scripts/run_ios_tests.sh CardShowScannerUITests
           fi

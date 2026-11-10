@@ -255,6 +255,13 @@ import XCTest
             catch { XCTAssertEqual(error as? OpenAPIPricingFailure, failure) }
         }
     }
+    func testNativeURLPolicyAllowsEveryRegisteredProductCategory() {
+        for category in TCGGameRegistry.entries {
+            let path = "/v1/\(category.id)/sets/123/skus"
+            XCTAssertTrue(NativeOpenAPIHTTPDataLoader.allows(URL(string: "https://openapi.tcgtracking.com" + path)), category.name)
+            XCTAssertTrue(NativeOpenAPIHTTPDataLoader.allows(URL(string: "https://openapi.tcgtracking.com:443" + path)), category.name)
+        }
+    }
     func testNativeURLPolicyRejectsCredentialsQueriesFragmentsAndOtherPaths() async {
         XCTAssertTrue(NativeOpenAPIHTTPDataLoader.allows(URL(string: "https://openapi.tcgtracking.com/v1/3/sets/1/skus")))
         XCTAssertTrue(NativeOpenAPIHTTPDataLoader.allows(URL(string: "https://openapi.tcgtracking.com/v1/products/512035")))
@@ -262,7 +269,13 @@ import XCTest
                     "https://user:secret@openapi.tcgtracking.com/v1/3/sets/1/skus", "https://openapi.tcgtracking.com/v1/3/sets/1/pricing",
                     "https://openapi.tcgtracking.com/v1/3/sets/1/skus?token=secret", "https://openapi.tcgtracking.com/v1/3/sets/1/skus#x",
                     "https://openapi.tcgtracking.com/v1/products/0", "https://openapi.tcgtracking.com/v1/products/512035/skus",
-                    "https://openapi.tcgtracking.com/v1/products/512035?token=secret", "https://openapi.tcgtracking.com/v1/products/512035#x"] {
+                    "https://openapi.tcgtracking.com/v1/products/512035?token=secret", "https://openapi.tcgtracking.com/v1/products/512035#x",
+                    "https://openapi.tcgtracking.com:444/v1/89/sets/1/skus", "https://user:secret@openapi.tcgtracking.com/v1/89/sets/1/skus",
+                    "https://openapi.tcgtracking.com/v1/89/sets/1/skus?token=secret", "https://openapi.tcgtracking.com/v1/89/sets/1/skus#x",
+                    "https://openapi.tcgtracking.com/v1/999999/sets/1/skus", "https://openapi.tcgtracking.com/v1/0/sets/1/skus",
+                    "https://openapi.tcgtracking.com/v1/089/sets/1/skus", "https://openapi.tcgtracking.com/v1/-89/sets/1/skus",
+                    "https://openapi.tcgtracking.com/v1/89/sets/0/skus", "https://openapi.tcgtracking.com/v1/89/sets/01/skus",
+                    "https://openapi.tcgtracking.com/v1/89/sets/1/skus/", "https://openapi.tcgtracking.com/v1/89/sets/1/pricing"] {
             XCTAssertFalse(NativeOpenAPIHTTPDataLoader.allows(URL(string: url)))
         }
     }

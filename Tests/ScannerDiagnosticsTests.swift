@@ -585,6 +585,36 @@ import UniformTypeIdentifiers
         XCTAssertNil(ServiceDiagnosticFields.failure(BetaAPICadenceFailure.httpStatus(600))["code"])
     }
 
+    func testPricingFailureDiagnosticsKeepReasonWithoutPrivateErrorContent() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = "PricingFailureDiagnostics." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let log = DiagnosticLog(directory: directory, defaults: defaults)
+        let cases: [(Error, [String: String])] = [
+            (OpenAPIPricingFailure.invalidResponse, ["domain": "openapi", "reason": "invalid_response"]),
+            (OpenAPIPricingFailure.catalogUnavailable, ["domain": "openapi", "reason": "catalog_mapping_missing"]),
+            (MarketPricingFailure.accessRejected(403), ["domain": "market", "reason": "access_rejected", "code": "403"]),
+            (URLError(.notConnectedToInternet, userInfo: [NSLocalizedDescriptionKey: "PRIVATE_NETWORK_DETAILS"]),
+             ["domain": "network", "reason": "transport_error", "code": "-1009"])
+        ]
+        for (error, fields) in cases {
+            log.record("pricing.failed", ServiceDiagnosticFields.failure(error))
+            var editor = ServiceDiagnosticFields.failure(error); editor["phase"] = "editor"
+            log.record("inventory.pricing_failed", editor)
+            XCTAssertEqual(ServiceDiagnosticFields.failure(error), fields)
+        }
+        let file = try log.exportForCopy()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let text = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertFalse(text.contains("PRIVATE_NETWORK_DETAILS"))
+        let rows = try diagnosticRows(text).filter { ["pricing.failed", "inventory.pricing_failed"].contains($0["event"] as? String ?? "") }
+        let expected = cases.flatMap { _, fields in [fields, fields.merging(["phase": "editor"]) { _, value in value }] }
+        XCTAssertEqual(rows.compactMap { $0["fields"] as? [String: String] }, expected)
+        XCTAssertNil(ServiceDiagnosticFields.failure(MarketPricingFailure.accessRejected(600))["code"])
+    }
+
     func testResearchDiagnosticExportKeepsMethodAndStatusWithoutCredentialContent() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

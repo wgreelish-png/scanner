@@ -13,6 +13,8 @@ Tap a preview to review its printing and condition. Every new selection starts a
 
 Only **Add to List** writes a card. Each confirmed physical copy becomes its own quantity-one row appended in scan order. Double taps cannot save twice. If saving fails, the selected card, printing and condition remain available for retry. Existing list/session identity and saved offers are retained. If adding to this list would finish another active session, the app asks before switching; it never opens the camera for manual entry.
 
+After a successful save, confirmation closes first, then Search & Add closes automatically. You return to the list or scanner that opened it, without another Done tap. Cancelling only the confirmation keeps your search; failed saves keep the confirmation available for retry. Returning to a scanner uses its existing warm-resume path.
+
 ## Data and performance
 
 Search reads the same native Application Support metadata as recognition. It follows the current game's committed manifest, reads only referenced metadata shards and supports legacy native v1 records. It never starts the camera, loads OpenCV, downloads another database or searches other games' cached metadata. Duplicate product references are combined while retaining printing choices. Missing/incomplete catalog data is visible and retryable; open the scanner once to download the game, or explicitly Check Database Updates to repair it.

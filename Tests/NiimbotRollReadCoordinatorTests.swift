@@ -210,6 +210,99 @@ import XCTest
         XCTAssertEqual(reader.freshness, .stale)
     }
 
+    func testSupersededAutomaticReadReleasesTheChannelBeforeOneRecoveryPublishesCurrentStock() async {
+        let reader = NiimbotRollReadCoordinator(), old = RollInfoReadGate(), current = RollInfoReadGate()
+        let obsolete = NiimbotRollInfo(productCode: "02242207", totalLabels: 84, usedLabels: 9, labelType: 1)
+        let replacement = NiimbotRollInfo(productCode: "120425109", totalLabels: 84, usedLabels: 10, labelType: 1)
+        var publications: [NiimbotRollInfo?] = []
+        var reads = 0, recoveries = 0
+        XCTAssertEqual(reader.refreshInfoIfNeeded(load: {
+            reads += 1
+            return try await old.read()
+        }, onUpdate: { publications.append($0) }, onSuperseded: {
+            recoveries += 1
+            XCTAssertFalse(reader.isReading, "Recovery must own a new single-flight read")
+            XCTAssertTrue(publications.isEmpty, "The superseded response must not restore obsolete stock")
+            XCTAssertEqual(reader.refreshInfoIfNeeded(load: {
+                reads += 1
+                return try await current.read()
+            }, onUpdate: { publications.append($0) }), .read)
+        }), .read)
+        await waitForInfoRead(old)
+        reader.markStale(); reader.markStale(); reader.markStale()
+        old.finish(obsolete)
+        await waitForInfoRead(current)
+        XCTAssertEqual(reads, 2); XCTAssertEqual(recoveries, 1)
+        XCTAssertTrue(reader.isReading); XCTAssertTrue(publications.isEmpty)
+        current.finish(replacement)
+        await reader.waitUntilIdle()
+        XCTAssertEqual(publications, [replacement]); XCTAssertEqual(reader.info, replacement)
+        XCTAssertEqual(reader.estimate?.remainingLabels, 74); XCTAssertEqual(reader.freshness, .fresh)
+        XCTAssertEqual(recoveries, 1)
+    }
+
+    func testRecoveryReadThatIsAlsoSupersededStopsWithoutPublishingOrPolling() async {
+        let reader = NiimbotRollReadCoordinator(), old = RollInfoReadGate(), recovery = RollInfoReadGate()
+        let info = NiimbotRollInfo(estimate: estimate())
+        var reads = 0, recoveries = 0, publications = 0
+        reader.refreshInfo(load: {
+            reads += 1
+            return try await old.read()
+        }, onUpdate: { _ in publications += 1 }, onSuperseded: {
+            recoveries += 1
+            // The printer omits recursive recovery for its replacement read.
+            XCTAssertTrue(reader.refreshInfo(load: {
+                reads += 1
+                return try await recovery.read()
+            }, onUpdate: { _ in publications += 1 }))
+        })
+        await waitForInfoRead(old)
+        reader.markStale()
+        old.finish(info)
+        await waitForInfoRead(recovery)
+        reader.markStale(); reader.markStale()
+        recovery.finish(info)
+        await reader.waitUntilIdle()
+        for _ in 0..<5 { await Task.yield() }
+        XCTAssertEqual(reads, 2); XCTAssertEqual(recoveries, 1); XCTAssertEqual(publications, 0)
+        XCTAssertNil(reader.info); XCTAssertFalse(reader.isReading)
+    }
+
+    func testCurrentSuccessfulMissingAndFailedReadsDoNotRequestSupersededRecovery() async {
+        let reader = NiimbotRollReadCoordinator()
+        let info = NiimbotRollInfo(estimate: estimate())
+        var updates: [NiimbotRollInfo?] = [], recoveries = 0
+        reader.refreshInfo(load: { info }, onUpdate: { updates.append($0) }, onSuperseded: { recoveries += 1 })
+        await reader.waitUntilIdle()
+        reader.refreshInfo(load: { nil }, onUpdate: { updates.append($0) }, onSuperseded: { recoveries += 1 })
+        await reader.waitUntilIdle()
+        reader.refreshInfo(load: { throw LabelPrinterIssue.responseTimeout },
+            onUpdate: { updates.append($0) }, onSuperseded: { recoveries += 1 })
+        await reader.waitUntilIdle()
+        XCTAssertEqual(updates, [info, nil, nil]); XCTAssertEqual(recoveries, 0)
+        XCTAssertNil(reader.info); XCTAssertEqual(reader.freshness, .unavailable)
+    }
+
+    func testResetSuppressesOldSupersededRecoveryWhileAReplacementConnectionIsReading() async {
+        let reader = NiimbotRollReadCoordinator(), old = RollInfoReadGate(), current = RollInfoReadGate()
+        let info = NiimbotRollInfo(estimate: estimate())
+        var recoveries = 0, publications: [NiimbotRollInfo?] = []
+        reader.refreshInfo(load: { try await old.read() }, onUpdate: { publications.append($0) },
+            onSuperseded: { recoveries += 1 })
+        await waitForInfoRead(old)
+        reader.markStale()
+        reader.reset()
+        reader.refreshInfo(load: { try await current.read() }, onUpdate: { publications.append($0) })
+        await waitForInfoRead(current)
+        old.finish(info)
+        for _ in 0..<5 { await Task.yield() }
+        XCTAssertEqual(recoveries, 0); XCTAssertTrue(publications.isEmpty)
+        XCTAssertTrue(reader.isReading); XCTAssertNil(reader.info)
+        current.finish(info)
+        await reader.waitUntilIdle()
+        XCTAssertEqual(publications, [info]); XCTAssertEqual(recoveries, 0)
+    }
+
     func testReconnectLateIdentityCannotPublishOverTheNewConnectionsProduct() async {
         let reader = NiimbotRollReadCoordinator(), old = RollInfoReadGate(), current = RollInfoReadGate()
         var published: [NiimbotRollInfo?] = []

@@ -173,6 +173,15 @@ enum ServiceDiagnosticFields {
         case opportunitiesMeta = "opportunities_meta", opportunitiesProduct = "opportunities_product"
     }
     static func failure(_ error: Error) -> [String: String] {
+        if let error = error as? MarketPricingFailure {
+            switch error {
+            case .accessRejected(let code):
+                var fields = ["domain": "market", "reason": "access_rejected"]
+                if (100...599).contains(code) { fields["code"] = String(code) }
+                return fields
+            case .publicPageUnavailable: return ["domain": "market", "reason": "public_page_unavailable"]
+            }
+        }
         if let error = error as? BetaAPIIndexValidationFailure { return error.diagnosticFields }
         if let error = error as? CardShowInventoryFailure {
             return ["domain": "inventory", "reason": error.diagnosticReason]

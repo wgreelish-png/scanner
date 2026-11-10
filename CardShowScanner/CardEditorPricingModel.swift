@@ -96,10 +96,10 @@ import Observation
                     ?? (error as? OpenAPIPricingFailure)?.errorDescription ?? (self.manualPriceAllowed
                     ? "Price unavailable. Retry Market Price or enter a price manually."
                     : "Price unavailable. Retry Market Price, or add this card without a market value.")
-                var fields = ["phase": "editor", "reason": "lookup_failed"]
-                if let failure = error as? MarketPricingFailure, case .accessRejected(let status) = failure {
+                var fields = ServiceDiagnosticFields.failure(error)
+                fields["phase"] = "editor"
+                if let failure = error as? MarketPricingFailure, case .accessRejected = failure {
                     self.priceConnectionRequired = true
-                    fields["reason"] = "access_rejected"; fields["code"] = String(status)
                 }
                 DiagnosticLog.shared.record("inventory.pricing_failed", fields)
             }
