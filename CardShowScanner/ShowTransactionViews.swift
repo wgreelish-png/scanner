@@ -109,6 +109,12 @@ import UIKit
 
     var body: some View {
         let evaluation = evaluatedPreview
+        let ready = canRecord(preview: evaluation.amounts, accounting: evaluation.accounting)
+        let activity = DiagnosticActivityState(selectedCount: outgoingQuantities.values.reduce(0, +),
+            isPreparing: isRecording, canProceed: ready,
+            blockReason: !store.isLoaded ? .unavailable : store.isSaving || isRecording ? .saving
+                : showNeedsSelection ? .notActive : ready ? .ready : .invalidInput,
+            cardCount: incoming.reduce(0) { $0 + $1.quantity })
         NavigationStack {
             Form {
                 if !contextualList || showNeedsSelection || !store.isLoaded { transactionSection }
@@ -135,7 +141,10 @@ import UIKit
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     if !selectingInventory && !editingIncomingList {
-                        Button("Cancel") { dismiss() }.accessibilityIdentifier("showTransaction.cancel")
+                        Button("Cancel") {
+                            DiagnosticLog.shared.activity(.action, screen: .transaction, action: .cancel, state: activity)
+                            dismiss()
+                        }.accessibilityIdentifier("showTransaction.cancel")
                     }
                 }
                 ToolbarItemGroup(placement: .keyboard) {
@@ -162,7 +171,12 @@ import UIKit
             .onChange(of: editingIncomingList) { previous, current in
                 if previous && !current { refreshIncomingAfterEdit() }
             }
-            .onAppear(perform: prepare)
+            .onAppear {
+                prepare()
+                DiagnosticLog.shared.activity(.screen, screen: .transaction, state: activity)
+            }
+            .onChange(of: activity) { _, state in DiagnosticLog.shared.activity(.state, screen: .transaction, state: state) }
+            .onDisappear { DiagnosticLog.shared.activity(.exit, screen: .transaction) }
             .onChange(of: incomingListID) { _, _ in loadIncoming() }
             .onChange(of: kind) { previous, next in
                 makeEven = false
@@ -475,6 +489,8 @@ import UIKit
     private func outgoingSection(_ accounting: ShowTransactionAccounting?) -> some View {
         Section {
             Button {
+                DiagnosticLog.shared.activity(.action, screen: .transaction, action: .addCards,
+                    state: .init(selectedCount: outgoingQuantities.values.reduce(0, +)))
                 endEditing(); selectingInventory = true
             } label: {
                 Label(selectedLines.isEmpty ? "Select Inventory Cards" : "Add Cards", systemImage: "shippingbox")
@@ -493,6 +509,8 @@ import UIKit
                                 Button("Remove", role: .destructive) {
                                     guard !isRecording else { return }
                                     endEditing(); outgoingQuantities.removeValue(forKey: line.inventoryID)
+                                    DiagnosticLog.shared.activity(.action, screen: .transaction, action: .removeCard,
+                                        state: .init(selectedCount: outgoingQuantities.values.reduce(0, +)))
                                 }.disabled(isRecording)
                                     .accessibilityIdentifier("showTransaction.remove." + line.inventoryID.uuidString)
                             }
@@ -816,14 +834,21 @@ import UIKit
     private func record() {
         focused = nil
         guard !isRecording, let showID else { return }
+        let activity = DiagnosticActivityState(selectedCount: outgoingQuantities.values.reduce(0, +),
+            cardCount: incoming.reduce(0) { $0 + $1.quantity })
+        DiagnosticLog.shared.activity(.action, screen: .transaction, action: .recordTransaction, state: activity)
         isRecording = true
         defer { isRecording = false }
         do {
             let draft = try preparedDraft()
             _ = try ShowTransactionListService.record(draft, showID: showID, context: context, store: store)
+            DiagnosticLog.shared.activity(.outcome, screen: .transaction, action: .saved, state: activity)
             onRecorded()
             dismiss()
-        } catch { self.error = error.localizedDescription }
+        } catch {
+            self.error = error.localizedDescription
+            DiagnosticLog.shared.activity(.outcome, screen: .transaction, action: .failed, state: activity)
+        }
     }
 
     private func hasLegacyOutcome(_ list: CardList) -> Bool {
@@ -1082,6 +1107,8 @@ import UIKit
             }
         }
         .navigationTitle("Transaction Receipt").navigationBarTitleDisplayMode(.inline)
+        .onAppear { DiagnosticLog.shared.activity(.screen, screen: .transactionDetail) }
+        .onDisappear { DiagnosticLog.shared.activity(.exit, screen: .transactionDetail) }
         .safeAreaInset(edge: .bottom) {
             if let receipt, receipt.reversedAt == nil {
                 VStack(spacing: 8) {
@@ -1258,13 +1285,18 @@ import UIKit
 
     private func undo() {
         guard !isUndoing else { return }
+        DiagnosticLog.shared.activity(.action, screen: .transactionDetail, action: .undoTransaction)
         isUndoing = true
         defer { isUndoing = false }
         do {
             try store.undoTransaction(transactionID)
             error = nil
             confirmingUndo = false
-        } catch { self.error = error.localizedDescription }
+            DiagnosticLog.shared.activity(.outcome, screen: .transactionDetail, action: .saved)
+        } catch {
+            self.error = error.localizedDescription
+            DiagnosticLog.shared.activity(.outcome, screen: .transactionDetail, action: .failed)
+        }
     }
 }
 

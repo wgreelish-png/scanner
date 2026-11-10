@@ -252,12 +252,23 @@ private struct ScannerDatabaseSettingsView: View {
     @State private var error: String?
     @State private var confirmClear = false
     @State private var copyNotice: String?
+    @State private var issueNotice: String?
 
     var body: some View {
         Form {
             Section {
                 Toggle("Record diagnostics", isOn: $diagnosticsEnabled).accessibilityIdentifier("settings.recordDiagnostics")
+                Button("Mark Recent Issue", systemImage: "flag") {
+                    issueNotice = DiagnosticLog.shared.markActivityIssue()
+                        ? "Issue marked. Copy or export the diagnostic log to share the recent activity."
+                        : "The issue could not be marked. Check diagnostic recording and storage."
+                }.disabled(!diagnosticsEnabled).accessibilityIdentifier("settings.markIssue")
+                if let issueNotice {
+                    Text(issueNotice).font(.footnote).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("settings.issueMarked")
+                }
                 Button("Copy Diagnostic Log", systemImage: "doc.on.doc") {
+                    DiagnosticLog.shared.activity(.action, screen: .diagnostics, action: .copyDiagnostics)
                     copyNotice = nil
                     do {
                         let file = try DiagnosticLog.shared.exportForCopy()
@@ -274,6 +285,7 @@ private struct ScannerDatabaseSettingsView: View {
                         .accessibilityIdentifier("settings.diagnosticsCopied")
                 }
                 Button("Export Diagnostic Log", systemImage: "square.and.arrow.up") {
+                    DiagnosticLog.shared.activity(.action, screen: .diagnostics, action: .exportDiagnostics)
                     do { diagnosticURL = try DiagnosticLog.shared.export() }
                     catch { self.error = "Could not export the diagnostic file: " + error.localizedDescription }
                 }.accessibilityIdentifier("settings.exportDiagnostics")
@@ -281,11 +293,14 @@ private struct ScannerDatabaseSettingsView: View {
                     Text("Diagnostics could not be written to local storage.").foregroundStyle(.orange)
                 }
             } footer: {
-                Text("Keeps about 512 KB of recent local events, including scanner timings, save errors, device heat and memory warnings. While the app is active, health summaries include app memory/CPU, battery state and responsiveness. Available iOS crash/hang report counts are included. Card contents, credentials, camera images and call stacks are excluded. Copy puts the diagnostic file on the clipboard; Export opens file sharing.")
+                Text("Keeps about 512 KB of recent local events, including screen changes, important actions, selection/queue counts, scanner timings, save errors, device heat and memory warnings. Older events rotate out. Mark Recent Issue flags the last recorded app activity; copy or export soon afterward to keep that context. Active health summaries include app memory/CPU, battery and responsiveness, plus available iOS crash/hang counts. Card contents, prices, search text, credentials, images and call stacks are excluded. This does not record your screen. Copy puts the diagnostic file on the clipboard; Export opens file sharing.")
             }
             printerTransferTuning
             Section {
-                Button("Clear Diagnostic Log", role: .destructive) { confirmClear = true }
+                Button("Clear Diagnostic Log", role: .destructive) {
+                    DiagnosticLog.shared.activity(.action, screen: .diagnostics, action: .clearDiagnostics)
+                    confirmClear = true
+                }
                     .accessibilityIdentifier("settings.clearDiagnostics")
             }
         }
@@ -295,11 +310,13 @@ private struct ScannerDatabaseSettingsView: View {
         }
         .confirmationDialog("Clear saved diagnostic events?", isPresented: $confirmClear) {
             Button("Clear Log", role: .destructive) {
-                do { try DiagnosticLog.shared.clear(); copyNotice = nil }
+                do { try DiagnosticLog.shared.clear(); copyNotice = nil; issueNotice = nil }
                 catch { self.error = error.localizedDescription }
             }
         }
         .failureAlert($error)
+        .onAppear { DiagnosticLog.shared.activity(.screen, screen: .diagnostics) }
+        .onDisappear { DiagnosticLog.shared.activity(.exit, screen: .diagnostics) }
     }
 
     private var printerTransferTuning: some View {

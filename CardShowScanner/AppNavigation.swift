@@ -43,6 +43,9 @@ struct HomeView: View {
         }
         .tint(.indigo)
         .toolbarBackground(.visible, for: .tabBar)
+        .onChange(of: section) { _, _ in
+            DiagnosticLog.shared.activity(.action, screen: activityScreen, action: .changeSection)
+        }
         .onAppear {
             BetaAllowlistForegroundObserver.shared.setForeground(scenePhase == .active)
             if scenePhase == .active { synchronizeBudgetOutcomes() }
@@ -52,6 +55,16 @@ struct HomeView: View {
             if phase == .active { synchronizeBudgetOutcomes() }
         }
         .onDisappear { BetaAllowlistForegroundObserver.shared.setForeground(false) }
+    }
+
+    private var activityScreen: DiagnosticActivityScreen {
+        switch section {
+        case .lists: .lists
+        case .scan: .scanHome
+        case .show: .showHome
+        case .research: .research
+        case .settings: .settings
+        }
     }
 
     private func synchronizeBudgetOutcomes() {
@@ -134,12 +147,14 @@ private struct ScanHomeView: View {
         .failureAlert($error)
         .onAppear {
             isVisible = true
+            DiagnosticLog.shared.activity(.screen, screen: .scanHome)
             ScannerDatabaseUpdater.shared.setEnabled(autoDatabaseUpdates)
             ScannerDatabaseUpdater.shared.setForeground(scenePhase == .active)
             ScannerDatabaseUpdater.shared.setHomeVisible(true, game: game)
         }
         .onDisappear {
             isVisible = false
+            DiagnosticLog.shared.activity(.exit, screen: .scanHome)
             ScannerDatabaseUpdater.shared.setHomeVisible(false, game: game)
         }
         .onChange(of: game) { _, game in
@@ -189,6 +204,8 @@ private struct ScanHomeView: View {
                 .font(.subheadline).foregroundStyle(.secondary)
             Text(session.game ?? game).font(.caption).foregroundStyle(.secondary)
             Button {
+                DiagnosticLog.shared.activity(.action, screen: .scanHome, action: .resumeScanner,
+                    state: .init(cardCount: list.quantity))
                 ScannerDatabaseUpdater.shared.setHomeVisible(false, game: game)
                 destination = session.id
             } label: {
@@ -200,6 +217,7 @@ private struct ScanHomeView: View {
 
     private func start() {
         guard destination == nil, draft == nil else { return }
+        DiagnosticLog.shared.activity(.action, screen: .scanHome, action: .open)
         ScannerDatabaseUpdater.shared.setHomeVisible(false, game: game)
         do {
             draft = try SessionService.prepareDraft(game: game)

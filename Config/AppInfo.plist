@@ -8,7 +8,7 @@
 		<true/>
 	</dict>
 	<key>ScannerWorkflowRevision</key>
-	<string>show-log-pricing-manual-add</string>
+	<string>bounded-activity-trail</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Find the NIIMBOT printer you select and print inventory price labels while this app is open.</string>
 	<key>UIRequiresFullScreen</key>

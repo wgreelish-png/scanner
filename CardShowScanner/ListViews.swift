@@ -162,6 +162,11 @@ private struct ListSelectionButtonStyle: ButtonStyle {
             }
         }
         .onChange(of: Set(lists.map(\.id))) { _, existing in selectedListIDs.formIntersection(existing) }
+        .onAppear { DiagnosticLog.shared.activity(.screen, screen: .lists, state: .init(selectedCount: selectedListIDs.count)) }
+        .onDisappear { DiagnosticLog.shared.activity(.exit, screen: .lists) }
+        .onChange(of: selectedListIDs.count) { _, count in
+            DiagnosticLog.shared.activity(.state, screen: .lists, state: .init(selectedCount: count))
+        }
         .failureAlert($error)
     }
 
@@ -371,15 +376,25 @@ struct ListDeletionConfirmationView: View {
             .safeAreaInset(edge: .top) { reviewSummary }
             .safeAreaInset(edge: .bottom) { reviewActions }
             .onChange(of: reviewSection) { _, _ in
+                DiagnosticLog.shared.activity(.action, screen: .listReview, action: .changeSection,
+                    state: .init(cardCount: list.quantity))
                 endListSearchEditing()
             }
             .onAppear {
                 isVisible = true; openingScanner = false
+                DiagnosticLog.shared.activity(.screen, screen: .listReview, state: .init(cardCount: list.quantity))
                 continueGame = reviewSession?.game ?? list.orderedCards.first?.snapshot.identity.game ?? "Pokémon"
                 restoreOfferInputs()
                 synchronizeBudgetOutcomes()
             }
-            .onDisappear { isVisible = false }
+            .onDisappear {
+                DiagnosticLog.shared.activity(.exit, screen: .listReview, state: .init(cardCount: list.quantity))
+                isVisible = false
+            }
+            .onChange(of: list.quantity) { _, count in
+                guard isVisible else { return }
+                DiagnosticLog.shared.activity(.state, screen: .listReview, state: .init(cardCount: count))
+            }
             .onChange(of: scenePhase) { _, phase in if isVisible && phase == .active { synchronizeBudgetOutcomes() } }
             .confirmationDialog("Continue this list?", isPresented: $confirmContinue) {
                 Button("Continue Scanning") {
@@ -420,7 +435,11 @@ struct ListDeletionConfirmationView: View {
                 }
                 if !list.isCardShowInventory {
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button("Search & Add Card", systemImage: "magnifyingglass") { showingCatalogSearch = true }
+                        Button("Search & Add Card", systemImage: "magnifyingglass") {
+                            DiagnosticLog.shared.activity(.action, screen: .listReview, action: .openManualSearch,
+                                state: .init(cardCount: list.quantity))
+                            showingCatalogSearch = true
+                        }
                             .accessibilityIdentifier("list.searchAndAdd")
                     }
                 }
@@ -517,6 +536,8 @@ struct ListDeletionConfirmationView: View {
         else if filtered.isEmpty { ContentUnavailableView.search(text: search) }
         ForEach(filtered) { item in
             Button {
+                DiagnosticLog.shared.activity(.action, screen: .listReview, action: .openCard,
+                    state: .init(cardCount: list.quantity))
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                 selectedCard = item
             } label: {
@@ -690,6 +711,9 @@ struct ListDeletionConfirmationView: View {
 
     private var recordTransactionButton: some View {
         Button {
+            DiagnosticLog.shared.activity(.action, screen: .listReview,
+                action: inventoryTransaction != nil || transactionStore.hasOwnedInventory(forListID: list.id) ? .open : .recordTransaction,
+                state: .init(cardCount: list.quantity))
             if let receipt = inventoryTransaction { receiptRoute = ReceiptRoute(id: receipt.id) }
             else if transactionStore.hasOwnedInventory(forListID: list.id) { showingWorkingInventory = true }
             else { openTransactionCheckout() }
@@ -715,12 +739,20 @@ struct ListDeletionConfirmationView: View {
     }
 
     private func addOwnedInventory() {
+        DiagnosticLog.shared.activity(.action, screen: .listReview, action: .addToInventory,
+            state: .init(cardCount: list.quantity))
         do {
             let result = try ShowOwnedInventoryListService.add(list, context: context, store: transactionStore)
+            DiagnosticLog.shared.activity(.outcome, screen: .listReview, action: .addSucceeded,
+                state: .init(cardCount: result.addedQuantity))
             ownedInventoryMessage = result.addedQuantity == 0
                 ? "These cards are already in inventory."
                 : "\(result.addedQuantity.formatted()) \(result.addedQuantity == 1 ? "card" : "cards") added · Cost unknown"
-        } catch { self.error = error.localizedDescription }
+        } catch {
+            DiagnosticLog.shared.activity(.outcome, screen: .listReview, action: .addFailed,
+                state: .init(cardCount: list.quantity))
+            self.error = error.localizedDescription
+        }
     }
 
     private func openTransactionCheckout() {
@@ -757,6 +789,8 @@ struct ListDeletionConfirmationView: View {
 
     private func requestContinueScanning() {
         guard !openingScanner, !confirmContinue, reviewDestination == nil else { return }
+        DiagnosticLog.shared.activity(.action, screen: .listReview, action: .resumeScanner,
+            state: .init(cardCount: list.quantity))
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         DiagnosticLog.shared.record("navigation.scan_requested", ["phase": "list_action_bar"])
         if let session = reviewSession, session.isActive {
@@ -903,6 +937,10 @@ struct CardEditorView: View {
     }
 
     private var hasOfferOverrides: Bool { !cashOverride.isEmpty || !tradeOverride.isEmpty || !maximumOverride.isEmpty }
+    private var activityState: DiagnosticActivityState {
+        .init(isPreparing: saving, canProceed: !pricing.priceLoading && !saving,
+              blockReason: saving ? .saving : (pricing.priceLoading ? .preparing : .ready), cardCount: quantity)
+    }
     var body: some View {
         Form {
             Section {
@@ -920,7 +958,10 @@ struct CardEditorView: View {
                 }.pickerStyle(.menu).accessibilityIdentifier("cardEditor.printing")
                 Menu {
                     ForEach(pricing.languages, id: \.self) { language in
-                        Button(language) { pricing.changeIdentity { $0.language = language } }
+                        Button(language) {
+                            DiagnosticLog.shared.activity(.action, screen: .cardEditor, action: .changeLanguage, state: activityState)
+                            pricing.changeIdentity { $0.language = language }
+                        }
                     }
                 } label: {
                     LabeledContent("Language", value: pricing.card.identity.language)
@@ -937,6 +978,7 @@ struct CardEditorView: View {
             }
             Section {
                 Button("Find Correct Card", systemImage: "magnifyingglass") {
+                    DiagnosticLog.shared.activity(.action, screen: .cardEditor, action: .openManualSearch, state: activityState)
                     focusedField = nil; sheet = .correction
                 }.accessibilityIdentifier("cardEditor.correctMatch")
             }
@@ -952,7 +994,10 @@ struct CardEditorView: View {
         .scrollDismissesKeyboard(.interactively)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { dismiss() }.disabled(saving).accessibilityIdentifier("cardEditor.cancel")
+                Button("Cancel") {
+                    DiagnosticLog.shared.activity(.action, screen: .cardEditor, action: .cancel, state: activityState)
+                    dismiss()
+                }.disabled(saving).accessibilityIdentifier("cardEditor.cancel")
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") { save() }.disabled(pricing.priceLoading || saving)
@@ -967,8 +1012,17 @@ struct CardEditorView: View {
                 }
             }
         }
-        .onAppear { pricing.resumeAfterNavigation() }
-        .onDisappear { focusedField = nil; pricing.suspendForNavigation() }
+        .onAppear {
+            DiagnosticLog.shared.activity(.screen, screen: .cardEditor, state: activityState)
+            pricing.resumeAfterNavigation()
+        }
+        .onChange(of: activityState) { _, state in
+            DiagnosticLog.shared.activity(.state, screen: .cardEditor, state: state)
+        }
+        .onDisappear {
+            DiagnosticLog.shared.activity(.exit, screen: .cardEditor, state: activityState)
+            focusedField = nil; pricing.suspendForNavigation()
+        }
         .sheet(item: $sheet) { selected in
             switch selected {
             case .artwork:
@@ -1084,6 +1138,7 @@ struct CardEditorView: View {
 
     private func save() {
         guard !pricing.priceLoading, !saving else { return }
+        DiagnosticLog.shared.activity(.action, screen: .cardEditor, action: .save, state: activityState)
         focusedField = nil
         guard !pricing.card.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !pricing.card.identity.productID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -1111,8 +1166,13 @@ struct CardEditorView: View {
             pricing.card.marketPrice = text.isEmpty ? nil : parsed
             try CardListService.edit(item, card: pricing.card, quantity: quantity,
                 cashOverride: cashText, tradeOverride: tradeText, maximumOverride: maximumText, context: context)
-            DiagnosticLog.shared.record("inventory.edited"); dismiss()
-        } catch { context.rollback(); self.error = "The card could not be saved. Your changes are kept; try Save again." }
+            DiagnosticLog.shared.record("inventory.edited")
+            DiagnosticLog.shared.activity(.outcome, screen: .cardEditor, action: .saveSucceeded, state: activityState)
+            dismiss()
+        } catch {
+            DiagnosticLog.shared.activity(.outcome, screen: .cardEditor, action: .saveFailed, state: activityState)
+            context.rollback(); self.error = "The card could not be saved. Your changes are kept; try Save again."
+        }
     }
 }
 

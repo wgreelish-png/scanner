@@ -14,6 +14,21 @@ import SwiftUI
     @FocusState private var focused: Field?
     private enum Field { case price, copies }
 
+    private var activityState: DiagnosticActivityState {
+        let blocked: DiagnosticActivityBlockReason = !queue.isLoaded ? .queueUnavailable
+            : queue.isPrinting ? .printerBusy
+            : model.preparing ? .preparing
+            : (!queue.entries.isEmpty && !model.hasPreparedQueue) ? .unfinishedQueue
+            : (!model.hasPreparedQueue && printer.isReadingRoll) ? .rollReading
+            : model.draft == nil ? .invalidInput : .ready
+        return DiagnosticActivityState(labelCount: model.draft?.copies,
+            pendingCount: queue.pendingCount, completedCount: queue.completedCount,
+            failedCount: queue.failedCount, uncertainCount: queue.uncertainCount,
+            previewReady: bitmap != nil && previewDraft == model.draft, isPreparing: model.preparing,
+            canProceed: blocked == .ready, printerConnected: printer.isConnected,
+            rollReading: printer.isReadingRoll, blockReason: blocked)
+    }
+
     init(isBulk: Bool = false, paperPreferences: LabelPaperPreferences = .shared,
          onPrintingCompleted: (() -> Void)? = nil) {
         self.onPrintingCompleted = onPrintingCompleted
@@ -50,6 +65,7 @@ import SwiftUI
                         .accessibilityIdentifier("customLabels.copies")
                 }
                 Picker("Physical paper", selection: Binding(get: { paperPreferences.size }, set: { size in
+                    DiagnosticLog.shared.activity(.action, screen: .customLabels, action: .changePaper)
                     paperPreferences.select(size)
                     model.paperSize = paperPreferences.size
                 })) {
@@ -57,6 +73,7 @@ import SwiftUI
                 }.disabled(paperPreferences.detectedProduct != nil)
                     .accessibilityIdentifier("customLabels.paper")
                 LabelPricePositionPicker(selection: Binding(get: { model.pricePosition }, set: { position in
+                    DiagnosticLog.shared.activity(.action, screen: .customLabels, action: .changeLayout)
                     model.pricePosition = position
                     paperPreferences.selectPricePosition(position)
                 }), identifier: "customLabels.pricePosition")
@@ -87,7 +104,10 @@ import SwiftUI
                          ? "Review or clear the saved queue before preparing new labels."
                          : (queue.error ?? "Your saved queue needs attention."))
                         .font(.footnote).foregroundStyle(.secondary)
-                    Button("Review Saved Queue") { focused = nil; showingQueue = true }
+                    Button("Review Saved Queue") {
+                        DiagnosticLog.shared.activity(.action, screen: .customLabels, action: .openQueue, state: activityState)
+                        focused = nil; showingQueue = true
+                    }
                         .accessibilityIdentifier("customLabels.reviewQueue")
                     if !queue.isLoaded {
                         Button("Reload Queue") { queue.reload() }.accessibilityIdentifier("customLabels.reloadQueue")
@@ -108,11 +128,19 @@ import SwiftUI
                 Text("\(model.copies) labels").font(.subheadline).monospacedDigit()
                 Spacer(minLength: 12)
                 Button(model.hasPreparedQueue ? "View Queue" : "Prepare Labels") {
+                    DiagnosticLog.shared.activity(.action, screen: .customLabels,
+                        action: model.hasPreparedQueue ? .openQueue : .prepareLabels, state: activityState)
                     guard model.hasPreparedQueue || !printer.isReadingRoll else { return }
                     focused = nil
                     model.paperSize = paperPreferences.size
                     model.pricePosition = paperPreferences.pricePosition
-                    if model.prepare() { showingQueue = true }
+                    let prepared = model.prepare()
+                    if prepared { showingQueue = true }
+                    DiagnosticLog.shared.activity(.outcome, screen: .customLabels, action: .prepareLabels,
+                        state: DiagnosticActivityState(labelCount: model.draft?.copies,
+                            pendingCount: queue.pendingCount, completedCount: queue.completedCount,
+                            failedCount: queue.failedCount, uncertainCount: queue.uncertainCount,
+                            succeeded: prepared))
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(model.draft == nil || model.preparing || queue.isPrinting || !queue.isLoaded
@@ -123,7 +151,7 @@ import SwiftUI
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                ClearLabelPrintQueueButton(identifier: "customLabels.clearQueue")
+                ClearLabelPrintQueueButton(identifier: "customLabels.clearQueue", activityScreen: .customLabels)
             }
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
@@ -134,10 +162,18 @@ import SwiftUI
         .onAppear {
             model.paperSize = paperPreferences.size
             model.pricePosition = paperPreferences.pricePosition
+            DiagnosticLog.shared.activity(.screen, screen: .customLabels, state: activityState)
+        }
+        .onDisappear { DiagnosticLog.shared.activity(.exit, screen: .customLabels, state: activityState) }
+        .onChange(of: activityState) { _, state in
+            DiagnosticLog.shared.activity(.state, screen: .customLabels, state: state)
         }
         .onChange(of: paperPreferences.size) { _, size in model.paperSize = size }
         .onChange(of: paperPreferences.pricePosition) { _, position in model.pricePosition = position }
-        .onChange(of: model.isBulk) { _, _ in focused = nil }
+        .onChange(of: model.isBulk) { _, _ in
+            DiagnosticLog.shared.activity(.action, screen: .customLabels, action: .changeLayout)
+            focused = nil
+        }
         .task(id: model.draft) {
             bitmap = nil; previewDraft = nil; previewError = nil
             guard let draft = model.draft else { return }

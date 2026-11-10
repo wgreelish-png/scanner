@@ -14,6 +14,13 @@ import SwiftUI
 
     private enum Destination: Hashable { case custom, bulk, queue, printer }
 
+    private var activityState: DiagnosticActivityState {
+        DiagnosticActivityState(labelCount: queue.entries.count, pendingCount: queue.pendingCount,
+            completedCount: queue.completedCount, failedCount: queue.failedCount,
+            uncertainCount: queue.uncertainCount, printerConnected: printer.isConnected,
+            rollReading: printer.isReadingRoll)
+    }
+
     init(store: ShowBudgetStore = .shared, paperPreferences: LabelPaperPreferences = .shared) {
         _store = State(initialValue: store)
         _paperPreferences = State(initialValue: paperPreferences)
@@ -47,11 +54,17 @@ import SwiftUI
                         symbol: "rectangle.stack", count: nil, identifier: "priceTags.chooseCards")
                     batchButton(.priceChanged, title: "Print Price Changed", subtitle: "New cards and saved sticker prices that still need labels.",
                         symbol: "arrow.triangle.2.circlepath", count: approvals.isLoaded ? changedIDs.count : nil)
-                    Button { destination = .custom } label: {
+                    Button {
+                        DiagnosticLog.shared.activity(.action, screen: .priceTags, action: .openCustom, state: activityState)
+                        destination = .custom
+                    } label: {
                         routeLabel(title: "Custom Price Tag", subtitle: "PokéDen logo, price and copies. No inventory needed.",
                             symbol: "square.and.pencil", count: nil)
                     }.buttonStyle(.plain).accessibilityIdentifier("priceTags.custom")
-                    Button { destination = .bulk } label: {
+                    Button {
+                        DiagnosticLog.shared.activity(.action, screen: .priceTags, action: .openBulk, state: activityState)
+                        destination = .bulk
+                    } label: {
                         routeLabel(title: "2 for $1 Bulk Tags", subtitle: "PokéDen stickers for bulk bins. Choose copies and paper.",
                             symbol: "tray.2", count: nil)
                     }.buttonStyle(.plain).accessibilityIdentifier("priceTags.bulk")
@@ -69,7 +82,10 @@ import SwiftUI
                             : "No available cards for \(InventoryGameFilter.title(for: gamePreferences.selectedGame)). Choose All Games or another game to prepare inventory labels."))
                 }
                 VStack(spacing: 0) {
-                    Button { destination = .queue } label: {
+                    Button {
+                        DiagnosticLog.shared.activity(.action, screen: .priceTags, action: .openQueue, state: activityState)
+                        destination = .queue
+                    } label: {
                         HStack {
                             Label("Saved Print Queue", systemImage: "tray.full")
                             Spacer()
@@ -78,7 +94,10 @@ import SwiftUI
                         }
                     }.accessibilityIdentifier("priceTags.queue")
                     Divider().padding(.vertical, 14)
-                    Button { destination = .printer } label: {
+                    Button {
+                        DiagnosticLog.shared.activity(.action, screen: .priceTags, action: .openPrinterSettings, state: activityState)
+                        destination = .printer
+                    } label: {
                         HStack {
                             Label("Printer Settings", systemImage: "printer")
                             Spacer()
@@ -96,7 +115,7 @@ import SwiftUI
         .navigationTitle("Price Tags").navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                ClearLabelPrintQueueButton(identifier: "priceTags.clearQueue")
+                ClearLabelPrintQueueButton(identifier: "priceTags.clearQueue", activityScreen: .priceTags)
             }
         }
         .sheet(item: $batch) { mode in
@@ -115,13 +134,18 @@ import SwiftUI
                 LabelPrinterSettingsView(onPrintingCompleted: finishPrinting)
             }
         }
-        .onAppear { printer.startPriceTagsConnection() }
+        .onAppear {
+            DiagnosticLog.shared.activity(.screen, screen: .priceTags, state: activityState)
+            printer.startPriceTagsConnection()
+        }
+        .onDisappear { DiagnosticLog.shared.activity(.exit, screen: .priceTags, state: activityState) }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { printer.startPriceTagsConnection() }
         }
     }
 
     private func finishPrinting() {
+        DiagnosticLog.shared.activity(.outcome, screen: .priceTags, action: .finish, state: activityState)
         batch = nil
         destination = nil
     }
@@ -166,14 +190,20 @@ import SwiftUI
             }
             if !printer.isConnected {
                 ForEach(printer.devices) { device in
-                    Button { printer.connect(device.id) } label: {
+                    Button {
+                        DiagnosticLog.shared.activity(.action, screen: .priceTags, action: .connectPrinter, state: activityState)
+                        printer.connect(device.id)
+                    } label: {
                         Label(device.name, systemImage: "printer")
                     }
                     .disabled(printer.isPrinting || printer.isConfiguringPaper)
                     .accessibilityIdentifier("priceTags.printerDevice." + device.id.uuidString)
                 }
                 if !printer.isScanning {
-                    Button("Search for Printer") { printer.startSearch() }
+                    Button("Search for Printer") {
+                        DiagnosticLog.shared.activity(.action, screen: .priceTags, action: .searchPrinter, state: activityState)
+                        printer.startSearch()
+                    }
                         .disabled(printer.isPrinting || printer.isConfiguringPaper)
                         .accessibilityIdentifier("priceTags.printerSearch")
                 }
@@ -193,7 +223,11 @@ import SwiftUI
 
     private func batchButton(_ mode: InventoryLabelBatchMode, title: String, subtitle: String,
                              symbol: String, count: Int?, identifier: String? = nil) -> some View {
-        Button { batch = mode } label: {
+        Button {
+            DiagnosticLog.shared.activity(.action, screen: .priceTags,
+                action: mode == .all ? .selectAll : .selectCards, state: activityState)
+            batch = mode
+        } label: {
             routeLabel(title: title, subtitle: subtitle, symbol: symbol, count: count)
         }
         .buttonStyle(.plain)
@@ -227,18 +261,24 @@ import SwiftUI
 /// It removes saved print work without changing inventory or sticker prices.
 @MainActor struct ClearLabelPrintQueueButton: View {
     let identifier: String
+    let activityScreen: DiagnosticActivityScreen
     @State private var queue = LabelPrintQueue.shared
     @State private var printer = NiimbotPrinter.shared
     @State private var confirming = false
     @State private var failure: String?
 
-    init(identifier: String = "labels.clearQueue") { self.identifier = identifier }
+    init(identifier: String = "labels.clearQueue", activityScreen: DiagnosticActivityScreen = .labelQueue) {
+        self.identifier = identifier; self.activityScreen = activityScreen
+    }
 
     private var busy: Bool { queue.isPrinting || printer.isPrinting || printer.isConfiguringPaper }
     private var empty: Bool { queue.isLoaded && queue.entries.isEmpty }
 
     var body: some View {
-        Button { confirming = true } label: {
+        Button {
+            DiagnosticLog.shared.activity(.action, screen: activityScreen, action: .clearQueue)
+            confirming = true
+        } label: {
             Label("Clear Print Queue", systemImage: "trash")
         }
         .disabled(busy || empty)
@@ -246,7 +286,9 @@ import SwiftUI
         .confirmationDialog("Clear the print queue?", isPresented: $confirming, titleVisibility: .visible) {
             Button("Clear Print Queue", role: .destructive) { clearQueue() }
                 .accessibilityIdentifier(identifier + ".confirm")
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) {
+                DiagnosticLog.shared.activity(.action, screen: activityScreen, action: .cancel)
+            }
                 .accessibilityIdentifier(identifier + ".cancel")
         } message: {
             Text(confirmationMessage)
@@ -268,10 +310,18 @@ import SwiftUI
     }
 
     private func clearQueue() {
+        var succeeded = false
+        defer {
+            DiagnosticLog.shared.activity(.outcome, screen: activityScreen, action: .clearQueue,
+                state: DiagnosticActivityState(labelCount: queue.entries.count, pendingCount: queue.pendingCount,
+                    completedCount: queue.completedCount, failedCount: queue.failedCount,
+                    uncertainCount: queue.uncertainCount, succeeded: succeeded))
+        }
         do {
             guard !busy else { throw LabelPrinterIssue.printerBusy }
             if queue.isLoaded { try queue.clear() }
             else { try queue.discardSavedQueue() }
+            succeeded = true
         } catch { failure = error.localizedDescription }
     }
 }

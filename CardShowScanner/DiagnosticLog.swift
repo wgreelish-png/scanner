@@ -2,6 +2,105 @@ import Foundation
 import Observation
 import OSLog
 
+/// Activity breadcrumbs describe navigation and readiness, never screen text,
+/// card identities, prices, search input, images or Bluetooth payloads.
+enum DiagnosticActivityKind: String, CaseIterable, Sendable {
+    case screen, exit, action, state, outcome, issue
+    var event: String { "activity." + rawValue }
+}
+
+enum DiagnosticActivityScreen: String, CaseIterable, Hashable, Sendable {
+    case lists, scanHome, scanner, scanReview, manualSearch, manualConfirmation, listReview
+    case cardEditor, cardResearch, research, settings, diagnostics, showHome, inventory
+    case priceTags, labelSelection, labelDetails, labelReview, labelEditor, customLabels
+    case labelQueue, labelPreview, labelProgress, printerSettings
+    case transaction, transactionHistory, transactionDetail, inventoryImport
+    case showBudget, inventoryDetail, inventorySelection
+}
+
+enum DiagnosticActivityAction: String, CaseIterable, Sendable {
+    case open, close, back, cancel, continueFlow, selectCard, changeSection
+    case changePrinting, changeCondition, changeLanguage, retrySearch, retryPrice, refresh
+    case openManualSearch, resumeScanner, pauseScanner, resetRecognition, openList, openConnection
+    case addCard, addSucceeded, addFailed, undoAdd, addCopy, finishSession, openCard, addToInventory
+    case openCustom, openBulk, openQueue, openPrinterSettings, selectCards, selectAll, clearSelection
+    case reviewDetails, prepareLabels, editLabel, saveChanges, printLabels, pausePrinting, retryLabels
+    case clearQueue, clearCompleted, refreshRoll, connectPrinter, searchPrinter, changeLayout, changePaper
+    case previewLabel, finish, recordTransaction, confirmTransaction, addCards, removeCard
+    case save, saved, failed, saveSucceeded, saveFailed, undoTransaction, openHistory, changeQuantity, markIssue
+    case copyDiagnostics, exportDiagnostics, clearDiagnostics
+}
+
+enum DiagnosticActivityBlockReason: String, CaseIterable, Sendable {
+    case ready, noSelection, invalidInput, queueUnavailable, unfinishedQueue, rollReading
+    case printerDisconnected, printerBusy, preparing, stockMismatch, notActive, unavailable, saving
+}
+
+struct DiagnosticActivityState: Equatable, Sendable {
+    let selectedCount: Int?, labelCount: Int?, pendingCount: Int?, completedCount: Int?
+    let failedCount: Int?, uncertainCount: Int?
+    let previewReady: Bool?, isPreparing: Bool?, canProceed: Bool?, printerConnected: Bool?, rollReading: Bool?
+    let blockReason: DiagnosticActivityBlockReason?
+    let cardCount: Int?, searchHasText: Bool?, succeeded: Bool?
+
+    init(selectedCount: Int? = nil, labelCount: Int? = nil, pendingCount: Int? = nil,
+         completedCount: Int? = nil, failedCount: Int? = nil, uncertainCount: Int? = nil,
+         previewReady: Bool? = nil, isPreparing: Bool? = nil, canProceed: Bool? = nil,
+         printerConnected: Bool? = nil, rollReading: Bool? = nil, blockReason: DiagnosticActivityBlockReason? = nil,
+         cardCount: Int? = nil, searchHasText: Bool? = nil, succeeded: Bool? = nil) {
+        self.selectedCount = selectedCount; self.labelCount = labelCount; self.pendingCount = pendingCount
+        self.completedCount = completedCount; self.failedCount = failedCount; self.uncertainCount = uncertainCount
+        self.previewReady = previewReady; self.isPreparing = isPreparing; self.canProceed = canProceed
+        self.printerConnected = printerConnected; self.rollReading = rollReading; self.blockReason = blockReason
+        self.cardCount = cardCount; self.searchHasText = searchHasText; self.succeeded = succeeded
+    }
+
+    fileprivate var fields: [String: String] {
+        var fields: [String: String] = [:]
+        let counts = [("selected_count", selectedCount), ("label_count", labelCount),
+            ("pending_count", pendingCount), ("completed_count", completedCount),
+            ("failed_count", failedCount), ("uncertain_count", uncertainCount), ("card_count", cardCount)]
+        for (key, value) in counts {
+            if let value { fields[key] = String(max(0, min(1_000_000, value))) }
+        }
+        let flags = [("preview_ready", previewReady), ("is_preparing", isPreparing), ("can_proceed", canProceed),
+            ("printer_connected", printerConnected), ("roll_reading", rollReading),
+            ("search_has_text", searchHasText), ("succeeded", succeeded)]
+        for (key, value) in flags { if let value { fields[key] = String(value) } }
+        if let blockReason { fields["block_reason"] = blockReason.rawValue }
+        return fields
+    }
+}
+
+enum DiagnosticActivityFields {
+    static let counts: Set<String> = ["selected_count", "label_count", "pending_count", "completed_count",
+        "failed_count", "uncertain_count", "card_count", "activity_suppressed"]
+    static let flags: Set<String> = ["preview_ready", "is_preparing", "can_proceed", "printer_connected",
+        "roll_reading", "search_has_text", "succeeded"]
+    static let keys = counts.union(flags).union(["activity_screen", "activity_action", "from_screen",
+        "block_reason", "activity_sequence", "activity_uptime_ms", "activity_gap_ms"])
+
+    static func accepts(_ key: String, _ value: String, event: String) -> Bool {
+        guard event.hasPrefix("activity.") else { return !keys.contains(key) }
+        switch key {
+        case "activity_screen", "from_screen": return DiagnosticActivityScreen(rawValue: value) != nil
+        case "activity_action": return DiagnosticActivityAction(rawValue: value) != nil
+        case "block_reason": return DiagnosticActivityBlockReason(rawValue: value) != nil
+        case "activity_sequence": return integer(value, maximum: 1_000_000_000)
+        case "activity_uptime_ms": return integer(value, maximum: 9_000_000_000_000)
+        case "activity_gap_ms": return integer(value, maximum: 3_600_000)
+        default:
+            if counts.contains(key) { return integer(value, maximum: 1_000_000) }
+            return flags.contains(key) && (value == "true" || value == "false")
+        }
+    }
+
+    private static func integer(_ text: String, maximum: UInt64) -> Bool {
+        guard let value = UInt64(text), value <= maximum else { return false }
+        return String(value) == text
+    }
+}
+
 /// A second check at storage keeps the newly allowlisted scan fields numeric or
 /// enum-only even if another caller accidentally supplies arbitrary text.
 enum DiagnosticScanFields {
@@ -315,6 +414,15 @@ enum ServiceDiagnosticFields {
     private let defaults: UserDefaults
     private let run = UUID().uuidString
     private var lastSamples: [String: Date] = [:]
+    @ObservationIgnored private let activityNow: @MainActor () -> TimeInterval
+    @ObservationIgnored private var activitySequence = 0
+    @ObservationIgnored private var activityLastTime: TimeInterval?
+    @ObservationIgnored private var activityWindowStart: TimeInterval?
+    @ObservationIgnored private var activityWindowCount = 0
+    @ObservationIgnored private var activitySuppressed = 0
+    @ObservationIgnored private var activityScreen: DiagnosticActivityScreen?
+    @ObservationIgnored private var activityContentScreen: DiagnosticActivityScreen?
+    @ObservationIgnored private var activityStates: [DiagnosticActivityScreen: DiagnosticActivityState] = [:]
     private let keys: Set<String> = Set(["provider", "game", "episode", "same", "accepted", "confidence", "candidates",
         "printing_required", "priced", "merged", "automatic", "quantity", "reason", "stage", "backend", "elapsed_ms",
         "scan_ms", "capture_ms", "frames", "domain", "code", "records", "rejected_records", "phase", "candidate_index", "app_version", "build", "downloaded_bytes", "cached_shards", "cache", "source", "persisted", "cache_backend", "revision",
@@ -329,15 +437,68 @@ enum ServiceDiagnosticFields {
         .union(DiagnosticPrinterFields.timingKeys)
         .union(DiagnosticPrinterFields.batchingKeys)
         .union(DiagnosticPrinterFields.rollKeys)
+        .union(DiagnosticActivityFields.keys)
     private var current: URL { directory.appendingPathComponent("current.jsonl") }
     private var previous: URL { directory.appendingPathComponent("previous.jsonl") }
     var enabled: Bool { defaults.object(forKey: "diagnosticsEnabled") as? Bool ?? true }
 
-    init(directory: URL? = nil, maximumBytes: Int = 262144, defaults: UserDefaults = .standard) {
+    init(directory: URL? = nil, maximumBytes: Int = 262144, defaults: UserDefaults = .standard,
+         activityNow: @escaping @MainActor () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         self.directory = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Diagnostics", isDirectory: true)
         self.maximumBytes = max(1024, maximumBytes)
         self.defaults = defaults
+        self.activityNow = activityNow
+    }
+
+    /// Human actions only: no timers, recordings, frame sampling or retained
+    /// event array. State deduplication has one entry per fixed screen enum.
+    func activity(_ kind: DiagnosticActivityKind, screen: DiagnosticActivityScreen,
+                  action: DiagnosticActivityAction? = nil, state: DiagnosticActivityState = .init()) {
+        guard enabled else { return }
+        let now = activityNow()
+        guard now.isFinite, now >= 0 else { return }
+        if kind == .state, activityStates[screen] == state { return }
+        if kind == .screen, activityScreen == screen, activityStates[screen] == state,
+           let last = activityLastTime, now - last >= 0, now - last < 0.25 { return }
+        // A bad observer cannot flood the file. Important issue markers bypass
+        // this budget; ordinary human navigation stays far below 120/10 sec.
+        if activityWindowStart == nil || now - (activityWindowStart ?? now) >= 10 || now < (activityWindowStart ?? now) {
+            activityWindowStart = now; activityWindowCount = 0
+        }
+        guard kind == .issue || activityWindowCount < 120 else {
+            activitySuppressed = min(1_000_000, activitySuppressed + 1)
+            return
+        }
+        activityWindowCount += 1
+        activitySequence = activitySequence == 1_000_000_000 ? 1 : activitySequence + 1
+        var fields = state.fields
+        fields["activity_screen"] = screen.rawValue
+        fields["activity_sequence"] = String(activitySequence)
+        fields["activity_uptime_ms"] = String(Int(min(9_000_000_000_000, now * 1_000)))
+        if let action { fields["activity_action"] = action.rawValue }
+        if let last = activityLastTime {
+            fields["activity_gap_ms"] = String(Int(max(0, min(3_600_000, (now - last) * 1_000))))
+        }
+        if activitySuppressed > 0 { fields["activity_suppressed"] = String(activitySuppressed) }
+        if kind == .screen {
+            if let previous = activityScreen, previous != screen { fields["from_screen"] = previous.rawValue }
+            activityScreen = screen
+            if screen != .settings && screen != .diagnostics { activityContentScreen = screen }
+        }
+        // An exit or an action without a snapshot must not erase the last known
+        // readiness/counts used when the owner marks a recent issue afterward.
+        if kind == .state || !state.fields.isEmpty || activityStates[screen] == nil { activityStates[screen] = state }
+        activityLastTime = now; activitySuppressed = 0
+        record(kind.event, fields)
+    }
+
+    @discardableResult func markActivityIssue() -> Bool {
+        guard enabled else { return false }
+        let screen = activityContentScreen ?? activityScreen ?? .diagnostics
+        let sequence = activitySequence
+        activity(.issue, screen: screen, action: .markIssue, state: activityStates[screen] ?? .init())
+        return activitySequence != sequence && !storageFailed
     }
     func record(_ event: String, _ fields: [String: String] = [:], sampleEvery: TimeInterval = 0) {
         guard enabled else { return }
@@ -351,7 +512,11 @@ enum ServiceDiagnosticFields {
                 (!event.hasPrefix("health.") || DiagnosticHealthFields.keys.contains(key)) && value.count <= 80 &&
                 value.range(of: #"^[A-Za-z0-9_.-]{1,80}$"#, options: .regularExpression) != nil &&
                 DiagnosticScanFields.accepts(key, value) && DiagnosticPrinterFields.accepts(key, value, event: event) &&
-                DiagnosticHealthFields.accepts(key, value)
+                DiagnosticHealthFields.accepts(key, value) && DiagnosticActivityFields.accepts(key, value, event: event)
+        }
+        if event.hasPrefix("activity.") {
+            guard DiagnosticActivityKind(rawValue: String(event.dropFirst("activity.".count))) != nil,
+                  safe["activity_screen"] != nil else { return }
         }
         let entry: [String: Any] = ["schema": 1, "time": Self.timestampFormatter.string(from: now),
             "run": run, "event": event, "fields": safe]
@@ -391,6 +556,9 @@ enum ServiceDiagnosticFields {
             try FileManager.default.removeItem(at: url)
         }
         lastSamples.removeAll(); storageFailed = false
+        activityStates.removeAll(); activityScreen = nil; activityContentScreen = nil
+        activitySequence = 0; activityLastTime = nil; activityWindowStart = nil
+        activityWindowCount = 0; activitySuppressed = 0
     }
     func export() throws -> URL {
         try exportFile(event: "diagnostics.export")
@@ -417,7 +585,7 @@ enum ServiceDiagnosticFields {
             "build": bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
             "revision": bundle.object(forInfoDictionaryKey: "ScannerWorkflowRevision") as? String ?? "unknown",
             "os": ProcessInfo.processInfo.operatingSystemVersionString,
-            "note": "Local app events and aggregate device health only; no system console, raw OS reports, card/list contents, credentials, images, or raw web responses. Native process samples exclude WebKit processes."]
+            "note": "Local app events, sanitized activity breadcrumbs and aggregate device health only; no system console, raw OS reports, card/list contents, credentials, images, or raw web responses. Native process samples exclude WebKit processes."]
         var data = try JSONSerialization.data(withJSONObject: header, options: [.sortedKeys]); data.append(10)
         for url in [previous, current] where FileManager.default.fileExists(atPath: url.path) {
             data.append(try Data(contentsOf: url))

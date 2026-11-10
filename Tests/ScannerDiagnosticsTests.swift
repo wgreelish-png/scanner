@@ -117,6 +117,206 @@ import UniformTypeIdentifiers
         }
     }
 
+    private func withActivityLog(maximumBytes: Int = 262144,
+                                 _ body: (DiagnosticLog, UserDefaults, URL, DiagnosticActivityTestClock) throws -> Void) throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = "ActivityDiagnostics." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "diagnosticsEnabled")
+        let clock = DiagnosticActivityTestClock()
+        let log = DiagnosticLog(directory: directory, maximumBytes: maximumBytes, defaults: defaults,
+            activityNow: { clock.reads += 1; return clock.uptime })
+        try body(log, defaults, directory, clock)
+    }
+
+    private func activityRows(_ log: DiagnosticLog) throws -> [[String: Any]] {
+        let file = try log.exportForCopy()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        return try diagnosticRows(String(contentsOf: file, encoding: .utf8)).filter {
+            ($0["event"] as? String)?.hasPrefix("activity.") == true
+        }
+    }
+
+    func testActivityTrailPreservesRouteActionsReadinessAndMonotonicOrdering() throws {
+        try withActivityLog { log, _, _, clock in
+            log.activity(.screen, screen: .priceTags)
+            log.activity(.action, screen: .priceTags, action: .selectCards)
+            clock.uptime += 0.25
+            log.activity(.screen, screen: .labelSelection, state: .init(selectedCount: 0, canProceed: false))
+            clock.uptime += 0.25
+            log.activity(.action, screen: .labelSelection, action: .selectCard,
+                state: .init(selectedCount: 2, canProceed: true))
+            clock.uptime += 0.25
+            log.activity(.screen, screen: .labelDetails,
+                state: .init(selectedCount: 2, labelCount: 3, previewReady: false, canProceed: false, blockReason: .rollReading))
+            clock.uptime += 0.125
+            log.activity(.state, screen: .labelDetails,
+                state: .init(selectedCount: 2, labelCount: 3, previewReady: true, canProceed: true, blockReason: .ready))
+
+            let rows = try activityRows(log)
+            XCTAssertEqual(rows.compactMap { $0["event"] as? String },
+                ["activity.screen", "activity.action", "activity.screen", "activity.action", "activity.screen", "activity.state"])
+            let fields = try rows.map { try XCTUnwrap($0["fields"] as? [String: String]) }
+            XCTAssertEqual(fields.compactMap { $0["activity_sequence"] }, (1...6).map(String.init))
+            XCTAssertEqual(fields.compactMap { $0["activity_uptime_ms"] }, ["100000", "100000", "100250", "100500", "100750", "100875"])
+            XCTAssertNil(fields[0]["activity_gap_ms"])
+            XCTAssertEqual(fields.dropFirst().compactMap { $0["activity_gap_ms"] }, ["0", "250", "250", "250", "125"])
+            XCTAssertEqual(fields[2]["from_screen"], "priceTags")
+            XCTAssertEqual(fields[4]["from_screen"], "labelSelection")
+            XCTAssertEqual(fields[3]["activity_action"], "selectCard")
+            XCTAssertEqual(fields[4]["block_reason"], "rollReading")
+            XCTAssertEqual(fields[5]["preview_ready"], "true")
+            XCTAssertEqual(fields[5]["can_proceed"], "true")
+            XCTAssertEqual(fields[5]["label_count"], "3")
+        }
+    }
+
+    func testActivityStorageRejectsContentUnknownRoutesAndNoncanonicalStateFields() throws {
+        try withActivityLog { log, _, _, _ in
+            log.record("activity.state", ["activity_screen": "labelDetails", "activity_action": "PRIVATE_TEST_ACTION",
+                "from_screen": "PRIVATE_TEST_SCREEN", "block_reason": "PRIVATE_TEST_REASON", "selected_count": "01",
+                "label_count": "1000001", "pending_count": "-1", "completed_count": "1.5", "card_count": "1e2",
+                "preview_ready": "PRIVATE_TEST_BOOL", "can_proceed": "1", "search_has_text": "true",
+                "activity_sequence": "1000000001", "activity_uptime_ms": "9000000000001", "activity_gap_ms": "3600001",
+                "reason": "PRIVATE_TEST_CONTENT", "game": "PRIVATE_TEST_GAME", "card_name": "PRIVATE_TEST_CARD",
+                "query": "PRIVATE_TEST_QUERY", "image": "PRIVATE_TEST_IMAGE"])
+            log.record("activity.screen", ["activity_screen": "PRIVATE_TEST_SCREEN"])
+            log.record("activity.action", ["activity_action": "selectCard"])
+            log.record("activity.private_test_route", ["activity_screen": "labelDetails"])
+            log.activity(.state, screen: .labelQueue,
+                state: .init(selectedCount: -1, labelCount: Int.max, pendingCount: 2, completedCount: 0,
+                    failedCount: 1, uncertainCount: 1, canProceed: false, succeeded: false))
+            log.record("web.scan_stats", ["activity_screen": "labelQueue", "activity_action": "printLabels",
+                "selected_count": "3", "can_proceed": "true"])
+
+            let file = try log.exportForCopy()
+            defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+            let text = try String(contentsOf: file, encoding: .utf8)
+            XCTAssertFalse(text.contains("PRIVATE_TEST")); XCTAssertFalse(text.contains("private_test_route"))
+            let rows = try diagnosticRows(text)
+            let activity = rows.filter { ($0["event"] as? String)?.hasPrefix("activity.") == true }
+            XCTAssertEqual(activity.count, 2, "Unknown or missing screens and event kinds must not create trail entries")
+            XCTAssertEqual(activity[0]["fields"] as? [String: String],
+                ["activity_screen": "labelDetails", "search_has_text": "true"])
+            let bounded = try XCTUnwrap(activity[1]["fields"] as? [String: String])
+            XCTAssertEqual(bounded["selected_count"], "0"); XCTAssertEqual(bounded["label_count"], "1000000")
+            XCTAssertEqual(bounded["pending_count"], "2"); XCTAssertEqual(bounded["completed_count"], "0")
+            XCTAssertEqual(bounded["succeeded"], "false")
+            XCTAssertEqual(rows.first { $0["event"] as? String == "web.scan_stats" }?["fields"] as? [String: String], [:])
+        }
+    }
+
+    func testActivityReadinessDeduplicatesWithoutDroppingRepeatedHumanActions() throws {
+        try withActivityLog { log, _, _, _ in
+            let blocked = DiagnosticActivityState(labelCount: 2, canProceed: false, blockReason: .rollReading)
+            log.activity(.screen, screen: .labelDetails, state: blocked)
+            for _ in 0..<1_000 { log.activity(.state, screen: .labelDetails, state: blocked) }
+            log.activity(.action, screen: .labelDetails, action: .prepareLabels, state: blocked)
+            log.activity(.action, screen: .labelDetails, action: .prepareLabels, state: blocked)
+            log.activity(.state, screen: .labelDetails,
+                state: .init(labelCount: 2, canProceed: true, blockReason: .ready))
+            let rows = try activityRows(log)
+            XCTAssertEqual(rows.compactMap { $0["event"] as? String },
+                ["activity.screen", "activity.action", "activity.action", "activity.state"])
+            XCTAssertEqual((rows.last?["fields"] as? [String: String])?["block_reason"], "ready")
+        }
+    }
+
+    func testActivityBurstBudgetKeepsIssueMarkersAndResumesWithSuppressionCount() throws {
+        try withActivityLog { log, _, _, clock in
+            for index in 0..<140 {
+                log.activity(.action, screen: .labelSelection, action: .selectCard, state: .init(selectedCount: index))
+            }
+            XCTAssertTrue(log.markActivityIssue(), "A user issue marker must survive an excessive state/action burst")
+            log.activity(.action, screen: .labelSelection, action: .selectCard)
+            clock.uptime += 10
+            log.activity(.action, screen: .labelSelection, action: .continueFlow, state: .init(selectedCount: 140))
+            let rows = try activityRows(log)
+            XCTAssertEqual(rows.count, 122)
+            XCTAssertEqual(rows[120]["event"] as? String, "activity.issue")
+            let issue = try XCTUnwrap(rows[120]["fields"] as? [String: String])
+            XCTAssertEqual(issue["activity_suppressed"], "20")
+            let resumed = try XCTUnwrap(rows[121]["fields"] as? [String: String])
+            XCTAssertEqual(resumed["activity_action"], "continueFlow")
+            XCTAssertEqual(resumed["activity_suppressed"], "1")
+            XCTAssertEqual(resumed["activity_sequence"], "122")
+        }
+    }
+
+    func testDisabledActivityRecordingDoesNotReadClockWriteFilesOrAdvanceDeduplication() throws {
+        try withActivityLog { log, defaults, directory, clock in
+            defaults.set(false, forKey: "diagnosticsEnabled")
+            let state = DiagnosticActivityState(labelCount: 3, canProceed: true)
+            for _ in 0..<200 { log.activity(.state, screen: .customLabels, state: state) }
+            XCTAssertFalse(log.markActivityIssue())
+            XCTAssertEqual(clock.reads, 0)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+            XCTAssertTrue(try activityRows(log).isEmpty)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path), "Export while disabled must not create a saved log")
+
+            defaults.set(true, forKey: "diagnosticsEnabled")
+            clock.uptime = 150
+            log.activity(.state, screen: .customLabels, state: state)
+            let fields = try XCTUnwrap(try activityRows(log).first?["fields"] as? [String: String])
+            XCTAssertEqual(fields["activity_sequence"], "1")
+            XCTAssertEqual(fields["activity_uptime_ms"], "150000")
+            XCTAssertNil(fields["activity_gap_ms"])
+        }
+    }
+
+    func testActivitySharesExistingBoundedRotationWithoutAddingASeparateHistoryFile() throws {
+        try withActivityLog(maximumBytes: 1024) { log, _, directory, clock in
+            for index in 0..<80 {
+                log.activity(.action, screen: .labelQueue, action: .printLabels,
+                    state: .init(labelCount: 10, pendingCount: 10 - index % 10, completedCount: index % 10,
+                        printerConnected: true, rollReading: false))
+                clock.uptime += 11
+            }
+            let rows = try activityRows(log)
+            XCTAssertFalse(rows.isEmpty)
+            XCTAssertLessThan(rows.count, 80, "Old activity must rotate out instead of growing with a long show")
+            XCTAssertEqual((rows.last?["fields"] as? [String: String])?["activity_sequence"], "80")
+            let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey])
+            XCTAssertEqual(files.map(\.lastPathComponent).sorted(), ["current.jsonl", "previous.jsonl"])
+            let sizes = try files.map { try $0.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0 }
+            XCTAssertTrue(sizes.allSatisfy { $0 <= 1024 })
+            XCTAssertLessThanOrEqual(sizes.reduce(0, +), 2048)
+        }
+    }
+
+    func testIssueMarkerRetainsLastContentScreenAndClearRemovesItsContext() throws {
+        try withActivityLog { log, _, directory, clock in
+            log.activity(.screen, screen: .labelDetails,
+                state: .init(selectedCount: 2, labelCount: 3, canProceed: false, rollReading: true, blockReason: .rollReading))
+            log.activity(.exit, screen: .labelDetails)
+            clock.uptime += 1
+            log.activity(.screen, screen: .settings)
+            clock.uptime += 1
+            log.activity(.screen, screen: .diagnostics)
+            XCTAssertTrue(log.markActivityIssue())
+            var rows = try activityRows(log)
+            let issue = try XCTUnwrap(rows.last?["fields"] as? [String: String])
+            XCTAssertEqual(rows.last?["event"] as? String, "activity.issue")
+            XCTAssertEqual(issue["activity_screen"], "labelDetails")
+            XCTAssertEqual(issue["activity_action"], "markIssue")
+            XCTAssertEqual(issue["selected_count"], "2"); XCTAssertEqual(issue["label_count"], "3")
+            XCTAssertEqual(issue["block_reason"], "rollReading")
+
+            try log.clear()
+            XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
+            XCTAssertTrue(log.markActivityIssue())
+            rows = try activityRows(log)
+            XCTAssertEqual(rows.count, 1)
+            let afterClear = try XCTUnwrap(rows[0]["fields"] as? [String: String])
+            XCTAssertEqual(afterClear["activity_screen"], "diagnostics")
+            XCTAssertEqual(afterClear["activity_sequence"], "1")
+            XCTAssertNil(afterClear["activity_gap_ms"]); XCTAssertNil(afterClear["selected_count"])
+            XCTAssertNil(afterClear["label_count"]); XCTAssertNil(afterClear["block_reason"])
+        }
+    }
+
     func testPrinterHandshakeExportKeepsOnlyBoundedTransportMetadataWithoutDeviceOrPacketContents() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -894,4 +1094,9 @@ import UniformTypeIdentifiers
         XCTAssertEqual(fields["solid"], "false"); XCTAssertEqual(fields["candidate_quads"], "0")
         XCTAssertEqual((samples.last?["fields"] as? [String: String])?.count, 0)
     }
+}
+
+@MainActor private final class DiagnosticActivityTestClock {
+    var uptime: TimeInterval = 100
+    var reads = 0
 }
