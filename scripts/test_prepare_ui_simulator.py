@@ -1,5 +1,8 @@
 import contextlib
 import io
+import os
+from pathlib import Path
+import tempfile
 import json
 import subprocess
 import sys
@@ -79,6 +82,23 @@ class SelectUISimulatorTests(unittest.TestCase):
         selected = self.select({runtime["identifier"]: [device]}, [runtime])
         self.assertEqual(selected.device_type, "com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro")
 
+    def test_interrupted_creation_recovery_matches_only_owned_unique_name(self):
+        owned = "Scanner UI Tests " + "a" * 32
+        device_id = "10000000-0000-0000-0000-000000000002"
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Path(directory) / "name"
+            journal.write_text(owned)
+            devices = {"devices": {"ios": [
+                {"name": "Unrelated phone", "udid": "10000000-0000-0000-0000-000000000001"},
+                {"name": owned, "udid": device_id}]}}
+            with patch.dict(os.environ, SCANNER_DEVICE_NAME_FILE=str(journal)), \
+                 patch.object(sys, "argv", ["prepare_ui_simulator.py", "recover"]), \
+                 patch.object(prepare_ui_simulator, "run", return_value=json.dumps(devices)) as run, \
+                 contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(prepare_ui_simulator.main(), 0)
+            self.assertEqual(output.getvalue().strip(), device_id)
+            self.assertEqual(run.call_args.kwargs["timeout"], 30)
+
     def test_cold_discovery_and_device_creation_have_bounded_startup_budgets(self):
         runtime = self.runtime()
         device_id = "10000000-0000-0000-0000-000000000002"
@@ -104,7 +124,7 @@ class SelectUISimulatorTests(unittest.TestCase):
             return subprocess.CompletedProcess(arguments, 0, stdout=output)
 
         with patch.object(sys, "argv", ["prepare_ui_simulator.py", "create"]), \
-             patch.object(prepare_ui_simulator.subprocess, "run", side_effect=cold_command), \
+             patch.object(prepare_ui_simulator, "bounded_run", side_effect=cold_command), \
              contextlib.redirect_stdout(io.StringIO()) as output, \
              contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(prepare_ui_simulator.main(), 0)
@@ -118,7 +138,7 @@ class SelectUISimulatorTests(unittest.TestCase):
         command = ("xcrun", "simctl", "list", "devices", "available", "-j")
         failure = subprocess.TimeoutExpired(command, 300, output=b"Waiting for CoreSimulatorService")
         with patch.object(sys, "argv", ["prepare_ui_simulator.py", "create"]), \
-             patch.object(prepare_ui_simulator.subprocess, "run", side_effect=failure) as run, \
+             patch.object(prepare_ui_simulator, "bounded_run", side_effect=failure) as run, \
              contextlib.redirect_stdout(io.StringIO()) as output, \
              contextlib.redirect_stderr(io.StringIO()) as errors:
             self.assertEqual(prepare_ui_simulator.main(), 1)
@@ -141,7 +161,7 @@ class SelectUISimulatorTests(unittest.TestCase):
             return subprocess.CompletedProcess(arguments, 0, stdout="")
 
         with patch.object(sys, "argv", ["prepare_ui_simulator.py", "boot", device_id]), \
-             patch.object(prepare_ui_simulator.subprocess, "run", side_effect=cold_boot), \
+             patch.object(prepare_ui_simulator, "bounded_run", side_effect=cold_boot), \
              contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(prepare_ui_simulator.main(), 0)
         self.assertEqual(calls, [(("xcrun", "simctl", "boot", device_id), 90)])

@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import os
+from pathlib import Path
+from process_budget import run as bounded_run, seconds
 import json
 import re
 import subprocess
@@ -79,8 +82,8 @@ def select_device(devices: dict, runtimes: dict, sdk_version: str | None = None)
 
 
 def run(*arguments: str, timeout: int = 30) -> str:
-    return subprocess.run(arguments, check=True, text=True, capture_output=True,
-                          timeout=timeout).stdout.strip()
+    return bounded_run(arguments, check=True, text=True, capture_output=True,
+                          timeout=min(seconds(timeout), seconds(os.environ.get("SCANNER_SIMCTL_TIMEOUT_SECONDS", timeout)))).stdout.strip()
 
 
 def checked_id(value: str) -> str:
@@ -89,12 +92,26 @@ def checked_id(value: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("create", "boot", "ready", "shutdown"))
+    parser.add_argument("command", choices=("create", "boot", "ready", "shutdown", "delete", "recover"))
     parser.add_argument("device_id", nargs="?")
     arguments = parser.parse_args()
     stage = "device selection"
     try:
-        if arguments.command == "create":
+        if arguments.command == "recover":
+            # A create request can succeed server-side before its CLI is killed.
+            # Recover only the exact unique name journaled by this invocation.
+            stage = "owned device recovery"
+            name = Path(os.environ["SCANNER_DEVICE_NAME_FILE"]).read_text().strip()
+            if not re.fullmatch(r"Scanner UI Tests [0-9a-f]{32}", name):
+                raise ValueError("Invalid owned simulator name")
+            devices = json.loads(run("xcrun", "simctl", "list", "devices", "available", "-j",
+                                     timeout=seconds(os.environ.get("SCANNER_CLEANUP_TIMEOUT_SECONDS", 30))))
+            matches = [row for rows in devices["devices"].values() for row in rows if row.get("name") == name]
+            if len(matches) == 1:
+                print(checked_id(matches[0]["udid"]))
+            elif matches:
+                raise ValueError("Owned simulator name is ambiguous")
+        elif arguments.command == "create":
             selection = select_device(
                 json.loads(run("xcrun", "simctl", "list", "devices", "available", "-j",
                                timeout=SIMULATOR_DISCOVERY_TIMEOUT)),
@@ -103,7 +120,9 @@ def main() -> int:
                 run("xcrun", "--sdk", "iphonesimulator", "--show-sdk-version"),
             )
             stage = "device creation"
-            name = "Scanner UI Tests " + uuid.uuid4().hex[:12]
+            name = "Scanner UI Tests " + uuid.uuid4().hex
+            if os.environ.get("SCANNER_DEVICE_NAME_FILE"):
+                Path(os.environ["SCANNER_DEVICE_NAME_FILE"]).write_text(name)
             device_id = checked_id(run("xcrun", "simctl", "create", name,
                                        selection.device_type, selection.runtime,
                                        timeout=SIMULATOR_CREATION_TIMEOUT))
@@ -123,9 +142,10 @@ def main() -> int:
                 run("xcrun", "simctl", "bootstatus", device_id, "-b", timeout=300)
                 print("Dedicated UI simulator is ready.", file=sys.stderr)
             else:
-                stage = "shutdown"
-                run("xcrun", "simctl", "shutdown", device_id)
-                print("Stopped dedicated UI simulator; its data remains available for diagnostics.", file=sys.stderr)
+                stage = arguments.command
+                run("xcrun", "simctl", arguments.command, device_id,
+                    timeout=seconds(os.environ.get("SCANNER_CLEANUP_TIMEOUT_SECONDS", 30)))
+                print(f"Dedicated UI simulator {arguments.command} completed.", file=sys.stderr)
     except (ValueError, KeyError, TypeError, AttributeError, OSError, json.JSONDecodeError,
             subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         # All commands and names above are local preparation, never credentials.
@@ -142,7 +162,7 @@ def main() -> int:
         print(message, file=sys.stderr)
         # GitHub summaries remain useful when no XCTest log was created yet.
         escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-        severity = "warning" if arguments.command == "shutdown" else "error"
+        severity = "warning" if arguments.command in ("shutdown", "delete") else "error"
         print(f"::{severity} title=UI simulator preparation::{escaped}", file=sys.stderr)
         return 1
     return 0
