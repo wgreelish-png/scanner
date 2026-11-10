@@ -2,10 +2,73 @@ import SwiftUI
 import SwiftData
 import UIKit
 
+enum ScannerPurpose { case standard, leftoverStock }
+
+/// Counting needs exact identities and copies, not network market-price work.
+struct StockCountPricing: MarketPricing {
+    func quote(for card: CardCandidate) async throws -> MarketQuote? { nil }
+    func details(for card: CardCandidate, candidates: [CardCandidate], forceRefresh: Bool) async throws -> MarketDetails {
+        MarketDetails(quote: nil, printings: card.printings)
+    }
+}
+
+@MainActor struct LeftoverCountCardsView: View {
+    @Bindable var list: CardList
+    @Environment(\.modelContext) private var context
+    @State private var search = ""
+    @State private var error: String?
+
+    private var rows: [InventoryCard] {
+        list.orderedCards.reversed().filter {
+            search.isEmpty || [$0.snapshot.name, $0.snapshot.set, $0.snapshot.number,
+                $0.snapshot.identity.printing, $0.snapshot.identity.condition, $0.snapshot.identity.language]
+                .joined(separator: " ").localizedCaseInsensitiveContains(search)
+        }
+    }
+
+    var body: some View {
+        List {
+            Section {
+                Text("\(list.quantity) physical cards counted")
+                Text("Review printing, condition, language and copies. This count does not record a purchase, sale or inventory adjustment.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(rows) { row in
+                NavigationLink { CardEditorView(item: row) } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(row.snapshot.name).font(.headline)
+                        Text([row.snapshot.set, row.snapshot.number].filter { !$0.isEmpty }.joined(separator: " · "))
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text("\(row.snapshot.identity.printing) · \(row.snapshot.identity.condition) · \(row.snapshot.identity.language) · Qty \(row.quantity)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }.swipeActions {
+                    Button("Remove", role: .destructive) {
+                        guard !context.hasChanges else { error = "Finish saving your current edits, then remove this counted card."; return }
+                        let previousCards = list.cards
+                        context.delete(row)
+                        do { try context.save() } catch {
+                            // The context was clean before this synchronous edit.
+                            context.rollback()
+                            list.cards = previousCards; row.list = list
+                            context.processPendingChanges()
+                            self.error = "The counted card could not be removed. Your saved count was kept."
+                        }
+                    }
+                }
+            }
+        }.navigationTitle("Counted Cards").navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search counted cards")
+            .scrollDismissesKeyboard(.interactively)
+            .failureAlert($error)
+    }
+}
+
 @MainActor struct ScannerView: View {
     let session: ScanSession
     let list: CardList
     let draft: ScanBatchDraft?
+    let purpose: ScannerPurpose
     @Environment(\.modelContext) private var context
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -28,14 +91,21 @@ import UIKit
     @State private var manualSearchTransitionReady = false
     @State private var selectedRecentCard: InventoryCard?
     @State private var manualPromptPolicy = ScannerManualSearchPromptPolicy()
-    init(session: ScanSession, list: CardList, draft: ScanBatchDraft? = nil, model: ScannerViewModel? = nil) {
+    init(session: ScanSession, list: CardList, draft: ScanBatchDraft? = nil, model: ScannerViewModel? = nil,
+         purpose: ScannerPurpose = .standard) {
         self.session = session; self.list = list; self.draft = draft
+        let purpose: ScannerPurpose = LeftoverStockStore.shared.active?.countListIDs.contains(list.id) == true ? .leftoverStock : purpose
+        self.purpose = purpose
         _game = State(initialValue: session.game ?? "Pokémon")
-        let scannerModel = model ?? ScannerViewModel()
+        let scannerModel = model ?? (purpose == .leftoverStock ? ScannerViewModel(pricing: StockCountPricing()) : ScannerViewModel())
         _model = State(initialValue: scannerModel)
         _mode = State(initialValue: scannerModel.liveProvider == nil ? "Mock" : "Live")
     }
     @State private var visible = false
+    private var scannerPricing: any MarketPricing {
+        if purpose == .leftoverStock { return StockCountPricing() }
+        return StandardMarketPricing()
+    }
     private var activityState: DiagnosticActivityState {
         .init(selectedCount: min(5, model.result?.candidates.count ?? 0), isPreparing: model.saving || model.selectionInProgress,
               canProceed: session.isActive && !model.saving && !model.selectionInProgress && !model.quickActionCoolingDown && !model.paused,
@@ -109,7 +179,8 @@ import UIKit
         .fullScreenCover(isPresented: $showingConnection, onDismiss: finishConnection) { connectionView }
         .sheet(isPresented: $showingManualSearch, onDismiss: finishManualSearch) {
             ManualCardSearchView(list: list, game: session.game ?? game, allowsGameChange: false, draft: draft,
-                                 focusSearchOnAppear: true)
+                                 focusSearchOnAppear: true,
+                                 pricing: scannerPricing)
         }
         .sheet(item: $selectedRecentCard, onDismiss: finishRecentCard) { item in
             NavigationStack { CardEditorView(item: item) }
@@ -130,6 +201,7 @@ import UIKit
             else if phase == .background { showingManualSearchPrompt = false; model.stop() }
         }
         .onChange(of: game) { _, newGame in
+            guard purpose == .standard else { game = session.game ?? "Pokémon"; return }
             guard newGame != session.game else { return }
             pendingGame = newGame; game = session.game ?? "Pokémon"; confirmGame = true
         }
@@ -155,11 +227,16 @@ import UIKit
             if previous != nil && current == nil && nextDraft?.isCommitted == true { nextDraft = nil }
         }
         .navigationDestination(isPresented: $showingListReview) {
-            SessionReviewView(session: session, list: list, onContinueScanning: {
-                model.paused = false
-                showingListReview = false
-            }).toolbar(.visible, for: .navigationBar)
-                .toolbar(.visible, for: .tabBar)
+            if purpose == .leftoverStock {
+                LeftoverCountCardsView(list: list)
+                    .toolbar(.visible, for: .navigationBar)
+            } else {
+                SessionReviewView(session: session, list: list, onContinueScanning: {
+                    model.paused = false
+                    showingListReview = false
+                }).toolbar(.visible, for: .navigationBar)
+                    .toolbar(.visible, for: .tabBar)
+            }
         }
         .onChange(of: showingListReview) { _, showing in
             if !showing { startIfReady() }
@@ -200,7 +277,9 @@ import UIKit
                 }.accessibilityLabel(model.paused ? "Resume camera" : "Pause camera")
                     .accessibilityIdentifier("scanner.pause")
                 Menu {
-                    Picker("Game", selection: $game) { ForEach(CatalogOptions.games(including: game), id: \.self) { Text($0) } }
+                    if purpose == .standard {
+                        Picker("Game", selection: $game) { ForEach(CatalogOptions.games(including: game), id: \.self) { Text($0) } }
+                    }
                     Button("Retry Live Scanner") {
                         model.stop(); model.paused = false
                         startIfReady()
@@ -251,12 +330,12 @@ import UIKit
         return VStack(spacing: detailsCollapsed ? 6 : 10) {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(totals.quantity > 0 && totals.unpricedQuantity == totals.quantity
+                    Text(purpose == .leftoverStock ? "\(list.quantity) cards counted" : totals.quantity > 0 && totals.unpricedQuantity == totals.quantity
                          ? "\(totals.quantity) cards • unpriced"
                          : "\(totals.quantity) cards • \(totals.market.money) \(totals.unpricedQuantity > 0 ? "known" : "market")")
                         .font(.subheadline.bold())
                         .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("scanner.totals")
-                    if totals.unpricedQuantity > 0 {
+                    if purpose == .standard && totals.unpricedQuantity > 0 {
                         Text(totals.unpricedQuantity == totals.quantity ? "Market prices unavailable" : "\(totals.unpricedQuantity) unpriced • partial total")
                             .font(.caption).foregroundStyle(.orange)
                             .accessibilityIdentifier("scanner.unpriced")
@@ -301,8 +380,8 @@ import UIKit
                 model.stop(); showingListReview = true
                 DiagnosticLog.shared.record("navigation.review_opened", ["phase": "scanner"])
             } label: {
-                Label("List", systemImage: "list.bullet").frame(maxWidth: .infinity, minHeight: 44)
-            }.buttonStyle(.borderless).accessibilityLabel("View List").accessibilityIdentifier("scanner.viewList")
+                Label(purpose == .leftoverStock ? "Review Count" : "List", systemImage: "list.bullet").frame(maxWidth: .infinity, minHeight: 44)
+            }.buttonStyle(.borderless).accessibilityLabel(purpose == .leftoverStock ? "Review Count" : "View List").accessibilityIdentifier("scanner.viewList")
                 .disabled(draft?.isCommitted == false)
             if draft?.isCommitted == false {
                 Button("Close", systemImage: "xmark") {
@@ -312,7 +391,7 @@ import UIKit
                     .frame(maxWidth: .infinity, minHeight: 44).accessibilityLabel("Close Scan")
                     .accessibilityIdentifier("scanner.finishSession")
             } else if session.isActive {
-                FinishSessionButton(session: session, title: "Finish") {
+                FinishSessionButton(session: session, title: purpose == .leftoverStock ? "Finish Count" : "Finish") {
                     DiagnosticLog.shared.activity(.outcome, screen: .scanner, action: .finishSession, state: activityState)
                     model.stop(); dismiss()
                 }

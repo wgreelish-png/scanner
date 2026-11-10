@@ -34,7 +34,9 @@ import SwiftData
 
     @ViewBuilder private var rootView: some View {
 #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("--show-transactions-ui-fixture") {
+        if ProcessInfo.processInfo.arguments.contains("--uitest-leftover-stock") {
+            LeftoverStockFixtureScreen()
+        } else if ProcessInfo.processInfo.arguments.contains("--show-transactions-ui-fixture") {
             ShowTransactionFixtureScreen()
         } else if ProcessInfo.processInfo.arguments.contains("--uitest-market-evidence") {
             MarketEvidenceFixtureScreen(research: false)
@@ -150,6 +152,9 @@ struct ActiveSessionCard: View {
     @Query private var lists: [CardList]
     var body: some View {
         if let list = lists.first(where: { $0.id == session.listID }) {
+            if LeftoverStockStore.shared.active?.countListIDs.contains(list.id) == true {
+                NavigationLink { LeftoverStockView() } label: { Label("Continue Leftover Count", systemImage: "checklist") }
+            } else {
             Text(session.game ?? "Unknown game").font(.title2.bold())
             Text(session.startedAt, format: .dateTime).foregroundStyle(.secondary)
             Text(list.name).font(.caption)
@@ -158,6 +163,7 @@ struct ActiveSessionCard: View {
             if list.unpricedQuantity > 0 { Text("\(list.unpricedQuantity) unpriced copies need review").foregroundStyle(.orange) }
             NavigationLink { ScannerView(session: session, list: list) } label: { Label("Continue Scanning", systemImage: "viewfinder") }
             NavigationLink { SessionReviewView(session: session, list: list) } label: { Label("View List & Offers", systemImage: "dollarsign.circle") }
+            }
         } else {
             Text("The active session's list is unavailable.")
             FinishSessionButton(session: session)

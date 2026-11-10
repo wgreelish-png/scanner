@@ -226,6 +226,19 @@ import SwiftData
         XCTAssertNil(try SessionService.active(context: reopened))
     }
 
+    func testLeftoverDraftPreservesPreferredScannerGameAndHasNoPriceWork() async throws {
+        let suite = "LeftoverDraft.Tests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("Magic: The Gathering", forKey: "defaultGame")
+        let draft = try SessionService.prepareDraft(game: "Pokémon", rememberGame: false, defaults: defaults)
+        XCTAssertEqual(defaults.string(forKey: "defaultGame"), "Magic: The Gathering")
+        XCTAssertNil(draft.list.modelContext); XCTAssertFalse(draft.isCommitted)
+        let card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]
+        let details = try await StockCountPricing().details(for: card, candidates: [card], forceRefresh: true)
+        XCTAssertNil(details.quote); XCTAssertEqual(details.printings, card.printings)
+    }
+
     func testFirstConfirmedDraftCardCreatesOneListAndLaterCardsKeepItsIdentity() throws {
         let container = try store(), context = container.mainContext
         let instant = Date(timeIntervalSince1970: 1_800_000_000)

@@ -40,6 +40,6 @@ Required device checks: module imports under the current site's CSP/import map; 
 
 Observed hosts for device networking are `tcgtracking.com`, `nsp-static.tcgtracking.com`, and `cdn.tcgtracking.com`. Existing modules may load further assets based on the live page's configuration. No cloud network configuration was changed. An official published plugin bridge would be preferable when available; the provider isolates this version-dependent adapter so it can be replaced without changing lists or persistence.
 
-No additional files are currently needed: the HAR supplied the backend and pack files required for this implementation. If an actual runtime failure reveals another missing dependency, request that exact file then. TCGTracking CSV import compatibility remains unverified and is not offered.
+No additional files are currently needed: the HAR supplied the backend and pack files required for this implementation. If an actual runtime failure reveals another missing dependency, request that exact file then. Build 109 adds a dedicated [Leftover Stock export](LeftoverStock109.md) using the public importer’s canonical headers and explicit column mapping. Live backend round-trip compatibility remains unverified; the documented workflow clears only Card Show and then uses Add, never account-wide Full Replace.
 
 Local diagnostic logging now records bounded, sampled startup/recognition/add/save events. Settings can export JSON-lines logs, clear them, or disable future recording. See the README for the test-and-share workflow and exclusions.

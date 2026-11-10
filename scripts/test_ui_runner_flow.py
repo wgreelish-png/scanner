@@ -292,7 +292,8 @@ class UIRunnerFlowTests(unittest.TestCase):
         for name, targets in expected.items():
             with self.subTest(job=name):
                 block = job_blocks[name]
-                scope = "inputs.job_scope == 'show_polish' && " + ("'show_polish'" if name == "ui" else "'all'") + " || "
+                scope = "inputs.job_scope == 'leftover_stock' && " + ("'leftover_stock'" if name == "ui" else "'all'") + " || "
+                scope += "inputs.job_scope == 'show_polish' && " + ("'show_polish'" if name == "ui" else "'all'") + " || "
                 scope += "inputs.job_scope == 'log_review' && 'log_review' || "
                 if name == "ui":
                     scope += "inputs.job_scope == 'ui_diagnostic' && 'ui_diagnostic' || "
@@ -339,6 +340,31 @@ class UIRunnerFlowTests(unittest.TestCase):
             source = (root / "UITests" / (target.split("/")[1] + ".swift")).read_text()
             self.assertRegex(source, r"\bfunc\s+" + target.rsplit("/", 1)[1] + r"\s*\(")
         rejected, rejected_commands, _ = self.run_flow(target=targets[0] + "Typo")
+        self.assertEqual(rejected.returncode, 2)
+        self.assertFalse(rejected_commands)
+
+    def test_leftover_stock_runs_only_the_focused_case_and_preserves_runner_safety(self):
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/ios.yml").read_text()
+        jobs = dict(re.findall(r"(?ms)^  (\w+):\n(.*?)(?=^  \w+:\n|\Z)", workflow.split("\njobs:\n", 1)[1]))
+        target = "CardShowScannerUITests/LeftoverStockFlowTests/testCompletedCountExportsOnlyPositiveAbsoluteStockWithoutChangingInventory"
+        for name, block in jobs.items():
+            self.assertEqual("inputs.job_scope == 'leftover_stock'" in block.splitlines()[0], name in ("native", "ui"))
+        options = workflow.split("      test_scope:\n", 1)[1].split("\n# PRs", 1)[0]
+        self.assertNotIn("          - leftover_stock\n", options)
+        branch = re.search(r'elif \[ "\$SCANNER_TEST_SCOPE" = leftover_stock \]; then\n'
+                           r'(.*?)(?=\n          (?:elif|else|fi)\b)', jobs["ui"], re.DOTALL)
+        self.assertIsNotNone(branch)
+        self.assertEqual(branch.group(1).split(), ["bash", "scripts/run_ios_tests.sh", target])
+        result, commands, _ = self.run_flow(target=target)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        test = next(row["args"] for row in commands if row["tool"] == "xcodebuild" and row["args"][0] == "test-without-building")
+        self.assertEqual([value for value in test if value.startswith("-only-testing:")], ["-only-testing:" + target])
+        self.assertFalse(any(value.startswith("-skip-testing:") for value in test))
+        self.assert_shutdown(commands)
+        source = (root / "UITests/LeftoverStockFlowTests.swift").read_text()
+        self.assertRegex(source, r"\bfunc\s+" + target.rsplit("/", 1)[1] + r"\s*\(")
+        rejected, rejected_commands, _ = self.run_flow(target=target + "Typo")
         self.assertEqual(rejected.returncode, 2)
         self.assertFalse(rejected_commands)
 

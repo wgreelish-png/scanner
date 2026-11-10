@@ -99,7 +99,11 @@ private struct ListSelectionButtonStyle: ButtonStyle {
                                 .accessibilityAddTraits(selectedListIDs.contains(list.id) ? .isSelected : [])
                         } else {
                             NavigationLink {
-                                CardListView(list: list, session: sessions.first { $0.listID == list.id })
+                                if LeftoverStockStore.shared.active?.countListIDs.contains(list.id) == true {
+                                    LeftoverStockView()
+                                } else {
+                                    CardListView(list: list, session: sessions.first { $0.listID == list.id })
+                                }
                             } label: { savedListLabel(list) }
                         }
                     }

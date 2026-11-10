@@ -5,7 +5,13 @@ struct SessionReviewView: View {
     let session: ScanSession
     let list: CardList
     var onContinueScanning: (() -> Void)? = nil
-    var body: some View { CardListView(list: list, session: session, onContinueScanning: onContinueScanning) }
+    var body: some View {
+        if LeftoverStockStore.shared.active?.countListIDs.contains(list.id) == true {
+            LeftoverCountCardsView(list: list)
+        } else {
+            CardListView(list: list, session: session, onContinueScanning: onContinueScanning)
+        }
+    }
 }
 
 private struct OfferMetricCard: View {

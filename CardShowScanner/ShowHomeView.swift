@@ -30,6 +30,10 @@ import UIKit
                             ShowHomeRouteCard(title: "Inventory", subtitle: "\(availableQuantity.formatted()) cards in local stock",
                                               symbol: "shippingbox.fill", color: .indigo)
                         }.buttonStyle(.plain).accessibilityIdentifier("show.inventory")
+                        NavigationLink { LeftoverStockView() } label: {
+                            ShowHomeRouteCard(title: "Count Leftover Stock", subtitle: "Compare with Card Show and export replacement CSV",
+                                              symbol: "checklist", color: .teal)
+                        }.buttonStyle(.plain).accessibilityIdentifier("show.leftoverStock")
                         NavigationLink { PriceTagsView(store: store) } label: {
                             ShowHomeRouteCard(title: "Price Tags", subtitle: "Print all, changed prices, or custom tags",
                                               symbol: "tag.fill", color: .indigo)

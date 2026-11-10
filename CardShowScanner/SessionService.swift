@@ -96,14 +96,14 @@ enum ScannerUndoFailure: LocalizedError, Equatable {
         return OfferRates(cash: rate("cashPercentage", fallback: defaults.object(forKey: "pricingPercentage") == nil ? 70 : defaults.double(forKey: "pricingPercentage")),
             trade: rate("tradePercentage", fallback: 80), maximum: rate("maximumBuyPercentage", fallback: 75))
     }
-    static func prepareDraft(game: String, defaults: UserDefaults = .standard, now: Date = .now) throws -> ScanBatchDraft {
+    static func prepareDraft(game: String, rememberGame: Bool = true, defaults: UserDefaults = .standard, now: Date = .now) throws -> ScanBatchDraft {
         guard TCGGameRegistry.scannerKey(for: game) != nil else { throw BatchFailure.wrongGame }
         let formatter = DateFormatter(); formatter.dateFormat = "MMM d, yyyy - h:mm a"
         let list = CardList(name: formatter.string(from: now) + " - " + game); list.createdAt = now
         let session = ScanSession(listName: list.name)
         session.startedAt = now; session.listID = list.id; session.game = game; session.statusRaw = "active"
         session.setRates(Self.defaults(defaults))
-        defaults.set(game, forKey: "defaultGame")
+        if rememberGame { defaults.set(game, forKey: "defaultGame") }
         return ScanBatchDraft(session: session, list: list)
     }
 

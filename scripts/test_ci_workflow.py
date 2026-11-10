@@ -44,6 +44,7 @@ class CIWorkflowTests(unittest.TestCase):
         self.assertEqual(selected_jobs(job="tooling"), {"tooling"})
         self.assertEqual(selected_jobs(job="log_review"), {"tooling", "native", "ui"})
         self.assertEqual(selected_jobs(job="show_polish"), {"tooling", "native", "ui"})
+        self.assertEqual(selected_jobs(job="leftover_stock"), {"tooling", "native", "ui"})
         self.assertEqual(selected_jobs(job="ui_diagnostic"), {"tooling", "ui"})
         for scope in ("all", "printer_transport", "navigation_price", "label_queue"):
             self.assertEqual(selected_jobs(job="ui_diagnostic", test=scope), {"tooling", "ui"})
@@ -70,6 +71,17 @@ class CIWorkflowTests(unittest.TestCase):
                 values = context(job="show_polish", test=test_scope)
                 self.assertEqual(selected_jobs(job="show_polish", test=test_scope), {"tooling", "native", "ui"})
                 for name, expected in (("native", "all"), ("ui", "show_polish")):
+                    scope = re.search(r"(?m)^          SCANNER_TEST_SCOPE: \$\{\{ (.+) \}\}$", JOBS[name])
+                    self.assertIsNotNone(scope)
+                    self.assertEqual(expression(scope.group(1), values), expected)
+
+    def test_leftover_stock_forces_full_native_and_focused_ui_without_unrelated_jobs(self):
+        self.assertIn("          - leftover_stock\n", WORKFLOW.split("      test_scope:\n", 1)[0])
+        for test_scope in ("all", "printer_transport", "label_controls", "label_preview", "label_queue", "show_readiness", "navigation_price"):
+            with self.subTest(test_scope=test_scope):
+                values = context(job="leftover_stock", test=test_scope)
+                self.assertEqual(selected_jobs(job="leftover_stock", test=test_scope), {"tooling", "native", "ui"})
+                for name, expected in (("native", "all"), ("ui", "leftover_stock")):
                     scope = re.search(r"(?m)^          SCANNER_TEST_SCOPE: \$\{\{ (.+) \}\}$", JOBS[name])
                     self.assertIsNotNone(scope)
                     self.assertEqual(expression(scope.group(1), values), expected)

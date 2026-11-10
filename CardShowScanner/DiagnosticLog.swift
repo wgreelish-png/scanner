@@ -16,6 +16,7 @@ enum DiagnosticActivityScreen: String, CaseIterable, Hashable, Sendable {
     case labelQueue, labelPreview, labelProgress, printerSettings
     case transaction, transactionHistory, transactionDetail, inventoryImport
     case showBudget, inventoryDetail, inventorySelection
+    case leftoverStock
 }
 
 enum DiagnosticActivityAction: String, CaseIterable, Sendable {
@@ -30,6 +31,7 @@ enum DiagnosticActivityAction: String, CaseIterable, Sendable {
     case save, saved, failed, saveSucceeded, saveFailed, undoTransaction, openHistory, changeQuantity, markIssue
     case copyDiagnostics, exportDiagnostics, clearDiagnostics
     case refreshMissingPrices
+    case fetchBaseline, finishCount, exportReplacement, exportComparison, resolveSKU, setCount, newCount, resumeCount
 }
 
 enum DiagnosticActivityBlockReason: String, CaseIterable, Sendable {
