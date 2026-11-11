@@ -329,9 +329,12 @@ enum ScannerResourceMode: String, Equatable {
     case normal, reduced, cooling
 
     static func policy(for state: DeviceResourceState) -> Self {
+        // Apple recommends reducing demand at serious heat and, if possible,
+        // stopping camera use at critical heat. These are OS-reported bands,
+        // not an app-defined temperature or an OS-wide app-block threshold.
         switch state.thermal {
-        case .serious, .critical: return .cooling
-        case .fair: return .reduced
+        case .critical: return .cooling
+        case .fair, .serious: return .reduced
         case .nominal, .unknown: return state.lowPowerMode ? .reduced : .normal
         }
     }

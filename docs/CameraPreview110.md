@@ -8,13 +8,14 @@ memory warnings or sampled heartbeat lag. Earlier sessions did contain thermal
 pressure, so heat protection remains necessary. Native CPU/memory samples exclude
 WebKit; track-reported FPS is a camera setting, not a rendered-frame measurement.
 
-The preview now retains the resource policy's cap throughout live scanning, card
+Build 110 changed the preview to retain the resource policy's cap throughout live scanning, card
 review, manual search, the manual-search suggestion, and recent-card editing:
 30 FPS normally, 10 FPS at fair heat or in Low Power Mode. These are requested
 limits, subject to device/browser support. Recognition and outline processing
 remain stopped while a review or manual screen is open. Reusing the mounted
-stream and loaded database avoids a restart on return. Serious/critical heat and
-backgrounding still stop capture. Card matching, inventory and user preferences
+stream and loaded database avoids a restart on return. Build 110 kept the earlier
+serious/critical pause; [build 111](AppleThermal111.md) narrows the camera pause to
+critical heat and reduces card scanning at serious heat. Backgrounding still stops capture. Card matching, inventory and user preferences
 are unchanged.
 
 State-only transitions also reuse a successfully applied frame-rate target on
@@ -39,7 +40,7 @@ cannot verify rendered smoothness or battery impact on an iPhone.
 3. Enable Low Power Mode and repeat. A 10 FPS preview is expected in reduced
    mode; manual/review must not drop it to 1 FPS. Turn Low Power Mode off and
    confirm the normal cap returns.
-4. Background and return once. If iOS naturally reports serious heat, capture
+4. Background and return once. If iOS naturally reports critical heat, capture
    should stop for cooling. Do not intentionally heat the phone.
 5. Export diagnostics afterward. Relevant `web.camera_workload` transitions
    should show `target_fps=30` normally or `10` in reduced mode, with

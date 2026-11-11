@@ -35,7 +35,7 @@ intact and repeated adds cannot duplicate its existing rows. See the
 Build 103 reduces [scanner workload](docs/DeviceHealthMonitoring.md) behind
 card review and manual search, requests lower camera frame rates during those
 states, and applies stronger throttling when iOS reports warmth. Existing
-serious/critical heat protection stays enabled; sustained iPhone results are
+critical-heat camera protection stays enabled; sustained iPhone results are
 pending. New diagnostics distinguish requested and reported camera rates.
 
 Build 102 shows the saved last printed tag value in inventory rows and card
@@ -154,7 +154,7 @@ choice across inventory/custom/bulk labels, and preserves already queued art.
 Build 76 adds [device health diagnostics and camera heat protection](docs/DeviceHealthMonitoring.md):
 foreground-only health summaries, memory/thermal warnings, available iOS crash
 and hang report counts, and reduced scanner work in Low Power Mode or elevated
-heat. Serious/critical heat pauses capture without changing saved inventory.
+heat. Serious heat uses reduced card scanning; critical heat pauses capture without changing saved inventory.
 
 Build 75 adds [warm manual-search return and recent scan review](docs/WarmScannerReview.md):
 Search Manually is available in Choose the Card, scan-origin catalog entry opens

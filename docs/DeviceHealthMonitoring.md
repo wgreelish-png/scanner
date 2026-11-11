@@ -1,8 +1,9 @@
 # Device health monitoring and heat protection
 
-Build 110, revision `smooth-review-camera-preview`, updates the preview policy
-introduced in build 103 (`scanner-workload-reduction`). The build 76
-`device-health-protection` controls remain active.
+Build 111, revision `apple-thermal-camera-threshold`, follows Apple’s recommendation
+to reduce demand at serious heat and stop camera use at critical heat. Build 110’s
+`smooth-review-camera-preview` behavior and the build 76 device monitoring remain
+active. See [Apple thermal guidance](AppleThermal111.md) for the source and limits.
 
 ## Recorded measurements
 
@@ -64,7 +65,7 @@ Protection uses iOS resource notifications independently of diagnostic opt-out:
 
 - Normal thermal state keeps the existing recognition scheduler and requests
   a maximum 30 FPS camera stream. Recognition resolution remains unchanged.
-- Fair thermal state or Low Power Mode limits the card scanner processing /
+- Fair or serious thermal state, or Low Power Mode, limits the card scanner processing /
   overlay scheduler to approximately 5 Hz (200 ms between frame requests) and
   requests a maximum 10 FPS camera stream. Actual rates depend on camera support.
 - A held choose-card review, manual-search sheet or unresolved manual-search
@@ -73,7 +74,7 @@ Protection uses iOS resource notifications independently of diagnostic opt-out:
   and the loaded database/backend and frozen review remain available. Review or
   manual entry alone no longer requests 1 FPS. Processing stays paused without
   reopening the database or changing matching thresholds.
-- Serious or critical thermal state stops card recognition and camera capture
+- Critical thermal state stops card recognition and camera capture
   and shows Cooling down. The loaded database/backend and frozen card review
   remain available. Capture can resume after cooling only when the scanner is
   still active and foreground, manual search is closed and the user has not
@@ -83,8 +84,8 @@ Protection uses iOS resource notifications independently of diagnostic opt-out:
   deadline backs up the WebKit command. If delivery fails or hangs, the public
   WebKit camera-stop API retires capture and exposes Retry instead of claiming
   successful cooling recovery.
-- The separate PSA barcode camera also refuses startup and pauses at serious /
-  critical heat. Captured certification codes remain available; its existing
+- The separate PSA barcode camera also refuses startup and pauses at critical
+  heat. Captured certification codes remain available; its existing
   Retry Camera action resumes when eligible, and manual number entry works.
 
 No app can promise zero battery consumption or prevent every OS/app crash.
@@ -112,7 +113,7 @@ jerky even in nominal conditions. Build 110 retains the recognition pause and us
 the normal/reduced preview caps instead. Camera constraint
 updates use one serialized pump, coalesce to the latest state and ignore retired
 stream callbacks. A pending browser constraint operation is not cancellable;
-serious/critical heat still stops its track immediately. Unsupported or rejected
+critical heat still stops its track immediately. Unsupported or rejected
 constraints are logged, never represented as measured success.
 
 `web.camera_workload` records transitions, not frames:
@@ -148,7 +149,8 @@ heat/battery improvement remains pending a sustained physical-device session.
    this app. Avoid drawing conclusions from a single 30-second battery sample.
 6. Exercise cooling transitions with injected test states in automated tests;
    do not intentionally heat a physical device. On an organically warm phone,
-   verify Cooling down stops capture, keeps saved data/review usable and
+   verify serious heat uses reduced card scanning and critical-heat Cooling down
+   stops capture, keeps saved data/review usable and
    respects user pause/manual-entry/background state during recovery.
 7. While choosing a match or entering a card manually, inspect the new workload
    events for `processing_active=false` and the same normal/reduced preview cap.

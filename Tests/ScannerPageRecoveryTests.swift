@@ -31,13 +31,13 @@ final class ScannerPageRecoveryTests: XCTestCase {
         XCTAssertTrue(policy.shouldPresent(at: 220))
     }
 
-    func testPublicThermalAndPowerSignalsChooseConservativeScannerWorkWithoutInventedThresholds() {
+    func testAppleThermalBandsReduceSeriousScanningAndPauseOnlyAtCritical() {
         for thermal in [DeviceThermalLevel.nominal, .fair, .serious, .critical, .unknown] {
             for lowPower in [false, true] {
                 let mode = ScannerResourceMode.policy(for: DeviceResourceState(thermal: thermal, lowPowerMode: lowPower))
                 switch thermal {
-                case .serious, .critical: XCTAssertEqual(mode, .cooling)
-                case .fair: XCTAssertEqual(mode, .reduced)
+                case .critical: XCTAssertEqual(mode, .cooling)
+                case .fair, .serious: XCTAssertEqual(mode, .reduced)
                 case .nominal, .unknown: XCTAssertEqual(mode, lowPower ? .reduced : .normal)
                 }
             }
