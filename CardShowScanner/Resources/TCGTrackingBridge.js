@@ -83,6 +83,7 @@
   let markScanIssue = () => false;
   let setSteadyCardBorder = () => {};
   let setResourceMode = () => false;
+  let setDeliveryDiagnostics = () => false;
   let setCaptureMode = () => false;
   let capturePhoto = async () => false;
   let retakePhoto = async () => false;
@@ -102,6 +103,7 @@
     const validResourceMode = value => ['normal', 'reduced', 'cooling'].includes(value);
     let resourceMode = validResourceMode(config.resourceMode) ? config.resourceMode : 'normal';
     let foreground = config.foreground !== false;
+    let deliveryDiagnosticsEnabled = typeof config.diagnosticsEnabled === 'boolean' ? config.diagnosticsEnabled : true;
     let thermalResumePending = resourceMode === 'cooling' || !foreground;
     let resumeRequested = false, startupFailed = false, retiredPlayback = false, retiredResourceAcquisition = false, preserveRetiredReview = false, loopGeneration = 0;
     let pack = null, backendPack = null, cacheWarning = false;
@@ -296,8 +298,101 @@
     frame.append(video, canvas, still); root.append(frame, button, hint); document.body.append(root);
     const clearStill = () => { still.hidden = true; still.style.display = 'none'; still.width = still.height = 1; };
 
+    // Video delivery is separate from requested camera settings and recognition.
+    // This observer only retains counters/timestamps: no pixels, image copies or
+    // per-frame bridge messages. Aggregate windows and stop flushes do not overlap.
+    let deliveryOwner = null, deliveryPlaybackStream = null;
+    const deliveryClock = () => {
+      try {
+        const at = globalThis.performance?.now?.();
+        return typeof at === 'number' && Number.isFinite(at) && at >= 0 ? at : null;
+      } catch (_) { return null; }
+    };
+    const deliveryCurrent = owner => deliveryDiagnosticsEnabled && running && deliveryOwner === owner && stream === owner.stream;
+    const flushDelivery = (owner, stopping = false) => {
+      if (!deliveryCurrent(owner)) return;
+      const at = deliveryClock(), windowMS = at === null || owner.windowAt === null ? null : at - owner.windowAt;
+      if (windowMS === null || !Number.isFinite(windowMS) || windowMS < 1 || windowMS > 86400000) {
+        owner.windowAt = at; owner.base = owner.latest; return;
+      }
+      if (!stopping && windowMS < 5000) return;
+      const fields = { captureMode: owner.mode, deliveryState: owner.supported ? 'pending' : 'unavailable',
+        windowMS: Math.floor(windowMS), cameraOnMS: Math.floor(windowMS) };
+      if (owner.supported && owner.base && owner.latest) {
+        const frames = owner.latest.frames - owner.base.frames;
+        const frameWindowMS = owner.latest.at - owner.base.at;
+        const fps = frames * 1000 / frameWindowMS;
+        if (Number.isSafeInteger(frames) && frames >= 0 && frames <= 1_000_000 &&
+            Number.isFinite(frameWindowMS) && frameWindowMS >= 1 && frameWindowMS <= 86400000 &&
+            Number.isFinite(fps) && fps >= 0 && fps <= 240) {
+          Object.assign(fields, { deliveryState: 'measured', deliveredFrames: frames,
+            frameWindowMS: Math.floor(frameWindowMS), deliveredFPS: Math.round(fps * 1000) / 1000 });
+        }
+      }
+      diagnostic('camera_delivery', fields);
+      owner.windowAt = at; owner.base = owner.latest;
+    };
+    const stopDelivery = (flush = true) => {
+      const owner = deliveryOwner;
+      if (!owner) return;
+      if (flush) flushDelivery(owner, true);
+      deliveryOwner = null;
+      clearTimeout(owner.timer);
+      if (owner.callback !== null) {
+        try { video.cancelVideoFrameCallback(owner.callback); } catch (_) { /* Optional telemetry cannot interrupt capture. */ }
+      }
+    };
+    const startDelivery = ownedStream => {
+      stopDelivery();
+      if (!deliveryDiagnosticsEnabled) return;
+      const at = deliveryClock();
+      if (at === null) { diagnostic('camera_delivery', { captureMode, deliveryState: 'unavailable' }); return; }
+      const owner = { stream: ownedStream, mode: captureMode, windowAt: at, base: null, latest: null,
+        supported: typeof video.requestVideoFrameCallback === 'function' && typeof video.cancelVideoFrameCallback === 'function',
+        callback: null, timer: null };
+      deliveryOwner = owner;
+      const frameDelivered = (_, metadata) => {
+        owner.callback = null;
+        if (!deliveryCurrent(owner) || !foreground || document.hidden || cooling()) return;
+        const at = deliveryClock(), frames = metadata?.presentedFrames;
+        if (at !== null && Number.isSafeInteger(frames) && frames >= 0) {
+          const sample = { at, frames };
+          if (!owner.base || !owner.latest || at < owner.latest.at || frames < owner.latest.frames) owner.base = sample;
+          owner.latest = sample; owner.supported = true;
+        } else {
+          owner.base = owner.latest = null; owner.supported = false;
+          if (at === null) owner.windowAt = null;
+        }
+        requestDelivery();
+      };
+      const requestDelivery = () => {
+        if (!deliveryCurrent(owner) || !foreground || document.hidden || cooling()) return;
+        try { owner.callback = video.requestVideoFrameCallback(frameDelivered); }
+        catch (_) { owner.supported = false; owner.base = owner.latest = null; owner.callback = null; }
+      };
+      const sampleWindow = () => {
+        if (!deliveryCurrent(owner)) return;
+        flushDelivery(owner);
+        owner.timer = setTimeout(sampleWindow, 5000);
+      };
+      if (owner.supported) requestDelivery();
+      owner.timer = setTimeout(sampleWindow, 5000);
+    };
+    setDeliveryDiagnostics = (enabled, expectedNonce) => {
+      if (!running || typeof enabled !== 'boolean' || expectedNonce !== config.nonce) return false;
+      if (enabled === deliveryDiagnosticsEnabled) return true;
+      deliveryDiagnosticsEnabled = enabled;
+      // Opting out discards the partial window without producing a last log.
+      // Re-enabling starts now; time/frames from the disabled period stay absent.
+      if (!enabled) stopDelivery(false);
+      else if (stream && deliveryPlaybackStream === stream && foreground && !document.hidden && !cooling()) startDelivery(stream);
+      return true;
+    };
+
     const report = value => { value = cooling() ? coolingMessage : value; hint.hidden = config.autoStart === true || !!stream; hint.textContent = text(value); post({ kind: 'status', message: text(value) }); };
     const stopCamera = (preserveReview = false) => {
+      stopDelivery();
+      deliveryPlaybackStream = null;
       loopGeneration++;
       const promptPending = preserveReview && manualPromptPending;
       clearManualAttempt(); manualPromptPending = promptPending; removalAbsentSince = null;
@@ -532,6 +627,8 @@
         video.srcObject = stream; await video.play();
         if (!eligible() || stream !== captured) { stopCamera(preserveRetiredReview || cooling()); return; }
         diagnostic('video_playing', { elapsedMS: clock() - began });
+        deliveryPlaybackStream = captured;
+        startDelivery(captured);
         stage = 'scan';
         overlay = overlays.createOverlay(canvas, { fit: 'cover' });
         // The camera outlines a detection; only the candidate sheet names a card.
@@ -697,5 +794,5 @@
     if (captureMode === 'photo') emitPhotoState(cooling() ? 'cooling' : (photoFramingRequested ? 'off' : photoRestState));
     if (config.autoStart) await button.onclick();
   }
-  globalThis.CardShowBridge = { install, stop: () => dispose(), resetRecognition: () => resetRecognition(), releaseReview: ref => releaseReview(ref), resumeAfterManualSearchPrompt: () => resumeAfterManualSearchPrompt(), suspendForManualSearch: nonce => suspendForManualSearch(nonce), resumeAfterManualSearch: nonce => resumeAfterManualSearch(nonce), setResourceMode: (mode, nonce, foreground) => setResourceMode(mode, nonce, foreground), refreshDatabase: () => refreshDatabase(), markScanIssue: reason => markScanIssue(reason), setSteadyCardBorder: enabled => setSteadyCardBorder(enabled), setCaptureMode: (mode, nonce) => setCaptureMode(mode, nonce), capturePhoto: nonce => capturePhoto(nonce), retakePhoto: nonce => retakePhoto(nonce), normalizeView };
+  globalThis.CardShowBridge = { install, stop: () => dispose(), resetRecognition: () => resetRecognition(), releaseReview: ref => releaseReview(ref), resumeAfterManualSearchPrompt: () => resumeAfterManualSearchPrompt(), suspendForManualSearch: nonce => suspendForManualSearch(nonce), resumeAfterManualSearch: nonce => resumeAfterManualSearch(nonce), setResourceMode: (mode, nonce, foreground) => setResourceMode(mode, nonce, foreground), setDeliveryDiagnostics: (enabled, nonce) => setDeliveryDiagnostics(enabled, nonce), refreshDatabase: () => refreshDatabase(), markScanIssue: reason => markScanIssue(reason), setSteadyCardBorder: enabled => setSteadyCardBorder(enabled), setCaptureMode: (mode, nonce) => setCaptureMode(mode, nonce), capturePhoto: nonce => capturePhoto(nonce), retakePhoto: nonce => retakePhoto(nonce), normalizeView };
 })();

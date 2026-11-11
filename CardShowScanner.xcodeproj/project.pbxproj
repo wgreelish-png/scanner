@@ -190,6 +190,7 @@
         D13A1F0A7B6E4A8395D10001 /* ScannerUndoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D13A1F0A7B6E4A8395D10002; };
         D13A1F0A7B6E4A8395D10003 /* ScannerQuickActionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D13A1F0A7B6E4A8395D10004; };
         D12C0F1A7B6E4A8395D10001 /* ScanConfirmationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D12C0F1A7B6E4A8395D10002; };
+        A11300000000000000000101 /* ManualCatalogFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11300000000000000000102; };
         D1AB9CA2F03E4EA6B9C10007 /* ManualCardSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1AB9CA2F03E4EA6B9C10008; };
         D1AB9CA2F03E4EA6B9C10005 /* ManualCardSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1AB9CA2F03E4EA6B9C10006; };
         A10900000000000000000101 /* LeftoverStockReconciliation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10900000000000000000102; };
@@ -449,6 +450,7 @@
         D13A1F0A7B6E4A8395D10002 /* ScannerUndoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerUndoTests.swift; sourceTree = "<group>"; };
         D13A1F0A7B6E4A8395D10004 /* ScannerQuickActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerQuickActionTests.swift; sourceTree = "<group>"; };
         D12C0F1A7B6E4A8395D10002 /* ScanConfirmationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanConfirmationUITests.swift; sourceTree = "<group>"; };
+        A11300000000000000000102 /* ManualCatalogFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualCatalogFilterTests.swift; sourceTree = "<group>"; };
         D1AB9CA2F03E4EA6B9C10008 /* ManualCardSearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualCardSearchTests.swift; sourceTree = "<group>"; };
         D1AB9CA2F03E4EA6B9C10006 /* ManualCardSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualCardSearchView.swift; sourceTree = "<group>"; };
         A10900000000000000000102 /* LeftoverStockReconciliation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeftoverStockReconciliation.swift; sourceTree = "<group>"; };
@@ -642,6 +644,7 @@
                 D13A1F0A7B6E4A8395D10004 /* ScannerQuickActionTests.swift */,
                 C4D311E710AB4F79A8B00010 /* ListDeletionTests.swift */,
                 62C79FEE709E4526B4520002 /* CameraPermissionTests.swift */,
+                A11300000000000000000102 /* ManualCatalogFilterTests.swift */,
                 D1AB9CA2F03E4EA6B9C10008 /* ManualCardSearchTests.swift */,
                 A10800000000000000000004 /* MissingListPricesTests.swift */,
                 C0C2D1F0A3AD4B7CB6500006 /* ScannerPageRecoveryTests.swift */,
@@ -1037,6 +1040,7 @@
                 D14A1F0A7B6E4A8395D10003 /* ListOutcomeTests.swift in Sources */,
                 C4D311E710AB4F79A8B00011 /* ListDeletionTests.swift in Sources */,
                 62C79FEE709E4526B4520001 /* CameraPermissionTests.swift in Sources */,
+                A11300000000000000000101 /* ManualCatalogFilterTests.swift in Sources */,
                 D1AB9CA2F03E4EA6B9C10007 /* ManualCardSearchTests.swift in Sources */,
                 A10800000000000000000003 /* MissingListPricesTests.swift in Sources */,
                 D13A1F0A7B6E4A8395D10001 /* ScannerUndoTests.swift in Sources */,
@@ -1249,7 +1253,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 112;
+				CURRENT_PROJECT_VERSION = 113;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -1286,7 +1290,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 112;
+				CURRENT_PROJECT_VERSION = 113;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";

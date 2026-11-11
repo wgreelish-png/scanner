@@ -4,39 +4,75 @@ import SwiftData
 
 @MainActor @Observable final class ManualCardSearchModel {
     private(set) var query = ""
+    private(set) var filters = CardCatalogFilters()
     private(set) var game: String
     private(set) var results: [CardCandidate] = []
     private(set) var isSearching = false
     private(set) var error: String?
+    private(set) var isSuspendedForSelection = false
     private let catalog: any CardCatalogSearching
     private let debounce: Duration
     private var task: Task<Void, Never>?
     private var requestID = UUID()
+    private var searchNeededOnReturn = false
 
     init(game: String, catalog: any CardCatalogSearching = CachedCardCatalog.shared, debounce: Duration = .milliseconds(150)) {
         self.game = game; self.catalog = catalog; self.debounce = debounce
     }
-    func load() { updateQuery(query) }
+    var hasCriteria: Bool { !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !filters.isEmpty }
+    func load() { scheduleSearch() }
     func changeGame(_ game: String) {
         guard TCGGameRegistry.scannerKey(for: game) != nil, game != self.game else { return }
-        self.game = game; results = []; updateQuery(query)
+        self.game = game; results = []; filters = .init(); scheduleSearch()
     }
     func updateQuery(_ value: String) {
-        task?.cancel(); requestID = UUID()
-        query = String(value.prefix(256)); error = nil; isSearching = true
-        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { results = [] }
-        let query = query, game = game, id = requestID, delay = debounce
+        let value = String(value.prefix(256))
+        guard value != query else { return }
+        query = value; scheduleSearch()
+    }
+    func updateSetFilter(_ value: String) {
+        let value = String(value.prefix(256))
+        guard value != filters.set else { return }
+        filters.set = value; scheduleSearch()
+    }
+    func updateNumberFilter(_ value: String) {
+        let value = String(value.prefix(64))
+        guard value != filters.number else { return }
+        filters.number = value; scheduleSearch()
+    }
+    func clearFilters() { filters = .init(); scheduleSearch() }
+
+    /// A confirmation page needs the chosen snapshot, not live typeahead work.
+    /// Keep completed results so Back does not reload an unchanged catalog.
+    func suspendForSelection() {
+        searchNeededOnReturn = searchNeededOnReturn || isSearching
+        isSuspendedForSelection = true
+        cancel()
+    }
+    func resumeAfterSelection() {
+        guard isSuspendedForSelection else { return }
+        isSuspendedForSelection = false
+        if searchNeededOnReturn { searchNeededOnReturn = false; scheduleSearch() }
+    }
+
+    private func scheduleSearch() {
+        cancel()
+        if isSuspendedForSelection { searchNeededOnReturn = true; return }
+        error = nil; isSearching = true
+        if !hasCriteria { results = [] }
+        let query = query, game = game, filters = filters, id = requestID, delay = debounce
+        let hasCriteria = hasCriteria
         task = Task { [weak self, catalog] in
             do {
-                if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { try await Task.sleep(for: delay) }
+                if hasCriteria { try await Task.sleep(for: delay) }
                 try Task.checkCancellation()
-                let cards = try await catalog.search(query, game: game, limit: 5)
-                guard let self, !Task.isCancelled, self.requestID == id else { return }
-                self.results = Array(cards.prefix(5)); self.isSearching = false
+                let cards = try await catalog.search(query, game: game, limit: 5, filters: filters)
+                guard let self, !Task.isCancelled, self.requestID == id, !self.isSuspendedForSelection else { return }
+                self.results = Array(cards.prefix(5)); self.isSearching = false; self.task = nil
                 DiagnosticLog.shared.record("catalog.search_finished", ["records": String(self.results.count)], sampleEvery: 1)
             } catch {
-                guard let self, !Task.isCancelled, self.requestID == id else { return }
-                self.isSearching = false
+                guard let self, !Task.isCancelled, self.requestID == id, !self.isSuspendedForSelection else { return }
+                self.isSearching = false; self.task = nil
                 self.results = []
                 self.error = (error as? CardCatalogFailure)?.errorDescription ?? "The saved catalog could not be searched. Retry, or check the database in the scanner."
                 DiagnosticLog.shared.failure("catalog.search_failed", error)

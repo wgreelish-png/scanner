@@ -53,6 +53,13 @@ struct TCGBridgeEnvelope: Decodable {
     var processingActive: Bool?
     var constraintState: String?
     var photoState: String?
+    var deliveryState: String?
+    var windowMS: Double?
+    var cameraOnMS: Double?
+    var deliveredFrames: Double?
+    var frameWindowMS: Double?
+    var deliveredFPS: Double?
+    var captureMode: String?
 }
 
 enum ScannerCaptureMode: String, CaseIterable, Sendable {
@@ -91,8 +98,11 @@ struct ScannerDiagnosticRecord {
     static func validated(_ message: TCGBridgeEnvelope) -> Self? {
         let allowed: Set<String> = ["bridge_ready", "bridge_stopped", "startup_started", "modules_ready", "index_ready", "pack_ready", "pack_cache_warning",
             "backend_ready", "camera_requested", "camera_acquired", "video_playing", "scanner_ready", "startup_failed",
-            "scan_stats", "border_retry", "recognition_snapshot", "scan_issue", "recognition_settled", "camera_interrupted", "camera_backgrounded", "camera_workload", "javascript_error", "javascript_rejection"]
+            "scan_stats", "border_retry", "recognition_snapshot", "scan_issue", "recognition_settled", "camera_interrupted", "camera_backgrounded", "camera_workload", "camera_delivery", "javascript_error", "javascript_rejection"]
         guard message.kind == "diagnostic", let event = message.event, allowed.contains(event) else { return nil }
+        if event == "camera_delivery" {
+            return Self(event: "web.camera_delivery", fields: cameraDeliveryFields(message), sampleEvery: 0)
+        }
         var fields: [String: String] = [:]
         if event == "camera_workload" {
             for (key, value, allowed) in [
@@ -148,6 +158,31 @@ struct ScannerDiagnosticRecord {
             }
         }
         return Self(event: "web." + event, fields: fields, sampleEvery: event == "scan_stats" ? 5 : event == "border_retry" ? 1 : 0)
+    }
+
+    /// RVFC counters describe video frames delivered for presentation. They do
+    /// not measure display refresh, recognition throughput or whole-device CPU.
+    /// The bridge aggregates while a camera stream is visible and flushes once
+    /// on retirement; terminal windows must not be sampled away at storage.
+    private static func cameraDeliveryFields(_ message: TCGBridgeEnvelope) -> [String: String] {
+        guard let state = message.deliveryState, ["measured", "pending", "unavailable"].contains(state) else { return [:] }
+        var fields = ["delivery_state": state]
+        if let mode = message.captureMode, ScannerCaptureMode(rawValue: mode) != nil { fields["capture_mode"] = mode }
+        // Without a monotonic browser clock, report unavailability rather than
+        // inventing zero duration or using a wall-clock fallback.
+        if state == "unavailable", message.windowMS == nil, message.cameraOnMS == nil { return fields }
+        guard let window = message.windowMS, window.isFinite, (0...86_400_000).contains(window),
+              let cameraOn = message.cameraOnMS, cameraOn.isFinite, (0...window).contains(cameraOn) else { return [:] }
+        fields["delivery_window_ms"] = String(Int(window)); fields["camera_on_ms"] = String(Int(cameraOn))
+        guard state == "measured" else { return fields }
+        guard let frames = message.deliveredFrames, frames.isFinite, (0...1_000_000).contains(frames),
+              frames.rounded(.towardZero) == frames,
+              let frameWindow = message.frameWindowMS, frameWindow.isFinite, (1...86_400_000).contains(frameWindow),
+              let fps = message.deliveredFPS, fps.isFinite, (0...240).contains(fps) else { return [:] }
+        fields["delivered_frames"] = String(Int(frames))
+        fields["frame_window_ms"] = String(Int(frameWindow))
+        fields["delivered_fps"] = String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), fps)
+        return fields
     }
 }
 
@@ -382,6 +417,7 @@ enum ScannerResourceMode: String, Equatable {
     private var bridgeInstalled = false
     private var resourceMode = ScannerResourceMode.normal
     private var resourceForeground = true
+    private var deliveryDiagnosticsEnabled = true
     private var resourceObservers: [NSObjectProtocol] = []
     private var resourceRequestID = UUID()
     private var resourcePauseDeadline: Task<Void, Never>?
@@ -467,7 +503,7 @@ enum ScannerResourceMode: String, Equatable {
             do {
                 try Task.checkCancellation()
                 if restartingServer { try await LocalScannerServer.shared.restart() }
-                else { try await LocalScannerServer.shared.start() }
+                try await LocalScannerServer.shared.ensureReachable()
                 guard let self, self.active, self.nonce == startupNonce, !Task.isCancelled else { return }
                 self.pageNavigation = self.webView.load(URLRequest(url: Self.pageURL))
                 if self.pageNavigation == nil { self.documentFailed = true; self.photoDocumentFailed(); self.status = "Scanner could not open. Tap Retry Live Scanner." }
@@ -502,6 +538,7 @@ enum ScannerResourceMode: String, Equatable {
     private func observeResources() {
         resourceMode = ScannerResourceMode.policy(for: .current())
         resourceForeground = UIApplication.shared.applicationState == .active
+        deliveryDiagnosticsEnabled = DiagnosticLog.shared.enabled
         let requestNonce = nonce
         for name in [ProcessInfo.thermalStateDidChangeNotification, Notification.Name.NSProcessInfoPowerStateDidChange,
                      UIApplication.willResignActiveNotification, UIApplication.didBecomeActiveNotification] {
@@ -525,6 +562,23 @@ enum ScannerResourceMode: String, Equatable {
                 }
             })
         }
+        resourceObservers.append(NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification,
+            object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.active, self.nonce == requestNonce else { return }
+                    let enabled = DiagnosticLog.shared.enabled
+                    guard enabled != self.deliveryDiagnosticsEnabled else { return }
+                    self.deliveryDiagnosticsEnabled = enabled
+                    self.dispatchDeliveryDiagnostics()
+                }
+            })
+    }
+    private func dispatchDeliveryDiagnostics() {
+        guard active, bridgeInstalled, !documentFailed, Self.allowed(webView.url) else { return }
+        // Optional measurement must not restart, pause or retire the scanner.
+        // The bridge rejects an old nonce and starts a fresh window on enable.
+        webView.callAsyncJavaScript("return window.CardShowBridge?.setDeliveryDiagnostics(enabled, expectedNonce);",
+            arguments: ["enabled": deliveryDiagnosticsEnabled, "expectedNonce": nonce], in: nil, in: .page) { _ in }
     }
     private func dispatchResourceMode() {
         guard active, !documentFailed else { return }
@@ -777,6 +831,8 @@ enum ScannerResourceMode: String, Equatable {
         let requestNonce = nonce
         let installedSuspended = manualSearchSuspended
         let installedCaptureMode = captureMode
+        let installedDeliveryDiagnostics = DiagnosticLog.shared.enabled
+        deliveryDiagnosticsEnabled = installedDeliveryDiagnostics
         if recoveryAttempts > 0 { DiagnosticLog.shared.record("scanner.local_recovered", ["quantity": String(recoveryAttempts)]) }
         DiagnosticLog.shared.record("web.page_loaded")
         guard let url = Bundle.main.url(forResource: "TCGTrackingBridge", withExtension: "js"),
@@ -786,6 +842,7 @@ enum ScannerResourceMode: String, Equatable {
                   "steadyCardBorder": UserDefaults.standard.object(forKey: "steadyCardBorder") as? Bool ?? true,
                   "manualSearchSuspended": manualSearchSuspended, "resourceMode": resourceMode.rawValue, "foreground": resourceForeground,
                   "captureMode": captureMode.rawValue,
+                  "diagnosticsEnabled": installedDeliveryDiagnostics,
                   "photoReviewState": photoReviewConfiguration]),
               let config = String(data: data, encoding: .utf8) else {
             documentFailed = true
@@ -801,6 +858,7 @@ enum ScannerResourceMode: String, Equatable {
             } else {
                 self.bridgeInstalled = true
                 self.dispatchResourceMode()
+                if self.deliveryDiagnosticsEnabled != installedDeliveryDiagnostics { self.dispatchDeliveryDiagnostics() }
                 if self.captureMode != installedCaptureMode { self.dispatchPhotoCommand("setCaptureMode", mode: self.captureMode) }
                 // Pause/dismissal may have arrived after config was captured
                 // but before this document installed its bridge callbacks.

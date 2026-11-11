@@ -10,17 +10,22 @@ function deferred() {
   return { promise, resolve, reject };
 }
 function harness({ denyCamera = false, cacheState = 'ok', beforePackReady, acquireCamera, playVideo,
-  cameraConstraintsSupported = false, applyCameraConstraints, cameraSettings, scanPhoto, createPhotoBitmap, videoSize } = {}) {
+  cameraConstraintsSupported = false, applyCameraConstraints, cameraSettings, scanPhoto, createPhotoBitmap, videoSize,
+  videoFrameCallbacks = false, monotonicClock = true } = {}) {
   const messages = [], elements = [], events = new Map(), windowEvents = new Map(), trackEvents = new Map(), draws = [];
   let overlayDestroyed = 0;
   const packOptions = [], cameraTracks = [], cameraConstraintCalls = [], photoCalls = [], bitmaps = [], photoDraws = [];
-  const timers = new Map(), frames = new Map(); let scheduleID = 0;
+  const timers = new Map(), frames = new Map(), videoFrames = new Map(); let scheduleID = 0;
   let captureOptions, scannerOptions, scannerStarts = 0, activeLoops = 0, cameraRequests = 0, stopped = 0, disposed = 0, packSets = 0, now = 0;
   const element = tag => {
     const e = { tag, style: {}, children: [], append(...items) { this.children.push(...items); }, setAttribute() {},
       remove() { this.removed = true; }, async play() { await playVideo?.(); },
       videoWidth: videoSize?.[0] ?? 1920, videoHeight: videoSize?.[1] ?? 1080,
       getContext() { return { drawImage(...args) { photoDraws.push({ args, tracksLive: cameraTracks.some(track => track.readyState === 'live') }); } }; } };
+    if (tag === 'video' && videoFrameCallbacks) {
+      e.requestVideoFrameCallback = fn => { const id = ++scheduleID; videoFrames.set(id, fn); return id; };
+      e.cancelVideoFrameCallback = id => videoFrames.delete(id);
+    }
     elements.push(e); return e;
   };
   const body = element('body');
@@ -58,7 +63,7 @@ function harness({ denyCamera = false, cacheState = 'ok', beforePackReady, acqui
       const bitmap = { width: canvas.width, height: canvas.height, closed: false, close() { this.closed = true; } };
       bitmaps.push(bitmap); return bitmap;
     },
-    performance: { now: () => now },
+    performance: monotonicClock ? { now: () => now } : undefined,
     setTimeout(fn, delay) { const id = ++scheduleID; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); },
     requestAnimationFrame(fn) { const id = ++scheduleID; frames.set(id, fn); return id; }, cancelAnimationFrame(id) { frames.delete(id); },
     navigator: { mediaDevices: { async getUserMedia(options) {
@@ -87,6 +92,8 @@ function harness({ denyCamera = false, cacheState = 'ok', beforePackReady, acqui
   return { bridge: sandbox.CardShowBridge, messages, elements, events, windowEvents, trackEvents, draws, document, timers, frames,
     flushTimers() { const pending = [...timers.values()]; timers.clear(); for (const timer of pending) timer.fn(); },
     flushFrames() { const pending = [...frames.values()]; frames.clear(); for (const frame of pending) frame(); },
+    videoFrames,
+    emitVideoFrame(metadata) { const pending = [...videoFrames.values()]; videoFrames.clear(); for (const fn of pending) fn(now, metadata); },
     get overlayDestroyed() { return overlayDestroyed; }, advance(ms) { now += ms; },
     packOptions, cameraTracks, cameraConstraintCalls, photoCalls, bitmaps, photoDraws, get activeLoops() { return activeLoops; }, get scannerOptions() { return scannerOptions; }, get scannerStarts() { return scannerStarts; }, get cameraRequests() { return cameraRequests; }, get captureOptions() { return captureOptions; }, get stopped() { return stopped; }, get disposed() { return disposed; }, get packSets() { return packSets; } };
 }
@@ -834,7 +841,7 @@ test('normal resource mode preserves the default scheduler; reduced mode bounds 
   assert.equal(h.cameraRequests, 1); assert.equal(h.packOptions.length, 1);
   const schedule = h.scannerOptions.frame; let ticks = 0;
   const cancel = schedule({}, () => ticks++);
-  assert.deepEqual([...h.timers.values()].map(timer => timer.delay), [200]);
+  assert.deepEqual([...h.timers.values()].filter(timer => timer.delay !== 5000).map(timer => timer.delay), [200]);
   assert.equal(ticks, 0); h.flushTimers(); assert.equal(ticks, 0);
   h.flushFrames(); assert.equal(ticks, 1); cancel();
   const cancelBeforeTimer = schedule({}, () => ticks++); cancelBeforeTimer(); h.flushTimers(); h.flushFrames();
@@ -1329,4 +1336,156 @@ test('photo errors are fixed messages, release bounded bitmaps and leave a retry
   assert.equal(h.bridge.setCaptureMode('live', 'stale'), false);
   assert.equal(await h.bridge.retakePhoto('photo-failure'), true);
   assert.equal(h.packOptions.length, 1); assert.equal(h.disposed, 0); h.bridge.stop();
+});
+
+const deliveryEvents = h => h.messages.filter(message => message.event === 'camera_delivery');
+
+test('camera delivery aggregates compositor frame-counter deltas without confusing the requested camera rate', async () => {
+  const h = harness({ videoFrameCallbacks: true, cameraSettings: () => ({ frameRate: 10 }) });
+  await h.bridge.install({ nonce: 'delivery', game: 'tcgp:3', autoStart: true });
+  assert.equal(h.videoFrames.size, 1); assert.equal(deliveryEvents(h).length, 0);
+  h.emitVideoFrame({ presentedFrames: 10 });
+  h.advance(5000); h.emitVideoFrame({ presentedFrames: 310 });
+  assert.equal(deliveryEvents(h).length, 0, 'Frame callbacks retain counters only, never write per-frame logs');
+  h.flushTimers();
+  let event = deliveryEvents(h).at(-1);
+  assert.equal(event.deliveryState, 'measured'); assert.equal(event.captureMode, 'live');
+  assert.equal(event.deliveredFrames, 300); assert.equal(event.frameWindowMS, 5000);
+  assert.equal(event.deliveredFPS, 60); assert.equal(event.windowMS, 5000); assert.equal(event.cameraOnMS, 5000);
+  assert.equal(h.photoDraws.length, 0, 'Measuring frames must not copy or process images');
+  h.advance(5000); h.emitVideoFrame({ presentedFrames: 460 }); h.flushTimers();
+  event = deliveryEvents(h).at(-1);
+  assert.equal(event.deliveredFrames, 150); assert.equal(event.frameWindowMS, 5000); assert.equal(event.deliveredFPS, 30);
+  h.advance(1000); h.emitVideoFrame({ presentedFrames: 520 }); h.bridge.stop();
+  event = deliveryEvents(h).at(-1);
+  assert.equal(event.windowMS, 1000); assert.equal(event.cameraOnMS, 1000); assert.equal(event.deliveredFrames, 60);
+  assert.equal(deliveryEvents(h).reduce((sum, row) => sum + row.cameraOnMS, 0), 11000);
+  assert.equal(h.videoFrames.size, 0); assert.equal(h.timers.size, 0);
+});
+
+test('unsupported or unavailable delivery counters keep camera-on timing without inventing a measured preview rate', async () => {
+  const h = harness({ cameraSettings: () => ({ frameRate: 120 }) });
+  await h.bridge.install({ nonce: 'no-delivery-counter', game: 'tcgp:3', autoStart: true });
+  h.advance(5000); h.flushTimers();
+  const event = deliveryEvents(h).at(-1);
+  assert.equal(event.deliveryState, 'unavailable'); assert.equal(event.cameraOnMS, 5000);
+  for (const field of ['deliveredFrames', 'frameWindowMS', 'deliveredFPS']) assert.equal(Object.hasOwn(event, field), false);
+  h.bridge.stop();
+
+  const malformed = harness({ videoFrameCallbacks: true });
+  await malformed.bridge.install({ nonce: 'invalid-delivery-counter', game: 'tcgp:3', autoStart: true });
+  malformed.emitVideoFrame({ presentedFrames: NaN, deviceId: 'PRIVATE_CAMERA' });
+  malformed.advance(5000); malformed.flushTimers();
+  assert.equal(deliveryEvents(malformed).at(-1).deliveryState, 'unavailable');
+  assert.equal(JSON.stringify(deliveryEvents(malformed)).includes('PRIVATE_CAMERA'), false);
+  malformed.emitVideoFrame({ presentedFrames: 100 });
+  malformed.advance(5000); malformed.emitVideoFrame({ presentedFrames: 250 }); malformed.flushTimers();
+  assert.equal(deliveryEvents(malformed).at(-1).deliveredFPS, 30);
+  malformed.bridge.stop();
+});
+
+test('photo framing delivery stops at capture and a stale callback cannot add camera-off dwell or enter a later stream', async () => {
+  const h = harness({ videoFrameCallbacks: true });
+  await h.bridge.install({ nonce: 'photo-delivery', game: 'tcgp:3', autoStart: true, captureMode: 'photo' });
+  h.advance(500); h.emitVideoFrame({ presentedFrames: 1 });
+  h.advance(2000); h.emitVideoFrame({ presentedFrames: 61 });
+  const stale = [...h.videoFrames.values()][0];
+  await h.bridge.capturePhoto('photo-delivery');
+  const first = deliveryEvents(h).at(-1);
+  assert.equal(first.captureMode, 'photo'); assert.equal(first.cameraOnMS, 2500);
+  assert.equal(first.deliveredFrames, 60); assert.equal(first.frameWindowMS, 2000);
+  assert.equal(h.videoFrames.size, 0); assert.equal(h.timers.size, 0);
+  const events = deliveryEvents(h).length;
+  h.advance(30000); stale(0, { presentedFrames: 999999 });
+  assert.equal(deliveryEvents(h).length, events); assert.equal(h.videoFrames.size, 0);
+  await h.bridge.retakePhoto('photo-delivery');
+  h.advance(500); h.emitVideoFrame({ presentedFrames: 1001 });
+  h.advance(1000); h.emitVideoFrame({ presentedFrames: 1031 });
+  h.bridge.stop();
+  assert.equal(deliveryEvents(h).at(-1).deliveredFrames, 30);
+  assert.equal(deliveryEvents(h).at(-1).cameraOnMS, 1500);
+  assert.equal(deliveryEvents(h).reduce((sum, row) => sum + row.cameraOnMS, 0), 4000);
+});
+
+test('counter rollback and thermal/background teardown reset delivery observations and fence old timer callbacks', async () => {
+  const h = harness({ videoFrameCallbacks: true });
+  await h.bridge.install({ nonce: 'delivery-teardown', game: 'tcgp:3', autoStart: true });
+  h.emitVideoFrame({ presentedFrames: 1000 }); h.advance(1000); h.emitVideoFrame({ presentedFrames: 4 });
+  h.advance(4000); h.flushTimers();
+  assert.equal(deliveryEvents(h).at(-1).deliveryState, 'pending');
+  assert.equal(Object.hasOwn(deliveryEvents(h).at(-1), 'deliveredFPS'), false);
+  h.advance(1000); h.emitVideoFrame({ presentedFrames: 34 });
+  const staleFrame = [...h.videoFrames.values()][0], staleTimer = [...h.timers.values()][0].fn;
+  h.bridge.setResourceMode('cooling', 'delivery-teardown');
+  assert.equal(h.videoFrames.size, 0); assert.equal(h.timers.size, 0);
+  const count = deliveryEvents(h).length;
+  h.advance(60000); staleFrame(0, { presentedFrames: 999 }); staleTimer();
+  assert.equal(deliveryEvents(h).length, count); assert.equal(h.videoFrames.size, 0); assert.equal(h.timers.size, 0);
+  h.bridge.setResourceMode('reduced', 'delivery-teardown'); await waitForCameraReady(h, 2);
+  h.emitVideoFrame({ presentedFrames: 1 }); h.advance(1000); h.emitVideoFrame({ presentedFrames: 11 });
+  h.document.hidden = true; h.events.get('visibilitychange')();
+  assert.equal(deliveryEvents(h).at(-1).cameraOnMS, 1000);
+  assert.equal(h.videoFrames.size, 0); assert.equal(h.timers.size, 0);
+  h.bridge.stop();
+});
+
+test('delivery measurement without a monotonic clock reports unavailable rather than substituting wall time', async () => {
+  const h = harness({ videoFrameCallbacks: true, monotonicClock: false });
+  await h.bridge.install({ nonce: 'no-monotonic-delivery', game: 'tcgp:3', autoStart: true });
+  const event = deliveryEvents(h).at(-1);
+  assert.equal(event.deliveryState, 'unavailable'); assert.equal(event.captureMode, 'live');
+  for (const field of ['windowMS', 'cameraOnMS', 'frameWindowMS', 'deliveredFPS', 'deliveredFrames']) {
+    assert.equal(Object.hasOwn(event, field), false);
+  }
+  assert.equal(h.videoFrames.size, 0); assert.equal(h.timers.size, 0);
+  h.bridge.stop();
+});
+
+test('delivery diagnostic opt-out cancels observers without a final log and re-enable starts a fresh current-stream window', async () => {
+  const h = harness({ videoFrameCallbacks: true });
+  await h.bridge.install({ nonce: 'delivery-optout', game: 'tcgp:3', autoStart: true, diagnosticsEnabled: false });
+  assert.equal(h.cameraRequests, 1); assert.equal(h.activeLoops, 1);
+  assert.equal(h.videoFrames.size, 0); assert.equal(h.timers.size, 0); assert.equal(deliveryEvents(h).length, 0);
+  h.advance(5000);
+  assert.equal(h.bridge.setDeliveryDiagnostics(true, 'old-document'), false);
+  assert.equal(h.bridge.setDeliveryDiagnostics('true', 'delivery-optout'), false);
+  assert.equal(h.videoFrames.size, 0);
+  assert.equal(h.bridge.setDeliveryDiagnostics(true, 'delivery-optout'), true);
+  h.emitVideoFrame({ presentedFrames: 200 });
+  h.advance(5000); h.emitVideoFrame({ presentedFrames: 350 }); h.flushTimers();
+  assert.equal(deliveryEvents(h).at(-1).cameraOnMS, 5000);
+  assert.equal(deliveryEvents(h).at(-1).deliveredFPS, 30);
+  const staleFrame = [...h.videoFrames.values()][0], staleTimer = [...h.timers.values()][0].fn;
+  const count = deliveryEvents(h).length;
+  h.advance(1000);
+  assert.equal(h.bridge.setDeliveryDiagnostics(false, 'delivery-optout'), true);
+  assert.equal(deliveryEvents(h).length, count, 'Disable must discard, not flush, its partial window');
+  assert.equal(h.videoFrames.size, 0); assert.equal(h.timers.size, 0);
+  h.advance(60000); staleFrame(0, { presentedFrames: 9999 }); staleTimer();
+  assert.equal(deliveryEvents(h).length, count); assert.equal(h.videoFrames.size, 0); assert.equal(h.timers.size, 0);
+  assert.equal(h.bridge.setDeliveryDiagnostics(true, 'delivery-optout'), true);
+  h.emitVideoFrame({ presentedFrames: 12000 });
+  h.advance(1000); h.emitVideoFrame({ presentedFrames: 12030 }); h.bridge.stop();
+  assert.equal(deliveryEvents(h).at(-1).cameraOnMS, 1000);
+  assert.equal(deliveryEvents(h).at(-1).deliveredFrames, 30);
+  assert.equal(deliveryEvents(h).reduce((sum, row) => sum + row.cameraOnMS, 0), 6000);
+  assert.equal(h.bridge.setDeliveryDiagnostics(true, 'delivery-optout'), false);
+  assert.equal(h.cameraRequests, 1, 'Changing diagnostic preference must not restart capture or recognition');
+});
+
+test('re-enabling delivery diagnostics while photo capture is off never opens the camera or records its idle dwell', async () => {
+  const h = harness({ videoFrameCallbacks: true });
+  await h.bridge.install({ nonce: 'photo-optout', game: 'tcgp:3', autoStart: true, captureMode: 'photo', diagnosticsEnabled: false });
+  await h.bridge.capturePhoto('photo-optout');
+  assert.equal(h.videoFrames.size, 0); assert.equal(h.timers.size, 0);
+  h.advance(30000);
+  assert.equal(h.bridge.setDeliveryDiagnostics(true, 'photo-optout'), true);
+  assert.equal(h.cameraRequests, 1); assert.equal(h.videoFrames.size, 0); assert.equal(h.timers.size, 0);
+  assert.equal(deliveryEvents(h).length, 0);
+  await h.bridge.retakePhoto('photo-optout');
+  assert.equal(h.cameraRequests, 2); assert.equal(h.videoFrames.size, 1);
+  h.emitVideoFrame({ presentedFrames: 5 }); h.advance(1000); h.emitVideoFrame({ presentedFrames: 35 });
+  h.bridge.stop();
+  assert.equal(deliveryEvents(h).at(-1).cameraOnMS, 1000);
+  assert.equal(deliveryEvents(h).at(-1).deliveredFPS, 30);
 });

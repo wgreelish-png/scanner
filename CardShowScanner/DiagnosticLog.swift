@@ -132,6 +132,52 @@ enum DiagnosticScanFields {
     }
 }
 
+/// Aggregate camera delivery facts are accepted only on their own event. Track
+/// settings remain separate from RVFC frame counters, and unsupported sampling
+/// must never grow a made-up zero or requested FPS measurement.
+enum DiagnosticCameraDeliveryFields {
+    static let keys: Set<String> = ["delivery_state", "delivery_window_ms", "camera_on_ms",
+        "delivered_frames", "frame_window_ms", "delivered_fps", "capture_mode"]
+
+    static func accepts(_ key: String, _ value: String, event: String) -> Bool {
+        guard keys.contains(key) else { return true }
+        guard event == "web.camera_delivery" else { return false }
+        switch key {
+        case "capture_mode": return ["live", "photo"].contains(value)
+        case "delivery_state": return ["measured", "pending", "unavailable"].contains(value)
+        case "delivery_window_ms", "camera_on_ms", "frame_window_ms": return integer(value, maximum: 86_400_000)
+        case "delivered_frames": return integer(value, maximum: 1_000_000)
+        case "delivered_fps":
+            guard value.range(of: #"\A(?:0|[1-9][0-9]{0,2})(?:\.[0-9]{1,3})?\z"#, options: .regularExpression) != nil,
+                  let fps = Double(value), fps.isFinite else { return false }
+            return (0...240).contains(fps)
+        default: return false
+        }
+    }
+
+    static func validated(_ fields: [String: String]) -> [String: String] {
+        guard let state = fields["delivery_state"], ["measured", "pending", "unavailable"].contains(state) else { return [:] }
+        var result = ["delivery_state": state]
+        if let mode = fields["capture_mode"], ["live", "photo"].contains(mode) { result["capture_mode"] = mode }
+        if state == "unavailable", fields["delivery_window_ms"] == nil, fields["camera_on_ms"] == nil { return result }
+        guard let window = fields["delivery_window_ms"], integer(window, maximum: 86_400_000),
+              let cameraOn = fields["camera_on_ms"], integer(cameraOn, maximum: 86_400_000),
+              let windowValue = UInt64(window), let onValue = UInt64(cameraOn), onValue <= windowValue else { return [:] }
+        result["delivery_window_ms"] = window; result["camera_on_ms"] = cameraOn
+        guard state == "measured" else { return result }
+        guard let frames = fields["delivered_frames"], integer(frames, maximum: 1_000_000),
+              let frameWindow = fields["frame_window_ms"], integer(frameWindow, maximum: 86_400_000), frameWindow != "0",
+              let fps = fields["delivered_fps"], accepts("delivered_fps", fps, event: "web.camera_delivery") else { return [:] }
+        result["delivered_frames"] = frames; result["frame_window_ms"] = frameWindow; result["delivered_fps"] = fps
+        return result
+    }
+
+    private static func integer(_ text: String, maximum: UInt64) -> Bool {
+        guard let value = UInt64(text), value <= maximum else { return false }
+        return String(value) == text
+    }
+}
+
 /// Printer transport diagnostics describe byte counts and command identifiers,
 /// never packet contents, Bluetooth names or device identifiers. Validate at
 /// storage as well as at the native caller so accidental free-form values drop.
@@ -441,6 +487,7 @@ enum ServiceDiagnosticFields {
         .union(DiagnosticPrinterFields.batchingKeys)
         .union(DiagnosticPrinterFields.rollKeys)
         .union(DiagnosticActivityFields.keys)
+        .union(DiagnosticCameraDeliveryFields.keys)
     private var current: URL { directory.appendingPathComponent("current.jsonl") }
     private var previous: URL { directory.appendingPathComponent("previous.jsonl") }
     var enabled: Bool { defaults.object(forKey: "diagnosticsEnabled") as? Bool ?? true }
@@ -510,13 +557,15 @@ enum ServiceDiagnosticFields {
         if sampleEvery > 0, let last = lastSamples[event], now.timeIntervalSince(last) < sampleEvery { return }
         if sampleEvery > 0 { lastSamples[event] = now }
         // Unknown fields and free-form values are dropped at the storage boundary.
-        let safe = fields.filter { key, value in
+        var safe = fields.filter { key, value in
             (keys.contains(key) || DiagnosticHealthFields.keys.contains(key)) &&
                 (!event.hasPrefix("health.") || DiagnosticHealthFields.keys.contains(key)) && value.count <= 80 &&
                 value.range(of: #"^[A-Za-z0-9_.-]{1,80}$"#, options: .regularExpression) != nil &&
                 DiagnosticScanFields.accepts(key, value) && DiagnosticPrinterFields.accepts(key, value, event: event) &&
-                DiagnosticHealthFields.accepts(key, value) && DiagnosticActivityFields.accepts(key, value, event: event)
+                DiagnosticHealthFields.accepts(key, value) && DiagnosticActivityFields.accepts(key, value, event: event) &&
+                DiagnosticCameraDeliveryFields.accepts(key, value, event: event)
         }
+        if event == "web.camera_delivery" { safe = DiagnosticCameraDeliveryFields.validated(safe) }
         if event.hasPrefix("activity.") {
             guard DiagnosticActivityKind(rawValue: String(event.dropFirst("activity.".count))) != nil,
                   safe["activity_screen"] != nil else { return }

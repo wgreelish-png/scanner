@@ -8,6 +8,11 @@ The website session is remembered in WebKit's persistent store. Settings and sca
 
 ## Scan and confirm
 
+Build 113 streamlines manual confirmation into the existing search sheet, adds
+optional set/collector-number filters, verifies the local scanner before loading
+a page, and records aggregate delivered-frame/camera-on measurements when
+diagnostics are enabled. See [scanner polish and phone checks](docs/ScannerPolish113.md).
+
 **Photo Scan** is available in scanner Options → Scan Mode, alongside Live Scan.
 Tap **Take Photo** to capture one card, stop the camera and recognize the static
 image using the saved on-device database. Review and add it normally; the camera
