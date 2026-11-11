@@ -63,6 +63,47 @@ import SwiftData
         XCTAssertEqual(model.card, saved)
     }
 
+    func testActivityConnectionRecoveryIsLimitedToAccessFailuresAndClearsOnRetry() async throws {
+        let cases: [(OpportunitiesFailure, Bool)] = [
+            (.notConfigured, true), (.directNotConfigured, true), (.authorizationRequired, true),
+            (.directAuthorizationRequired, true), (.accessDenied, true), (.unsupportedCard, false),
+            (.notCovered, false), (.skuNotCovered, false), (.networkUnavailable, false), (.rateLimited, false)
+        ]
+        for (failure, needsConnection) in cases {
+            let pricing = ControlledInsightsPricing(), opportunities = ControlledInsightsOpportunities(), saved = card()
+            let model = MarketInsightsModel(card: saved, publicPricing: pricing, opportunities: opportunities)
+            model.refreshActivity(forceRefresh: false)
+            try await opportunities.waitForCalls(1)
+            await opportunities.reject(0, with: failure)
+            try await waitUntil { !model.activityLoading }
+            XCTAssertEqual(model.activityFailure, failure)
+            XCTAssertEqual(model.activityNeedsConnection, needsConnection, failure.localizedDescription)
+
+            model.refreshActivity()
+            XCTAssertNil(model.activityFailure); XCTAssertFalse(model.activityNeedsConnection)
+            try await opportunities.waitForCalls(2)
+            await opportunities.resolve(1, with: try activity(for: saved))
+            try await waitUntil { !model.activityLoading }
+            XCTAssertNil(model.activityFailure); XCTAssertFalse(model.activityNeedsConnection)
+            let publicRequests = await pricing.requests
+            XCTAssertTrue(publicRequests.isEmpty, "Activity recovery must not reload or replace public pricing")
+        }
+    }
+
+    func testChangingCardClearsTypedActivityFailureAndItsConnectionSuggestion() async throws {
+        let pricing = ControlledInsightsPricing(), opportunities = ControlledInsightsOpportunities()
+        let model = MarketInsightsModel(card: card(), publicPricing: pricing, opportunities: opportunities)
+        model.refreshActivity()
+        try await opportunities.waitForCalls(1)
+        await opportunities.reject(0, with: OpportunitiesFailure.accessDenied)
+        try await waitUntil { !model.activityLoading }
+        XCTAssertTrue(model.activityNeedsConnection)
+        model.changeCard(card(productID: 43), refresh: false)
+        XCTAssertNil(model.activityFailure); XCTAssertNil(model.activityMessage)
+        XCTAssertFalse(model.activityNeedsConnection)
+        XCTAssertNil(model.publicDetails)
+    }
+
     func testRetryActivityLeavesPublicDetailsAndPublicRequestUntouched() async throws {
         let pricing = ControlledInsightsPricing(), opportunities = ControlledInsightsOpportunities()
         let saved = card(), model = MarketInsightsModel(card: saved, publicPricing: pricing, opportunities: opportunities)

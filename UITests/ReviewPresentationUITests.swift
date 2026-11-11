@@ -1,6 +1,62 @@
 import XCTest
 
 @MainActor final class ReviewPresentationUITests: XCTestCase {
+    func testMissingPricesRefreshUpdatesUnknownCardAndPreservesKnownZero() async throws {
+        continueAfterFailure = false
+        let app = launch(arguments: ["--uitest-missing-prices"])
+        defer { app.terminate() }
+        _ = UITestInteraction.tapToolbar(app.buttons["list.options"], in: app)
+        _ = UITestInteraction.tap(app.buttons["list.refreshMissingPrices"], in: app)
+        let summary = app.staticTexts["list.priceRefresh.status"]
+        XCTAssertTrue(summary.waitForExistence(timeout: 8))
+        XCTAssertTrue(summary.label.contains("Updated 1 of 1 entries"))
+        XCTAssertTrue(summary.label.contains("0 still have no price"))
+        XCTAssertEqual(app.staticTexts["list.quantity"].label, "2 cards")
+        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "list.card."))
+        XCTAssertTrue(rows.allElementsBoundByIndex.contains { $0.label.contains("Synthetic card 1") && $0.label.contains("$17") })
+        XCTAssertTrue(rows.allElementsBoundByIndex.contains { $0.label.contains("Synthetic card 2") && $0.label.contains("$0") })
+        _ = UITestInteraction.tapToolbar(app.buttons["list.options"], in: app)
+        XCTAssertFalse(app.buttons["list.refreshMissingPrices"].isEnabled)
+    }
+
+    func testSuccessfulManualAddClosesBothSheetsAndCommitsOneRow() async throws {
+        continueAfterFailure = false
+        let app = launchManualAdd()
+        defer { app.terminate() }
+        let add = await openManualCardConfirmation(in: app)
+        _ = UITestInteraction.tap(add, in: app)
+
+        let returned = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == true"), object: app.buttons["manualAdd.open"])
+        await fulfillment(of: [returned], timeout: 5)
+        XCTAssertFalse(app.navigationBars["Confirm Card"].exists)
+        XCTAssertFalse(app.navigationBars["Search & Add"].exists)
+        XCTAssertEqual(app.staticTexts["manualAdd.quantity"].label, "Cards: 1")
+        XCTAssertEqual(app.staticTexts["manualAdd.savedRows"].label, "Saved rows: 1")
+        XCTAssertEqual(app.staticTexts["manualAdd.card"].label, "Synthetic manual card")
+    }
+
+    func testCancellingManualConfirmationKeepsSearchAndDoesNotSave() async throws {
+        continueAfterFailure = false
+        let app = launchManualAdd()
+        defer { app.terminate() }
+        _ = await openManualCardConfirmation(in: app)
+        _ = UITestInteraction.tapToolbar(app.navigationBars["Confirm Card"].buttons["Cancel"], in: app)
+
+        let query = app.textFields["catalog.query"]
+        let searching = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == true"), object: query)
+        await fulfillment(of: [searching], timeout: 5)
+        XCTAssertEqual(query.value as? String, "Synthetic")
+        XCTAssertTrue(app.buttons["catalog.result.mock:manual-add:1"].exists)
+        XCTAssertFalse(app.navigationBars["Confirm Card"].exists)
+        _ = UITestInteraction.tapToolbar(app.navigationBars["Search & Add"].buttons["Done"], in: app)
+        let returned = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == true"), object: app.buttons["manualAdd.open"])
+        await fulfillment(of: [returned], timeout: 5)
+        XCTAssertFalse(app.navigationBars["Search & Add"].exists)
+        XCTAssertEqual(app.staticTexts["manualAdd.quantity"].label, "Cards: 0")
+        XCTAssertEqual(app.staticTexts["manualAdd.savedRows"].label, "Saved rows: 0")
+        XCTAssertFalse(app.staticTexts["manualAdd.card"].exists)
+    }
+
     func testListLookupStaysVisibleAfterScrollingAndPreservesCardsAndOfferDraft() async throws {
         continueAfterFailure = false
         let app = launch(arguments: ["--uitest-long-review"])
@@ -130,6 +186,33 @@ import XCTest
         XCTAssertTrue(scanning.isHittable)
         XCTAssertFalse(app.buttons["list.exportCSV"].exists)
         XCTAssertFalse(app.buttons["list.offerPercentages"].exists)
+    }
+
+    private func launchManualAdd() -> XCUIApplication {
+        let app = XCUIApplication()
+        if let path = ProcessInfo.processInfo.environment["DYLD_FALLBACK_LIBRARY_PATH"] {
+            app.launchEnvironment["DYLD_FALLBACK_LIBRARY_PATH"] = path
+        }
+        app.launchArguments = ["-autoDatabaseUpdates", "NO", "--uitest-manual-add"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Manual Add Fixture"].waitForExistence(timeout: 10))
+        return app
+    }
+
+    private func openManualCardConfirmation(in app: XCUIApplication) async -> XCUIElement {
+        _ = UITestInteraction.tap(app.buttons["manualAdd.open"], in: app)
+        let query = app.textFields["catalog.query"]
+        XCTAssertTrue(query.waitForExistence(timeout: 5))
+        _ = UITestInteraction.tap(query, in: app)
+        query.typeText("Synthetic")
+        let result = app.buttons["catalog.result.mock:manual-add:1"]
+        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        _ = UITestInteraction.tap(result, in: app)
+        XCTAssertTrue(app.navigationBars["Confirm Card"].waitForExistence(timeout: 5))
+        let add = app.buttons["catalog.confirmAdd"]
+        let priced = expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: add)
+        await fulfillment(of: [priced], timeout: 5)
+        return add
     }
 
     private func launch(arguments: [String] = []) -> XCUIApplication {

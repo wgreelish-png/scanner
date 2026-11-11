@@ -14,6 +14,11 @@ struct CustomPriceTagDraft: Equatable, Sendable {
         isBlankPrice ? "" : (isBulk ? StickerPrice.twoForOne.displayText : StickerPrice.individual(priceCents).displayText)
     }
     var priceDescription: String { isBlankPrice ? InventoryLabelDraft.blankPriceDescription : priceText }
+    /// Copy count is transport work, not part of the printed artwork.
+    var artworkDraft: CustomPriceTagDraft {
+        CustomPriceTagDraft(priceCents: priceCents, copies: 1, paperSize: paperSize,
+                            isBulk: isBulk, pricePosition: pricePosition)
+    }
 
     func validate() throws {
         guard ShowBudgetMoney.isValid(priceCents) else { throw InventoryLabelFailure.invalidPrice }
@@ -48,9 +53,16 @@ struct CustomPriceTagDraft: Equatable, Sendable {
     }
 
     var draft: CustomPriceTagDraft? {
+        guard let artworkDraft, let count = Int(copies) else { return nil }
+        let draft = CustomPriceTagDraft(priceCents: artworkDraft.priceCents, copies: count, paperSize: paperSize,
+                                       isBulk: isBulk, pricePosition: pricePosition)
+        return (try? draft.validate()) != nil ? draft : nil
+    }
+
+    var artworkDraft: CustomPriceTagDraft? {
         let amount: Int64? = isBulk ? 0 : ShowBudgetMoney.parse(price)
-        guard let cents = amount, let count = Int(copies) else { return nil }
-        let draft = CustomPriceTagDraft(priceCents: cents, copies: count, paperSize: paperSize,
+        guard let cents = amount else { return nil }
+        let draft = CustomPriceTagDraft(priceCents: cents, copies: 1, paperSize: paperSize,
                                        isBulk: isBulk, pricePosition: pricePosition)
         return (try? draft.validate()) != nil ? draft : nil
     }
@@ -61,7 +73,7 @@ struct CustomPriceTagDraft: Equatable, Sendable {
     }
 
     /// A preview prepares the same immutable printer bits used by Prepare.
-    /// Keep only this model's latest exact draft, including its roll profile.
+    /// Keep only this model's latest exact artwork, including its roll profile.
     func previewRaster(for draft: CustomPriceTagDraft) throws -> LabelRaster {
         var metrics = LabelPreparationMetrics()
         var phase = LabelPreparationMetrics.Phase.failed
@@ -75,10 +87,10 @@ struct CustomPriceTagDraft: Equatable, Sendable {
     private func raster(for draft: CustomPriceTagDraft, metrics: inout LabelPreparationMetrics)
         throws -> (raster: LabelRaster, reused: Bool) {
         try draft.validate()
-        if let cached = rasterCache, cached.draft == draft { return (cached.raster, true) }
+        if let cached = rasterCache, cached.draft == draft.artworkDraft { return (cached.raster, true) }
         let raster = try metrics.measure(.render) { try self.render(draft) }
         try raster.validate()
-        rasterCache = (draft, raster)
+        rasterCache = (draft.artworkDraft, raster)
         return (raster, false)
     }
 
@@ -103,7 +115,7 @@ struct CustomPriceTagDraft: Equatable, Sendable {
         }
         do {
             guard queue.isLoaded else { throw LabelPrintQueueFailure.notLoaded }
-            guard queue.entries.isEmpty else { throw LabelPrintQueueFailure.unfinishedQueue }
+            guard queue.entries.allSatisfy({ $0.state == .completed }) else { throw LabelPrintQueueFailure.unfinishedQueue }
             let prepared = try raster(for: draft, metrics: &metrics)
             let entries = try (1...draft.copies).map { copy in
                 let entry = try LabelQueueEntry(customPriceCents: draft.priceCents, raster: prepared.raster,

@@ -3,6 +3,34 @@ import SwiftData
 @testable import CardShowScanner
 
 final class ScannerPageRecoveryTests: XCTestCase {
+    func testDecliningManualSearchSuppressesFurtherModalPromptsForTwoMinutes() {
+        var policy = ScannerManualSearchPromptPolicy()
+        XCTAssertTrue(policy.shouldPresent(at: 10))
+        policy.declined(at: 10)
+        XCTAssertFalse(policy.shouldPresent(at: 10))
+        XCTAssertFalse(policy.shouldPresent(at: 70))
+        XCTAssertFalse(policy.shouldPresent(at: 129.999))
+        XCTAssertTrue(policy.shouldPresent(at: 130))
+        policy.declined(at: 150)
+        XCTAssertFalse(policy.shouldPresent(at: 260), "A later explicit decline starts its own pause")
+        XCTAssertTrue(policy.shouldPresent(at: 270))
+        XCTAssertTrue(ScannerManualSearchPromptPolicy().shouldPresent(at: 20), "A new scanner session has its own policy")
+    }
+
+    func testInvalidOrBackwardPromptClockCannotBypassTheDeclinedCooldown() {
+        var policy = ScannerManualSearchPromptPolicy()
+        for time in [Double.nan, Double.infinity, -1] {
+            XCTAssertFalse(policy.shouldPresent(at: time))
+            policy.declined(at: time)
+        }
+        XCTAssertTrue(policy.shouldPresent(at: 100), "An invalid decline does not poison a valid new session")
+        policy.declined(at: 100)
+        XCTAssertFalse(policy.shouldPresent(at: 99))
+        policy.declined(at: .nan)
+        XCTAssertFalse(policy.shouldPresent(at: 200))
+        XCTAssertTrue(policy.shouldPresent(at: 220))
+    }
+
     func testPublicThermalAndPowerSignalsChooseConservativeScannerWorkWithoutInventedThresholds() {
         for thermal in [DeviceThermalLevel.nominal, .fair, .serious, .critical, .unknown] {
             for lowPower in [false, true] {

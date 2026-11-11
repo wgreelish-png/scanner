@@ -226,6 +226,19 @@ import SwiftData
         XCTAssertNil(try SessionService.active(context: reopened))
     }
 
+    func testLeftoverDraftPreservesPreferredScannerGameAndHasNoPriceWork() async throws {
+        let suite = "LeftoverDraft.Tests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("Magic: The Gathering", forKey: "defaultGame")
+        let draft = try SessionService.prepareDraft(game: "Pokémon", rememberGame: false, defaults: defaults)
+        XCTAssertEqual(defaults.string(forKey: "defaultGame"), "Magic: The Gathering")
+        XCTAssertNil(draft.list.modelContext); XCTAssertFalse(draft.isCommitted)
+        let card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]
+        let details = try await StockCountPricing().details(for: card, candidates: [card], forceRefresh: true)
+        XCTAssertNil(details.quote); XCTAssertEqual(details.printings, card.printings)
+    }
+
     func testFirstConfirmedDraftCardCreatesOneListAndLaterCardsKeepItsIdentity() throws {
         let container = try store(), context = container.mainContext
         let instant = Date(timeIntervalSince1970: 1_800_000_000)
@@ -406,6 +419,60 @@ import SwiftData
         let totals = OfferCalculator.calculate(lines, rates: OfferRates())
         XCTAssertEqual(totals.unpricedQuantity, 4); XCTAssertEqual(totals.quantity, 6)
         XCTAssertEqual(totals.market, 0); XCTAssertEqual(totals.cash, 0)
+    }
+    func testOfferOverrideFeedbackExplainsUnpricedValuesAndTreatsZeroAsKnown() {
+        XCTAssertNil(OfferOverrideFeedback.badge(hasOverrides: false, marketPrice: nil))
+        XCTAssertNil(OfferOverrideFeedback.explanation(hasOverrides: false, marketPrice: nil))
+        XCTAssertEqual(OfferOverrideFeedback.badge(hasOverrides: true, marketPrice: nil), "Not included")
+        XCTAssertNotNil(OfferOverrideFeedback.explanation(hasOverrides: true, marketPrice: nil))
+        XCTAssertEqual(OfferOverrideFeedback.badge(hasOverrides: true, marketPrice: 0), "Applied")
+        XCTAssertNil(OfferOverrideFeedback.explanation(hasOverrides: true, marketPrice: 0))
+        XCTAssertEqual(OfferOverrideFeedback.badge(hasOverrides: true, marketPrice: .nan), "Not included")
+        XCTAssertEqual(OfferOverrideFeedback.badge(hasOverrides: true, marketPrice: -1), "Not included")
+    }
+    func testNewOfferOverrideEditsAreCompatibleWithCheckoutCentPrecision() {
+        for text in ["0", "0.00", "1.", "1.2", "1.25", "999999999.99", " 12.50 "] {
+            XCTAssertNotNil(OfferOverrideInput.parse(text), text)
+            XCTAssertEqual(OfferOverrideInput.parse(text), CustomOfferAmount.parse(text), text)
+            XCTAssertTrue(OfferOverrideInput.isValidEdit(text, preserving: nil), text)
+        }
+        for text in ["0.001", "1.230000", "1.123456", "-1", "NaN", "1e3", "1000000000", "1,000", "$3"] {
+            XCTAssertNil(OfferOverrideInput.parse(text), text)
+            XCTAssertFalse(OfferOverrideInput.isValidEdit(text, preserving: nil), text)
+            XCTAssertNil(OfferOverrideInput.storedText(text, preserving: nil), text)
+        }
+        XCTAssertTrue(OfferOverrideInput.isValidEdit("  ", preserving: "1.234567"))
+        XCTAssertNil(OfferOverrideInput.storedText("  ", preserving: "1.234567"))
+        XCTAssertEqual(OfferOverrideInput.storedText(" 12.50 ", preserving: nil), "12.5")
+    }
+    func testUntouchedLegacyOfferOverrideIsKeptWithoutRounding() {
+        let original = "0.123456"
+        XCTAssertTrue(OfferOverrideInput.isValidEdit(original, preserving: original))
+        XCTAssertEqual(OfferOverrideInput.storedText(original, preserving: original), original)
+        XCTAssertFalse(OfferOverrideInput.isValidEdit("0.123457", preserving: original))
+        XCTAssertTrue(OfferOverrideInput.isValidEdit("0.13", preserving: original))
+        XCTAssertEqual(OfferOverrideInput.storedText("0.13", preserving: original), "0.13")
+        // Editing another field must not turn a saved fraction into a new
+        // rounded offer; an explicit replacement still uses checkout precision.
+        XCTAssertEqual(MoneyInput.parse(original), Decimal(string: original))
+    }
+    func testOfferHeadlinesDistinguishUnknownPricesKnownZeroAndExplicitAmounts() {
+        let unknown = OfferCalculator.calculate([OfferLine(price: nil, quantity: 2)], rates: OfferRates())
+        XCTAssertTrue(OfferValuePresentation.hasOnlyUnpriced(unknown))
+        XCTAssertNil(OfferValuePresentation.amount(unknown.market, totals: unknown))
+        XCTAssertEqual(OfferValuePresentation.text(unknown.cash, totals: unknown), "Unavailable")
+        XCTAssertEqual(OfferValuePresentation.marketCaption(unknown), "2 cards • prices unavailable")
+        XCTAssertEqual(OfferValuePresentation.amount(15, totals: unknown, hasExplicitValue: true), 15)
+
+        let zero = OfferCalculator.calculate([OfferLine(price: 0, quantity: 2)], rates: OfferRates())
+        XCTAssertFalse(OfferValuePresentation.hasOnlyUnpriced(zero))
+        XCTAssertEqual(OfferValuePresentation.amount(zero.market, totals: zero), 0)
+        XCTAssertEqual(OfferValuePresentation.text(zero.cash, totals: zero), Decimal.zero.money)
+
+        let partial = OfferCalculator.calculate([OfferLine(price: 0, quantity: 1), OfferLine(price: nil, quantity: 2)], rates: OfferRates())
+        XCTAssertFalse(OfferValuePresentation.hasOnlyUnpriced(partial))
+        XCTAssertEqual(OfferValuePresentation.marketCaption(partial), "1 of 3 cards priced")
+        XCTAssertEqual(OfferValuePresentation.amount(partial.market, totals: partial), 0)
     }
     func testOfferCurrencyRoundingAndNumericInputValidation() async {
         let totals = OfferCalculator.calculate([OfferLine(price: Decimal(string: "0.05"), quantity: 3)], rates: OfferRates())

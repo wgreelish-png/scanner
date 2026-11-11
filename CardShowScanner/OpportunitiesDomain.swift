@@ -11,7 +11,7 @@ enum OpportunitiesFailure: LocalizedError, Equatable, Sendable {
         switch self {
         case .notConfigured: return "Configure your server in TCGTracking API Connection to load market activity."
         case .directNotConfigured: return "Enter your TCGTracking shipper ID and API key in TCGTracking API Connection to load market activity."
-        case .unsupportedCard: return "Market activity requires a catalog-matched card with a selected printing, language and condition."
+        case .unsupportedCard: return "Beta market activity supports Pokémon, Magic and Yu-Gi-Oh! catalog cards with an exact printing, language and condition. Public card pricing remains separate."
         case .catalogUnavailable: return "The catalog cannot locate this card’s exact set. Refresh the card database and retry market activity."
         case .authorizationRequired: return "The server requires a valid device access token. Check TCGTracking API Connection."
         case .directAuthorizationRequired: return "TCGTracking rejected these credentials for market activity. Check TCGTracking API Connection."

@@ -14,6 +14,11 @@ import UIKit
     init(store: ShowBudgetStore = .shared) { _store = State(initialValue: store) }
 
     private var availableQuantity: Int { store.inventory.reduce(0) { $0 + max(0, $1.quantity) } }
+    private var activityState: DiagnosticActivityState {
+        .init(canProceed: store.isLoaded && store.eligibleActiveShow != nil,
+            blockReason: !store.isLoaded ? .unavailable : store.eligibleActiveShow == nil ? .notActive : .ready,
+            cardCount: availableQuantity)
+    }
 
     var body: some View {
         TimelineView(ForegroundMinuteSchedule(enabled: isVisible && scenePhase == .active)) { _ in
@@ -25,11 +30,18 @@ import UIKit
                             ShowHomeRouteCard(title: "Inventory", subtitle: "\(availableQuantity.formatted()) cards in local stock",
                                               symbol: "shippingbox.fill", color: .indigo)
                         }.buttonStyle(.plain).accessibilityIdentifier("show.inventory")
+                        NavigationLink { LeftoverStockView() } label: {
+                            ShowHomeRouteCard(title: "Count Leftover Stock", subtitle: "Compare with Card Show and export replacement CSV",
+                                              symbol: "checklist", color: .teal)
+                        }.buttonStyle(.plain).accessibilityIdentifier("show.leftoverStock")
                         NavigationLink { PriceTagsView(store: store) } label: {
                             ShowHomeRouteCard(title: "Price Tags", subtitle: "Print all, changed prices, or custom tags",
                                               symbol: "tag.fill", color: .indigo)
                         }.buttonStyle(.plain).accessibilityIdentifier("show.priceTags")
-                        Button { showingTransaction = true } label: {
+                        Button {
+                            DiagnosticLog.shared.activity(.action, screen: .showHome, action: .recordTransaction, state: activityState)
+                            showingTransaction = true
+                        } label: {
                             ShowHomeRouteCard(title: "Record Transaction", subtitle: "Sell, trade, or buy cards",
                                               symbol: "arrow.left.arrow.right", color: .teal)
                         }.buttonStyle(.plain).disabled(!store.isLoaded || store.eligibleActiveShow == nil)
@@ -63,8 +75,12 @@ import UIKit
         }
         .navigationTitle("Show")
         .sheet(isPresented: $showingTransaction) { ShowTransactionForm(store: store, initialKind: .sale) }
-        .onAppear { isVisible = true; seedInventory() }
-        .onDisappear { isVisible = false }
+        .onAppear {
+            isVisible = true; seedInventory()
+            DiagnosticLog.shared.activity(.screen, screen: .showHome, state: activityState)
+        }
+        .onChange(of: activityState) { _, state in DiagnosticLog.shared.activity(.state, screen: .showHome, state: state) }
+        .onDisappear { isVisible = false; DiagnosticLog.shared.activity(.exit, screen: .showHome) }
     }
 
     private func seedInventory() {
@@ -132,6 +148,13 @@ private struct ShowHomeRouteCard: View {
                 .localizedCaseInsensitiveContains(query)
         }
         return selectedSort.sorted(matches)
+    }
+    private var activityState: DiagnosticActivityState {
+        .init(selectedCount: transactionQuantities.values.reduce(0, +),
+            canProceed: store.isLoaded && !store.isSaving && store.eligibleActiveShow != nil && (!selectingTransaction || selectionIsAvailable),
+            blockReason: !store.isLoaded ? .unavailable : store.isSaving ? .saving
+                : store.eligibleActiveShow == nil ? .notActive : selectingTransaction && !selectionIsAvailable ? .invalidInput : .ready,
+            cardCount: available.reduce(0) { $0 + $1.quantity })
     }
 
     var body: some View {
@@ -215,7 +238,10 @@ private struct ShowHomeRouteCard: View {
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 if selectingTransaction {
-                    Button("Cancel") { transactionQuantities.removeAll(); selectingTransaction = false }
+                    Button("Cancel") {
+                        DiagnosticLog.shared.activity(.action, screen: .inventory, action: .cancel, state: activityState)
+                        transactionQuantities.removeAll(); selectingTransaction = false
+                    }
                         .accessibilityIdentifier("showInventory.cancelSelection")
                 }
             }
@@ -241,8 +267,12 @@ private struct ShowHomeRouteCard: View {
                 transactionQuantities.removeAll(); selectingTransaction = false
             }
         }
-        .onAppear { visible = true; seedInventory() }
-        .onDisappear { visible = false }
+        .onAppear {
+            visible = true; seedInventory()
+            DiagnosticLog.shared.activity(.screen, screen: .inventory, state: activityState)
+        }
+        .onChange(of: activityState) { _, state in DiagnosticLog.shared.activity(.state, screen: .inventory, state: state) }
+        .onDisappear { visible = false; DiagnosticLog.shared.activity(.exit, screen: .inventory) }
     }
 
     private var inventorySummary: some View {
@@ -263,7 +293,10 @@ private struct ShowHomeRouteCard: View {
                     Text("\(transactionQuantities.values.reduce(0, +).formatted()) selected")
                         .font(.headline).accessibilityIdentifier("showInventory.selectedQuantity")
                     Spacer()
-                    Button("Clear") { transactionQuantities.removeAll() }
+                    Button("Clear") {
+                        transactionQuantities.removeAll()
+                        DiagnosticLog.shared.activity(.action, screen: .inventory, action: .clearSelection, state: activityState)
+                    }
                         .frame(minHeight: 44).disabled(transactionQuantities.isEmpty)
                         .accessibilityIdentifier("showInventory.clearSelection")
                 }
@@ -316,8 +349,12 @@ private struct ShowHomeRouteCard: View {
                 endSearchEditing()
                 if selectingTransaction {
                     guard selectionIsAvailable else { return }
+                    DiagnosticLog.shared.activity(.action, screen: .inventory, action: .confirmTransaction, state: activityState)
                     showingTransaction = true
-                } else { selectingTransaction = true }
+                } else {
+                    DiagnosticLog.shared.activity(.action, screen: .inventory, action: .recordTransaction, state: activityState)
+                    selectingTransaction = true
+                }
             } label: {
                 Label(selectingTransaction ? "Confirm Transaction" : "Record Transaction",
                       systemImage: selectingTransaction ? "checkmark.circle" : "arrow.left.arrow.right")
@@ -360,6 +397,7 @@ private struct ShowHomeRouteCard: View {
             Button {
                 if transactionQuantities[item.id] != nil { transactionQuantities.removeValue(forKey: item.id) }
                 else { transactionQuantities[item.id] = 1 }
+                DiagnosticLog.shared.activity(.action, screen: .inventory, action: .selectCard, state: activityState)
             } label: {
                 HStack(spacing: 12) {
                     ShowWorkingInventoryRow(item: item)
@@ -375,7 +413,10 @@ private struct ShowHomeRouteCard: View {
                 .accessibilityAddTraits(selected > 0 ? .isSelected : [])
             if selected > 0 {
                 Stepper("Quantity: \(selected)", value: Binding(get: { transactionQuantities[item.id] ?? 1 },
-                    set: { transactionQuantities[item.id] = $0 }), in: 1...item.quantity)
+                    set: {
+                        transactionQuantities[item.id] = $0
+                        DiagnosticLog.shared.activity(.action, screen: .inventory, action: .changeQuantity, state: activityState)
+                    }), in: 1...item.quantity)
                     .accessibilityIdentifier("showInventory.selectionQuantity." + item.id.uuidString)
             }
         }
@@ -502,6 +543,8 @@ private struct ShowInventoryTransactionSelectionStyle: ButtonStyle {
                 }
             } else { ContentUnavailableView("Card unavailable", systemImage: "shippingbox") }
         }.navigationTitle("Card Details").navigationBarTitleDisplayMode(.inline)
+        .onAppear { DiagnosticLog.shared.activity(.screen, screen: .inventoryDetail, state: .init(cardCount: item?.quantity)) }
+        .onDisappear { DiagnosticLog.shared.activity(.exit, screen: .inventoryDetail) }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -732,6 +775,8 @@ private struct ShowInventoryArtwork: View {
         }
         .navigationTitle("Transaction History").navigationBarTitleDisplayMode(.inline)
         .searchable(text: $search, prompt: "Show or card name")
+        .onAppear { DiagnosticLog.shared.activity(.screen, screen: .transactionHistory) }
+        .onDisappear { DiagnosticLog.shared.activity(.exit, screen: .transactionHistory) }
     }
 
     private func historyRow(_ receipt: ShowHistoryReceipt) -> some View {

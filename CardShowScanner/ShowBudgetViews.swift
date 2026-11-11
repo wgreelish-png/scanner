@@ -75,7 +75,8 @@ import SwiftUI
 
     var body: some View {
         TimelineView(ForegroundMinuteSchedule(enabled: isVisible && scenePhase == .active)) { _ in dashboard }
-        .onAppear { isVisible = true }.onDisappear { isVisible = false }
+        .onAppear { isVisible = true; DiagnosticLog.shared.activity(.screen, screen: .showBudget) }
+        .onDisappear { isVisible = false; DiagnosticLog.shared.activity(.exit, screen: .showBudget) }
         .navigationTitle("Show Budget")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { dashboardToolbar }
@@ -701,14 +702,23 @@ private enum BudgetTradeDirection: String, CaseIterable, Identifiable {
 
     private func record() {
         guard !saving, !saved, let entry else { return }
+        DiagnosticLog.shared.activity(.action, screen: .showBudget, action: .recordTransaction)
         guard store.canRecord(showID: showID) else {
             error = "Cash can be recorded only on this show's scheduled dates. Your transaction has not been added."
+            DiagnosticLog.shared.activity(.outcome, screen: .showBudget, action: .failed,
+                state: .init(canProceed: false, blockReason: .notActive))
             return
         }
         saving = true; error = nil
         defer { saving = false }
-        do { try store.record(entry, showID: showID); saved = true; onRecorded() }
-        catch { self.error = budgetError(error) }
+        do {
+            try store.record(entry, showID: showID); saved = true
+            DiagnosticLog.shared.activity(.outcome, screen: .showBudget, action: .saved)
+            onRecorded()
+        } catch {
+            self.error = budgetError(error)
+            DiagnosticLog.shared.activity(.outcome, screen: .showBudget, action: .failed)
+        }
     }
 }
 

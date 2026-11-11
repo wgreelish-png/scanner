@@ -2,10 +2,73 @@ import SwiftUI
 import SwiftData
 import UIKit
 
+enum ScannerPurpose { case standard, leftoverStock }
+
+/// Counting needs exact identities and copies, not network market-price work.
+struct StockCountPricing: MarketPricing {
+    func quote(for card: CardCandidate) async throws -> MarketQuote? { nil }
+    func details(for card: CardCandidate, candidates: [CardCandidate], forceRefresh: Bool) async throws -> MarketDetails {
+        MarketDetails(quote: nil, printings: card.printings)
+    }
+}
+
+@MainActor struct LeftoverCountCardsView: View {
+    @Bindable var list: CardList
+    @Environment(\.modelContext) private var context
+    @State private var search = ""
+    @State private var error: String?
+
+    private var rows: [InventoryCard] {
+        list.orderedCards.reversed().filter {
+            search.isEmpty || [$0.snapshot.name, $0.snapshot.set, $0.snapshot.number,
+                $0.snapshot.identity.printing, $0.snapshot.identity.condition, $0.snapshot.identity.language]
+                .joined(separator: " ").localizedCaseInsensitiveContains(search)
+        }
+    }
+
+    var body: some View {
+        List {
+            Section {
+                Text("\(list.quantity) physical cards counted")
+                Text("Review printing, condition, language and copies. This count does not record a purchase, sale or inventory adjustment.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(rows) { row in
+                NavigationLink { CardEditorView(item: row) } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(row.snapshot.name).font(.headline)
+                        Text([row.snapshot.set, row.snapshot.number].filter { !$0.isEmpty }.joined(separator: " · "))
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text("\(row.snapshot.identity.printing) · \(row.snapshot.identity.condition) · \(row.snapshot.identity.language) · Qty \(row.quantity)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }.swipeActions {
+                    Button("Remove", role: .destructive) {
+                        guard !context.hasChanges else { error = "Finish saving your current edits, then remove this counted card."; return }
+                        let previousCards = list.cards
+                        context.delete(row)
+                        do { try context.save() } catch {
+                            // The context was clean before this synchronous edit.
+                            context.rollback()
+                            list.cards = previousCards; row.list = list
+                            context.processPendingChanges()
+                            self.error = "The counted card could not be removed. Your saved count was kept."
+                        }
+                    }
+                }
+            }
+        }.navigationTitle("Counted Cards").navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search counted cards")
+            .scrollDismissesKeyboard(.interactively)
+            .failureAlert($error)
+    }
+}
+
 @MainActor struct ScannerView: View {
     let session: ScanSession
     let list: CardList
     let draft: ScanBatchDraft?
+    let purpose: ScannerPurpose
     @Environment(\.modelContext) private var context
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -27,14 +90,29 @@ import UIKit
     @State private var pendingManualSearchFromReview = false
     @State private var manualSearchTransitionReady = false
     @State private var selectedRecentCard: InventoryCard?
-    init(session: ScanSession, list: CardList, draft: ScanBatchDraft? = nil, model: ScannerViewModel? = nil) {
+    @State private var manualPromptPolicy = ScannerManualSearchPromptPolicy()
+    init(session: ScanSession, list: CardList, draft: ScanBatchDraft? = nil, model: ScannerViewModel? = nil,
+         purpose: ScannerPurpose = .standard) {
         self.session = session; self.list = list; self.draft = draft
+        let purpose: ScannerPurpose = LeftoverStockStore.shared.active?.countListIDs.contains(list.id) == true ? .leftoverStock : purpose
+        self.purpose = purpose
         _game = State(initialValue: session.game ?? "Pokémon")
-        let scannerModel = model ?? ScannerViewModel()
+        let scannerModel = model ?? (purpose == .leftoverStock ? ScannerViewModel(pricing: StockCountPricing()) : ScannerViewModel())
         _model = State(initialValue: scannerModel)
         _mode = State(initialValue: scannerModel.liveProvider == nil ? "Mock" : "Live")
     }
     @State private var visible = false
+    private var scannerPricing: any MarketPricing {
+        if purpose == .leftoverStock { return StockCountPricing() }
+        return StandardMarketPricing()
+    }
+    private var activityState: DiagnosticActivityState {
+        .init(selectedCount: min(5, model.result?.candidates.count ?? 0), isPreparing: model.saving || model.selectionInProgress,
+              canProceed: session.isActive && !model.saving && !model.selectionInProgress && !model.quickActionCoolingDown && !model.paused,
+              blockReason: !session.isActive || model.paused ? .notActive
+                  : (model.saving || model.selectionInProgress ? .saving : (model.quickActionCoolingDown ? .preparing : .ready)),
+              cardCount: list.quantity)
+    }
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -52,6 +130,13 @@ import UIKit
                                   !returningFromConnection, !showingManualSearch,
                                   !pendingManualSearchFromReview, selectedRecentCard == nil else {
                                 live.resumeAfterManualSearchPrompt(); return
+                            }
+                            guard manualPromptPolicy.shouldPresent(at: ProcessInfo.processInfo.systemUptime) else {
+                                // The bridge has paused this attempt for the
+                                // suggestion. Suppression must release it too.
+                                live.resumeAfterManualSearchPrompt()
+                                DiagnosticLog.shared.record("scanner.manual_search_prompt_suppressed", ["reason": "cooldown"], sampleEvery: 15)
+                                return
                             }
                             showingManualSearchPrompt = true
                         }
@@ -71,6 +156,8 @@ import UIKit
                     .alert("Search for this card manually?", isPresented: $showingManualSearchPrompt) {
                         Button("Search Manually") { openManualSearch() }
                         Button("Keep Scanning", role: .cancel) {
+                            DiagnosticLog.shared.activity(.action, screen: .scanner, action: .continueFlow, state: activityState)
+                            manualPromptPolicy.declined(at: ProcessInfo.processInfo.systemUptime)
                             model.liveProvider?.resumeAfterManualSearchPrompt()
                             DiagnosticLog.shared.record("scanner.manual_search_declined")
                         }
@@ -92,30 +179,37 @@ import UIKit
         .fullScreenCover(isPresented: $showingConnection, onDismiss: finishConnection) { connectionView }
         .sheet(isPresented: $showingManualSearch, onDismiss: finishManualSearch) {
             ManualCardSearchView(list: list, game: session.game ?? game, allowsGameChange: false, draft: draft,
-                                 focusSearchOnAppear: true)
+                                 focusSearchOnAppear: true,
+                                 pricing: scannerPricing)
         }
         .sheet(item: $selectedRecentCard, onDismiss: finishRecentCard) { item in
             NavigationStack { CardEditorView(item: item) }
         }
         .onAppear {
             visible = true
+            DiagnosticLog.shared.activity(.screen, screen: .scanner, state: activityState)
             DiagnosticLog.shared.record("navigation.scanner_appeared")
             startIfReady()
         }
         .onDisappear {
+            DiagnosticLog.shared.activity(.exit, screen: .scanner, state: activityState)
             visible = false; showingManualSearchPrompt = false; model.stop()
             DiagnosticLog.shared.record("navigation.scanner_disappeared")
         }
         .onChange(of: scenePhase) { _, phase in
-            DiagnosticLog.shared.record("app.scene", ["phase": phase == .active ? "active" : (phase == .background ? "background" : "inactive")])
             if phase == .active { startIfReady() }
             else if phase == .background { showingManualSearchPrompt = false; model.stop() }
         }
         .onChange(of: game) { _, newGame in
+            guard purpose == .standard else { game = session.game ?? "Pokémon"; return }
             guard newGame != session.game else { return }
             pendingGame = newGame; game = session.game ?? "Pokémon"; confirmGame = true
         }
         .onChange(of: session.isActive) { _, active in if !active { model.stop() } }
+        .onChange(of: activityState) { _, state in
+            guard visible, !showingManualSearch, !showingListReview, selectedRecentCard == nil else { return }
+            DiagnosticLog.shared.activity(.state, screen: model.selected == nil ? .scanner : .scanReview, state: state)
+        }
         .confirmationDialog("Start a new scan for another game?", isPresented: $confirmGame) {
             Button("Start New Scan") {
                 guard let pendingGame else { return }
@@ -133,11 +227,16 @@ import UIKit
             if previous != nil && current == nil && nextDraft?.isCommitted == true { nextDraft = nil }
         }
         .navigationDestination(isPresented: $showingListReview) {
-            SessionReviewView(session: session, list: list, onContinueScanning: {
-                model.paused = false
-                showingListReview = false
-            }).toolbar(.visible, for: .navigationBar)
-                .toolbar(.visible, for: .tabBar)
+            if purpose == .leftoverStock {
+                LeftoverCountCardsView(list: list)
+                    .toolbar(.visible, for: .navigationBar)
+            } else {
+                SessionReviewView(session: session, list: list, onContinueScanning: {
+                    model.paused = false
+                    showingListReview = false
+                }).toolbar(.visible, for: .navigationBar)
+                    .toolbar(.visible, for: .tabBar)
+            }
         }
         .onChange(of: showingListReview) { _, showing in
             if !showing { startIfReady() }
@@ -148,7 +247,10 @@ import UIKit
     }
     private var cameraHeader: some View {
         HStack(spacing: 4) {
-                Button { model.stop(); dismiss() } label: {
+                Button {
+                    DiagnosticLog.shared.activity(.action, screen: .scanner, action: .close, state: activityState)
+                    model.stop(); dismiss()
+                } label: {
                     Image(systemName: "chevron.left").frame(width: 44, height: 44)
                 }.accessibilityLabel("Close scanner").accessibilityIdentifier("scanner.close")
                 VStack(alignment: .leading, spacing: 2) {
@@ -166,6 +268,8 @@ import UIKit
                     }.foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, alignment: .leading)
                 Button {
+                    DiagnosticLog.shared.activity(.action, screen: .scanner,
+                        action: model.paused ? .resumeScanner : .pauseScanner, state: activityState)
                     model.paused.toggle()
                     if model.paused { model.stop() } else { startIfReady() }
                 } label: {
@@ -173,12 +277,17 @@ import UIKit
                 }.accessibilityLabel(model.paused ? "Resume camera" : "Pause camera")
                     .accessibilityIdentifier("scanner.pause")
                 Menu {
-                    Picker("Game", selection: $game) { ForEach(CatalogOptions.games(including: game), id: \.self) { Text($0) } }
+                    if purpose == .standard {
+                        Picker("Game", selection: $game) { ForEach(CatalogOptions.games(including: game), id: \.self) { Text($0) } }
+                    }
                     Button("Retry Live Scanner") {
                         model.stop(); model.paused = false
                         startIfReady()
                     }.disabled(model.liveProvider == nil)
-                    Button("Reset Card Recognition", systemImage: "arrow.clockwise") { model.scanNextCard() }
+                    Button("Reset Card Recognition", systemImage: "arrow.clockwise") {
+                        DiagnosticLog.shared.activity(.action, screen: .scanner, action: .resetRecognition, state: activityState)
+                        model.scanNextCard()
+                    }
                         .disabled(model.selectionInProgress || model.saving)
                         .accessibilityIdentifier("scanner.resetRecognition")
                     Button("TCGTracking Account", systemImage: "person.crop.circle") {
@@ -221,10 +330,14 @@ import UIKit
         return VStack(spacing: detailsCollapsed ? 6 : 10) {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("\(totals.quantity) cards • \(totals.market.money) market").font(.subheadline.bold())
+                    Text(purpose == .leftoverStock ? "\(list.quantity) cards counted" : totals.quantity > 0 && totals.unpricedQuantity == totals.quantity
+                         ? "\(totals.quantity) cards • unpriced"
+                         : "\(totals.quantity) cards • \(totals.market.money) \(totals.unpricedQuantity > 0 ? "known" : "market")")
+                        .font(.subheadline.bold())
                         .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("scanner.totals")
-                    if totals.unpricedQuantity > 0 {
-                        Text("\(totals.unpricedQuantity) unpriced • partial total").font(.caption).foregroundStyle(.orange)
+                    if purpose == .standard && totals.unpricedQuantity > 0 {
+                        Text(totals.unpricedQuantity == totals.quantity ? "Market prices unavailable" : "\(totals.unpricedQuantity) unpriced • partial total")
+                            .font(.caption).foregroundStyle(.orange)
                             .accessibilityIdentifier("scanner.unpriced")
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)
@@ -261,20 +374,27 @@ import UIKit
                 .accessibilityIdentifier("scanner.manualSearch")
             Button {
                 guard !showingListReview else { return }
+                DiagnosticLog.shared.activity(.action, screen: .scanner, action: .openList, state: activityState)
                 // Stop before navigation begins, and keep scene callbacks
                 // from restarting this scanner beneath the review screen.
                 model.stop(); showingListReview = true
                 DiagnosticLog.shared.record("navigation.review_opened", ["phase": "scanner"])
             } label: {
-                Label("List", systemImage: "list.bullet").frame(maxWidth: .infinity, minHeight: 44)
-            }.buttonStyle(.borderless).accessibilityLabel("View List").accessibilityIdentifier("scanner.viewList")
+                Label(purpose == .leftoverStock ? "Review Count" : "List", systemImage: "list.bullet").frame(maxWidth: .infinity, minHeight: 44)
+            }.buttonStyle(.borderless).accessibilityLabel(purpose == .leftoverStock ? "Review Count" : "View List").accessibilityIdentifier("scanner.viewList")
                 .disabled(draft?.isCommitted == false)
             if draft?.isCommitted == false {
-                Button("Close", systemImage: "xmark") { model.stop(); dismiss() }
+                Button("Close", systemImage: "xmark") {
+                    DiagnosticLog.shared.activity(.action, screen: .scanner, action: .close, state: activityState)
+                    model.stop(); dismiss()
+                }
                     .frame(maxWidth: .infinity, minHeight: 44).accessibilityLabel("Close Scan")
                     .accessibilityIdentifier("scanner.finishSession")
             } else if session.isActive {
-                FinishSessionButton(session: session, title: "Finish") { model.stop(); dismiss() }
+                FinishSessionButton(session: session, title: purpose == .leftoverStock ? "Finish Count" : "Finish") {
+                    DiagnosticLog.shared.activity(.outcome, screen: .scanner, action: .finishSession, state: activityState)
+                    model.stop(); dismiss()
+                }
                     .frame(maxWidth: .infinity)
                     .accessibilityIdentifier("scanner.finishSession")
             }
@@ -284,6 +404,7 @@ import UIKit
     private var scannerQuickActions: some View {
         HStack(alignment: .top, spacing: 10) {
             Button {
+                DiagnosticLog.shared.activity(.action, screen: .scanner, action: .undoAdd, state: activityState)
                 model.undoLastAdd(list: list, context: context)
             } label: {
                 if dynamicTypeSize.isAccessibilitySize {
@@ -296,6 +417,7 @@ import UIKit
                 .accessibilityLabel("Undo Last Add")
                 .accessibilityIdentifier("scanner.undoLastAdd")
             Button {
+                DiagnosticLog.shared.activity(.action, screen: .scanner, action: .addCopy, state: activityState)
                 model.addAnotherCopy(list: list, context: context)
             } label: {
                 if dynamicTypeSize.isAccessibilitySize {
@@ -327,7 +449,10 @@ import UIKit
                             .font(.subheadline).foregroundStyle(.secondary)
                         if let message = model.priceMessage {
                             Text(message).font(.caption).foregroundStyle(.secondary)
-                            Button("Retry Market Price") { model.refreshPrice() }.disabled(model.priceLoading || model.selectionInProgress)
+                            Button("Retry Market Price") {
+                                DiagnosticLog.shared.activity(.action, screen: .scanReview, action: .retryPrice, state: activityState)
+                                model.refreshPrice()
+                            }.disabled(model.priceLoading || model.selectionInProgress)
                         }
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: dynamicTypeSize.isAccessibilitySize ? 1 : 2), alignment: .leading, spacing: 16) {
                             ForEach(Array((model.result?.candidates ?? []).prefix(5))) { candidate in
@@ -337,8 +462,14 @@ import UIKit
                                         options: model.printings(for: candidate),
                                         accessibilityID: "scanReview.printing." + candidate.identity.productID,
                                         accessibilityContext: candidate.name,
-                                        onChange: { model.changePrinting($0, for: candidate) })
-                                    Button { model.selectAndAdd(candidate, list: list, context: context) } label: {
+                                        onChange: {
+                                            DiagnosticLog.shared.activity(.action, screen: .scanReview, action: .changePrinting, state: activityState)
+                                            model.changePrinting($0, for: candidate)
+                                        })
+                                    Button {
+                                        DiagnosticLog.shared.activity(.action, screen: .scanReview, action: .addCard, state: activityState)
+                                        model.selectAndAdd(candidate, list: list, context: context)
+                                    } label: {
                                         CandidateMatchTile(candidate: candidate, selected: card, priceLoading: model.priceLoading)
                                     }.buttonStyle(.plain)
                                         .accessibilityIdentifier("scanReview.add." + candidate.identity.productID)
@@ -357,6 +488,8 @@ import UIKit
                     }
                 }.padding().padding(.top, 8)
             }.navigationTitle("Choose the Card").navigationBarTitleDisplayMode(.inline)
+                .onAppear { DiagnosticLog.shared.activity(.screen, screen: .scanReview, state: activityState) }
+                .onDisappear { DiagnosticLog.shared.activity(.exit, screen: .scanReview, state: activityState) }
                 .toolbar(.visible, for: .navigationBar)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) { scanIssueMenu }
@@ -365,7 +498,10 @@ import UIKit
                     if let card = model.selected {
                         VStack(alignment: .leading, spacing: 6) {
                             ScanReviewDropdown(title: "Condition", value: card.identity.condition, options: CatalogOptions.conditions,
-                                accessibilityID: "scanReview.condition", onChange: { model.changeCondition($0) })
+                                accessibilityID: "scanReview.condition", onChange: {
+                                    DiagnosticLog.shared.activity(.action, screen: .scanReview, action: .changeCondition, state: activityState)
+                                    model.changeCondition($0)
+                                })
                                 .disabled(model.selectionInProgress || model.saving || model.quickActionCoolingDown || !session.isActive)
                             Text("Applies to the card you add. Each new scan starts at Near Mint.")
                                 .font(.caption).foregroundStyle(.secondary)
@@ -380,7 +516,10 @@ import UIKit
                             .buttonStyle(.borderedProminent).frame(maxWidth: .infinity, minHeight: 44)
                             .disabled(model.selectionInProgress || model.saving || !session.isActive)
                             .accessibilityIdentifier("scanReview.manualSearch")
-                        Button("Discard & Scan Again") { model.scanNextCard() }.frame(minHeight: 44)
+                        Button("Discard & Scan Again") {
+                            DiagnosticLog.shared.activity(.action, screen: .scanReview, action: .resetRecognition, state: activityState)
+                            model.scanNextCard()
+                        }.frame(minHeight: 44)
                             .disabled(model.selectionInProgress || model.saving || !session.isActive)
                     }.padding().frame(maxWidth: .infinity).background(.regularMaterial)
                 }
@@ -402,6 +541,7 @@ import UIKit
         guard !returningFromConnection, !showingConnection,
               model.suspendForPricingConnection() else { return }
         showingConnection = true
+        DiagnosticLog.shared.activity(.action, screen: .scanner, action: .openConnection, state: activityState)
         DiagnosticLog.shared.record("connection.opened", ["phase": "scanner"])
     }
     private func finishConnection() {
@@ -417,29 +557,39 @@ import UIKit
               model.suspendForManualSearch() else { return }
         showingManualSearchPrompt = false
         showingManualSearch = true
+        DiagnosticLog.shared.activity(.action, screen: .scanner, action: .openManualSearch, state: activityState)
         DiagnosticLog.shared.record("scanner.manual_search_opened")
     }
     private func openManualSearchFromReview() {
         guard session.isActive, !showingManualSearch, !pendingManualSearchFromReview,
               model.suspendForManualSearch(discardSelection: true) else { return }
         showingManualSearchPrompt = false
+        DiagnosticLog.shared.activity(.action, screen: .scanReview, action: .openManualSearch, state: activityState)
         // Clearing the held result dismisses its sheet. Present the catalog only
         // after that dismissal finishes, with recognition still suspended.
         pendingManualSearchFromReview = true
         manualSearchTransitionReady = false
     }
     private func finishRecognitionReview() {
+        if visible { DiagnosticLog.shared.activity(.screen, screen: .scanner, state: activityState) }
         guard pendingManualSearchFromReview else { return }
         manualSearchTransitionReady = true
         startIfReady()
     }
-    private func finishManualSearch() { startIfReady() }
+    private func finishManualSearch() {
+        if visible { DiagnosticLog.shared.activity(.screen, screen: .scanner, state: activityState) }
+        startIfReady()
+    }
     private func openRecentCard(_ item: InventoryCard) {
         guard session.isActive, selectedRecentCard == nil, !showingManualSearch,
               !pendingManualSearchFromReview, model.suspendForManualSearch() else { return }
+        DiagnosticLog.shared.activity(.action, screen: .scanner, action: .openCard, state: activityState)
         selectedRecentCard = item
     }
-    private func finishRecentCard() { startIfReady() }
+    private func finishRecentCard() {
+        if visible { DiagnosticLog.shared.activity(.screen, screen: .scanner, state: activityState) }
+        startIfReady()
+    }
     private func startIfReady() {
         if pendingManualSearchFromReview, manualSearchTransitionReady,
            visible, session.isActive, scenePhase == .active, !model.paused,

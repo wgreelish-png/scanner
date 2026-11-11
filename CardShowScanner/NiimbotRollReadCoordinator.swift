@@ -99,14 +99,15 @@ struct NiimbotPrintStockSnapshot: Equatable, Sendable {
     /// a short monotonic lifetime also prevents indefinitely reusing quiet stock.
     @discardableResult func refreshInfoIfNeeded(
         load: @escaping @MainActor () async throws -> NiimbotRollInfo?,
-        onUpdate: @escaping @MainActor (NiimbotRollInfo?) -> Void = { _ in }
+        onUpdate: @escaping @MainActor (NiimbotRollInfo?) -> Void = { _ in },
+        onSuperseded: @escaping @MainActor () -> Void = {}
     ) -> NiimbotRollRefreshSource {
         guard task == nil else { return .inFlight }
         if info != nil, let cachedAt {
             let age = now() - cachedAt
             if age.isFinite, age >= 0, age < Self.maximumCacheAge { return .cache }
         }
-        _ = refreshInfo(load: load, onUpdate: onUpdate)
+        _ = refreshInfo(load: load, onUpdate: onUpdate, onSuperseded: onSuperseded)
         return .read
     }
 
@@ -119,9 +120,12 @@ struct NiimbotPrintStockSnapshot: Equatable, Sendable {
 
     /// Publication is fenced by both connection and work revision. Detection
     /// callbacks cannot alter paper after a late or cancelled read completes.
+    /// Superseded work notifies its owner after releasing the single-flight
+    /// state; reset and cancellation cannot authorize replacement work.
     @discardableResult func refreshInfo(
         load: @escaping @MainActor () async throws -> NiimbotRollInfo?,
-        onUpdate: @escaping @MainActor (NiimbotRollInfo?) -> Void = { _ in }
+        onUpdate: @escaping @MainActor (NiimbotRollInfo?) -> Void = { _ in },
+        onSuperseded: @escaping @MainActor () -> Void = {}
     ) -> Bool {
         guard task == nil else { return false }
         let requestConnection = connection, requestRevision = revision
@@ -131,8 +135,15 @@ struct NiimbotPrintStockSnapshot: Equatable, Sendable {
             do { result = .success(try await load()) }
             catch { result = .failure(error) }
             guard let self, self.connection == requestConnection else { return }
-            defer { self.task = nil; self.isReading = false }
-            guard self.revision == requestRevision, !Task.isCancelled else { return }
+            var superseded = false
+            defer {
+                self.task = nil; self.isReading = false
+                // The stale result stays fenced out, but an owner with a
+                // pending stock change can now authorize one current read.
+                if superseded { onSuperseded() }
+            }
+            guard !Task.isCancelled else { return }
+            guard self.revision == requestRevision else { superseded = true; return }
             switch result {
             case .success(let value):
                 self.info = value

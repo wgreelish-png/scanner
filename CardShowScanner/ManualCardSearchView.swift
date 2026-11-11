@@ -11,18 +11,28 @@ struct ManualCardSearchView: View {
     let allowsGameChange: Bool
     let draft: ScanBatchDraft?
     let focusSearchOnAppear: Bool
+    private let pricing: any MarketPricing
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var model: ManualCardSearchModel
     @State private var selection: ManualSearchSelection?
-    @State private var lastAdded: String?
+    @State private var didAddCard = false
     @State private var isVisible = false
     @FocusState private var searchFocused: Bool
     init(list: CardList, game: String, allowsGameChange: Bool, draft: ScanBatchDraft? = nil,
-         focusSearchOnAppear: Bool = false) {
+         focusSearchOnAppear: Bool = false,
+         catalog: any CardCatalogSearching = CachedCardCatalog.shared,
+         pricing: any MarketPricing = StandardMarketPricing()) {
         self.list = list; self.allowsGameChange = allowsGameChange; self.draft = draft
         self.focusSearchOnAppear = focusSearchOnAppear
-        _model = State(initialValue: ManualCardSearchModel(game: TCGGameRegistry.scannerKey(for: game) != nil ? game : "Pokémon"))
+        self.pricing = pricing
+        _model = State(initialValue: ManualCardSearchModel(game: TCGGameRegistry.scannerKey(for: game) != nil ? game : "Pokémon", catalog: catalog))
+    }
+    private var activityState: DiagnosticActivityState {
+        .init(selectedCount: model.results.count, canProceed: !model.isSearching && !model.results.isEmpty,
+              blockReason: model.isSearching ? .preparing : (model.error != nil ? .unavailable : (model.results.isEmpty ? .noSelection : .ready)),
+              cardCount: (draft?.list ?? list).quantity,
+              searchHasText: !model.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
     var body: some View {
         NavigationStack {
@@ -39,7 +49,6 @@ struct ManualCardSearchView: View {
                         .accessibilityIdentifier("catalog.query")
                     Text("Search saved \(model.game) cards. Add a number or set to narrow the five closest matches.")
                         .font(.caption).foregroundStyle(.secondary)
-                    if let lastAdded { Label("Added \(lastAdded)", systemImage: "checkmark.circle.fill").font(.subheadline).foregroundStyle(.green) }
                 }
                 if model.isSearching {
                     ProgressView(model.query.isEmpty ? "Opening saved catalog…" : "Searching…")
@@ -47,7 +56,10 @@ struct ManualCardSearchView: View {
                 if let error = model.error {
                     Section {
                         Text(error).foregroundStyle(.secondary)
-                        Button("Retry Search") { model.load() }.disabled(model.isSearching)
+                        Button("Retry Search") {
+                            DiagnosticLog.shared.activity(.action, screen: .manualSearch, action: .retrySearch, state: activityState)
+                            model.load()
+                        }.disabled(model.isSearching)
                     }
                 } else if !model.isSearching && !model.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && model.results.isEmpty {
                     ContentUnavailableView("No matches", systemImage: "magnifyingglass", description: Text("Try the card name, its number, or its set."))
@@ -57,6 +69,7 @@ struct ManualCardSearchView: View {
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: dynamicTypeSize.isAccessibilitySize ? 1 : 2), spacing: 16) {
                             ForEach(model.results) { card in
                                 Button {
+                                    DiagnosticLog.shared.activity(.action, screen: .manualSearch, action: .selectCard, state: activityState)
                                     searchFocused = false
                                     selection = ManualSearchSelection(card: card)
                                 } label: { CatalogSearchTile(card: card) }
@@ -69,7 +82,10 @@ struct ManualCardSearchView: View {
                 .scrollDismissesKeyboard(.interactively)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Done") { isVisible = false; searchFocused = false; dismiss() }
+                        Button("Done") {
+                            DiagnosticLog.shared.activity(.action, screen: .manualSearch, action: .close, state: activityState)
+                            closeSearch()
+                        }
                     }
                     ToolbarItemGroup(placement: .keyboard) {
                         Spacer()
@@ -79,13 +95,22 @@ struct ManualCardSearchView: View {
                     }
                 }
                 .sheet(item: $selection, onDismiss: {
-                    if focusSearchOnAppear, isVisible, selection == nil { searchFocused = true }
+                    // Finish the confirmation's dismissal before closing its
+                    // presenter. The scanner resumes only after this sheet ends.
+                    if didAddCard { closeSearch() }
+                    else if focusSearchOnAppear, isVisible, selection == nil { searchFocused = true }
                 }) { selected in
-                    ManualCardConfirmationView(card: selected.card, list: list, draft: draft) { card in
-                        lastAdded = card.name; selection = nil
+                    ManualCardConfirmationView(card: selected.card, list: list, draft: draft, pricing: pricing) { _ in
+                        didAddCard = true; searchFocused = false; selection = nil
                     }
                 }
-                .onAppear { isVisible = true }
+                .onAppear {
+                    isVisible = true
+                    DiagnosticLog.shared.activity(.screen, screen: .manualSearch, state: activityState)
+                }
+                .onChange(of: activityState) { _, state in
+                    DiagnosticLog.shared.activity(.state, screen: .manualSearch, state: state)
+                }
                 .task {
                     model.load()
                     guard focusSearchOnAppear else { return }
@@ -95,8 +120,15 @@ struct ManualCardSearchView: View {
                     guard isVisible, selection == nil, !Task.isCancelled else { return }
                     searchFocused = true
                 }
-                .onDisappear { isVisible = false; searchFocused = false; model.cancel() }
+                .onDisappear {
+                    DiagnosticLog.shared.activity(.exit, screen: .manualSearch, state: activityState)
+                    isVisible = false; searchFocused = false; model.cancel()
+                }
         }
+    }
+    private func closeSearch() {
+        isVisible = false; searchFocused = false; model.cancel()
+        dismiss()
     }
 }
 
@@ -141,11 +173,20 @@ private struct ManualCardConfirmationView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var model: ManualCardAddModel
     @State private var hasRequestedPrice = false
-    init(card: CardCandidate, list: CardList, draft: ScanBatchDraft?, onAdded: @escaping (CardCandidate) -> Void) {
-        self.list = list; self.draft = draft; self.onAdded = onAdded; _model = State(initialValue: ManualCardAddModel(card: card))
+    init(card: CardCandidate, list: CardList, draft: ScanBatchDraft?, pricing: any MarketPricing,
+         onAdded: @escaping (CardCandidate) -> Void) {
+        self.list = list; self.draft = draft; self.onAdded = onAdded
+        _model = State(initialValue: ManualCardAddModel(card: card, pricing: pricing))
     }
     private var validPrinting: Bool {
         model.pricing.card.printings.isEmpty || model.pricing.card.printings.contains(model.pricing.card.identity.printing)
+    }
+    private var activityState: DiagnosticActivityState {
+        .init(isPreparing: model.isSaving,
+              canProceed: hasRequestedPrice && !model.isSaving && !model.isSaved && !model.pricing.priceLoading && validPrinting,
+              blockReason: model.isSaving ? .saving : (!hasRequestedPrice || model.pricing.priceLoading ? .preparing
+                  : (!validPrinting ? .invalidInput : (model.isSaved ? .unavailable : .ready))),
+              cardCount: (draft?.list ?? list).quantity)
     }
     var body: some View {
         NavigationStack {
@@ -164,7 +205,10 @@ private struct ManualCardConfirmationView: View {
                         Text(metadata.summary).font(.caption).foregroundStyle(.secondary)
                     }
                     if let message = model.pricing.priceMessage { Text(message).font(.caption).foregroundStyle(.secondary) }
-                    Button("Retry Market Price") { model.pricing.refreshPrice() }.disabled(model.pricing.priceLoading)
+                    Button("Retry Market Price") {
+                        DiagnosticLog.shared.activity(.action, screen: .manualConfirmation, action: .retryPrice, state: activityState)
+                        model.pricing.refreshPrice()
+                    }.disabled(model.pricing.priceLoading)
                     Text("Recent quotes are cached. You can add this card unpriced when a quote is unavailable.").font(.caption).foregroundStyle(.secondary)
                 }.disabled(model.isSaving || model.isSaved)
                 if let error = model.error { Section { Text(error).foregroundStyle(.red) } }
@@ -175,12 +219,24 @@ private struct ManualCardConfirmationView: View {
                     Text("Adds one physical card as a new row at the end of this list.").font(.caption).foregroundStyle(.secondary)
                 }
             }.navigationTitle("Confirm Card").navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(model.isSaving) } }
+                .toolbar { ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        DiagnosticLog.shared.activity(.action, screen: .manualConfirmation, action: .cancel, state: activityState)
+                        dismiss()
+                    }.disabled(model.isSaving)
+                } }
+                .onAppear { DiagnosticLog.shared.activity(.screen, screen: .manualConfirmation, state: activityState) }
+                .onChange(of: activityState) { _, state in
+                    DiagnosticLog.shared.activity(.state, screen: .manualConfirmation, state: state)
+                }
                 .task {
                     guard !hasRequestedPrice else { return }
-                    hasRequestedPrice = true; model.pricing.refreshPrice()
+                    hasRequestedPrice = true; model.pricing.loadInitialPrice()
                 }
-                .onDisappear { model.pricing.cancelLookup() }
+                .onDisappear {
+                    DiagnosticLog.shared.activity(.exit, screen: .manualConfirmation, state: activityState)
+                    model.pricing.cancelLookup()
+                }
                 .confirmationDialog("Finish the other active session?", isPresented: $model.needsSessionSwitch) {
                     Button("Finish & Add to This List") { add(finishingOtherSession: true) }
                     Button("Cancel", role: .cancel) {}
@@ -189,10 +245,18 @@ private struct ManualCardConfirmationView: View {
     }
     private func identityBinding(_ keyPath: WritableKeyPath<CardIdentity, String>) -> Binding<String> {
         Binding(get: { model.pricing.card.identity[keyPath: keyPath] }, set: { value in
+            DiagnosticLog.shared.activity(.action, screen: .manualConfirmation,
+                action: keyPath == \CardIdentity.printing ? .changePrinting : .changeCondition, state: activityState)
             model.pricing.changeIdentity { $0[keyPath: keyPath] = value }
         })
     }
     private func add(finishingOtherSession: Bool = false) {
-        if model.add(to: list, context: context, finishingOtherSession: finishingOtherSession, draft: draft) { onAdded(model.pricing.card) }
+        DiagnosticLog.shared.activity(.action, screen: .manualConfirmation, action: .addCard, state: activityState)
+        if model.add(to: list, context: context, finishingOtherSession: finishingOtherSession, draft: draft) {
+            DiagnosticLog.shared.activity(.outcome, screen: .manualConfirmation, action: .addSucceeded, state: activityState)
+            onAdded(model.pricing.card)
+        } else if model.error != nil {
+            DiagnosticLog.shared.activity(.outcome, screen: .manualConfirmation, action: .addFailed, state: activityState)
+        }
     }
 }

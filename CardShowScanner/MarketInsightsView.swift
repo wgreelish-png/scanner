@@ -37,6 +37,8 @@ struct MarketPriceSummary: View {
 struct MarketInsightsContent: View {
     @Bindable var model: MarketInsightsModel
     @Binding var window: Int
+    var onConnection: (() -> Void)? = nil
+    @ObservedObject private var allowlist = BetaIPAllowlistSync.shared
     @State private var showingListingDetails = false
 
     var body: some View {
@@ -65,7 +67,24 @@ struct MarketInsightsContent: View {
             if model.activityLoading { ProgressView("Loading activity…").accessibilityIdentifier("marketDetails.activityLoading") }
             if let message = model.activityMessage {
                 Text(message).font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("marketDetails.activityStatus")
-                Button("Retry Market Activity") { model.refreshActivity() }.disabled(model.activityLoading)
+                if model.activityFailure != .unsupportedCard {
+                    Button("Retry Market Activity") { model.refreshActivity() }.disabled(model.activityLoading)
+                }
+                if model.activityNeedsConnection {
+                    if allowlist.needsSignIn {
+                        Text("Automatic IP updates need website sign-in. Activity access is unverified.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("marketDetails.accessContext")
+                    } else if allowlist.isCoolingPaused {
+                        Text("Automatic website checks are paused while this iPhone cools. API requests remain available.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("marketDetails.accessContext")
+                    }
+                    if let onConnection {
+                        Button("Review API Connection", systemImage: "gearshape", action: onConnection)
+                            .accessibilityIdentifier("marketDetails.connection")
+                    }
+                }
             }
             if let details = model.activityDetails {
                 Picker("Period", selection: $window) {

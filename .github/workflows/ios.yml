@@ -3,18 +3,22 @@ on:
   push:
     branches:
       - main
-      - 'codex/**'
   pull_request:
   workflow_dispatch:
     inputs:
       job_scope:
         description: Jobs to run
         type: choice
-        default: all
+        default: native
         options:
           - all
           - native
+          - tooling
+          - ui_diagnostic
           - ui
+          - log_review
+          - show_polish
+          - leftover_stock
           - research_ui
           - evidence_ui
           - budget_ui
@@ -31,31 +35,48 @@ on:
           - label_queue
           - show_readiness
           - navigation_price
+# PRs validate work branches; main pushes validate integration. Avoid running
+# both push and pull_request checks for the same work-branch commit.
 concurrency:
-  group: ios-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}-${{ inputs.job_scope || 'all' }}-${{ inputs.test_scope || 'all' }}-${{ github.event_name == 'workflow_dispatch' && github.sha || 'automatic' }}
-  # Let an active validation finish when another run is requested on this branch.
-  # Manual checks for different commits also retain their own pending slot.
-  cancel-in-progress: false
+  group: ios-${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}-${{ inputs.job_scope || 'native' }}-${{ inputs.test_scope || 'all' }}
+  # Replace stale work only for the same repository, branch and requested scope.
+  # Independent focused requests retain their own run; commit SHA is not a key.
+  cancel-in-progress: true
+permissions:
+  contents: read
+env:
+  SCANNER_BUILD_TIMEOUT_SECONDS: '1800'
+  SCANNER_CLEANUP_TIMEOUT_SECONDS: '30'
 jobs:
-  native:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job_scope == 'all' || inputs.job_scope == 'native' }}
-    runs-on: macos-15-intel
-    timeout-minutes: 90
+  tooling:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install portable checker dependencies
+        run: python3 -m pip install --disable-pip-version-check -r scripts/requirements-ci.txt
       - run: node --experimental-vm-modules --test Tests/JavaScript/*.cjs
       - run: node --test server/research/tests/*.test.mjs
       - run: node --test postman/test_*.mjs
       - run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - run: python3 scripts/check_xcode_sources.py
       - run: python3 scripts/check_scanner_runtime.py
+  native:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job_scope == 'all' || inputs.job_scope == 'native' || inputs.job_scope == 'log_review' || inputs.job_scope == 'show_polish' || inputs.job_scope == 'leftover_stock' }}
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
       - name: Build and run native regression tests
         id: native_tests
         env:
-          SCANNER_TEST_SCOPE: ${{ inputs.test_scope || 'all' }}
+          SCANNER_TEST_SCOPE: ${{ inputs.job_scope == 'leftover_stock' && 'all' || inputs.job_scope == 'show_polish' && 'all' || inputs.job_scope == 'log_review' && 'log_review' || inputs.test_scope || 'all' }}
         run: |
           if [ "$SCANNER_TEST_SCOPE" = printer_transport ] || [ "$SCANNER_TEST_SCOPE" = label_controls ]; then
             bash scripts/run_ios_tests.sh CardShowScannerTests/NiimbotProtocolTests CardShowScannerTests/ScannerDiagnosticsTests CardShowScannerTests/LabelPrintQueueTests CardShowScannerTests/NiimbotImageTransferPreferencesTests CardShowScannerTests/NiimbotRollReadCoordinatorTests CardShowScannerTests/NiimbotLabelCatalogTests CardShowScannerTests/NiimbotLabelProductResolverTests
@@ -78,6 +99,17 @@ jobs:
               CardShowScannerTests/ScannerPageRecoveryTests \
               CardShowScannerTests/DeviceHealthMonitorTests \
               CardShowScannerTests/DeviceHealthValuesTests
+          elif [ "$SCANNER_TEST_SCOPE" = log_review ]; then
+            bash scripts/run_ios_tests.sh \
+              CardShowScannerTests/ManualCardSearchTests \
+              CardShowScannerTests/OpenAPIMarketPricingTests \
+              CardShowScannerTests/TCGGameRegistryTests \
+              CardShowScannerTests/TCGGamePricingTests \
+              CardShowScannerTests/CardEditorPricingTests \
+              CardShowScannerTests/ScannerPageRecoveryTests \
+              CardShowScannerTests/ScannerManualSearchLifecycleTests \
+              CardShowScannerTests/NiimbotRollReadCoordinatorTests \
+              CardShowScannerTests/ScannerDiagnosticsTests
           else
             bash scripts/run_ios_tests.sh CardShowScannerTests
           fi
@@ -89,7 +121,7 @@ jobs:
         shell: bash
         run: |
           python3 scripts/annotate_xcode_errors.py NativeTests.log --fallback 'Native tests failed; see the native-test-results artifact.'
-          xcrun xcresulttool export diagnostics --path TestResults.xcresult --output-path NativeDiagnostics || true
+          python3 scripts/process_budget.py --seconds 120 -- xcrun xcresulttool export diagnostics --path TestResults.xcresult --output-path NativeDiagnostics || true
           python3 scripts/report_simulator_crash.py NativeDiagnostics "$HOME/Library/Logs/DiagnosticReports" | tee NativeCrashSummary.log
       - uses: actions/upload-artifact@v4
         if: always()
@@ -100,10 +132,10 @@ jobs:
             NativeTests.log
             NativeCrashSummary.log
   ui:
-    if: ${{ github.event_name != 'workflow_dispatch' || ((inputs.job_scope == 'all' || inputs.job_scope == 'ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'navigation_price') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.job_scope == 'leftover_stock' || inputs.job_scope == 'show_polish' || inputs.job_scope == 'log_review' || inputs.job_scope == 'ui_diagnostic' || ((inputs.job_scope == 'all' || inputs.job_scope == 'ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'navigation_price')) }}
     runs-on: macos-15-intel
-    # The full selection can use 42 bounded six-minute cases, plus cold setup.
-    timeout-minutes: 300
+    # Total CLI budgets stop a stall cascade before the outer job deadline.
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@v4
       - name: Validate UI runner timing and concurrency contracts
@@ -111,7 +143,8 @@ jobs:
       - name: Build and run UI regression tests
         id: ui_tests
         env:
-          SCANNER_TEST_SCOPE: ${{ inputs.test_scope || 'all' }}
+          SCANNER_TEST_SCOPE: ${{ inputs.job_scope == 'leftover_stock' && 'leftover_stock' || inputs.job_scope == 'show_polish' && 'show_polish' || inputs.job_scope == 'log_review' && 'log_review' || inputs.job_scope == 'ui_diagnostic' && 'ui_diagnostic' || inputs.test_scope || 'all' }}
+          SCANNER_TEST_TIMEOUT_SECONDS: ${{ inputs.job_scope == 'ui_diagnostic' && '900' || '3600' }}
         run: |
           if [ "$SCANNER_TEST_SCOPE" = label_preview ]; then
             bash scripts/run_ios_tests.sh \
@@ -143,6 +176,20 @@ jobs:
               CardShowScannerUITests/InventoryLabelsUITests/testSingleCardDraftCancelPreservesInventoryAndBudget \
               CardShowScannerUITests/InventoryLabelsUITests/testInventoryPrintOrderSortsNumericPricesAndRemembersSelection \
               CardShowScannerUITests/InventoryLabelsUITests/testLeavingCustomAndBulkPrintQueuesClearsThemAndPreservesPreferences
+          elif [ "$SCANNER_TEST_SCOPE" = leftover_stock ]; then
+            bash scripts/run_ios_tests.sh CardShowScannerUITests/LeftoverStockFlowTests/testCompletedCountExportsOnlyPositiveAbsoluteStockWithoutChangingInventory
+          elif [ "$SCANNER_TEST_SCOPE" = show_polish ]; then
+            bash scripts/run_ios_tests.sh \
+              CardShowScannerUITests/InventoryLabelsUITests/testCustomPrintStartsFromPreviewWithoutAQueueStepAndWaitsForFinalAcknowledgement \
+              CardShowScannerUITests/InventoryLabelsUITests/testSelectedInventoryPrintsDirectlyAndCompletedReceiptsDoNotBlockCustomTags \
+              CardShowScannerUITests/InventoryLabelsUITests/testDirectPrintFailureRetainsUncertainLabelsAndRequiresCheckingBeforeRetry \
+              CardShowScannerUITests/ReviewPresentationUITests/testMissingPricesRefreshUpdatesUnknownCardAndPreservesKnownZero
+          elif [ "$SCANNER_TEST_SCOPE" = log_review ]; then
+            bash scripts/run_ios_tests.sh \
+              CardShowScannerUITests/ReviewPresentationUITests/testSuccessfulManualAddClosesBothSheetsAndCommitsOneRow \
+              CardShowScannerUITests/ReviewPresentationUITests/testCancellingManualConfirmationKeepsSearchAndDoesNotSave
+          elif [ "$SCANNER_TEST_SCOPE" = ui_diagnostic ]; then
+            bash scripts/run_ios_tests.sh CardShowScannerUITests/InventoryLabelsUITests/testBatchSearchCopiesPreviewAndLeavingUnprintedQueueClearsBeforeRelaunch
           else
             bash scripts/run_ios_tests.sh CardShowScannerUITests
           fi
@@ -154,7 +201,7 @@ jobs:
         shell: bash
         run: |
           python3 scripts/annotate_xcode_errors.py NativeTests.log --fallback 'UI tests failed; see the ui-test-results artifact.'
-          xcrun xcresulttool export diagnostics --path TestResults.xcresult --output-path NativeDiagnostics || true
+          python3 scripts/process_budget.py --seconds 120 -- xcrun xcresulttool export diagnostics --path TestResults.xcresult --output-path NativeDiagnostics || true
           python3 scripts/report_simulator_crash.py NativeDiagnostics "$HOME/Library/Logs/DiagnosticReports" | tee NativeCrashSummary.log
       - uses: actions/upload-artifact@v4
         if: always()
@@ -165,9 +212,9 @@ jobs:
             NativeTests.log
             NativeCrashSummary.log
   research_ui:
-    if: ${{ github.event_name != 'workflow_dispatch' || ((inputs.job_scope == 'all' || inputs.job_scope == 'research_ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness' && inputs.test_scope != 'label_controls' && inputs.test_scope != 'navigation_price') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && ((inputs.job_scope == 'all' || inputs.job_scope == 'research_ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness' && inputs.test_scope != 'label_controls' && inputs.test_scope != 'navigation_price') }}
     runs-on: macos-15-intel
-    timeout-minutes: 120
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@v4
       - name: Build and run Research UI checks independently
@@ -181,7 +228,7 @@ jobs:
         shell: bash
         run: |
           python3 scripts/annotate_xcode_errors.py NativeTests.log --fallback 'Research UI tests failed; see the research-ui-test-results artifact.'
-          xcrun xcresulttool export diagnostics --path TestResults.xcresult --output-path NativeDiagnostics || true
+          python3 scripts/process_budget.py --seconds 120 -- xcrun xcresulttool export diagnostics --path TestResults.xcresult --output-path NativeDiagnostics || true
           python3 scripts/report_simulator_crash.py NativeDiagnostics "$HOME/Library/Logs/DiagnosticReports" | tee NativeCrashSummary.log
       - uses: actions/upload-artifact@v4
         if: always()
@@ -192,9 +239,9 @@ jobs:
             NativeTests.log
             NativeCrashSummary.log
   evidence_ui:
-    if: ${{ github.event_name != 'workflow_dispatch' || ((inputs.job_scope == 'all' || inputs.job_scope == 'evidence_ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness' && inputs.test_scope != 'label_controls') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && ((inputs.job_scope == 'all' || inputs.job_scope == 'evidence_ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness' && inputs.test_scope != 'label_controls') }}
     runs-on: macos-15-intel
-    timeout-minutes: 120
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@v4
       - name: Build and run navigation and chart UI checks independently
@@ -221,7 +268,7 @@ jobs:
         shell: bash
         run: |
           python3 scripts/annotate_xcode_errors.py NativeTests.log --fallback 'Evidence UI tests failed; see the evidence-ui-test-results artifact.'
-          xcrun xcresulttool export diagnostics --path TestResults.xcresult --output-path NativeDiagnostics || true
+          python3 scripts/process_budget.py --seconds 120 -- xcrun xcresulttool export diagnostics --path TestResults.xcresult --output-path NativeDiagnostics || true
           python3 scripts/report_simulator_crash.py NativeDiagnostics "$HOME/Library/Logs/DiagnosticReports" | tee NativeCrashSummary.log
       - uses: actions/upload-artifact@v4
         if: always()
@@ -232,10 +279,9 @@ jobs:
             NativeTests.log
             NativeCrashSummary.log
   budget_ui:
-    if: ${{ github.event_name != 'workflow_dispatch' || ((inputs.job_scope == 'all' || inputs.job_scope == 'budget_ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness' && inputs.test_scope != 'label_controls' && inputs.test_scope != 'navigation_price') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && ((inputs.job_scope == 'all' || inputs.job_scope == 'budget_ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness' && inputs.test_scope != 'label_controls' && inputs.test_scope != 'navigation_price') }}
     runs-on: macos-15-intel
-    # Eighteen bounded six-minute cases plus cold simulator/build setup.
-    timeout-minutes: 150
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@v4
       - name: Build and run show budget UI check independently
@@ -249,7 +295,7 @@ jobs:
         shell: bash
         run: |
           python3 scripts/annotate_xcode_errors.py NativeTests.log --fallback 'Show budget UI check failed; see the budget-ui-test-results artifact.'
-          xcrun xcresulttool export diagnostics --path TestResults.xcresult --output-path NativeDiagnostics || true
+          python3 scripts/process_budget.py --seconds 120 -- xcrun xcresulttool export diagnostics --path TestResults.xcresult --output-path NativeDiagnostics || true
           python3 scripts/report_simulator_crash.py NativeDiagnostics "$HOME/Library/Logs/DiagnosticReports" | tee NativeCrashSummary.log
       - uses: actions/upload-artifact@v4
         if: always()
@@ -260,9 +306,9 @@ jobs:
             NativeTests.log
             NativeCrashSummary.log
   release:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job_scope == 'all' || inputs.job_scope == 'release' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.job_scope == 'all' || inputs.job_scope == 'release') }}
     runs-on: macos-15-intel
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - name: Build Release configuration for iPhone
@@ -270,7 +316,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          xcodebuild build -project CardShowScanner.xcodeproj -scheme 'CardShowScanner Personal' -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO 2>&1 | tee NativeRelease.log
+          python3 scripts/process_budget.py --seconds "$SCANNER_BUILD_TIMEOUT_SECONDS" --log NativeRelease.log -- xcodebuild build -project CardShowScanner.xcodeproj -scheme 'CardShowScanner Personal' -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO
       - name: Report Release build failures
         if: failure() && steps.native_release.outcome == 'failure'
         run: python3 scripts/annotate_xcode_errors.py NativeRelease.log --fallback 'Release compilation failed; see the native-release-results artifact.'

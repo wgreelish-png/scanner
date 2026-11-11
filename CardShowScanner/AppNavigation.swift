@@ -43,6 +43,9 @@ struct HomeView: View {
         }
         .tint(.indigo)
         .toolbarBackground(.visible, for: .tabBar)
+        .onChange(of: section) { _, _ in
+            DiagnosticLog.shared.activity(.action, screen: activityScreen, action: .changeSection)
+        }
         .onAppear {
             BetaAllowlistForegroundObserver.shared.setForeground(scenePhase == .active)
             if scenePhase == .active { synchronizeBudgetOutcomes() }
@@ -52,6 +55,16 @@ struct HomeView: View {
             if phase == .active { synchronizeBudgetOutcomes() }
         }
         .onDisappear { BetaAllowlistForegroundObserver.shared.setForeground(false) }
+    }
+
+    private var activityScreen: DiagnosticActivityScreen {
+        switch section {
+        case .lists: .lists
+        case .scan: .scanHome
+        case .show: .showHome
+        case .research: .research
+        case .settings: .settings
+        }
     }
 
     private func synchronizeBudgetOutcomes() {
@@ -83,6 +96,8 @@ private struct ScanHomeView: View {
     @State private var isVisible = false
     @State private var destination: UUID?
     @State private var draft: ScanBatchDraft?
+    @State private var showingLeftoverStock = false
+    @State private var leftoverStore = LeftoverStockStore.shared
     @State private var error: String?
 
     private var active: ScanSession? { sessions.first { $0.isActive } }
@@ -101,6 +116,11 @@ private struct ScanHomeView: View {
                 }.padding(.top, 8)
 
                 newScanCard
+                NavigationLink { LeftoverStockView() } label: {
+                    Label("Count Leftover Stock", systemImage: "checklist")
+                        .font(.headline).frame(maxWidth: .infinity, alignment: .leading).padding(18)
+                        .background(.background, in: RoundedRectangle(cornerRadius: 18))
+                }.buttonStyle(.plain).accessibilityIdentifier("home.leftoverStock")
                 if let active, let activeList { continueCard(session: active, list: activeList) }
 
                 Button(action: onOpenLists) {
@@ -131,15 +151,18 @@ private struct ScanHomeView: View {
         .navigationDestination(item: $draft) { draft in
             DraftScannerDestination(draft: draft)
         }
+        .navigationDestination(isPresented: $showingLeftoverStock) { LeftoverStockView() }
         .failureAlert($error)
         .onAppear {
             isVisible = true
+            DiagnosticLog.shared.activity(.screen, screen: .scanHome)
             ScannerDatabaseUpdater.shared.setEnabled(autoDatabaseUpdates)
             ScannerDatabaseUpdater.shared.setForeground(scenePhase == .active)
             ScannerDatabaseUpdater.shared.setHomeVisible(true, game: game)
         }
         .onDisappear {
             isVisible = false
+            DiagnosticLog.shared.activity(.exit, screen: .scanHome)
             ScannerDatabaseUpdater.shared.setHomeVisible(false, game: game)
         }
         .onChange(of: game) { _, game in
@@ -189,8 +212,11 @@ private struct ScanHomeView: View {
                 .font(.subheadline).foregroundStyle(.secondary)
             Text(session.game ?? game).font(.caption).foregroundStyle(.secondary)
             Button {
+                DiagnosticLog.shared.activity(.action, screen: .scanHome, action: .resumeScanner,
+                    state: .init(cardCount: list.quantity))
                 ScannerDatabaseUpdater.shared.setHomeVisible(false, game: game)
-                destination = session.id
+                if leftoverStore.active?.countListIDs.contains(list.id) == true { showingLeftoverStock = true }
+                else { destination = session.id }
             } label: {
                 Label("Continue Scanning", systemImage: "viewfinder").frame(maxWidth: .infinity).padding(.vertical, 4)
             }.buttonStyle(.bordered).controlSize(.large).accessibilityIdentifier("home.continueScan")
@@ -200,6 +226,7 @@ private struct ScanHomeView: View {
 
     private func start() {
         guard destination == nil, draft == nil else { return }
+        DiagnosticLog.shared.activity(.action, screen: .scanHome, action: .open)
         ScannerDatabaseUpdater.shared.setHomeVisible(false, game: game)
         do {
             draft = try SessionService.prepareDraft(game: game)

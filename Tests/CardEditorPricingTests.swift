@@ -3,6 +3,40 @@ import SwiftData
 @testable import CardShowScanner
 
 @MainActor final class CardEditorPricingTests: XCTestCase {
+    func testInitialConfirmationUsesCacheAndExplicitRefreshRequestsFreshData() async throws {
+        let service = ControlledEditorPricing()
+        let model = CardEditorPricingModel(card: card(), pricing: service)
+        model.loadInitialPrice()
+        try await waitForRequests(1, pricing: service)
+        let initialFlags = await service.forceRefreshes
+        XCTAssertEqual(initialFlags, [false])
+        await service.resolve(0, with: MarketQuote(marketPrice: 0, skuID: "initial-zero"))
+        await waitForIdle(model)
+        XCTAssertEqual(model.card.marketPrice, 0); XCTAssertEqual(model.card.identity.skuID, "initial-zero")
+        XCTAssertNil(model.priceMessage, "A cached known zero remains a quote")
+
+        model.refreshPrice()
+        try await waitForRequests(2, pricing: service)
+        let retryFlags = await service.forceRefreshes
+        XCTAssertEqual(retryFlags, [false, true])
+        await service.resolve(1, with: MarketQuote(marketPrice: 12, skuID: "refreshed"))
+        await waitForIdle(model)
+        XCTAssertEqual(model.card.marketPrice, 12); XCTAssertEqual(model.card.identity.skuID, "refreshed")
+    }
+
+    func testLateInitialQuoteCannotOverwriteAnExplicitManualCorrection() async throws {
+        let service = ControlledEditorPricing()
+        let model = CardEditorPricingModel(card: card(), pricing: service)
+        model.loadInitialPrice()
+        try await waitForRequests(1, pricing: service)
+        model.setPrice("7.25"); model.setSKU("manual-exact")
+        await service.resolve(0, with: MarketQuote(marketPrice: 99, skuID: "obsolete"))
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(model.card.marketPrice, Decimal(string: "7.25"))
+        XCTAssertEqual(model.card.identity.skuID, "manual-exact"); XCTAssertEqual(model.price, "7.25")
+        XCTAssertFalse(model.priceLoading)
+    }
+
     private func card() -> CardCandidate {
         var card = MockScannerProvider.samples(game: "Pokémon", index: 0)[0]
         card.marketPrice = 10; card.identity.skuID = "100"

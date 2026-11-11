@@ -2,6 +2,140 @@ import SwiftUI
 import UIKit
 import Observation
 
+/// Normal label editors start one explicit job and present progress directly.
+/// Saved queue/retry UI remains available for inspection or interrupted output.
+@MainActor @Observable final class LabelDirectPrintController {
+    let progress = LabelPrintProgressSession()
+    private(set) var isBusy = false
+    #if DEBUG
+    @ObservationIgnored let fixture = LabelPrintProgressFixture.configured()
+    #endif
+
+    var usesFixturePrinter: Bool {
+        #if DEBUG
+        fixture != nil
+        #else
+        false
+        #endif
+    }
+
+    func printerReady(_ printer: NiimbotPrinter) -> Bool {
+        (printer.isConnected || usesFixturePrinter) && !printer.isPrinting && !printer.isConfiguringPaper
+            && UIApplication.shared.applicationState == .active
+    }
+
+    @discardableResult func start(queue: LabelPrintQueue, printer: NiimbotPrinter) -> Bool {
+        guard !isBusy, printerReady(printer),
+              LabelStockCompatibility.issue(for: queue.entries.filter { $0.state == .pending }.map(\.paperSize),
+                  detected: LabelPaperPreferences.shared.detectedProduct) == nil else { return false }
+        let sender: any LabelPrinterSending
+        #if DEBUG
+        if let fixture { sender = fixture }
+        else { sender = printer.senderForCurrentPaperMode() }
+        #else
+        sender = printer.senderForCurrentPaperMode()
+        #endif
+        return start(queue: queue, using: sender,
+            canFinish: { UIApplication.shared.applicationState == .active })
+    }
+
+    @discardableResult func start(queue: LabelPrintQueue, using sender: any LabelPrinterSending,
+                                 canFinish: @escaping @MainActor () -> Bool = { true }) -> Bool {
+        guard !isBusy else { return false }
+        guard progress.start(queue: queue, using: sender, deferUntilPresented: true, canFinish: canFinish) else { return false }
+        isBusy = true
+        return true
+    }
+
+    /// Keep ownership through sheet dismissal, not only through the final ACK.
+    /// An editor cannot replace receipts before this cleanup has completed.
+    @discardableResult func completePresentation(queue: LabelPrintQueue) throws -> Bool {
+        guard isBusy, !progress.isPresented, !progress.isRunning else { return false }
+        defer { isBusy = false }
+        return try progress.completePresentation(queue: queue)
+    }
+}
+
+@MainActor struct LabelEditorPrinterStatus: View {
+    let controller: LabelDirectPrintController
+    let printer: NiimbotPrinter
+
+    @ViewBuilder var body: some View {
+        if !printer.isConnected && !controller.usesFixturePrinter {
+            Section("Printer") {
+                Label("Connect a printer to print", systemImage: "printer")
+                Text(printer.status).font(.footnote).foregroundStyle(.secondary)
+                ForEach(printer.devices) { device in
+                    Button(device.name) { printer.connect(device.id) }
+                }
+                if printer.isScanning { ProgressView("Searching for printer…") }
+                else { Button("Search for Printer") { printer.startSearch() } }
+            }
+        }
+    }
+}
+
+@MainActor struct LabelDirectPrintPresentation: ViewModifier {
+    let controller: LabelDirectPrintController
+    let queue: LabelPrintQueue
+    let printer: NiimbotPrinter
+    let onSuccess: () -> Void
+    let onReview: () -> Void
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var error: String?
+
+    func body(content: Content) -> some View {
+        content
+            .background(LabelPrintOwnerLifetime {
+                controller.progress.stop(queue: queue, using: printer)
+            }.frame(width: 0, height: 0).accessibilityHidden(true))
+            .sheet(isPresented: Binding(get: { controller.progress.isPresented }, set: { visible in
+                if !visible { controller.progress.close() }
+            }), onDismiss: finish) {
+                #if DEBUG
+                LabelPrintProgressView(progress: controller.progress, queue: queue, printer: printer, fixture: controller.fixture)
+                #else
+                LabelPrintProgressView(progress: controller.progress, queue: queue, printer: printer)
+                #endif
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase != .active { controller.progress.stop(queue: queue, using: printer) }
+            }
+            .alert("Print completion", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+                Button("Review Queue") { error = nil; onReview() }
+            } message: { Text(error ?? "") }
+    }
+
+    private func finish() {
+        let progress = controller.progress
+        DiagnosticLog.shared.activity(.outcome, screen: .labelProgress, action: .finish,
+            state: .init(labelCount: progress.total, pendingCount: queue.pendingCount,
+                completedCount: progress.completed(in: queue.entries), failedCount: queue.failedCount,
+                uncertainCount: queue.uncertainCount, succeeded: progress.didSucceed))
+        do {
+            if try controller.completePresentation(queue: queue) { onSuccess() }
+            else if !progress.didSucceed { onReview() }
+        } catch { self.error = error.localizedDescription }
+    }
+}
+
+/// A covering sheet may hide its presenter without ending its print session.
+/// Dismantling this mounted view identifies an actual removed owner instead.
+@MainActor private struct LabelPrintOwnerLifetime: UIViewRepresentable {
+    let onRemoval: () -> Void
+    final class Coordinator {
+        var onRemoval: () -> Void
+        init(_ onRemoval: @escaping () -> Void) { self.onRemoval = onRemoval }
+    }
+    func makeCoordinator() -> Coordinator { Coordinator(onRemoval) }
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView(frame: .zero); view.isUserInteractionEnabled = false
+        return view
+    }
+    func updateUIView(_ view: UIView, context: Context) { context.coordinator.onRemoval = onRemoval }
+    static func dismantleUIView(_ view: UIView, coordinator: Coordinator) { coordinator.onRemoval() }
+}
+
 /// Printer settings also reflect the connection started from Price Tags.
 @MainActor struct LabelPrinterSettingsView: View {
     private let onPrintingCompleted: (() -> Void)?
@@ -16,7 +150,7 @@ import Observation
             LabelPrinterConnectionSection(printer: printer)
             Section("Labels") {
                 NavigationLink { LabelPrintQueueView(onPrintingCompleted: onPrintingCompleted) } label: {
-                    LabeledContent("Saved print queue", value: queue.entries.count.formatted())
+                    LabeledContent("Saved print queue", value: queue.entries.filter { $0.state != .completed }.count.formatted())
                 }.accessibilityIdentifier("labelPrinter.queue")
                 Text("Create labels from Show → Price Tags. Asking prices and label copies are local drafts; printing never changes stock, costs, sales, or budgets.")
                     .font(.footnote).foregroundStyle(.secondary)
@@ -38,12 +172,16 @@ import Observation
         }
         .navigationTitle("Label Printer").navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) { ClearLabelPrintQueueButton(identifier: "labelPrinter.clearQueue") }
+            ToolbarItem(placement: .topBarTrailing) { ClearLabelPrintQueueButton(identifier: "labelPrinter.clearQueue", activityScreen: .printerSettings) }
         }
+        .onAppear { DiagnosticLog.shared.activity(.screen, screen: .printerSettings) }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { queue.stop(using: printer) }
         }
-        .onDisappear { if printer.isConfiguringPaper || !printer.isConnected { printer.stop() } }
+        .onDisappear {
+            DiagnosticLog.shared.activity(.exit, screen: .printerSettings)
+            if printer.isConfiguringPaper || !printer.isConnected { printer.stop() }
+        }
     }
 }
 
@@ -53,6 +191,9 @@ import Observation
     @State private var queue = LabelPrintQueue.shared
     @State private var paperPreferences = LabelPaperPreferences.shared
     private var paperBusy: Bool { queue.isPrinting || printer.isPrinting || printer.isConfiguringPaper }
+    private var activityScreen: DiagnosticActivityScreen {
+        rollIdentifier.hasPrefix("labelQueue.") ? .labelQueue : .printerSettings
+    }
 
     @ViewBuilder var body: some View {
         Section {
@@ -71,7 +212,10 @@ import Observation
                 Button("Disconnect", role: .destructive) { printer.disconnect() }
                     .disabled(paperBusy).accessibilityIdentifier("labelPrinter.disconnect")
             } else {
-                Button { printer.startSearch() } label: {
+                Button {
+                    DiagnosticLog.shared.activity(.action, screen: activityScreen, action: .searchPrinter)
+                    printer.startSearch()
+                } label: {
                     HStack {
                         Text(printer.isScanning ? "Search Again" : "Search for D110 / D110-M")
                         Spacer()
@@ -79,7 +223,10 @@ import Observation
                     }
                 }.disabled(paperBusy).accessibilityIdentifier("labelPrinter.search")
                 ForEach(printer.devices) { device in
-                    Button { printer.connect(device.id) } label: {
+                    Button {
+                        DiagnosticLog.shared.activity(.action, screen: activityScreen, action: .connectPrinter)
+                        printer.connect(device.id)
+                    } label: {
                         Label(device.name, systemImage: "printer")
                     }.disabled(paperBusy).accessibilityIdentifier("labelPrinter.device." + device.id.uuidString)
                 }
@@ -302,6 +449,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     @State private var keepExistingStickerIDs: Set<UUID> = []
     @State private var showingDiscard = false
     @State private var preparing = false
+    @State private var printing = LabelDirectPrintController()
     @State private var expandedReviewIDs: Set<UUID> = []
     @State private var showingIndividualEdits = false
     @State private var showingBatchPriceEditor = false
@@ -388,6 +536,31 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         return nil
     }
 
+    private var activityScreen: DiagnosticActivityScreen {
+        switch path.last {
+        case .configure: .labelDetails
+        case .review: .labelReview
+        case .queue: .labelQueue
+        case nil: .labelSelection
+        }
+    }
+    private var activityState: DiagnosticActivityState {
+        let blocked: DiagnosticActivityBlockReason = selectedIDs.isEmpty ? .noSelection
+            : path.isEmpty ? .ready
+            : preparing ? .preparing
+            : !queue.isLoaded ? .queueUnavailable
+            : queue.isPrinting || printing.isBusy ? .printerBusy
+            : printer.isReadingRoll ? .rollReading
+            : !queue.entries.allSatisfy({ $0.state == .completed }) ? .unfinishedQueue
+            : validation != nil ? .invalidInput
+            : !printing.printerReady(printer) ? .printerDisconnected : .ready
+        return DiagnosticActivityState(selectedCount: selectedIDs.count, labelCount: labelCount,
+            pendingCount: queue.pendingCount, completedCount: queue.completedCount,
+            failedCount: queue.failedCount, uncertainCount: queue.uncertainCount,
+            isPreparing: preparing, canProceed: blocked == .ready,
+            printerConnected: printer.isConnected, rollReading: printer.isReadingRoll, blockReason: blocked)
+    }
+
     var body: some View {
         NavigationStack(path: $path) {
             selection
@@ -447,20 +620,47 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
             if phase != .active { stopPrinting() }
         }
         .onAppear {
+            if !printing.usesFixturePrinter { printer.startPriceTagsConnection() }
             updatePaperSize(paperPreferences.size)
             updatePricePosition(paperPreferences.pricePosition)
+            if activityScreen != .labelQueue {
+                DiagnosticLog.shared.activity(.screen, screen: activityScreen, state: activityState)
+            }
+        }
+        .onChange(of: path) { previous, current in
+            // Queue owns its Print readiness; this owner describes preparation.
+            guard activityScreen != .labelQueue else { return }
+            if current.count < previous.count {
+                DiagnosticLog.shared.activity(.action, screen: activityScreen, action: .back, state: activityState)
+            }
+            DiagnosticLog.shared.activity(.screen, screen: activityScreen, state: activityState)
+        }
+        .onChange(of: activityState) { _, state in
+            if activityScreen != .labelQueue {
+                DiagnosticLog.shared.activity(.state, screen: activityScreen, state: state)
+            }
         }
         .onChange(of: paperPreferences.size) { _, size in updatePaperSize(size) }
         .onChange(of: paperPreferences.pricePosition) { _, position in updatePricePosition(position) }
         .onDisappear {
-            stopPrinting()
+            if activityScreen != .labelQueue {
+                DiagnosticLog.shared.activity(.exit, screen: activityScreen, state: activityState)
+            }
+            if !printing.progress.isPresented { stopPrinting() }
             if printer.isConfiguringPaper || !printer.isConnected { printer.stop() }
         }
+        .modifier(LabelDirectPrintPresentation(controller: printing, queue: queue, printer: printer,
+            onSuccess: { if let onPrintingCompleted { onPrintingCompleted() } else { dismiss() } },
+            onReview: { if path.last != .queue { path.append(.queue) } }))
     }
 
     @ToolbarContentBuilder private var closeToolbar: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
-            Button("Close") { endEditing(); stopPrinting(); dismiss() }
+            Button("Close") {
+                DiagnosticLog.shared.activity(.action, screen: activityScreen, action: .close,
+                    state: activityScreen == .labelQueue ? .init() : activityState)
+                endEditing(); stopPrinting(); dismiss()
+            }
                 .accessibilityIdentifier("labels.close")
         }
     }
@@ -477,6 +677,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 Button {
                     if selectedIDs.contains(item.id) { selectedIDs.remove(item.id) }
                     else { selectedIDs.insert(item.id) }
+                    DiagnosticLog.shared.activity(.action, screen: .labelSelection, action: .selectCards, state: activityState)
                 } label: {
                     HStack(spacing: 12) {
                         LabelInventoryThumbnail(card: item.card)
@@ -512,14 +713,18 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
             HStack {
                 Button(search.isEmpty ? "Select All" : "Select All Results") {
                     selectedIDs.formUnion(filtered.map(\.id))
+                    DiagnosticLog.shared.activity(.action, screen: .labelSelection, action: .selectAll, state: activityState)
                 }.disabled(filtered.isEmpty).accessibilityIdentifier("labels.selectAll")
                 Spacer()
-                Button("Clear") { selectedIDs.removeAll() }
+                Button("Clear") {
+                    selectedIDs.removeAll()
+                    DiagnosticLog.shared.activity(.action, screen: .labelSelection, action: .clearSelection, state: activityState)
+                }
                     .disabled(selectedIDs.isEmpty).accessibilityIdentifier("labels.clearSelection")
             }.font(.subheadline.weight(.semibold)).padding(.horizontal, 16).padding(.vertical, 12).background(.bar)
         }
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) { ClearLabelPrintQueueButton() }
+            ToolbarItem(placement: .topBarLeading) { ClearLabelPrintQueueButton(activityScreen: .labelSelection) }
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
                 Button("Done") { endEditing() }.fixedSize().frame(minWidth: 64, minHeight: 44)
@@ -530,7 +735,10 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
             LabelActionBar {
                 Text("\(selectedIDs.count.formatted()) cards selected").font(.subheadline)
                     .accessibilityIdentifier("labels.selectedCount")
-                Button("Continue") { endEditing(); synchronizeDrafts(); path.append(.configure) }
+                Button("Continue") {
+                    DiagnosticLog.shared.activity(.action, screen: .labelSelection, action: .continueFlow, state: activityState)
+                    endEditing(); synchronizeDrafts(); path.append(.configure)
+                }
                     .buttonStyle(.borderedProminent).disabled(selectedIDs.isEmpty)
                     .accessibilityIdentifier("labels.continueSelection")
             }
@@ -556,6 +764,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                     }
                 }.accessibilityIdentifier("labels.style")
                 Picker("Physical paper", selection: Binding(get: { paperPreferences.size }, set: { size in
+                    DiagnosticLog.shared.activity(.action, screen: .labelDetails, action: .changePaper, state: activityState)
                     paperPreferences.select(size)
                     updatePaperSize(paperPreferences.size)
                 })) {
@@ -566,6 +775,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                     .accessibilityIdentifier("labels.paper")
                 if style == .priceOnly {
                     LabelPricePositionPicker(selection: Binding(get: { pricePosition }, set: { position in
+                        DiagnosticLog.shared.activity(.action, screen: .labelDetails, action: .changeLayout, state: activityState)
                         updatePricePosition(position)
                         paperPreferences.selectPricePosition(position)
                     }), identifier: "labels.pricePosition")
@@ -634,11 +844,15 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 Text("Labels use the selected whole-dollar price or 2 for $1 deal. Preparing and printing labels do not change inventory prices, quantities, costs or budgets.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
+            LabelEditorPrinterStatus(controller: printing, printer: printer)
         }
         .accessibilityIdentifier("labels.configuration")
         .navigationTitle("Label Details").navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .topBarLeading) { ClearLabelPrintQueueButton() } }
-        .onChange(of: style) { _, value in for index in drafts.indices { drafts[index].style = value } }
+        .toolbar { ToolbarItem(placement: .topBarLeading) { ClearLabelPrintQueueButton(activityScreen: .labelDetails) } }
+        .onChange(of: style) { _, value in
+            DiagnosticLog.shared.activity(.action, screen: .labelDetails, action: .changeLayout, state: activityState)
+            for index in drafts.indices { drafts[index].style = value }
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             LabelActionBar {
                 VStack(spacing: 10) {
@@ -646,11 +860,14 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                         Text("\(labelCount.formatted()) labels").font(.subheadline).monospacedDigit()
                             .accessibilityIdentifier("labels.totalCount")
                         Spacer()
-                        Button("Review Details") { path.append(.review) }
+                        Button("Review Details") {
+                            DiagnosticLog.shared.activity(.action, screen: .labelDetails, action: .reviewDetails, state: activityState)
+                            path.append(.review)
+                        }
                             .font(.subheadline).disabled(validation != nil || preparing)
                             .accessibilityIdentifier("labels.continueReview")
                     }
-                    prepareButton
+                    HStack(spacing: 12) { prepareButton; printButton }
                 }
             }
         }
@@ -676,19 +893,34 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     }
 
     private var prepareButton: some View {
-        Button { prepareQueue() } label: {
+        Button { _ = prepareQueue() } label: {
             Group {
                 if preparing { ProgressView() }
-                else { Text(labelCount > 0 ? "Prepare Labels" : "Save Label Choices") }
+                else { Text(labelCount > 0 ? "Review Queue" : "Save Label Choices") }
             }.frame(maxWidth: .infinity)
         }
-        .buttonStyle(.borderedProminent).controlSize(.large)
-        .disabled(preparing || validation != nil || !canPrepareNewQueue)
+        .buttonStyle(.bordered).controlSize(.large)
+        .disabled(preparing || validation != nil || !canPrepareNewQueue || printing.isBusy)
         .accessibilityIdentifier("labels.prepare")
+    }
+
+    private var printButton: some View {
+        Button("Print \(labelCount.formatted()) Labels") {
+            guard !printing.isBusy,
+                  printing.printerReady(printer), !printer.isReadingRoll else { return }
+            endEditing()
+            DiagnosticLog.shared.activity(.action, screen: activityScreen, action: .printLabels, state: activityState)
+            if prepareQueue(showQueue: false), !printing.start(queue: queue, printer: printer) { path.append(.queue) }
+        }
+        .buttonStyle(.borderedProminent).controlSize(.large)
+        .disabled(labelCount == 0 || preparing || validation != nil || !canPrepareNewQueue
+                  || !printing.printerReady(printer) || printing.isBusy)
+        .accessibilityIdentifier("labels.print")
     }
 
     private func printOrderPicker(identifier: String) -> some View {
         Picker("Print order", selection: Binding(get: { printOrderPreferences.order }, set: { order in
+            DiagnosticLog.shared.activity(.action, screen: activityScreen, action: .changeLayout, state: activityState)
             printOrderPreferences.order = order
         })) {
             ForEach(LabelPrintOrder.allCases) { order in
@@ -716,8 +948,8 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 if style == .priceOnly { LabeledContent("Price position", value: pricePosition.title) }
                 printOrderPicker(identifier: "labels.review.sortOrder")
                 Text(mode == .priceChanged
-                     ? "Prepare labels for changed prices. Unchanged, already-labeled stickers are skipped. Printing starts when you tap Print Queued Labels."
-                     : "Prepare the requested labels, including replacements for cards labeled before. Printing starts when you tap Print Queued Labels.")
+                     ? "Unchanged, already-labeled stickers are skipped. Print starts this batch; Review Queue opens optional details without printing."
+                     : "Includes replacements for cards labeled before. Print starts this batch; Review Queue opens optional details without printing.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             ForEach(orderedDrafts) { draft in
@@ -735,21 +967,25 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
             if let validation {
                 Section { Text(validation).font(.footnote).foregroundStyle(.orange) }
             }
+            LabelEditorPrinterStatus(controller: printing, printer: printer)
         }
         .accessibilityIdentifier("labels.review")
         .navigationTitle("Review Labels").navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .topBarLeading) { ClearLabelPrintQueueButton() } }
+        .toolbar { ToolbarItem(placement: .topBarLeading) { ClearLabelPrintQueueButton(activityScreen: .labelReview) } }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             LabelActionBar {
                 Text("\(labelCount.formatted()) labels · \(paper.title)").font(.caption)
-                prepareButton
+                HStack(spacing: 12) { prepareButton; printButton }
             }
         }
     }
 
     private var configurationRows: some View {
         ForEach(orderedDrafts) { draft in
-            Button { editing = draft } label: {
+            Button {
+                DiagnosticLog.shared.activity(.action, screen: activityScreen, action: .editLabel, state: activityState)
+                editing = draft
+            } label: {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 5) {
                         Text(draft.cardName).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
@@ -808,7 +1044,10 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
             Text("Confirm you checked the physical \(draft.priceText ?? "") sticker and already have the labels you need. This records it as labeled and skips printing.")
                 .font(.caption).foregroundStyle(.secondary)
         }
-        Button(draft.isBulk ? "Edit Copies" : "Edit Price or Copies") { editing = draft }
+        Button(draft.isBulk ? "Edit Copies" : "Edit Price or Copies") {
+            DiagnosticLog.shared.activity(.action, screen: activityScreen, action: .editLabel, state: activityState)
+            editing = draft
+        }
             .accessibilityIdentifier("labels.reviewEdit." + draft.id.uuidString)
     }
 
@@ -824,7 +1063,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
     }
 
     @ViewBuilder private var savedQueueSection: some View {
-        if !canPrepareNewQueue {
+        if !queue.isLoaded || queue.entries.contains(where: { $0.state != .completed }) {
             Section("Saved queue needs review") {
                 Text(queue.isLoaded
                      ? "A queue with \(queue.entries.count.formatted()) labels is saved. Review it or explicitly discard it before preparing this batch."
@@ -839,6 +1078,10 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 Button("Discard Saved Queue", role: .destructive) { showingDiscard = true }
                     .disabled(queue.isPrinting).accessibilityIdentifier("labels.discardQueue")
             }
+        } else if printer.isReadingRoll {
+            Section { ProgressView("Reading label measurements…") }
+        } else if queue.isPrinting {
+            Section { ProgressView("Finishing the current print job…") }
         }
     }
 
@@ -870,10 +1113,12 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
             resetPreparationNotice()
         })
     }
-    private func prepareQueue() {
+    @discardableResult private func prepareQueue(showQueue: Bool = true) -> Bool {
+        let preparingScreen = activityScreen
+        DiagnosticLog.shared.activity(.action, screen: preparingScreen, action: .prepareLabels, state: activityState)
         updatePaperSize(paperPreferences.size)
         updatePricePosition(paperPreferences.pricePosition)
-        guard validation == nil, approvals.isLoaded, canPrepareNewQueue, !preparing else { return }
+        guard validation == nil, approvals.isLoaded, canPrepareNewQueue, !preparing else { return false }
         preparing = true
         var metrics = LabelPreparationMetrics()
         var preparationPhase = LabelPreparationMetrics.Phase.failed
@@ -881,6 +1126,11 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         defer {
             preparing = false
             metrics.record(kind: .inventory, stage: .queue, phase: preparationPhase, total: requestedCopies)
+            DiagnosticLog.shared.activity(.outcome, screen: preparingScreen, action: .prepareLabels,
+                state: DiagnosticActivityState(selectedCount: selectedIDs.count, labelCount: requestedCopies,
+                    pendingCount: queue.pendingCount, completedCount: queue.completedCount,
+                    failedCount: queue.failedCount, uncertainCount: queue.uncertainCount,
+                    succeeded: preparationPhase == .completed))
         }
         var pricesSaved = false
         do {
@@ -901,7 +1151,7 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
             guard !draftsToPrint.isEmpty else {
                 preparationNotice = "Label choices saved. No labels need printing."
                 preparationPhase = .completed
-                return
+                return false
             }
             var entries: [LabelQueueEntry] = []
             var priceRasters: [LabelPriceRasterKey: LabelRaster] = [:]
@@ -927,11 +1177,13 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
             }
             try metrics.measure(.queueSave) { try queue.replace(with: entries) }
             preparationPhase = .completed
-            path.append(.queue)
+            if showQueue { path.append(.queue) }
+            return true
         } catch {
             self.error = pricesSaved
                 ? "Label choices were saved, but the labels could not be prepared. Review the issue and try again. \(error.localizedDescription)"
                 : error.localizedDescription
+            return false
         }
     }
     private func stopPrinting() { queue.stop(using: printer) }
@@ -981,6 +1233,10 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         guard (1...InventoryLabelDraft.maximumCopies).contains(edited.copies) else { return "Enter 1–100 copies. The requested count has not been reduced." }
         return nil
     }
+    private var activityState: DiagnosticActivityState {
+        DiagnosticActivityState(previewReady: bitmap != nil && previewDraft == edited,
+            canProceed: issue == nil, blockReason: issue == nil ? .ready : .invalidInput)
+    }
 
     var body: some View {
         NavigationStack {
@@ -1023,7 +1279,10 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                             description: previewDescription)
                     }
                     else { Text(previewError ?? "Update the preview to see this label.").foregroundStyle(.secondary) }
-                    Button("Update Preview") { focus = nil; updatePreview() }
+                    Button("Update Preview") {
+                        DiagnosticLog.shared.activity(.action, screen: .labelEditor, action: .previewLabel, state: activityState)
+                        focus = nil; updatePreview()
+                    }
                         .disabled(issue != nil).accessibilityIdentifier("labels.editor.preview")
                     if previewPrice != price {
                         Text("Update the preview to see your edited price.").font(.caption).foregroundStyle(.secondary)
@@ -1033,9 +1292,12 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
             .navigationTitle("Edit Label").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") { dismiss() }.accessibilityIdentifier("labels.editor.cancel")
+                    Button("Cancel") {
+                        DiagnosticLog.shared.activity(.action, screen: .labelEditor, action: .cancel)
+                        dismiss()
+                    }.accessibilityIdentifier("labels.editor.cancel")
                 }
-                ToolbarItem(placement: .topBarTrailing) { ClearLabelPrintQueueButton(identifier: "labels.editor.clearQueue") }
+                ToolbarItem(placement: .topBarTrailing) { ClearLabelPrintQueueButton(identifier: "labels.editor.clearQueue", activityScreen: .labelEditor) }
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
                     Button("Done") { focus = nil }.accessibilityIdentifier("labels.editor.keyboardDone")
@@ -1045,17 +1307,33 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
                 LabelActionBar {
                     Text(edited.paperSize.title).font(.caption)
                     Button("Save Label") {
+                        DiagnosticLog.shared.activity(.action, screen: .labelEditor, action: .saveChanges,
+                            state: activityState)
                         focus = nil
                         do {
                             try edited.validate()
                             _ = try InventoryLabelRenderer.render(edited)
-                            onSave(edited); dismiss()
-                        } catch { bitmap = nil; previewError = error.localizedDescription }
+                            onSave(edited)
+                            DiagnosticLog.shared.activity(.outcome, screen: .labelEditor, action: .saveChanges,
+                                state: DiagnosticActivityState(succeeded: true))
+                            dismiss()
+                        } catch {
+                            bitmap = nil; previewError = error.localizedDescription
+                            DiagnosticLog.shared.activity(.outcome, screen: .labelEditor, action: .saveChanges,
+                                state: DiagnosticActivityState(succeeded: false))
+                        }
                     }.buttonStyle(.borderedProminent).disabled(issue != nil)
                         .accessibilityIdentifier("labels.editor.save")
                 }
             }
-            .onAppear { updatePreview() }
+            .onAppear {
+                DiagnosticLog.shared.activity(.screen, screen: .labelEditor)
+                updatePreview()
+            }
+            .onDisappear { DiagnosticLog.shared.activity(.exit, screen: .labelEditor) }
+            .onChange(of: activityState) { _, state in
+                DiagnosticLog.shared.activity(.state, screen: .labelEditor, state: state)
+            }
             .onChange(of: paperPreferences.size) { _, _ in updatePreview() }
             .onChange(of: paperPreferences.pricePosition) { _, _ in updatePreview() }
             .onChange(of: price) { _, text in if text.count > 40 { price = String(text.prefix(40)) } }
@@ -1069,6 +1347,8 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
             bitmap = try InventoryLabelRenderer.render(edited)
             previewError = nil; previewPrice = price; previewDraft = edited
         } catch { bitmap = nil; previewError = error.localizedDescription }
+        DiagnosticLog.shared.activity(.state, screen: .labelEditor,
+            state: activityState)
     }
     private var previewDescription: String {
         let shown = previewDraft ?? edited
@@ -1099,6 +1379,8 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         .frame(maxWidth: .infinity, alignment: .leading)
         .task(id: draft) {
             guard !Task.isCancelled, renderedDraft != draft || image == nil else { return }
+            DiagnosticLog.shared.activity(.state, screen: .labelPreview,
+                state: DiagnosticActivityState(previewReady: false))
             render(draft)
         }
     }
@@ -1107,6 +1389,8 @@ private struct LabelSelectionButtonStyle: ButtonStyle {
         do { image = try InventoryLabelRenderer.render(requestedDraft).previewImage; error = nil }
         catch { image = nil; self.error = error.localizedDescription }
         renderedDraft = requestedDraft
+        DiagnosticLog.shared.activity(.state, screen: .labelPreview,
+            state: DiagnosticActivityState(previewReady: image != nil))
     }
 }
 
@@ -1194,6 +1478,19 @@ private struct LabelActionBar<Content: View>: View {
         LabelStockCompatibility.issue(for: queue.entries.filter { $0.state == .pending }.map(\.paperSize),
                                       detected: paperPreferences.detectedProduct)
     }
+    private var activityState: DiagnosticActivityState {
+        let blocked: DiagnosticActivityBlockReason = !queue.isLoaded ? .queueUnavailable
+            : queue.isPrinting || progress.isRunning || printer.isConfiguringPaper ? .printerBusy
+            : !printer.isConnected && !usesFixturePrinter ? .printerDisconnected
+            : stockIssue != nil ? .stockMismatch
+            : scenePhase != .active ? .notActive
+            : !queue.canStart ? .noSelection : .ready
+        return DiagnosticActivityState(selectedCount: selected.count, labelCount: queue.entries.count,
+            pendingCount: queue.pendingCount, completedCount: queue.completedCount,
+            failedCount: queue.failedCount, uncertainCount: queue.uncertainCount,
+            canProceed: blocked == .ready, printerConnected: printer.isConnected,
+            rollReading: printer.isReadingRoll, blockReason: blocked)
+    }
 
     var body: some View {
         List {
@@ -1225,6 +1522,7 @@ private struct LabelActionBar<Content: View>: View {
                             Text("Select only labels that need another copy. The printer may finish labels already buffered after pausing. Check every uncertain label before retrying. Completed copies cannot be retried.")
                                 .font(.footnote).foregroundStyle(.secondary)
                             Button("Retry Selected (\(selected.count))") {
+                                DiagnosticLog.shared.activity(.action, screen: .labelQueue, action: .retryLabels, state: activityState)
                                 if selectedUncertain { acknowledged = false; showingRetry = true }
                                 else { retrySelected() }
                             }.disabled(selected.isEmpty || queue.isPrinting)
@@ -1236,6 +1534,7 @@ private struct LabelActionBar<Content: View>: View {
                     }
                     Section {
                         Button("Clear Completed Receipts") {
+                            DiagnosticLog.shared.activity(.action, screen: .labelQueue, action: .clearCompleted, state: activityState)
                             perform { try queue.clearCompleted() }
                         }.disabled(queue.completedCount == 0 || queue.isPrinting)
                             .accessibilityIdentifier("labelQueue.clearCompleted")
@@ -1251,6 +1550,10 @@ private struct LabelActionBar<Content: View>: View {
         .navigationTitle("Label Print Queue").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .topBarTrailing) { ClearLabelPrintQueueButton(identifier: "labelQueue.clearQueue") } }
         .safeAreaInset(edge: .bottom, spacing: 0) { printControls }
+        .onAppear { DiagnosticLog.shared.activity(.screen, screen: .labelQueue, state: activityState) }
+        .onChange(of: activityState) { _, state in
+            DiagnosticLog.shared.activity(.state, screen: .labelQueue, state: state)
+        }
         .sheet(isPresented: Binding(get: { progress.isPresented }, set: { visible in
             if !visible { progress.close() }
         }), onDismiss: finishProgressPresentation) { progressScreen }
@@ -1268,8 +1571,11 @@ private struct LabelActionBar<Content: View>: View {
                         LabeledContent("Style", value: entry.style.title)
                     }
                 }.navigationTitle("Queued Label").navigationBarTitleDisplayMode(.inline)
+                    .onAppear { DiagnosticLog.shared.activity(.screen, screen: .labelPreview,
+                        state: DiagnosticActivityState(labelCount: 1, previewReady: true)) }
+                    .onDisappear { DiagnosticLog.shared.activity(.exit, screen: .labelPreview) }
                     .toolbar {
-                        ToolbarItem(placement: .topBarLeading) { ClearLabelPrintQueueButton(identifier: "labelQueue.preview.clearQueue") }
+                        ToolbarItem(placement: .topBarLeading) { ClearLabelPrintQueueButton(identifier: "labelQueue.preview.clearQueue", activityScreen: .labelPreview) }
                         ToolbarItem(placement: .topBarTrailing) { Button("Done") { previewEntry = nil } }
                     }
             }
@@ -1293,7 +1599,7 @@ private struct LabelActionBar<Content: View>: View {
                 progress.stop(queue: queue, using: printer)
                 queue.stop(using: printer)
             }
-            if phase == .background { try? queue.clearIfUnprinted() }
+            if phase == .background { clearUnprintedQueue() }
         }
         .onChange(of: queue.entries.map(\.id)) { _, ids in
             selected.formIntersection(ids)
@@ -1301,11 +1607,12 @@ private struct LabelActionBar<Content: View>: View {
             if let previewEntry, !ids.contains(previewEntry.id) { self.previewEntry = nil }
         }
         .onDisappear {
+            DiagnosticLog.shared.activity(.exit, screen: .labelQueue, state: activityState)
             if !progress.isPresented {
                 queue.stop(using: printer)
                 // A preview, retry sheet or progress presentation still belongs
                 // to this print screen; ordinary Back/Close discards unsent work.
-                if previewEntry == nil && !showingRetry { try? queue.clearIfUnprinted() }
+                if previewEntry == nil && !showingRetry { clearUnprintedQueue() }
             }
             if !printer.isConnected { printer.stop() }
         }
@@ -1344,6 +1651,17 @@ private struct LabelActionBar<Content: View>: View {
             Text("Completed means the printer confirmed completion. Check the physical output before applying labels. Printing starts only when you tap Print Queued Labels.")
                 .font(.caption).foregroundStyle(.secondary)
         } header: { Text(queue.isPrinting ? "Printing in order" : "Review saved queue") }
+    }
+
+    private func clearUnprintedQueue() {
+        let count = queue.entries.count
+        try? queue.clearIfUnprinted()
+        if queue.entries.count != count {
+            DiagnosticLog.shared.activity(.outcome, screen: .labelQueue, action: .clearQueue,
+                state: DiagnosticActivityState(labelCount: queue.entries.count, pendingCount: queue.pendingCount,
+                    completedCount: queue.completedCount, failedCount: queue.failedCount,
+                    uncertainCount: queue.uncertainCount, succeeded: true))
+        }
     }
 
     private func queueRow(_ entry: LabelQueueEntry) -> some View {
@@ -1393,10 +1711,14 @@ private struct LabelActionBar<Content: View>: View {
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                     if queue.isPrinting {
-                        Button("Pause Printing", role: .destructive) { queue.stop(using: printer) }
+                        Button("Pause Printing", role: .destructive) {
+                            DiagnosticLog.shared.activity(.action, screen: .labelQueue, action: .pausePrinting, state: activityState)
+                            queue.stop(using: printer)
+                        }
                             .buttonStyle(.borderedProminent).accessibilityIdentifier("labelQueue.pause")
                     } else {
                         Button("Print Queued Labels") {
+                            DiagnosticLog.shared.activity(.action, screen: .labelQueue, action: .printLabels, state: activityState)
                             guard !printer.isConfiguringPaper, stockIssue == nil else { return }
                             progress.start(queue: queue, using: printSender(), deferUntilPresented: true,
                                 canFinish: { UIApplication.shared.applicationState == .active })
@@ -1431,13 +1753,26 @@ private struct LabelActionBar<Content: View>: View {
     }
 
     private func finishProgressPresentation() {
+        DiagnosticLog.shared.activity(.outcome, screen: .labelProgress, action: .finish,
+            state: DiagnosticActivityState(labelCount: progress.total,
+                pendingCount: queue.pendingCount, completedCount: progress.completed(in: queue.entries),
+                failedCount: queue.failedCount, uncertainCount: queue.uncertainCount,
+                canProceed: progress.didSucceed, succeeded: progress.didSucceed))
         guard progress.didSucceed, !queue.isPrinting else { return }
         do {
             guard try progress.completePresentation(queue: queue) else { return }
         } catch {
             actionError = error.localizedDescription
+            DiagnosticLog.shared.activity(.outcome, screen: .labelQueue, action: .finish,
+                state: DiagnosticActivityState(labelCount: queue.entries.count,
+                    pendingCount: queue.pendingCount, completedCount: queue.completedCount,
+                    failedCount: queue.failedCount, uncertainCount: queue.uncertainCount, succeeded: false))
             return
         }
+        DiagnosticLog.shared.activity(.outcome, screen: .labelQueue, action: .finish,
+            state: DiagnosticActivityState(labelCount: queue.entries.count,
+                pendingCount: queue.pendingCount, completedCount: queue.completedCount,
+                failedCount: queue.failedCount, uncertainCount: queue.uncertainCount, succeeded: true))
         if let onPrintingCompleted { onPrintingCompleted() }
         else { showingPriceTagsAfterPrint = true }
     }
@@ -1519,6 +1854,14 @@ private struct LabelActionBar<Content: View>: View {
         return progress.status(in: queue.entries, printerStatus: printer.status)
     }
 
+    private var activityState: DiagnosticActivityState {
+        DiagnosticActivityState(labelCount: progress.total, pendingCount: queue.pendingCount,
+            completedCount: progress.completed(in: queue.entries), failedCount: queue.failedCount,
+            uncertainCount: queue.uncertainCount, canProceed: !progress.isRunning,
+            printerConnected: printer.isConnected, rollReading: printer.isReadingRoll,
+            blockReason: progress.isRunning ? .printerBusy : .ready)
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 24) {
@@ -1580,11 +1923,15 @@ private struct LabelActionBar<Content: View>: View {
                     LabelActionBar {
                         if progress.isRunning {
                             Button(progress.didRequestStop ? "Stopping…" : "Pause Printing", role: .destructive) {
+                                DiagnosticLog.shared.activity(.action, screen: .labelProgress, action: .pausePrinting, state: activityState)
                                 progress.stop(queue: queue, using: printer)
                             }.buttonStyle(.borderedProminent).disabled(progress.didRequestStop)
                                 .accessibilityIdentifier("labelProgress.pause")
                         } else {
-                            Button("Review Queue") { progress.close() }.buttonStyle(.borderedProminent)
+                            Button("Review Queue") {
+                                DiagnosticLog.shared.activity(.action, screen: .labelProgress, action: .openQueue, state: activityState)
+                                progress.close()
+                            }.buttonStyle(.borderedProminent)
                                 .accessibilityIdentifier("labelProgress.reviewQueue")
                         }
                     }
@@ -1593,8 +1940,12 @@ private struct LabelActionBar<Content: View>: View {
         .interactiveDismissDisabled(progress.isRunning)
         .presentationDetents([.large])
         .presentationDragIndicator(.hidden)
-        .onAppear { progress.presentationDidAppear() }
+        .onAppear {
+            DiagnosticLog.shared.activity(.screen, screen: .labelProgress, state: activityState)
+            progress.presentationDidAppear()
+        }
         .onDisappear {
+            DiagnosticLog.shared.activity(.exit, screen: .labelProgress, state: activityState)
             if progress.isRunning { progress.stop(queue: queue, using: printer) }
         }
         .accessibilityIdentifier("labelProgress.screen")

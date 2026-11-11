@@ -178,7 +178,7 @@ import XCTest
         }
     }
 
-    func testCustomPreviewCacheIncludesCompleteGeometryPricePositionPriceCopiesAndBulkCategory() throws {
+    func testCustomPreviewCacheIncludesCompleteArtworkButExcludesCopyCount() throws {
         let original = try InventoryLabelSize(product: NiimbotLabelProduct(code: "120425109", width: 40,
             height: 12, rotation: 90, paperType: 1,
             inputAreas: [.init(x: 1, y: 1, width: 38, height: 10)]))
@@ -203,19 +203,108 @@ import XCTest
         _ = try model.previewRaster(for: XCTUnwrap(model.draft))
         model.price = "6"
         _ = try model.previewRaster(for: XCTUnwrap(model.draft))
+        XCTAssertEqual(rendered.count, 4)
         model.copies = "3"
         _ = try model.previewRaster(for: XCTUnwrap(model.draft))
+        XCTAssertEqual(rendered.count, 4, "Copies do not change the artwork or invalidate its preview")
         model.isBulk = true
         _ = try model.previewRaster(for: XCTUnwrap(model.draft))
-        XCTAssertEqual(rendered.count, 6, "Every changed artwork snapshot invalidates the single-entry cache")
+        XCTAssertEqual(rendered.count, 5, "Price, complete geometry, position and bulk category change the artwork")
         model.price = "99"
         let bulkPreview = try model.previewRaster(for: XCTUnwrap(model.draft))
-        XCTAssertEqual(rendered.count, 6, "Unused individual input does not change a bulk draft")
+        XCTAssertEqual(rendered.count, 5, "Unused individual input does not change a bulk draft")
         XCTAssertTrue(model.prepare())
-        XCTAssertEqual(rendered.count, 6)
+        XCTAssertEqual(rendered.count, 5)
         XCTAssertTrue(queue.entries.allSatisfy { $0.paperSize == corrected && $0.raster == bulkPreview })
         XCTAssertTrue(queue.entries.allSatisfy { $0.customBulk == true })
         XCTAssertFalse(queue.isPrinting)
+    }
+
+    func testChangingOnlyCopiesReusesPreviewButPreparesTheNewRequestedQuantity() throws {
+        let storage = CustomLabelQueueStorage(), queue = queue(storage)
+        var renders = 0
+        let model = CustomPriceTagModel(queue: queue, render: { draft in
+            renders += 1
+            return self.raster(draft.paperSize)
+        })
+        model.price = "5"; model.copies = "2"
+        let first = try XCTUnwrap(model.draft)
+        let preview = try model.previewRaster(for: first)
+        let invalid = CustomPriceTagDraft(priceCents: first.priceCents, copies: 0, paperSize: first.paperSize,
+                                         isBulk: first.isBulk, pricePosition: first.pricePosition)
+        XCTAssertThrowsError(try model.previewRaster(for: invalid), "Artwork reuse must not bypass copy validation")
+        XCTAssertEqual(renders, 1)
+        model.copies = ""
+        XCTAssertNil(model.draft)
+        XCTAssertEqual(model.artworkDraft, first.artworkDraft, "Clearing a copy field keeps its preview artwork")
+        XCTAssertEqual(try model.previewRaster(for: XCTUnwrap(model.artworkDraft)), preview)
+        XCTAssertEqual(renders, 1)
+        model.copies = "4"
+        let changed = try XCTUnwrap(model.draft)
+        XCTAssertNotEqual(first, changed, "The requested print quantity must remain part of the full draft")
+        XCTAssertEqual(try model.previewRaster(for: changed), preview)
+        XCTAssertEqual(renders, 1)
+        XCTAssertTrue(model.prepare())
+        XCTAssertEqual(renders, 1)
+        XCTAssertEqual(queue.entries.map(\.copyNumber), [1, 2, 3, 4])
+        XCTAssertEqual(queue.entries.map(\.raster), Array(repeating: preview, count: 4))
+        XCTAssertEqual(storage.writes, 1)
+        model.copies = "3"
+        XCTAssertFalse(model.hasPreparedQueue, "A new count must not silently reuse a queued quantity")
+        XCTAssertFalse(model.prepare(), "Already pending labels require explicit recovery or clearing")
+        XCTAssertEqual(queue.entries.count, 4)
+        XCTAssertEqual(storage.writes, 1)
+    }
+
+    func testCustomPreparationReplacesCompletedInventoryReceiptsWithoutChangingPrintedTagHistory() throws {
+        for bulk in [false, true] {
+            let approvals = approvalStore(), id = UUID()
+            try approvals.approve([.init(id: id, approvedTag: .individual(1_000), currentMarket: 10)])
+            let revision = try XCTUnwrap(approvals.record(for: id)).priceRevisionID
+            var receipt = try inventory(id: id, revision: revision)
+            receipt.state = .completed
+            let storage = CustomLabelQueueStorage(bytes: try document(receipt))
+            let queue = queue(storage, approvals: approvals)
+            let history = approvals.records
+            XCTAssertEqual(queue.entries, [receipt])
+            let model = CustomPriceTagModel(queue: queue, render: { self.raster($0.paperSize) })
+            model.isBulk = bulk; model.price = bulk ? "" : "5"; model.copies = "2"
+
+            XCTAssertTrue(model.prepare(), "A fully confirmed old job must not require a review/clear detour")
+            XCTAssertEqual(queue.entries.count, 2)
+            XCTAssertTrue(queue.entries.allSatisfy { $0.source == .custom && $0.state == .pending })
+            XCTAssertFalse(queue.entries.contains { $0.id == receipt.id })
+            XCTAssertEqual(approvals.records, history, "Replacing receipts cannot rewrite inventory tag values/history")
+            XCTAssertEqual(storage.writes, 1)
+            let saved = queue.entries
+            XCTAssertTrue(model.prepare())
+            XCTAssertEqual(queue.entries, saved, "A repeated Print preparation cannot enqueue duplicate copies")
+            XCTAssertEqual(storage.writes, 1)
+            XCTAssertFalse(queue.isPrinting)
+        }
+    }
+
+    func testCustomPreparationPreservesPendingFailedAndUncertainInventoryWork() throws {
+        for state in [LabelQueueState.pending, .failed, .uncertain] {
+            var outstanding = try inventory()
+            outstanding.state = state
+            outstanding.lastIssue = state == .pending ? nil : .writeFailed
+            let bytes = try document(outstanding)
+            let storage = CustomLabelQueueStorage(bytes: bytes), queue = queue(storage)
+            var renders = 0
+            let model = CustomPriceTagModel(queue: queue, render: { draft in
+                renders += 1
+                return self.raster(draft.paperSize)
+            })
+            model.price = "5"; model.copies = "2"
+
+            XCTAssertFalse(model.prepare(), "Only an all-completed queue may be replaced: \(state)")
+            XCTAssertEqual(queue.entries, [outstanding])
+            XCTAssertEqual(storage.bytes, bytes)
+            XCTAssertEqual(storage.writes, 0)
+            XCTAssertEqual(renders, 0, "Blocked work must not start a needless render or upload")
+            XCTAssertFalse(queue.isPrinting)
+        }
     }
 
     func testInvalidPreviewRasterIsNotCachedOrWrittenIntoTheQueue() throws {

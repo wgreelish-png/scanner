@@ -4,6 +4,26 @@ import Observation
 import UIKit
 import AudioToolbox
 
+/// Declining a modal suggestion keeps scanning quiet for this scan session.
+/// This policy uses uptime so clock/time-zone changes cannot shorten the pause.
+struct ScannerManualSearchPromptPolicy {
+    static let cooldown: TimeInterval = 120
+    private var declinedAt: TimeInterval?
+
+    func shouldPresent(at uptime: TimeInterval) -> Bool {
+        guard uptime.isFinite, uptime >= 0 else { return false }
+        guard let declinedAt else { return true }
+        // Conservatively retain the pause if an injected/invalid clock goes
+        // backward; actual process uptime is monotonic.
+        return uptime >= declinedAt && uptime - declinedAt >= Self.cooldown
+    }
+
+    mutating func declined(at uptime: TimeInterval) {
+        guard uptime.isFinite, uptime >= 0 else { return }
+        declinedAt = uptime
+    }
+}
+
 /// A settled recognition is a review snapshot. A candidate tap explicitly confirms it.
 @MainActor @Observable final class ScannerViewModel {
     var result: ScanResult?
@@ -270,7 +290,7 @@ import AudioToolbox
             } catch {
                 guard let self, !Task.isCancelled, self.priceRequestID == requestID else { return }
                 self.priceLoading = false
-                DiagnosticLog.shared.failure("pricing.failed", error)
+                DiagnosticLog.shared.record("pricing.failed", ServiceDiagnosticFields.failure(error))
                 self.priceMessage = (error as? MarketPricingFailure)?.errorDescription
                     ?? (error as? OpenAPIPricingFailure)?.errorDescription
                     ?? "Price unavailable. You can still add the card."

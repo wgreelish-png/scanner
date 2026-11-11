@@ -1,0 +1,2 @@
+# Linux fallback for reading the Xcode OpenStep project file.
+openstep-parser==2.0.3

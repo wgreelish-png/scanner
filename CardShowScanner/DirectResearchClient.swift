@@ -43,6 +43,7 @@ struct DirectResearchClient: ResearchProviding {
         try Task.checkCancellation()
         let checked = try DirectResearchCredentials.validated(shipperID: credentials.shipperID, apiKey: credentials.apiKey)
         guard let category = OpenAPIMarketPricing.categoryID(card.identity.game),
+              BetaAPIGameSupport.contains(category),
               let productText = OpenAPIMarketPricing.productID(card.identity.productID),
               let product = Int(productText), product > 0 else { throw ResearchFailure.unsupportedCard }
         guard let group = try await resolver.setID(for: card), group > 0 else { throw ResearchFailure.catalogUnavailable }

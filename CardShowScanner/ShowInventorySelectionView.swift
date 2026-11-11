@@ -17,6 +17,9 @@ import UIKit
                 .localizedCaseInsensitiveContains(query)
         }
     }
+    private var activityState: DiagnosticActivityState {
+        .init(selectedCount: quantities.values.reduce(0, +), cardCount: available.reduce(0) { $0 + $1.quantity })
+    }
     var body: some View {
         List {
             if available.isEmpty {
@@ -29,6 +32,7 @@ import UIKit
                     Button {
                         if selected > 0 { quantities.removeValue(forKey: item.id) }
                         else { quantities[item.id] = 1 }
+                        DiagnosticLog.shared.activity(.action, screen: .inventorySelection, action: .selectCard, state: activityState)
                     } label: {
                         HStack(spacing: 12) {
                             ShowTransactionCardRow(card: item.card, quantity: item.quantity, quantityTitle: "Available")
@@ -41,7 +45,10 @@ import UIKit
                         .accessibilityIdentifier("showTransaction.stock." + item.id.uuidString)
                     if selected > 0 {
                         Stepper("Quantity: \(selected)", value: Binding(get: { quantities[item.id] ?? 1 },
-                            set: { quantities[item.id] = $0 }), in: 1...item.quantity)
+                            set: {
+                                quantities[item.id] = $0
+                                DiagnosticLog.shared.activity(.action, screen: .inventorySelection, action: .changeQuantity, state: activityState)
+                            }), in: 1...item.quantity)
                             .accessibilityIdentifier("showTransaction.quantity." + item.id.uuidString)
                     }
                 }.padding(.vertical, 6)
@@ -57,12 +64,20 @@ import UIKit
                     Text("\(quantities.values.reduce(0, +)) selected").font(.headline)
                 }
                 Spacer()
-                if !quantities.isEmpty { Button("Clear") { quantities.removeAll() } }
+                if !quantities.isEmpty {
+                    Button("Clear") {
+                        quantities.removeAll()
+                        DiagnosticLog.shared.activity(.action, screen: .inventorySelection, action: .clearSelection, state: activityState)
+                    }
+                }
             }.padding(.horizontal, 16).padding(.vertical, 10).background(.regularMaterial)
         }
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button("Done") { endEditing(); dismiss() }.fontWeight(.semibold)
+                Button("Done") {
+                    DiagnosticLog.shared.activity(.action, screen: .inventorySelection, action: .saveChanges, state: activityState)
+                    endEditing(); dismiss()
+                }.fontWeight(.semibold)
                     .accessibilityIdentifier("showInventorySelection.done")
             }
             ToolbarItemGroup(placement: .keyboard) {
@@ -71,7 +86,8 @@ import UIKit
                     .accessibilityIdentifier("showInventorySelection.keyboardDone")
             }
         }
-        .onDisappear { endEditing() }
+        .onAppear { DiagnosticLog.shared.activity(.screen, screen: .inventorySelection, state: activityState) }
+        .onDisappear { endEditing(); DiagnosticLog.shared.activity(.exit, screen: .inventorySelection) }
     }
 
     private func endEditing() {

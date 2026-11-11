@@ -54,6 +54,11 @@ struct CardResearchView: View {
             grader: grader, grade: grade, publicPricing: publicPricing, opportunities: opportunities, research: research))
     }
 
+    private var activityState: DiagnosticActivityState {
+        .init(isPreparing: model.section == .market
+              ? model.market.publicLoading || model.market.activityLoading : model.graded.loading)
+    }
+
     var body: some View {
         List {
             Section {
@@ -66,15 +71,24 @@ struct CardResearchView: View {
                     identity
                     ResearchOptionButtons(title: "Printing", options: model.printings,
                         selection: model.card.requiresPrintingSelection == true ? "" : model.card.identity.printing,
-                        accessibilityPrefix: "cardResearch.printing", onSelect: model.selectPrinting)
+                        accessibilityPrefix: "cardResearch.printing", onSelect: {
+                            DiagnosticLog.shared.activity(.action, screen: .cardResearch, action: .changePrinting)
+                            model.selectPrinting($0)
+                        })
                     if !model.languages.isEmpty {
                         ResearchOptionButtons(title: "Language", options: model.languages,
                             selection: model.card.identity.language,
                             accessibilityPrefix: "cardResearch.language", compactLanguageLabels: true,
-                            onSelect: model.selectLanguage)
+                            onSelect: {
+                                DiagnosticLog.shared.activity(.action, screen: .cardResearch, action: .changeLanguage)
+                                model.selectLanguage($0)
+                            })
                     }
                     if model.section == .market {
-                        CardConditionPicker(selection: Binding(get: { model.card.identity.condition }, set: { model.selectCondition($0) }),
+                        CardConditionPicker(selection: Binding(get: { model.card.identity.condition }, set: {
+                            DiagnosticLog.shared.activity(.action, screen: .cardResearch, action: .changeCondition)
+                            model.selectCondition($0)
+                        }),
                                             accessibilityPrefix: "cardResearch.condition")
                     }
                     if let url = MarketplaceLinks.tcgplayerProduct(model.card.identity.productID) {
@@ -93,7 +107,7 @@ struct CardResearchView: View {
                 .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
             }.listRowBackground(Color.indigo.opacity(0.07))
             if model.section == .market {
-                MarketInsightsContent(model: model.market, window: $model.marketWindow)
+                MarketInsightsContent(model: model.market, window: $model.marketWindow, onConnection: openConnection)
             } else {
                 GradedResearchContent(model: model.graded)
             }
@@ -103,7 +117,10 @@ struct CardResearchView: View {
         .toolbar(.visible, for: .tabBar)
         .safeAreaInset(edge: .top) {
             VStack(spacing: 7) {
-                Picker("Research view", selection: Binding(get: { model.section }, set: { model.selectSection($0) })) {
+                Picker("Research view", selection: Binding(get: { model.section }, set: {
+                    DiagnosticLog.shared.activity(.action, screen: .cardResearch, action: .changeSection)
+                    model.selectSection($0)
+                })) {
                     ForEach(CardResearchSection.allCases) { Text($0.title).tag($0) }
                 }.pickerStyle(.segmented).accessibilityIdentifier("cardResearch.section")
                 if model.section == .graded, let status = compactStatus {
@@ -118,12 +135,18 @@ struct CardResearchView: View {
         }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                Button { model.refresh() } label: { Image(systemName: "arrow.clockwise") }
+                Button {
+                    DiagnosticLog.shared.activity(.action, screen: .cardResearch, action: .refresh, state: activityState)
+                    model.refresh()
+                } label: { Image(systemName: "arrow.clockwise") }
                     .accessibilityLabel(model.section == .market ? "Refresh market details" : "Refresh graded research")
                     .accessibilityIdentifier("cardResearch.refresh")
                 if let cardContext {
                     Menu {
-                        Button { showingCardDetails = true } label: {
+                        Button {
+                            DiagnosticLog.shared.activity(.action, screen: .cardResearch, action: .openCard)
+                            showingCardDetails = true
+                        } label: {
                             Label(cardContext.detailsTitle, systemImage: cardContext.detailsSymbol)
                         }.accessibilityIdentifier(cardContext.detailsIdentifier)
                         Divider()
@@ -135,7 +158,7 @@ struct CardResearchView: View {
                     Button { showingInfo = true } label: { Image(systemName: "info.circle") }
                         .accessibilityLabel("Research data information").accessibilityIdentifier("cardResearch.info")
                 }
-                Button { showingConnection = true } label: { Image(systemName: "gearshape") }
+                Button(action: openConnection) { Image(systemName: "gearshape") }
                     .accessibilityLabel("TCGTracking API Connection").accessibilityIdentifier("cardResearch.connection")
             }
         }
@@ -147,12 +170,28 @@ struct CardResearchView: View {
             if wasShowing && !isShowing { model.connectionDidChange() }
         }
         .sheet(isPresented: $showingInfo) { CardResearchInfoSheet(model: model) }
-        .onAppear { visible = true; if scenePhase == .active { model.start() } }
-        .onDisappear { visible = false; model.stop() }
+        .onAppear {
+            visible = true
+            DiagnosticLog.shared.activity(.screen, screen: .cardResearch, state: activityState)
+            if scenePhase == .active { model.start() }
+        }
+        .onChange(of: activityState) { _, state in
+            guard visible else { return }
+            DiagnosticLog.shared.activity(.state, screen: .cardResearch, state: state)
+        }
+        .onDisappear {
+            DiagnosticLog.shared.activity(.exit, screen: .cardResearch, state: activityState)
+            visible = false; model.stop()
+        }
         .onChange(of: scenePhase) { _, phase in
             if visible && phase == .active { model.start() } else { model.stop() }
         }
         .onChange(of: inputCard.identity) { _, _ in model.changeCard(inputCard) }
+    }
+
+    private func openConnection() {
+        DiagnosticLog.shared.activity(.action, screen: .cardResearch, action: .openConnection)
+        showingConnection = true
     }
 
     @ViewBuilder private func cardDetails(_ context: CardResearchContext) -> some View {

@@ -21,13 +21,13 @@ struct BetaAllowlistSettingsSection: View {
             }
             if sync.busy { ProgressView("Updating IP access…") }
             Button("Check IP Now") { sync.checkNow() }
-                .disabled(!sync.enabled || sync.busy).accessibilityIdentifier("betaAllowlist.check")
+                .disabled(!sync.enabled || sync.busy || sync.isCoolingPaused).accessibilityIdentifier("betaAllowlist.check")
             if sync.needsSignIn {
                 Button("Sign In to Update IP Access") { signingIn = true }
                     .accessibilityIdentifier("betaAllowlist.signIn")
             }
         } header: { Text("Automatic Beta IP access") } footer: {
-            Text("While this app is active, it checks on launch, when you return, after network changes, and once a minute. It replaces only the previous IP recorded by this iPhone and preserves other allowed addresses. The first check adds this phone without removing existing entries. Requires a signed-in TCGTracking website session for the same Shipper ID. Checks stop when you leave the app.")
+            Text("While active and signed in, checks run on launch, when you return, after network changes, and once a minute. Sign-in failures pause automatic checks until sign-in changes or you tap Check IP Now. Website checks also pause while this iPhone cools and stop when you leave the app. It replaces only this iPhone’s recorded previous IP and preserves the account’s other addresses. Requires website sign-in for the same Shipper ID.")
         }
         .fullScreenCover(isPresented: $signingIn) {
             TCGTrackingConnectionView(continueTitle: "Done") {

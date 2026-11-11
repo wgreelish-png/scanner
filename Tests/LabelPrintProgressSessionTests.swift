@@ -27,6 +27,66 @@ import XCTest
         XCTAssertTrue(sender.isWaiting)
     }
 
+    func testDirectEditorRetainsOwnershipUntilDismissalCleanupFinishes() async throws {
+        let first = try queue(entries(1)), next = try queue(entries(1))
+        let sender = ProgressGatedSender(), later = ProgressImmediateSender()
+        let controller = LabelDirectPrintController()
+        XCTAssertTrue(controller.start(queue: first, using: sender))
+        XCTAssertTrue(controller.isBusy)
+        controller.progress.presentationDidAppear()
+        await waitForFinalAcknowledgement(sender)
+        XCTAssertFalse(try controller.completePresentation(queue: first))
+        XCTAssertTrue(controller.isBusy, "A visible progress sheet still owns the editor")
+        sender.finish(); await controller.progress.waitUntilFinished()
+        XCTAssertFalse(controller.progress.isPresented)
+        XCTAssertTrue(controller.isBusy, "Final ACK starts dismissal, not another editor job")
+        XCTAssertFalse(controller.start(queue: next, using: later))
+        XCTAssertEqual(later.sends, 0)
+        XCTAssertTrue(try controller.completePresentation(queue: first))
+        XCTAssertFalse(controller.isBusy); XCTAssertTrue(first.entries.isEmpty)
+        XCTAssertTrue(controller.start(queue: next, using: later))
+        controller.progress.presentationDidAppear()
+        await controller.progress.waitUntilFinished()
+        XCTAssertEqual(later.sends, 1)
+        XCTAssertTrue(try controller.completePresentation(queue: next))
+    }
+
+    func testStopAfterPresentationBeforeDispatchSendsNoLabels() async throws {
+        let queue = try queue(entries(1)), sender = ProgressImmediateSender(), session = LabelPrintProgressSession()
+        XCTAssertTrue(session.start(queue: queue, using: sender, deferUntilPresented: true))
+        session.presentationDidAppear()
+        session.stop(queue: queue, using: sender)
+        await session.waitUntilFinished()
+        XCTAssertEqual(sender.sends, 0)
+        XCTAssertEqual(queue.pendingCount, 1); XCTAssertEqual(queue.uncertainCount, 0)
+        XCTAssertFalse(session.isRunning); XCTAssertFalse(session.didSucceed)
+    }
+
+    func testStaleRunCancellationCannotStopANewerJobEvenWhenLabelIDsAreReused() async throws {
+        let rows = try entries(1), queue = try queue(rows), first = ProgressGatedSender()
+        var oldRun: UUID?, currentRun: UUID?
+        let oldTask = Task { @MainActor in await queue.start(using: first, onStarted: { oldRun = $0 }) }
+        await waitForFinalAcknowledgement(first)
+        let oldID = try XCTUnwrap(oldRun)
+        first.finish(); await oldTask.value
+        var rejectedCallback = false
+        await queue.start(using: first, onStarted: { _ in rejectedCallback = true })
+        XCTAssertFalse(rejectedCallback, "A rejected start cannot claim a queue generation")
+        try queue.replace(with: rows)
+        let current = ProgressGatedSender(holdsPhysicalProof: true)
+        let currentTask = Task { @MainActor in await queue.start(using: current, onStarted: { currentRun = $0 }) }
+        for _ in 0..<100 where !current.isWaitingForPhysicalProof { await Task.yield() }
+        XCTAssertTrue(current.isWaitingForPhysicalProof)
+        let currentID = try XCTUnwrap(currentRun)
+        XCTAssertNotEqual(oldID, currentID)
+        queue.stop(using: first, runID: oldID)
+        XCTAssertEqual(current.cancels, 0, "An old owner cannot cancel a reused label ID in a new job")
+        XCTAssertTrue(queue.isPrinting)
+        queue.stop(using: current, runID: currentID)
+        await currentTask.value
+        XCTAssertEqual(current.cancels, 1); XCTAssertEqual(queue.uncertainCount, 1)
+    }
+
     func testAllPhysicalCopiesCanBeConfirmedWhileProgressStillWaitsForFinalJobAcknowledgement() async throws {
         let queue = try queue(entries(2)), sender = ProgressGatedSender(), session = LabelPrintProgressSession()
         XCTAssertTrue(session.start(queue: queue, using: sender))
@@ -247,7 +307,11 @@ import XCTest
 
     func testEvenASynchronousSenderWaitsUntilTheProgressSheetAppears() async throws {
         let queue = try queue(entries(1)), sender = ProgressImmediateSender(), session = LabelPrintProgressSession()
-        session.start(queue: queue, using: sender, deferUntilPresented: true)
+        XCTAssertTrue(session.start(queue: queue, using: sender, deferUntilPresented: true))
+        let requested = session.requestedIDs
+        XCTAssertFalse(session.start(queue: queue, using: sender, deferUntilPresented: true),
+                       "A second Print tap must not replace or duplicate an outstanding presentation intent")
+        XCTAssertEqual(session.requestedIDs, requested)
         for _ in 0..<3 { await Task.yield() }
         XCTAssertTrue(session.isPresented)
         XCTAssertTrue(session.isRunning)

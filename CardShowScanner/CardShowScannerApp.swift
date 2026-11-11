@@ -6,6 +6,7 @@ import SwiftData
     private let startupError: String?
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("diagnosticsEnabled") private var diagnosticsEnabled = true
+    @State private var sceneDiagnostics = AppSceneDiagnostics()
     init() {
         DiagnosticLog.shared.record("app.launch", [
             "app_version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
@@ -19,9 +20,9 @@ import SwiftData
     var body: some Scene {
         WindowGroup {
             rootView
-                .onAppear { updateHealthMonitoring() }
-                .onChange(of: scenePhase) { _, _ in updateHealthMonitoring() }
-                .onChange(of: diagnosticsEnabled) { _, _ in updateHealthMonitoring() }
+                .onAppear { sceneDiagnostics.record(scenePhase); updateHealthMonitoring() }
+                .onChange(of: scenePhase) { _, phase in sceneDiagnostics.record(phase); updateHealthMonitoring() }
+                .onChange(of: diagnosticsEnabled) { _, _ in sceneDiagnostics.record(scenePhase); updateHealthMonitoring() }
         }
     }
 
@@ -33,7 +34,9 @@ import SwiftData
 
     @ViewBuilder private var rootView: some View {
 #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("--show-transactions-ui-fixture") {
+        if ProcessInfo.processInfo.arguments.contains("--uitest-leftover-stock") {
+            LeftoverStockFixtureScreen()
+        } else if ProcessInfo.processInfo.arguments.contains("--show-transactions-ui-fixture") {
             ShowTransactionFixtureScreen()
         } else if ProcessInfo.processInfo.arguments.contains("--uitest-market-evidence") {
             MarketEvidenceFixtureScreen(research: false)
@@ -45,6 +48,8 @@ import SwiftData
             CardShowInventoryFixtureScreen()
         } else if ProcessInfo.processInfo.arguments.contains("--uitest-streamlined-review") {
             ReviewPresentationFixtureScreen()
+        } else if ProcessInfo.processInfo.arguments.contains("--uitest-manual-add") {
+            ManualCardAddFixtureScreen()
         } else if ProcessInfo.processInfo.arguments.contains("--uitest-scanner-recents") {
             ScannerRecentCardsFixtureScreen()
         } else if ProcessInfo.processInfo.arguments.contains("--uitest-persistent-navigation") {
@@ -73,6 +78,28 @@ import SwiftData
     @ViewBuilder private var standardView: some View {
         if let container { HomeView().modelContainer(container) }
         else { StorageFailureView(message: startupError ?? "Unknown storage error") }
+    }
+}
+
+/// The app root sees settings, printing and other screens too. Repeated view
+/// appearances cannot masquerade as new application lifecycle transitions.
+@MainActor final class AppSceneDiagnostics {
+    private let log: DiagnosticLog
+    private var lastPhase: ScenePhase?
+
+    init(log: DiagnosticLog = .shared) { self.log = log }
+
+    func record(_ phase: ScenePhase) {
+        guard log.enabled, phase != lastPhase else { return }
+        let value: String
+        switch phase {
+        case .active: value = "active"
+        case .inactive: value = "inactive"
+        case .background: value = "background"
+        @unknown default: value = "unknown"
+        }
+        lastPhase = phase
+        log.record("app.scene", ["phase": value])
     }
 }
 
@@ -125,6 +152,9 @@ struct ActiveSessionCard: View {
     @Query private var lists: [CardList]
     var body: some View {
         if let list = lists.first(where: { $0.id == session.listID }) {
+            if LeftoverStockStore.shared.active?.countListIDs.contains(list.id) == true {
+                NavigationLink { LeftoverStockView() } label: { Label("Continue Leftover Count", systemImage: "checklist") }
+            } else {
             Text(session.game ?? "Unknown game").font(.title2.bold())
             Text(session.startedAt, format: .dateTime).foregroundStyle(.secondary)
             Text(list.name).font(.caption)
@@ -133,6 +163,7 @@ struct ActiveSessionCard: View {
             if list.unpricedQuantity > 0 { Text("\(list.unpricedQuantity) unpriced copies need review").foregroundStyle(.orange) }
             NavigationLink { ScannerView(session: session, list: list) } label: { Label("Continue Scanning", systemImage: "viewfinder") }
             NavigationLink { SessionReviewView(session: session, list: list) } label: { Label("View List & Offers", systemImage: "dollarsign.circle") }
+            }
         } else {
             Text("The active session's list is unavailable.")
             FinishSessionButton(session: session)

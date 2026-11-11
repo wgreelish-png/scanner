@@ -448,7 +448,7 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     func applyPaperMode() { configurePaper(reading: false) }
 
     /// Read-only and optional: inability to read a roll never prevents printing.
-    func refreshRollEstimate(force: Bool = true) {
+    func refreshRollEstimate(force: Bool = true, recoverSupersededRead: Bool = true) {
         if isReadingRoll {
             DiagnosticLog.shared.record("label.roll_read", ["roll_read_source": "in_flight", "roll_read_ms": "0"])
             return
@@ -474,14 +474,19 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             guard let self, self.connectionGeneration == generation else { return }
             self.updateDetectedRoll(info)
         }
+        let superseded: @MainActor () -> Void = { [weak self] in
+            guard recoverSupersededRead else { return }
+            guard let self, self.connectionGeneration == generation else { return }
+            self.refreshAfterRollChange()
+        }
         if force {
             // Clear synchronously with authorization, before the coordinator
             // captures its revision. A later stock event must retain its intent.
             rollChangeNeedsRefresh = false
-            rollReader.refreshInfo(load: load, onUpdate: update)
+            rollReader.refreshInfo(load: load, onUpdate: update, onSuperseded: superseded)
         }
         else {
-            let source = rollReader.refreshInfoIfNeeded(load: load, onUpdate: update)
+            let source = rollReader.refreshInfoIfNeeded(load: load, onUpdate: update, onSuperseded: superseded)
             if source == .read { rollChangeNeedsRefresh = false }
             if source != .read {
                 DiagnosticLog.shared.record("label.roll_read", ["roll_read_source": source.rawValue, "roll_read_ms": "0"])
@@ -567,6 +572,8 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
     }
 
     /// One stock-change refresh may wait for an obsolete RFID read to settle.
+    /// Its replacement cannot recursively refresh itself, and the task remains
+    /// single-flight until that read settles. A later event may authorize work.
     /// It never polls, crosses a connection generation or interrupts printing.
     private func refreshAfterRollChange() {
         guard rollChangeNeedsRefresh, rollChangeRefreshTask == nil, isConnected,
@@ -576,9 +583,12 @@ struct NiimbotDiscoveredPrinter: Identifiable, Equatable {
             guard let self else { return }
             await self.rollReader.waitUntilIdle()
             guard self.connectionGeneration == generation else { return }
-            defer { self.rollChangeRefreshTask = nil }
+            defer {
+                if self.connectionGeneration == generation { self.rollChangeRefreshTask = nil }
+            }
             guard !Task.isCancelled, self.rollChangeNeedsRefresh, self.canRefreshRollEstimate else { return }
-            self.refreshRollEstimate(force: false)
+            self.refreshRollEstimate(force: false, recoverSupersededRead: false)
+            await self.rollReader.waitUntilIdle()
         }
     }
 

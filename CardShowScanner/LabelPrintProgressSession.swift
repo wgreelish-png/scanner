@@ -15,6 +15,7 @@ import Observation
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var successfulEntries: [LabelQueueEntry] = []
     @ObservationIgnored private var presentationCompleted = false
+    @ObservationIgnored private var queueRunID: UUID?
 
     deinit { task?.cancel() }
 
@@ -50,6 +51,7 @@ import Observation
         issue = nil
         successfulEntries = []
         presentationCompleted = false
+        queueRunID = nil
         if deferUntilPresented {
             startWhenPresented = { [weak self] in
                 self?.launch(queue: queue, using: sender, ids: ids, generation: current, canFinish: canFinish)
@@ -75,7 +77,17 @@ import Observation
             return
         }
         task = Task { [weak self] in
-            await queue.start(using: sender)
+            guard self?.generation == current, self?.didRequestStop == false, !Task.isCancelled else {
+                if let self, self.generation == current {
+                    self.task = nil; self.isRunning = false
+                    self.issue = "Printing paused before any labels were sent."
+                }
+                return
+            }
+            await queue.start(using: sender, onStarted: { [weak self] runID in
+                guard let self, self.generation == current else { return }
+                self.queueRunID = runID
+            })
             guard let self, self.generation == current else { return }
             self.task = nil
             self.isRunning = false
@@ -104,7 +116,7 @@ import Observation
             issue = "Printing paused before any labels were sent."
             return
         }
-        queue.stop(using: printer)
+        if let queueRunID { queue.stop(using: printer, runID: queueRunID) }
     }
 
     func close() {

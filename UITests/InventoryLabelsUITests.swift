@@ -869,7 +869,7 @@ import XCTest
         assertContains("3 labels", element: app.staticTexts["labels.totalCount"])
         assertNoPrintingPricePrompts(app: app)
         XCTAssertTrue(app.buttons["labels.prepare"].isEnabled, "Known prices prepare directly even when acquisition costs are unknown")
-        assertContains("Prepare Labels", element: app.buttons["labels.prepare"])
+        assertContains("Review Queue", element: app.buttons["labels.prepare"])
         tap(app.buttons["labels.prepare"], app: app)
         XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.navigationBars["Review Labels"].exists, "The primary action prepares the queue without an extra review screen")
@@ -1322,6 +1322,87 @@ import XCTest
         assertBalances(app: app)
         tap(app.buttons["show.inventory"], app: app)
         assertContains("3 cards available", element: app.staticTexts["showInventory.quantity"])
+    }
+
+    func testCustomPrintStartsFromPreviewWithoutAQueueStepAndWaitsForFinalAcknowledgement() {
+        continueAfterFailure = false
+        let app = launch(extraArguments: ["--label-print-progress-fixture=success-per-copy"])
+        defer { app.terminate() }
+        tap(app.buttons["show.priceTags"], app: app)
+        tap(app.buttons["priceTags.custom"], app: app)
+        enter("5", field: app.textFields["customLabels.price"], app: app)
+        enter("2", field: app.textFields["customLabels.copies"], app: app)
+        tap(app.buttons["customLabels.keyboardDone"], app: app)
+        XCTAssertTrue(app.images["customLabels.preview"].waitForExistence(timeout: 5))
+        tap(app.buttons["customLabels.print"], app: app)
+        assertLiveProgress("Confirmed printed: 0 of 2", app: app)
+        XCTAssertFalse(app.navigationBars["Label Print Queue"].exists)
+        tap(app.buttons["labelProgress.fixtureConfirm"], app: app)
+        assertLiveProgress("Confirmed printed: 1 of 2", app: app)
+        tap(app.buttons["labelProgress.fixtureConfirm"], app: app)
+        assertLiveProgress("Confirmed printed: 2 of 2", app: app)
+        XCTAssertFalse(app.navigationBars["Price Tags"].isHittable, "A full count still waits for the final printer reply")
+        tap(app.buttons["labelProgress.fixtureFinish"], app: app)
+        assertReturnedToPriceTags(app: app)
+        XCTAssertEqual(app.buttons["priceTags.queue"].value as? String, "0")
+        XCTAssertFalse(app.navigationBars["Custom Price Tag"].exists)
+        assertNoBluetoothPrompt(app: app)
+    }
+
+    func testSelectedInventoryPrintsDirectlyAndCompletedReceiptsDoNotBlockCustomTags() {
+        continueAfterFailure = false
+        let app = launch(extraArguments: ["--label-print-progress-fixture=success"])
+        defer { app.terminate() }
+        tap(app.buttons["show.priceTags"], app: app)
+        tap(app.buttons["priceTags.chooseCards"], app: app)
+        let choice = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "labels.select.")).firstMatch
+        XCTAssertTrue(choice.waitForExistence(timeout: 5))
+        tap(choice, app: app)
+        tap(app.buttons["labels.continueSelection"], app: app)
+        XCTAssertTrue(app.navigationBars["Label Details"].waitForExistence(timeout: 5))
+        tap(app.buttons["labels.print"], app: app)
+        assertLiveProgress("Confirmed printed: 0 of 1", app: app)
+        XCTAssertFalse(app.navigationBars["Label Print Queue"].exists)
+        tap(app.buttons["labelProgress.fixtureConfirm"], app: app)
+        tap(app.buttons["labelProgress.fixtureFinish"], app: app)
+        assertReturnedToPriceTags(app: app)
+        XCTAssertEqual(app.buttons["priceTags.queue"].value as? String, "0", "Completed receipts are history, not waiting work")
+        tap(app.buttons["priceTags.custom"], app: app)
+        enter("7", field: app.textFields["customLabels.price"], app: app)
+        tap(app.buttons["customLabels.keyboardDone"], app: app)
+        XCTAssertFalse(app.buttons["customLabels.reviewQueue"].exists, "Completed inventory receipts cannot block a new custom job")
+        XCTAssertTrue(app.buttons["customLabels.print"].isEnabled)
+        tap(app.buttons["customLabels.print"], app: app)
+        assertLiveProgress("Confirmed printed: 0 of 1", app: app)
+        tap(app.buttons["labelProgress.fixtureConfirm"], app: app)
+        tap(app.buttons["labelProgress.fixtureFinish"], app: app)
+        assertReturnedToPriceTags(app: app)
+        assertNoBluetoothPrompt(app: app)
+    }
+
+    func testDirectPrintFailureRetainsUncertainLabelsAndRequiresCheckingBeforeRetry() {
+        continueAfterFailure = false
+        let app = launch(extraArguments: ["--label-print-progress-fixture=failure"])
+        defer { app.terminate() }
+        tap(app.buttons["show.priceTags"], app: app)
+        tap(app.buttons["priceTags.custom"], app: app)
+        enter("5", field: app.textFields["customLabels.price"], app: app)
+        tap(app.buttons["customLabels.keyboardDone"], app: app)
+        tap(app.buttons["customLabels.print"], app: app)
+        assertLiveProgress("Confirmed printed: 0 of 1", app: app)
+        tap(app.buttons["labelProgress.fixtureConfirm"], app: app)
+        XCTAssertTrue(app.buttons["labelProgress.reviewQueue"].waitForExistence(timeout: 5))
+        tap(app.buttons["labelProgress.reviewQueue"], app: app)
+        XCTAssertTrue(app.navigationBars["Label Print Queue"].waitForExistence(timeout: 5))
+        assertContains("0/1 completed", element: app.staticTexts["labelQueue.progress"])
+        XCTAssertFalse(app.buttons["labelQueue.print"].isEnabled)
+        let selection = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "labelQueue.select.")).firstMatch
+        reveal(selection, app: app); tap(selection, app: app)
+        assertManualRetryVisible(in: app)
+        tap(app.buttons["labelQueue.retrySelected"], app: app)
+        XCTAssertTrue(app.navigationBars["Check Before Retrying"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["labelQueue.confirmRetry"].isEnabled, "Uncertain physical output still requires explicit checking")
+        assertNoBluetoothPrompt(app: app)
     }
 
     func testCustomPrintingShowsProgressWaitsForFinalAcknowledgementAndReturnsToPriceTags() {

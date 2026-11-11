@@ -5,7 +5,7 @@ enum OpenAPIPricingFailure: LocalizedError, Equatable {
     case httpStatus(Int), invalidResponse, responseTooLarge, unsupportedCard, catalogUnavailable
     var errorDescription: String? {
         switch self {
-        case .unsupportedCard: return "Market pricing is unavailable for this card. Supported catalog games are Pokémon, Magic, and Yu-Gi-Oh! You can save this card unpriced."
+        case .unsupportedCard: return "Market pricing is unavailable for this card. You can save this card unpriced."
         case .catalogUnavailable: return "The card’s catalog set could not be resolved. Refresh the card database and retry, or save this card unpriced."
         case .httpStatus(let status): return "Public pricing is unavailable (HTTP \(status)). Retry Market Price or save this card unpriced."
         case .invalidResponse: return "Public pricing returned an unsupported response. Retry Market Price or save this card unpriced."
@@ -45,9 +45,13 @@ final class NativeOpenAPIHTTPDataLoader: OpenAPIHTTPDataLoading, @unchecked Send
     }
     static func allows(_ url: URL?) -> Bool {
         guard let url else { return false }
-        return url.scheme == "https" && url.host == "openapi.tcgtracking.com" && (url.port == nil || url.port == 443) &&
-            url.user == nil && url.password == nil && url.query == nil && url.fragment == nil &&
-            url.path.range(of: #"^/v1/(?:[123]/sets/[1-9][0-9]*/skus|products/[1-9][0-9]{0,11})\z"#, options: .regularExpression) != nil
+        guard url.scheme == "https", url.host == "openapi.tcgtracking.com", url.port == nil || url.port == 443,
+              url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else { return false }
+        if url.path.range(of: #"^/v1/products/[1-9][0-9]{0,11}\z"#, options: .regularExpression) != nil { return true }
+        guard url.path.range(of: #"^/v1/[1-9][0-9]*/sets/[1-9][0-9]*/skus\z"#, options: .regularExpression) != nil else { return false }
+        let components = url.pathComponents
+        guard components.count == 6, let category = Int(components[2]) else { return false }
+        return TCGGameRegistry.isProductCategory(category)
     }
     private final class PublicOnlyDelegate: NSObject, URLSessionTaskDelegate {
         func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
