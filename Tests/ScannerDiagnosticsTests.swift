@@ -914,7 +914,12 @@ import SwiftUI
     func testCameraWorkloadRecognizesIdleReviewManualAndStoppedStatesWithoutInventingCameraMeasurements() throws {
         let scenarios: [(String, String, Double, Bool, String)] = [
             ("normal", "live", 30, true, "applied"),
+            ("normal", "review", 30, false, "applied"),
+            ("normal", "manual", 30, false, "applied"),
+            ("normal", "prompt", 30, false, "applied"),
             ("reduced", "review", 10, false, "pending"),
+            ("reduced", "manual", 10, false, "applied"),
+            // Older exported logs used a 1 FPS cap; they must still decode.
             ("reduced", "manual", 1, false, "applied"),
             ("normal", "prompt", 1, false, "failed"),
             ("cooling", "stopped", 0, false, "inactive")

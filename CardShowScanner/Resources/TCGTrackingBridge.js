@@ -110,7 +110,10 @@
     // One active track operation and one latest pending request. Camera promises
     // cannot be cancelled; stream/owner fences prevent a retired completion from
     // changing a replacement stream or announcing a stale setting as applied.
-    let cameraWorkload = null, pendingCameraWorkload = null, cameraWorkloadOwner = null;
+    let cameraWorkload = null, pendingCameraWorkload = null, cameraWorkloadOwner = null, appliedCameraTarget = null;
+    // A native sheet pauses recognition, not the camera visible behind it.
+    // Keep its preview responsive while retaining the reduced-power policy.
+    const previewFPS = () => resourceMode === 'reduced' ? 10 : 30;
     const workloadFields = (request, constraintState) => {
       const fields = { resourceMode: request.mode, captureState: request.state, targetFPS: request.fps,
         processingActive: request.processing, constraintState };
@@ -128,11 +131,20 @@
         while (cameraWorkloadOwner === owner && pendingCameraWorkload) {
           const request = pendingCameraWorkload; pendingCameraWorkload = null;
           if (!currentWorkload(request)) continue;
+          if (appliedCameraTarget?.stream === request.stream && appliedCameraTarget.track === request.track && appliedCameraTarget.fps === request.fps) {
+            diagnostic('camera_workload', workloadFields(request, 'applied')); continue;
+          }
           if (typeof request.track?.applyConstraints !== 'function') {
             diagnostic('camera_workload', workloadFields(request, 'unsupported')); continue;
           }
           try {
+            // A rejected change leaves its effective state uncertain. A later
+            // request must not reuse a successful target from before that try.
+            appliedCameraTarget = null;
             await request.track.applyConstraints({ frameRate: { ideal: request.fps, max: request.fps } });
+            if (cameraWorkloadOwner === owner && running && stream === request.stream && request.track.readyState !== 'ended') {
+              appliedCameraTarget = { stream: request.stream, track: request.track, fps: request.fps };
+            }
             if (currentWorkload(request)) diagnostic('camera_workload', workloadFields(request, 'applied'));
           } catch (_) {
             if (currentWorkload(request)) diagnostic('camera_workload', workloadFields(request, 'failed'));
@@ -145,7 +157,7 @@
     const updateCameraWorkload = () => {
       const state = !running || !stream || cooling() || !foreground || document.hidden ? 'stopped'
         : manualSearchSuspended ? 'manual' : held ? 'review' : manualPromptPending ? 'prompt' : 'live';
-      const fps = state === 'stopped' ? 0 : state !== 'live' ? 1 : resourceMode === 'reduced' ? 10 : 30;
+      const fps = state === 'stopped' ? 0 : previewFPS();
       const processing = !!stopLoop && recognitionEligible();
       const key = [resourceMode, state, fps, processing].join('|');
       if (cameraWorkload?.stream === stream && cameraWorkload.key === key) return;
@@ -263,7 +275,7 @@
       if (!preserveReview) { heldRef = removalRef = null; heldScan = null; }
       stopRecognition(); stream?.getTracks().forEach(t => t.stop()); stream = null;
       // A hung browser operation on a stopped track cannot block its replacement.
-      cameraWorkloadOwner = null; pendingCameraWorkload = null;
+      cameraWorkloadOwner = null; pendingCameraWorkload = null; appliedCameraTarget = null;
       video.srcObject = null; overlay?.destroy?.(); overlay = null; latestScan = null; updateCameraWorkload();
     };
     const visibility = () => {
@@ -368,7 +380,7 @@
         if (!eligible()) { if (cooling()) report(coolingMessage); return; }
         stage = 'camera'; began = clock(); diagnostic('camera_requested');
         report('Starting rear camera…');
-        const acquisitionFPS = held || manualPromptPending ? 1 : resourceMode === 'reduced' ? 10 : 30;
+        const acquisitionFPS = previewFPS();
         const cameraOptions = { audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: acquisitionFPS, max: acquisitionFPS } } };
         let captured;
         try { captured = await navigator.mediaDevices.getUserMedia(cameraOptions); }

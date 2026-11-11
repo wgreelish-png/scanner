@@ -53,6 +53,18 @@ class CIWorkflowTests(unittest.TestCase):
         self.assertEqual(selected_jobs(job="all", test="printer_transport"), {"tooling", "native", "release"})
         self.assertEqual(selected_jobs(job="all", test="navigation_price"), {"tooling", "native", "evidence_ui", "release"})
 
+    def test_camera_lifecycle_selects_native_without_unrelated_ui_jobs(self):
+        options = WORKFLOW.split("      test_scope:\n", 1)[1].split("\n# PRs", 1)[0]
+        self.assertIn("          - camera_lifecycle", options.splitlines())
+        self.assertEqual(selected_jobs(job="native", test="camera_lifecycle"), {"tooling", "native"})
+        self.assertEqual(selected_jobs(job="all", test="camera_lifecycle"), {"tooling", "native", "release"})
+        for job in ("ui", "research_ui", "evidence_ui", "budget_ui"):
+            with self.subTest(job=job):
+                self.assertEqual(selected_jobs(job=job, test="camera_lifecycle"), {"tooling"})
+        scope = re.search(r"(?m)^          SCANNER_TEST_SCOPE: \$\{\{ (.+) \}\}$", JOBS["native"])
+        self.assertIsNotNone(scope)
+        self.assertEqual(expression(scope.group(1), context(job="native", test="camera_lifecycle")), "camera_lifecycle")
+
     def test_linux_project_checker_dependencies_are_installed_before_checks(self):
         tooling = JOBS["tooling"]
         setup = tooling.index("uses: actions/setup-python@v5")

@@ -274,6 +274,29 @@ class UIRunnerFlowTests(unittest.TestCase):
         for target in navigation_targets:
             self.assertRegex(navigation_source, r"\bfunc\s+" + target.rsplit("/", 1)[1] + r"\s*\(")
 
+    def test_camera_lifecycle_scope_preserves_focused_native_selection(self):
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/ios.yml").read_text()
+        jobs = dict(re.findall(r"(?ms)^  (\w+):\n(.*?)(?=^  \w+:\n|\Z)", workflow.split("\njobs:\n", 1)[1]))
+        targets = tuple("CardShowScannerTests/" + name for name in (
+            "ScannerDiagnosticsTests", "DeviceHealthMonitorTests", "DeviceHealthValuesTests",
+            "ScannerPageRecoveryTests", "ScannerManualSearchLifecycleTests"))
+        branch = re.search(r'elif \[ "\$SCANNER_TEST_SCOPE" = camera_lifecycle \]; then\n'
+                           r'(.*?)(?=\n          (?:elif|else|fi)\b)', jobs["native"], re.DOTALL)
+        self.assertIsNotNone(branch)
+        self.assertEqual(branch.group(1).replace("\\\n", " ").split(),
+                         ["bash", "scripts/run_ios_tests.sh", *targets])
+        result, commands, _ = self.run_flow(target=targets[0], additional_targets=targets[1:])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.actions(commands), ["test"])
+        test = next(row["args"] for row in commands if row["tool"] == "xcodebuild")
+        self.assertEqual([value for value in test if value.startswith("-only-testing:")],
+                         ["-only-testing:" + target for target in targets])
+        self.assertFalse(any(value.startswith("-skip-testing:") for value in test))
+        self.assertFalse(any(row["args"][:2] == ["simctl", "create"] for row in commands))
+        for job in ("ui", "research_ui", "evidence_ui", "budget_ui"):
+            self.assertIn("inputs.test_scope != 'camera_lifecycle'", jobs[job].splitlines()[0])
+
     def test_log_review_job_uses_only_its_focused_native_and_ui_selections(self):
         root = Path(__file__).resolve().parents[1]
         workflow = (root / ".github/workflows/ios.yml").read_text()

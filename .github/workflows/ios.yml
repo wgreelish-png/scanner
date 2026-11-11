@@ -35,6 +35,7 @@ on:
           - label_queue
           - show_readiness
           - navigation_price
+          - camera_lifecycle
 # PRs validate work branches; main pushes validate integration. Avoid running
 # both push and pull_request checks for the same work-branch commit.
 concurrency:
@@ -84,6 +85,13 @@ jobs:
             bash scripts/run_ios_tests.sh CardShowScannerTests/InventoryLabelTests CardShowScannerTests/AdaptiveLabelRenderingTests CardShowScannerTests/CustomPriceTagTests CardShowScannerTests/CustomLabelQueueTests CardShowScannerTests/LabelPrintQueueTests CardShowScannerTests/NiimbotImageTransferPreferencesTests CardShowScannerTests/NiimbotRollReadCoordinatorTests CardShowScannerTests/NiimbotLabelCatalogTests CardShowScannerTests/ScannerDiagnosticsTests CardShowScannerTests/NiimbotLabelProductResolverTests CardShowScannerTests/ShowInventorySortTests CardShowScannerTests/InventoryLabelBatchTests
           elif [ "$SCANNER_TEST_SCOPE" = label_queue ]; then
             bash scripts/run_ios_tests.sh CardShowScannerTests/LabelPrintQueueTests CardShowScannerTests/LabelPrintRunOutcomeTests CardShowScannerTests/CustomPriceTagTests
+          elif [ "$SCANNER_TEST_SCOPE" = camera_lifecycle ]; then
+            bash scripts/run_ios_tests.sh \
+              CardShowScannerTests/ScannerDiagnosticsTests \
+              CardShowScannerTests/DeviceHealthMonitorTests \
+              CardShowScannerTests/DeviceHealthValuesTests \
+              CardShowScannerTests/ScannerPageRecoveryTests \
+              CardShowScannerTests/ScannerManualSearchLifecycleTests
           elif [ "$SCANNER_TEST_SCOPE" = show_readiness ]; then
             bash scripts/run_ios_tests.sh \
               CardShowScannerTests/ShowBudgetTests \
@@ -132,7 +140,7 @@ jobs:
             NativeTests.log
             NativeCrashSummary.log
   ui:
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.job_scope == 'leftover_stock' || inputs.job_scope == 'show_polish' || inputs.job_scope == 'log_review' || inputs.job_scope == 'ui_diagnostic' || ((inputs.job_scope == 'all' || inputs.job_scope == 'ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'navigation_price')) }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.job_scope == 'leftover_stock' || inputs.job_scope == 'show_polish' || inputs.job_scope == 'log_review' || inputs.job_scope == 'ui_diagnostic' || ((inputs.job_scope == 'all' || inputs.job_scope == 'ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'camera_lifecycle' && inputs.test_scope != 'navigation_price')) }}
     runs-on: macos-15-intel
     # Total CLI budgets stop a stall cascade before the outer job deadline.
     timeout-minutes: 110
@@ -212,7 +220,7 @@ jobs:
             NativeTests.log
             NativeCrashSummary.log
   research_ui:
-    if: ${{ github.event_name == 'workflow_dispatch' && ((inputs.job_scope == 'all' || inputs.job_scope == 'research_ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness' && inputs.test_scope != 'label_controls' && inputs.test_scope != 'navigation_price') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && ((inputs.job_scope == 'all' || inputs.job_scope == 'research_ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'camera_lifecycle' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness' && inputs.test_scope != 'label_controls' && inputs.test_scope != 'navigation_price') }}
     runs-on: macos-15-intel
     timeout-minutes: 110
     steps:
@@ -239,7 +247,7 @@ jobs:
             NativeTests.log
             NativeCrashSummary.log
   evidence_ui:
-    if: ${{ github.event_name == 'workflow_dispatch' && ((inputs.job_scope == 'all' || inputs.job_scope == 'evidence_ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness' && inputs.test_scope != 'label_controls') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && ((inputs.job_scope == 'all' || inputs.job_scope == 'evidence_ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'camera_lifecycle' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness' && inputs.test_scope != 'label_controls') }}
     runs-on: macos-15-intel
     timeout-minutes: 110
     steps:
@@ -279,7 +287,7 @@ jobs:
             NativeTests.log
             NativeCrashSummary.log
   budget_ui:
-    if: ${{ github.event_name == 'workflow_dispatch' && ((inputs.job_scope == 'all' || inputs.job_scope == 'budget_ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness' && inputs.test_scope != 'label_controls' && inputs.test_scope != 'navigation_price') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && ((inputs.job_scope == 'all' || inputs.job_scope == 'budget_ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'camera_lifecycle' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness' && inputs.test_scope != 'label_controls' && inputs.test_scope != 'navigation_price') }}
     runs-on: macos-15-intel
     timeout-minutes: 110
     steps:

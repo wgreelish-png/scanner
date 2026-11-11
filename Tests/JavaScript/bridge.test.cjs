@@ -953,10 +953,12 @@ test('a frozen native review stops all recognition callbacks and stays stopped a
   oldLoop.overlay.draw({ quad: [[0, 0]] });
   assert.equal(h.messages.filter(message => message.event === 'scan_stats').length, stats);
   assert.equal(h.draws.length, draws);
-  h.bridge.setResourceMode('reduced', 'review-load'); h.bridge.setResourceMode('normal', 'review-load');
+  h.bridge.setResourceMode('reduced', 'review-load'); await finishCameraWork();
+  assert.equal(h.cameraTracks[0].fps, 10); assert.equal(h.activeLoops, 0);
+  h.bridge.setResourceMode('normal', 'review-load');
   await finishCameraWork();
   assert.equal(h.scannerStarts, starts); assert.equal(h.activeLoops, 0);
-  assert.equal(h.cameraTracks[0].fps, 1); assert.equal(cameraWorkloads(h).at(-1).processingActive, false);
+  assert.equal(h.cameraTracks[0].fps, 30); assert.equal(cameraWorkloads(h).at(-1).processingActive, false);
   assert.equal(cameraWorkloads(h).at(-1).captureState, 'review');
   assert.equal(h.cameraRequests, 1); assert.equal(h.packOptions.length, 1);
   h.bridge.releaseReview(); assert.equal(h.activeLoops, 1);
@@ -970,9 +972,10 @@ test('a pending manual-search prompt stops work until the existing decision resu
   await h.bridge.install({ nonce: 'prompt-load', game: 'tcgp:3', autoStart: true });
   await waitOnCard(h); await finishCameraWork();
   assert.equal(manualSuggestions(h).length, 1); assert.equal(h.activeLoops, 0);
-  assert.equal(h.cameraTracks[0].fps, 1); const starts = h.scannerStarts;
+  assert.equal(h.cameraTracks[0].fps, 30); const starts = h.scannerStarts;
   h.bridge.setResourceMode('reduced', 'prompt-load'); await finishCameraWork();
   assert.equal(h.scannerStarts, starts); assert.equal(h.activeLoops, 0);
+  assert.equal(h.cameraTracks[0].fps, 10);
   assert.equal(cameraWorkloads(h).at(-1).captureState, 'prompt');
   h.bridge.resumeAfterManualSearchPrompt(); await finishCameraWork();
   assert.equal(h.activeLoops, 1); assert.equal(h.cameraTracks[0].fps, 10);
@@ -980,15 +983,15 @@ test('a pending manual-search prompt stops work until the existing decision resu
   h.bridge.stop();
 });
 
-test('manual entry lowers capture while retaining its mounted warm stream and reuses database on return', async () => {
+test('manual entry pauses recognition while keeping the preview smooth and reuses database on return', async () => {
   const h = harness({ cameraConstraintsSupported: true });
   await h.bridge.install({ nonce: 'manual-load', game: 'tcgp:3', autoStart: true });
   const video = h.elements.find(element => element.tag === 'video'), stream = video.srcObject;
   h.bridge.suspendForManualSearch('manual-load'); await finishCameraWork();
   assert.equal(h.activeLoops, 0); assert.equal(video.srcObject, stream);
-  assert.equal(h.cameraTracks[0].readyState, 'live'); assert.equal(h.cameraTracks[0].fps, 1);
+  assert.equal(h.cameraTracks[0].readyState, 'live'); assert.equal(h.cameraTracks[0].fps, 30);
   h.bridge.setResourceMode('reduced', 'manual-load'); await finishCameraWork();
-  assert.equal(h.activeLoops, 0); assert.equal(h.cameraTracks[0].fps, 1);
+  assert.equal(h.activeLoops, 0); assert.equal(h.cameraTracks[0].fps, 10);
   await h.bridge.resumeAfterManualSearch('manual-load'); await finishCameraWork();
   assert.equal(h.activeLoops, 1); assert.equal(h.cameraTracks[0].fps, 10);
   assert.equal(video.srcObject, stream); assert.equal(h.cameraRequests, 1);
@@ -1008,10 +1011,81 @@ test('camera constraints are serialized with one latest pending target and no st
   assert.equal(h.cameraConstraintCalls.length, 1, 'Readiness changes cannot launch concurrent operations');
   first.resolve(); await finishCameraWork();
   assert.equal(peak, 1);
-  assert.deepEqual(h.cameraConstraintCalls.map(call => call.constraints.frameRate.ideal), [30, 1]);
-  assert.equal(h.cameraTracks[0].fps, 1); assert.equal(h.activeLoops, 0);
+  assert.deepEqual(h.cameraConstraintCalls.map(call => call.constraints.frameRate.ideal), [30, 10]);
+  assert.equal(h.cameraTracks[0].fps, 10); assert.equal(h.activeLoops, 0);
   const applied = cameraWorkloads(h).filter(message => message.constraintState === 'applied');
-  assert.deepEqual(applied.map(message => [message.captureState, message.targetFPS]), [['manual', 1]]);
+  assert.deepEqual(applied.map(message => [message.captureState, message.targetFPS]), [['manual', 10]]);
+  h.bridge.stop();
+});
+
+test('manual, review and prompt transitions reuse the successful preview rate without reconfiguring the camera', async () => {
+  for (const [mode, fps] of [['normal', 30], ['reduced', 10]]) {
+    const h = harness({ cameraConstraintsSupported: true });
+    await h.bridge.install({ nonce: 'smooth', game: 'tcgp:3', autoStart: true, resourceMode: mode });
+    await finishCameraWork();
+    assert.equal(h.cameraConstraintCalls.length, 1);
+    settle(h, { ref: tuple(), accepted: true, confidence: 96 }); await finishCameraWork();
+    assert.equal(h.activeLoops, 0); assert.equal(h.cameraTracks[0].fps, fps);
+    assert.equal(cameraWorkloads(h).at(-1).captureState, 'review');
+    assert.equal(cameraWorkloads(h).at(-1).processingActive, false);
+    for (let i = 0; i < 5; i++) {
+      h.bridge.suspendForManualSearch('smooth');
+      assert.equal(h.activeLoops, 0); assert.equal(h.cameraTracks[0].fps, fps);
+      await h.bridge.resumeAfterManualSearch('smooth');
+    }
+    await finishCameraWork();
+    assert.equal(h.activeLoops, 1); assert.equal(h.cameraTracks[0].fps, fps);
+    await waitOnCard(h); await finishCameraWork();
+    assert.equal(h.activeLoops, 0); assert.equal(h.cameraTracks[0].fps, fps);
+    assert.equal(cameraWorkloads(h).at(-1).captureState, 'prompt');
+    h.bridge.resumeAfterManualSearchPrompt(); await finishCameraWork();
+    assert.equal(h.activeLoops, 1); assert.equal(h.cameraTracks[0].fps, fps);
+    assert.equal(h.cameraConstraintCalls.length, 1, 'Only changing presentation or processing state must not reconfigure the same track');
+    assert.equal(h.cameraRequests, 1); assert.equal(h.packOptions.length, 1); assert.equal(h.disposed, 0);
+    h.bridge.stop();
+  }
+});
+
+test('cooling recovery reacquires a smooth preview without resuming an unresolved review or prompt', async () => {
+  for (const [mode, fps] of [['normal', 30], ['reduced', 10]]) {
+    for (const state of ['review', 'prompt']) {
+      const h = harness({ cameraConstraintsSupported: true });
+      await h.bridge.install({ nonce: 'held-preview', game: 'tcgp:3', autoStart: true, resourceMode: mode });
+      if (state === 'review') settle(h, { ref: tuple(), accepted: true, confidence: 96 });
+      else await waitOnCard(h);
+      assert.equal(h.activeLoops, 0);
+      h.bridge.setResourceMode('cooling', 'held-preview');
+      assert.equal(h.cameraTracks[0].readyState, 'ended');
+      h.bridge.setResourceMode(mode, 'held-preview'); await waitForCameraReady(h, 2); await finishCameraWork();
+      assert.deepEqual(clean(h.captureOptions.video.frameRate), { ideal: fps, max: fps });
+      assert.equal(h.cameraTracks[1].fps, fps); assert.equal(h.activeLoops, 0);
+      assert.equal(cameraWorkloads(h).at(-1).captureState, state);
+      assert.equal(cameraWorkloads(h).at(-1).processingActive, false);
+      assert.equal(h.cameraRequests, 2); assert.equal(h.packOptions.length, 1); assert.equal(h.disposed, 0);
+      if (state === 'review') h.bridge.releaseReview(); else h.bridge.resumeAfterManualSearchPrompt();
+      await finishCameraWork();
+      assert.equal(h.activeLoops, 1); assert.equal(h.cameraTracks[1].fps, fps);
+      assert.equal(h.cameraConstraintCalls.length, 2, 'A replacement stream needs its own successful target; releasing its sheet does not');
+      h.bridge.stop();
+    }
+  }
+});
+
+test('a rejected rate change cannot reuse an earlier successful target or mask another failure', async () => {
+  let attempts = 0;
+  const h = harness({ applyCameraConstraints: async () => {
+    if ([2, 3].includes(++attempts)) throw new Error('PRIVATE_CAMERA_ERROR');
+  } });
+  await h.bridge.install({ nonce: 'rate-failure', game: 'tcgp:3', autoStart: true }); await finishCameraWork();
+  h.bridge.setResourceMode('reduced', 'rate-failure'); await finishCameraWork();
+  assert.equal(cameraWorkloads(h).at(-1).constraintState, 'failed');
+  h.bridge.setResourceMode('normal', 'rate-failure'); await finishCameraWork();
+  assert.equal(cameraWorkloads(h).at(-1).constraintState, 'failed');
+  h.bridge.suspendForManualSearch('rate-failure'); await finishCameraWork();
+  assert.deepEqual(h.cameraConstraintCalls.map(call => call.constraints.frameRate.ideal), [30, 10, 30, 30]);
+  assert.equal(cameraWorkloads(h).at(-1).constraintState, 'applied');
+  assert.equal(h.cameraTracks[0].fps, 30); assert.equal(h.activeLoops, 0);
+  assert.equal(JSON.stringify(cameraWorkloads(h)).includes('PRIVATE_CAMERA_ERROR'), false);
   h.bridge.stop();
 });
 
