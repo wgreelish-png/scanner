@@ -52,6 +52,33 @@ struct TCGBridgeEnvelope: Decodable {
     var cameraFPS: Double?
     var processingActive: Bool?
     var constraintState: String?
+    var photoState: String?
+}
+
+enum ScannerCaptureMode: String, CaseIterable, Sendable {
+    case live, photo
+    var title: String { self == .live ? "Live Scan" : "Photo Scan" }
+}
+
+enum PhotoScanState: String, CaseIterable, Sendable {
+    case off, framing, processing, ready, noMatch, failed, cooling
+
+    static func validated(_ envelope: TCGBridgeEnvelope) -> Self? {
+        guard envelope.kind == "photoState", let value = envelope.photoState else { return nil }
+        return Self(rawValue: value)
+    }
+
+    var isResting: Bool { self == .ready || self == .noMatch || self == .failed }
+}
+
+/// Shutter readiness requires a bridge acknowledgement, not just a UI selection.
+enum ScannerPhotoCommandPolicy {
+    static func allows(mode: ScannerCaptureMode, state: PhotoScanState, retake: Bool,
+                       active: Bool, foreground: Bool, manual: Bool,
+                       cooling: Bool, documentReady: Bool) -> Bool {
+        mode == .photo && active && foreground && !manual && !cooling && documentReady
+            && (retake ? state.isResting : state == .framing)
+    }
 }
 
 /// Diagnostics have their own strict scalar schema. Neither recognition payloads
@@ -347,6 +374,8 @@ enum ScannerResourceMode: String, Equatable {
     let webView: WKWebView
     @Published private(set) var status = "Preparing TCGTracking…"
     @Published private(set) var manualSearchSuggested = false
+    @Published private(set) var captureMode = ScannerCaptureMode.live
+    @Published private(set) var photoState = PhotoScanState.off
     private var active = false
     private var manualSearchSuspended = false
     private var documentFailed = false
@@ -356,6 +385,10 @@ enum ScannerResourceMode: String, Equatable {
     private var resourceObservers: [NSObjectProtocol] = []
     private var resourceRequestID = UUID()
     private var resourcePauseDeadline: Task<Void, Never>?
+    private var photoCommandID = UUID()
+    private var photoCommandDeadline: Task<Void, Never>?
+    private var photoAwaitingRetake = false
+    private var photoRestingState = PhotoScanState.failed
     private var game = "Pokémon"
     private var nonce = UUID().uuidString
     private var normalizer = TCGBridgeNormalizer()
@@ -398,6 +431,7 @@ enum ScannerResourceMode: String, Equatable {
     }
     deinit {
         resourcePauseDeadline?.cancel()
+        photoCommandDeadline?.cancel()
         for observer in resourceObservers { NotificationCenter.default.removeObserver(observer) }
     }
     func start(game: String) {
@@ -419,6 +453,7 @@ enum ScannerResourceMode: String, Equatable {
         DiagnosticLog.shared.record("web.load_started", ["game": diagnosticGame])
         self.game = game; active = true; manualSearchSuspended = false; documentFailed = false; nonce = UUID().uuidString; normalizer = TCGBridgeNormalizer()
         observeResources()
+        updatePhotoState(captureMode == .photo && resourceMode == .cooling ? .cooling : .off)
         recoveryAttempts = 0
         status = resourceMode == .cooling ? Self.coolingStatus : "Starting bundled scanner…"
         loadBundledPage(restartingServer: false)
@@ -435,11 +470,12 @@ enum ScannerResourceMode: String, Equatable {
                 else { try await LocalScannerServer.shared.start() }
                 guard let self, self.active, self.nonce == startupNonce, !Task.isCancelled else { return }
                 self.pageNavigation = self.webView.load(URLRequest(url: Self.pageURL))
-                if self.pageNavigation == nil { self.documentFailed = true; self.status = "Scanner could not open. Tap Retry Live Scanner." }
+                if self.pageNavigation == nil { self.documentFailed = true; self.photoDocumentFailed(); self.status = "Scanner could not open. Tap Retry Live Scanner." }
             } catch {
                 guard let self, self.active, self.nonce == startupNonce, !Task.isCancelled else { return }
                 DiagnosticLog.shared.failure("scanner.local_start_failed", error)
                 self.documentFailed = true
+                self.photoDocumentFailed()
                 self.status = "Local scanner could not start. Tap Retry Live Scanner."
             }
         }
@@ -450,6 +486,8 @@ enum ScannerResourceMode: String, Equatable {
         for observer in resourceObservers { NotificationCenter.default.removeObserver(observer) }
         resourceObservers.removeAll()
         resourceRequestID = UUID(); resourcePauseDeadline?.cancel(); resourcePauseDeadline = nil
+        invalidatePhotoCommand()
+        updatePhotoState(.off)
         reviewRelease.restart()
         pageTask?.cancel(); pageTask = nil; pageNavigation = nil
         continuation.finish()
@@ -475,6 +513,10 @@ enum ScannerResourceMode: String, Equatable {
                         : name == UIApplication.didBecomeActiveNotification ? true : self.resourceForeground
                     guard mode != self.resourceMode || foreground != self.resourceForeground else { return }
                     self.resourceMode = mode; self.resourceForeground = foreground
+                    if mode == .cooling || !foreground {
+                        self.invalidatePhotoCommand()
+                        self.updatePhotoState(self.captureMode == .photo && mode == .cooling ? .cooling : .off)
+                    }
                     if mode == .cooling {
                         self.reviewRelease.loading()
                         self.status = Self.coolingStatus
@@ -511,6 +553,7 @@ enum ScannerResourceMode: String, Equatable {
         // rate. This public WebKit control stops capture independently of JS.
         webView.setCameraCaptureState(.none, completionHandler: nil)
         stop(); documentFailed = true
+        photoDocumentFailed()
         status = "Scanner paused. Tap Retry Live Scanner."
     }
     func clearCache() async throws {
@@ -555,6 +598,108 @@ enum ScannerResourceMode: String, Equatable {
         DiagnosticLog.shared.record("scanner.steady_border_changed", ["reason": enabled ? "enabled" : "disabled"])
         webView.evaluateJavaScript("window.CardShowBridge?.setSteadyCardBorder(\(enabled ? "true" : "false")); null;", completionHandler: nil)
     }
+    var canCapturePhoto: Bool { allowsPhotoCommand(retake: false) }
+    var canRetakePhoto: Bool { allowsPhotoCommand(retake: true) }
+
+    @discardableResult func setCaptureMode(_ mode: ScannerCaptureMode) -> Bool {
+        guard mode != captureMode else { return true }
+        guard photoState != .processing else { return false }
+        invalidatePhotoCommand()
+        captureMode = mode; photoAwaitingRetake = false; photoRestingState = .failed
+        normalizer = TCGBridgeNormalizer(); manualSearchSuggested = false
+        reviewRelease.discardPending(); updatePhotoState(mode == .photo && resourceMode == .cooling ? .cooling : .off)
+        DiagnosticLog.shared.record("scanner.capture_mode", ["phase": mode.rawValue])
+        guard active, bridgeInstalled, !documentFailed else { return true }
+        dispatchPhotoCommand("setCaptureMode", mode: mode)
+        return true
+    }
+
+    func capturePhoto() {
+        guard canCapturePhoto else { return }
+        photoAwaitingRetake = true; photoRestingState = .failed
+        normalizer = TCGBridgeNormalizer(); reviewRelease.discardPending()
+        updatePhotoState(.processing)
+        status = "Capturing photo…"
+        dispatchPhotoCommand("capturePhoto")
+    }
+
+    func retakePhoto() {
+        guard canRetakePhoto else { return }
+        photoAwaitingRetake = false
+        normalizer = TCGBridgeNormalizer(); reviewRelease.discardPending()
+        updatePhotoState(.off)
+        status = "Starting camera for another photo…"
+        dispatchPhotoCommand("retakePhoto")
+    }
+
+    /// An explicit retry discards an interrupted photo before the next page is
+    /// installed, so retry opens framing directly instead of a failed still.
+    func preparePhotoRetry() {
+        guard !active, captureMode == .photo else { return }
+        invalidatePhotoCommand()
+        photoAwaitingRetake = false; photoRestingState = .failed
+        normalizer = TCGBridgeNormalizer(); updatePhotoState(.off)
+    }
+
+    private func allowsPhotoCommand(retake: Bool) -> Bool {
+        ScannerPhotoCommandPolicy.allows(mode: captureMode, state: photoState, retake: retake,
+            active: active, foreground: resourceForeground, manual: manualSearchSuspended,
+            cooling: resourceMode == .cooling, documentReady: bridgeInstalled && !documentFailed && Self.allowed(webView.url))
+    }
+
+    private var photoReviewConfiguration: Any {
+        if captureMode == .photo && photoAwaitingRetake { return photoRestingState.rawValue }
+        return NSNull()
+    }
+
+    private func invalidatePhotoCommand() {
+        photoCommandID = UUID(); photoCommandDeadline?.cancel(); photoCommandDeadline = nil
+    }
+
+    private func updatePhotoState(_ state: PhotoScanState) {
+        guard photoState != state else { return }
+        photoState = state
+        DiagnosticLog.shared.record("scanner.photo_state", ["phase": state.rawValue])
+    }
+
+    private func dispatchPhotoCommand(_ operation: String, mode: ScannerCaptureMode? = nil) {
+        guard active, bridgeInstalled, !documentFailed, Self.allowed(webView.url),
+              ["setCaptureMode", "capturePhoto", "retakePhoto"].contains(operation) else { return }
+        invalidatePhotoCommand()
+        let id = photoCommandID, requestNonce = nonce
+        photoCommandDeadline = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(30)) } catch { return }
+            guard let self, self.active, self.nonce == requestNonce, self.photoCommandID == id else { return }
+            self.failPhotoCommand()
+        }
+        var arguments: [String: Any] = ["expectedNonce": requestNonce]
+        if let mode { arguments["mode"] = mode.rawValue }
+        let code = operation == "setCaptureMode"
+            ? "return await window.CardShowBridge?.setCaptureMode(mode, expectedNonce);"
+            : "return await window.CardShowBridge?.\(operation)(expectedNonce);"
+        webView.callAsyncJavaScript(code, arguments: arguments, in: nil, in: .page) { [weak self] result in
+            guard let self, self.active, self.nonce == requestNonce, self.photoCommandID == id else { return }
+            self.photoCommandDeadline?.cancel(); self.photoCommandDeadline = nil
+            guard case .success(let accepted) = result, accepted as? Bool == true else {
+                self.failPhotoCommand(); return
+            }
+        }
+    }
+
+    private func failPhotoCommand() {
+        // Retire uncertain page work before allowing a later photograph. This
+        // also prevents a delayed result from becoming a card in another job.
+        webView.setCameraCaptureState(.none, completionHandler: nil)
+        stop(); documentFailed = true
+        if captureMode == .photo {
+            photoAwaitingRetake = true; photoRestingState = .failed; updatePhotoState(.failed)
+        }
+        status = "Photo Scan could not finish. Retry the scanner, then take another photo."
+    }
+    private func photoDocumentFailed() {
+        invalidatePhotoCommand()
+        if captureMode == .photo { updatePhotoState(.failed) }
+    }
     func resumeAfterManualSearchPrompt() {
         guard active, manualSearchSuggested else { return }
         manualSearchSuggested = false
@@ -564,6 +709,8 @@ enum ScannerResourceMode: String, Equatable {
     func suspendForManualSearch() {
         guard active, !manualSearchSuspended else { return }
         manualSearchSuspended = true; manualSearchSuggested = false
+        invalidatePhotoCommand()
+        if captureMode == .photo { updatePhotoState(.off) }
         normalizer = TCGBridgeNormalizer(); reviewRelease.discardPending()
         dispatchManualSearch("suspendForManualSearch")
     }
@@ -583,6 +730,7 @@ enum ScannerResourceMode: String, Equatable {
         webView.evaluateJavaScript("window.CardShowBridge?.\(operation)(\(argument)); null;") { [weak self] _, error in
             guard let self, self.active, self.nonce == requestNonce, error != nil else { return }
             self.documentFailed = true
+            self.photoDocumentFailed()
             self.status = "Scanner could not resume. Tap Retry Live Scanner."
         }
     }
@@ -628,6 +776,7 @@ enum ScannerResourceMode: String, Equatable {
         pageNavigation = nil
         let requestNonce = nonce
         let installedSuspended = manualSearchSuspended
+        let installedCaptureMode = captureMode
         if recoveryAttempts > 0 { DiagnosticLog.shared.record("scanner.local_recovered", ["quantity": String(recoveryAttempts)]) }
         DiagnosticLog.shared.record("web.page_loaded")
         guard let url = Bundle.main.url(forResource: "TCGTrackingBridge", withExtension: "js"),
@@ -635,20 +784,24 @@ enum ScannerResourceMode: String, Equatable {
               let gameKey = TCGGameRegistry.scannerKey(for: game),
               let data = try? JSONSerialization.data(withJSONObject: ["nonce": nonce, "game": gameKey, "autoStart": true, "cacheToken": LocalScannerServer.shared.cacheToken,
                   "steadyCardBorder": UserDefaults.standard.object(forKey: "steadyCardBorder") as? Bool ?? true,
-                  "manualSearchSuspended": manualSearchSuspended, "resourceMode": resourceMode.rawValue, "foreground": resourceForeground]),
+                  "manualSearchSuspended": manualSearchSuspended, "resourceMode": resourceMode.rawValue, "foreground": resourceForeground,
+                  "captureMode": captureMode.rawValue,
+                  "photoReviewState": photoReviewConfiguration]),
               let config = String(data: data, encoding: .utf8) else {
             documentFailed = true
+            photoDocumentFailed()
             DiagnosticLog.shared.record("web.resource_missing")
             status = "Scanner adapter resource or game configuration is missing."; return
         }
         webView.evaluateJavaScript(source + "\nwindow.CardShowBridge.install(" + config + "); null;") { [weak self] _, error in
             guard let self, self.active, self.nonce == requestNonce else { return }
             if let error {
-                self.documentFailed = true; DiagnosticLog.shared.failure("web.injection_failed", error)
+                self.documentFailed = true; self.photoDocumentFailed(); DiagnosticLog.shared.failure("web.injection_failed", error)
                 self.status = "Could not initialize bundled scanner modules. Retry Live Scanner."
             } else {
                 self.bridgeInstalled = true
                 self.dispatchResourceMode()
+                if self.captureMode != installedCaptureMode { self.dispatchPhotoCommand("setCaptureMode", mode: self.captureMode) }
                 // Pause/dismissal may have arrived after config was captured
                 // but before this document installed its bridge callbacks.
                 if self.manualSearchSuspended || installedSuspended {
@@ -676,6 +829,7 @@ enum ScannerResourceMode: String, Equatable {
             loadBundledPage(restartingServer: true)
         } else {
             documentFailed = true
+            photoDocumentFailed()
             DiagnosticLog.shared.record("scanner.local_load_failed", ["quantity": String(recoveryAttempts),
                 "reason": recoveryAttempts > 0 ? "retry_exhausted" : "not_retryable"])
             status = "Scanner could not reconnect. Tap Retry Live Scanner."
@@ -686,6 +840,7 @@ enum ScannerResourceMode: String, Equatable {
         pageTask?.cancel(); pageTask = nil; pageNavigation = nil; manualSearchSuggested = false
         documentFailed = true
         bridgeInstalled = false
+        photoDocumentFailed()
         reviewRelease.restart()
         DiagnosticLog.shared.record("web.process_terminated")
         status = "Scanner process stopped. Tap Retry Live Scanner."
@@ -743,6 +898,32 @@ enum ScannerResourceMode: String, Equatable {
             let envelope = try JSONDecoder().decode(TCGBridgeEnvelope.self, from: data)
             guard envelope.nonce == nonce else { return }
             if envelope.kind == "diagnostic" { logDiagnostic(envelope); return }
+            if let state = PhotoScanState.validated(envelope) {
+                guard captureMode == .photo || state == .off else { return }
+                if resourceMode == .cooling { updatePhotoState(captureMode == .photo ? .cooling : .off); return }
+                guard resourceForeground, !manualSearchSuspended else { return }
+                if state == .processing {
+                    normalizer = TCGBridgeNormalizer(); photoAwaitingRetake = true; photoRestingState = .failed
+                } else if state.isResting {
+                    photoAwaitingRetake = true; photoRestingState = state
+                }
+                updatePhotoState(state)
+                switch state {
+                case .off: break
+                case .framing: status = "Frame one card, then tap Take Photo."
+                case .processing: status = "Scanning photo… Camera is off."
+                case .ready: status = "Photo scanned. Review the card or take another photo."
+                case .noMatch: status = "No card found in this photo. Retake it or search manually."
+                case .failed: status = "Photo could not be scanned. Retake it or search manually."
+                case .cooling: status = Self.coolingStatus
+                }
+                return
+            }
+            if envelope.kind == "photoState" { return }
+            if captureMode == .photo && !resourceForeground && envelope.kind != "status" { return }
+            if captureMode == .photo && envelope.kind == "scan" {
+                guard photoAwaitingRetake, photoState == .processing || photoState == .ready else { return }
+            }
             if resourceMode == .cooling && envelope.kind != "status" { return }
             if manualSearchSuspended && envelope.kind != "status" { return }
             if envelope.kind == "manualSearchSuggested" {
@@ -767,6 +948,7 @@ enum ScannerResourceMode: String, Equatable {
         guard let record = ScannerDiagnosticRecord.validated(message) else { return }
         if let event = message.event, ["startup_failed", "camera_interrupted", "javascript_error", "javascript_rejection"].contains(event) {
             documentFailed = true
+            photoDocumentFailed()
         }
         if message.event == "scanner_ready" { documentFailed = false }
         if let event = message.event, ["startup_started", "startup_failed", "camera_interrupted", "camera_backgrounded", "javascript_error", "javascript_rejection"].contains(event) {

@@ -34,7 +34,9 @@ import SwiftData
 
     @ViewBuilder private var rootView: some View {
 #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("--uitest-leftover-stock") {
+        if ProcessInfo.processInfo.arguments.contains("--uitest-photo-scan") {
+            PhotoScanFixtureScreen()
+        } else if ProcessInfo.processInfo.arguments.contains("--uitest-leftover-stock") {
             LeftoverStockFixtureScreen()
         } else if ProcessInfo.processInfo.arguments.contains("--show-transactions-ui-fixture") {
             ShowTransactionFixtureScreen()

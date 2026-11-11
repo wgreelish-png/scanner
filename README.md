@@ -8,6 +8,12 @@ The website session is remembered in WebKit's persistent store. Settings and sca
 
 ## Scan and confirm
 
+**Photo Scan** is available in scanner Options → Scan Mode, alongside Live Scan.
+Tap **Take Photo** to capture one card, stop the camera and recognize the static
+image using the saved on-device database. Review and add it normally; the camera
+stays off until **Take Another Photo**. The capture-mode preference is remembered.
+See [Photo Scan and phone checks](docs/PhotoScan112.md).
+
 Live scanning uses an edge-to-edge camera with floating controls. Matches use a two-column grid with large full-card artwork (one column at accessibility text sizes). A short consistency check filters early guesses before opening a full-height list of possible matches. Tap the correct match to save it and return to the camera; Discard stays pinned. Tentative names and cached prices never flash over the camera. The camera is no longer confined to a small embedded window.
 
 The app bundles camera capture, recognition JavaScript, worker/module dependencies and scalar/SIMD OpenCV (embedded WASM) in `Resources/ScannerRuntime`. A loopback-only asset server supplies a stable local WebKit origin. The selected game’s database is saved to native Application Support files with atomic writes, independently of WebKit quota/eviction. A complete validated database is reused when the camera reopens; existing valid IndexedDB data migrates without redownloading. Scanner options → Check Database Updates explicitly checks updates; missing/damaged files are repaired, and storage failures are shown. Market pricing uses the public Open API for exact-condition SKU quotes. Open API can reuse previously downloaded exact-SKU prices from up to four recent sets during connectivity failures, with cached/offline labels and original timestamps.

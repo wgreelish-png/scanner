@@ -10,35 +10,55 @@ function deferred() {
   return { promise, resolve, reject };
 }
 function harness({ denyCamera = false, cacheState = 'ok', beforePackReady, acquireCamera, playVideo,
-  cameraConstraintsSupported = false, applyCameraConstraints, cameraSettings } = {}) {
+  cameraConstraintsSupported = false, applyCameraConstraints, cameraSettings, scanPhoto, createPhotoBitmap, videoSize } = {}) {
   const messages = [], elements = [], events = new Map(), windowEvents = new Map(), trackEvents = new Map(), draws = [];
   let overlayDestroyed = 0;
-  const packOptions = [], cameraTracks = [], cameraConstraintCalls = [];
+  const packOptions = [], cameraTracks = [], cameraConstraintCalls = [], photoCalls = [], bitmaps = [], photoDraws = [];
   const timers = new Map(), frames = new Map(); let scheduleID = 0;
-  let captureOptions, scannerOptions, scannerStarts = 0, activeLoops = 0, cameraRequests = 0, stopped = 0, disposed = 0, now = 0;
+  let captureOptions, scannerOptions, scannerStarts = 0, activeLoops = 0, cameraRequests = 0, stopped = 0, disposed = 0, packSets = 0, now = 0;
   const element = tag => {
     const e = { tag, style: {}, children: [], append(...items) { this.children.push(...items); }, setAttribute() {},
-      remove() { this.removed = true; }, async play() { await playVideo?.(); } };
+      remove() { this.removed = true; }, async play() { await playVideo?.(); },
+      videoWidth: videoSize?.[0] ?? 1920, videoHeight: videoSize?.[1] ?? 1080,
+      getContext() { return { drawImage(...args) { photoDraws.push({ args, tracksLive: cameraTracks.some(track => track.readyState === 'live') }); } }; } };
     elements.push(e); return e;
   };
   const body = element('body');
   const document = { body, hidden: false, createElement: element,
     addEventListener(name, fn) { events.set(name, fn); }, removeEventListener(name) { events.delete(name); } };
-  const backend = { setPack() {}, dispose() { disposed++; } };
+  const backend = { setPack() { packSets++; }, dispose() { disposed++; },
+    async scanImage(bitmap, options) {
+      photoCalls.push({ bitmap, options: clean(options), tracksStopped: cameraTracks.every(track => track.readyState === 'ended') });
+      try { return scanPhoto ? await scanPhoto(bitmap, options) : photoResult(); }
+      finally { bitmap.close(); }
+    } };
+
   const modules = {
     'core/pack.js': { async loadPack(game, progress, options) {
       packOptions.push(options);
       if (game !== 'tcgp:3') throw new Error('No downloadable pack is available for this game.');
       progress(1, 1, { downloaded: 0, total: 0, cache: cacheState, cachedHashShards: 1, cachedMetaShards: 1, storage: { persisted: false } });
       await beforePackReady?.();
-      return { game };
+      return { game, refs: Array.from({ length: 8 }, (_, index) => tuple(123 + index)) };
+    } },
+    'app/desk-results.js': { candidatesFrom(pack, result, max) {
+      return (result.mockCands || result.top || [result.best]).slice(0, max).map(row => ({
+        tuple: pack.refs[row.i], ref: pack.refs[row.i]?.[0], confidence: row.confidence ?? result.confidence,
+        printingState: row.printing?.state ?? result.best.printing?.state
+      }));
     } },
     'app/scan-backends.js': { createBackend: async () => backend },
     'core/overlay.js': { createOverlay: () => ({ draw(options) { draws.push(options); }, clear() {}, setSource() {}, destroy() { overlayDestroyed++; } }) },
     'app/quickscan.js': { startQuickScan(options) { scannerStarts++; activeLoops++; scannerOptions = options; let active = true; return () => { if (active) { active = false; activeLoops--; stopped++; } }; } },
     'app/shared.js': { useScope(scope) { assert.equal(scope, 'price'); }, catalogDetail() {} }
   };
-  const sandbox = { URL, console, document, performance: { now: () => now },
+  const sandbox = { URL, console, document,
+    async createImageBitmap(canvas) {
+      if (createPhotoBitmap) await createPhotoBitmap(canvas);
+      const bitmap = { width: canvas.width, height: canvas.height, closed: false, close() { this.closed = true; } };
+      bitmaps.push(bitmap); return bitmap;
+    },
+    performance: { now: () => now },
     setTimeout(fn, delay) { const id = ++scheduleID; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); },
     requestAnimationFrame(fn) { const id = ++scheduleID; frames.set(id, fn); return id; }, cancelAnimationFrame(id) { frames.delete(id); },
     navigator: { mediaDevices: { async getUserMedia(options) {
@@ -68,10 +88,15 @@ function harness({ denyCamera = false, cacheState = 'ok', beforePackReady, acqui
     flushTimers() { const pending = [...timers.values()]; timers.clear(); for (const timer of pending) timer.fn(); },
     flushFrames() { const pending = [...frames.values()]; frames.clear(); for (const frame of pending) frame(); },
     get overlayDestroyed() { return overlayDestroyed; }, advance(ms) { now += ms; },
-    packOptions, cameraTracks, cameraConstraintCalls, get activeLoops() { return activeLoops; }, get scannerOptions() { return scannerOptions; }, get scannerStarts() { return scannerStarts; }, get cameraRequests() { return cameraRequests; }, get captureOptions() { return captureOptions; }, get stopped() { return stopped; }, get disposed() { return disposed; } };
+    packOptions, cameraTracks, cameraConstraintCalls, photoCalls, bitmaps, photoDraws, get activeLoops() { return activeLoops; }, get scannerOptions() { return scannerOptions; }, get scannerStarts() { return scannerStarts; }, get cameraRequests() { return cameraRequests; }, get captureOptions() { return captureOptions; }, get stopped() { return stopped; }, get disposed() { return disposed; }, get packSets() { return packSets; } };
 }
 const tuple = (id = 123, variants = [{ id: 10, label: 'Normal', nm: 1.25, primary: true }, { id: 11, label: 'Holofoil', nm: 2.5 }]) =>
   [`p:${id}`, `Sample ${id}`, '1/10', 'DEMO', 'Demo Set', '', 'https://cdn.tcgtracking.com/test.jpg', variants];
+function photoResult({ accepted = true, score = 96, count = 1, printingState = 'ambiguous' } = {}) {
+  return { cards: count ? [{ result: { accepted, confidence: score, gap: 3,
+    best: { i: 0, d: 7, confidence: score, printing: { state: printingState } },
+    top: Array.from({ length: 7 }, (_, i) => ({ i, confidence: score - i, d: 7 + i })) } }] : [], ms: { total: 44 } };
+}
 function settle(h, view) {
   h.scannerOptions.onShow(view);
   for (let i = 0; i < 2; i++) {
@@ -1170,4 +1195,138 @@ test('cooling or terminal stop during unsupported camera acquisition cannot trig
     assert.equal(h.messages.filter(message => message.event === 'startup_failed').length, 0);
     if (action === 'cooling') h.bridge.stop();
   }
+});
+
+
+const photoStates = h => h.messages.filter(message => message.kind === 'photoState').map(message => message.photoState);
+
+test('photo mode scans one bounded frozen frame with camera stopped and retains a warm backend for the next photo', async () => {
+  const h = harness({ cameraConstraintsSupported: true, videoSize: [4000, 3000] });
+  await h.bridge.install({ nonce: 'photo', game: 'tcgp:3', autoStart: true, captureMode: 'photo' });
+  assert.equal(h.activeLoops, 0); assert.equal(h.scannerStarts, 0); assert.equal(photoStates(h).at(-1), 'framing');
+  assert.equal(await h.bridge.capturePhoto('wrong'), false);
+  assert.equal(await h.bridge.capturePhoto('photo'), true);
+  assert.equal(h.photoDraws[0].tracksLive, true, 'Pixels are copied before capture is stopped');
+  assert.deepEqual(h.photoDraws[0].args.slice(1), [0, 0, 2048, 1536]);
+  assert.equal(h.photoCalls.length, 1); assert.equal(h.photoCalls[0].tracksStopped, true);
+  assert.deepEqual(h.photoCalls[0].options, { maxCards: 1 }); assert.equal(h.bitmaps[0].closed, true);
+  assert.equal(h.activeLoops, 0); assert.equal(h.scannerStarts, 0); assert.equal(h.cameraTracks[0].readyState, 'ended');
+  const result = h.messages.find(message => message.kind === 'scan');
+  assert.equal(result.accepted, true); assert.equal(result.confidence, 96); assert.equal(result.candidates.length, 5);
+  assert.equal(result.candidates[0].requiresPrintingSelection, true);
+  assert.equal(result.candidates[0].printings[1].skuID, '11'); assert.equal(photoStates(h).at(-1), 'ready');
+  const beforeRelease = h.cameraRequests; h.bridge.releaseReview('p:123');
+  assert.equal(h.cameraRequests, beforeRelease); assert.equal(h.activeLoops, 0);
+  assert.equal(await h.bridge.retakePhoto('photo'), true);
+  assert.equal(photoStates(h).at(-1), 'framing'); assert.equal(h.cameraRequests, 2);
+  h.bridge.releaseReview('p:123');
+  assert.equal(photoStates(h).at(-1), 'framing', 'A late release of the previous review cannot change a new framing phase');
+  assert.equal(h.packOptions.length, 1); assert.equal(h.disposed, 0); assert.equal(h.packSets, 1); assert.equal(h.activeLoops, 0);
+  assert.equal(await h.bridge.capturePhoto('photo'), true);
+  assert.equal(h.messages.filter(message => message.kind === 'scan').length, 2);
+  assert.ok(h.messages.filter(message => message.kind === 'hide').length >= 2, 'Every explicit photo begins a fresh recognition episode');
+  h.bridge.stop();
+});
+
+test('a missing or weak photo result leaves capture off and offers a retake without fabricating confidence', async () => {
+  for (const result of [photoResult({ count: 0 }), photoResult({ accepted: false, score: 49 })]) {
+    const h = harness({ scanPhoto: async () => result });
+    await h.bridge.install({ nonce: 'no-photo-match', game: 'tcgp:3', autoStart: true, captureMode: 'photo' });
+    assert.equal(await h.bridge.capturePhoto('no-photo-match'), true);
+    assert.equal(photoStates(h).at(-1), 'noMatch'); assert.equal(h.activeLoops, 0);
+    assert.equal(h.messages.some(message => message.kind === 'scan'), false); assert.equal(h.cameraRequests, 1);
+    h.bridge.releaseReview(); await finishCameraWork(); assert.equal(h.cameraRequests, 1);
+    h.bridge.stop();
+  }
+  const h = harness({ scanPhoto: async () => photoResult({ accepted: false, score: 64 }) });
+  await h.bridge.install({ nonce: 'guess-photo', game: 'tcgp:3', autoStart: true, captureMode: 'photo' });
+  await h.bridge.capturePhoto('guess-photo');
+  const guess = h.messages.find(message => message.kind === 'scan');
+  assert.equal(guess.accepted, false); assert.equal(guess.confidence, 64);
+  h.bridge.stop();
+});
+
+test('manual search cancels an in-flight photo, rejects double capture and does not restart capture behind its result', async () => {
+  const gate = deferred();
+  const h = harness({ scanPhoto: async () => { await gate.promise; return photoResult(); } });
+  await h.bridge.install({ nonce: 'photo-manual', game: 'tcgp:3', autoStart: true, captureMode: 'photo' });
+  const capture = h.bridge.capturePhoto('photo-manual'); await finishCameraWork();
+  assert.equal(photoStates(h).at(-1), 'processing'); assert.equal(h.photoCalls.length, 1);
+  assert.equal(await h.bridge.capturePhoto('photo-manual'), false);
+  assert.equal(await h.bridge.retakePhoto('photo-manual'), false);
+  assert.equal(h.bridge.suspendForManualSearch('photo-manual'), true);
+  assert.equal(h.disposed, 1, 'An in-flight image worker is retired when manual entry cancels it');
+  gate.resolve(); assert.equal(await capture, false);
+  assert.equal(h.messages.some(message => message.kind === 'scan'), false); assert.equal(h.bitmaps[0].closed, true);
+  await h.bridge.resumeAfterManualSearch('photo-manual');
+  assert.equal(h.cameraRequests, 1); assert.equal(photoStates(h).at(-1), 'failed');
+  assert.equal(await h.bridge.retakePhoto('photo-manual'), true); assert.equal(h.cameraRequests, 2);
+  assert.equal(h.packOptions.length, 1); assert.equal(h.packSets, 2, 'Only the replacement backend receives a pack copy');
+  h.bridge.stop();
+});
+
+test('manual entry while framing stops photo capture and restores only its framing preview using the same database', async () => {
+  const h = harness();
+  await h.bridge.install({ nonce: 'photo-frame', game: 'tcgp:3', autoStart: true, captureMode: 'photo' });
+  h.bridge.suspendForManualSearch('photo-frame');
+  assert.equal(h.cameraTracks[0].readyState, 'ended'); assert.equal(h.activeLoops, 0);
+  await h.bridge.resumeAfterManualSearch('photo-frame');
+  assert.equal(h.cameraRequests, 2); assert.equal(photoStates(h).at(-1), 'framing'); assert.equal(h.packOptions.length, 1);
+  await h.bridge.capturePhoto('photo-frame'); h.bridge.suspendForManualSearch('photo-frame');
+  await h.bridge.resumeAfterManualSearch('photo-frame');
+  assert.equal(h.cameraRequests, 2); assert.equal(photoStates(h).at(-1), 'ready');
+  assert.equal(h.disposed, 0, 'An already-finished photo keeps its warm backend during manual entry'); h.bridge.stop();
+});
+
+test('switching mode or disposing during bitmap creation closes the abandoned image without sending it to recognition', async () => {
+  for (const action of ['live', 'stop']) {
+    const gate = deferred(); const h = harness({ createPhotoBitmap: async () => { await gate.promise; } });
+    await h.bridge.install({ nonce: 'photo-bitmap', game: 'tcgp:3', autoStart: true, captureMode: 'photo' });
+    const capture = h.bridge.capturePhoto('photo-bitmap'); await finishCameraWork();
+    if (action === 'live') h.bridge.setCaptureMode('live', 'photo-bitmap'); else h.bridge.stop();
+    const scans = h.messages.filter(message => message.kind === 'scan').length;
+    gate.resolve(); assert.equal(await capture, false); await finishCameraWork();
+    assert.equal(h.bitmaps[0].closed, true); assert.equal(h.photoCalls.length, 0);
+    assert.equal(h.messages.filter(message => message.kind === 'scan').length, scans);
+    if (action === 'live') { assert.equal(h.activeLoops, 1); assert.equal(h.packOptions.length, 1); h.bridge.stop(); }
+  }
+});
+
+test('critical heat and background cancel an in-flight still and cannot auto-restart its camera on recovery', async () => {
+  for (const action of ['cooling', 'background']) {
+    const gate = deferred(); const h = harness({ scanPhoto: async () => { await gate.promise; return photoResult(); } });
+    await h.bridge.install({ nonce: 'photo-pressure', game: 'tcgp:3', autoStart: true, captureMode: 'photo' });
+    const capture = h.bridge.capturePhoto('photo-pressure'); await finishCameraWork();
+    h.bridge.setResourceMode(action === 'cooling' ? 'cooling' : 'normal', 'photo-pressure', action !== 'background');
+    assert.equal(h.disposed, 1, 'Critical heat or backgrounding retires active photo processing');
+    gate.resolve(); assert.equal(await capture, false);
+    h.bridge.setResourceMode('reduced', 'photo-pressure', true); await finishCameraWork();
+    assert.equal(h.messages.some(message => message.kind === 'scan'), false); assert.equal(h.cameraRequests, 1);
+    assert.equal(photoStates(h).at(-1), 'failed');
+    assert.equal(await h.bridge.retakePhoto('photo-pressure'), true); assert.equal(h.cameraRequests, 2);
+    assert.equal(h.cameraTracks[1].fps, 10); assert.equal(h.activeLoops, 0); h.bridge.stop();
+  }
+});
+
+test('a restored photo result initializes its backend without camera acquisition until explicit retake', async () => {
+  for (const state of ['ready', 'noMatch', 'failed']) {
+    const h = harness();
+    await h.bridge.install({ nonce: 'photo-restored', game: 'tcgp:3', autoStart: true, captureMode: 'photo', photoReviewState: state });
+    assert.equal(h.cameraRequests, 0); assert.equal(photoStates(h).at(-1), state); assert.equal(h.activeLoops, 0);
+    h.bridge.releaseReview('p:123'); await finishCameraWork(); assert.equal(h.cameraRequests, 0);
+    assert.equal(await h.bridge.retakePhoto('photo-restored'), true);
+    assert.equal(h.cameraRequests, 1); assert.equal(h.packOptions.length, 1); assert.equal(h.activeLoops, 0); h.bridge.stop();
+  }
+});
+
+test('photo errors are fixed messages, release bounded bitmaps and leave a retryable camera-off state', async () => {
+  const h = harness({ scanPhoto: async () => { throw new Error('PRIVATE_IMAGE_CONTENT'); } });
+  await h.bridge.install({ nonce: 'photo-failure', game: 'tcgp:3', autoStart: true, captureMode: 'photo' });
+  assert.equal(await h.bridge.capturePhoto('photo-failure'), true);
+  assert.equal(photoStates(h).at(-1), 'failed'); assert.equal(h.bitmaps[0].closed, true);
+  assert.equal(h.cameraTracks[0].readyState, 'ended'); assert.equal(JSON.stringify(h.messages).includes('PRIVATE_IMAGE_CONTENT'), false);
+  assert.equal(h.bridge.setCaptureMode('bad', 'photo-failure'), false);
+  assert.equal(h.bridge.setCaptureMode('live', 'stale'), false);
+  assert.equal(await h.bridge.retakePhoto('photo-failure'), true);
+  assert.equal(h.packOptions.length, 1); assert.equal(h.disposed, 0); h.bridge.stop();
 });
