@@ -103,7 +103,7 @@ app's implemented lifetimes. Public OpenAPI requests use no Beta credentials.
 | `GET /v1/meta` | 5 minutes | Actual response reviewed: version 1.1, catalog/pricing timestamps, counts, file types and last-export statistics. |
 | `GET /v1/categories` | 7 days | Actual public response reviewed: `categories` array containing 64 entries with `id`, `name`, `display_name`, counts and relative `api_url`. |
 | `GET /v1/{cat}/sets` | 7 days | Actual category 3 response reviewed: `sets` array with 288 unique positive `id` values, names, modification timestamps, counts and per-format relative URLs. |
-| `GET /v1/{cat}/sets/{set}` | 7 days | Not yet captured/verified. |
+| `GET /v1/{cat}/sets/{set}` | 7 days | Actual 3/23237 response reviewed: 249 products in a `products` array, including card and sealed-product examples, with set metadata and relative per-format URLs. |
 | `GET /v1/{cat}/sets/{set}/cards` | 7 days | Documented/tooling support; no confirmed live response retained here. |
 | `GET /v1/{cat}/sets/{set}/sealed` | 7 days | Not yet captured/verified. |
 | `GET /v1/{cat}/sets/{set}/product_detail` | 7 days | Not yet captured/verified. |
@@ -134,6 +134,17 @@ end in `/product-detail` (hyphen), while the endpoint screenshot uses
 `/product_detail` (underscore). Verify the returned route before choosing an
 alias. Keep `products_modified`, `pricing_modified` and `skus_modified` separate;
 the plain `modified_on` string has no explicit time-zone offset.
+
+The full-set response uses `set_id`, `set_name`, `set_abbr`, `set_released`,
+`product_count`, `data_modified`, `file_generated` and a `products` array. Its
+products use `id`, `name`, `clean_name`, nullable `number`/`rarity`, `ext_data`,
+image and marketplace links/IDs, plus optional `cardtrader` mappings. No explicit
+top-level per-product card/sealed flag was present in this sample; use the
+dedicated cards/sealed responses instead of guessing from names or null numbers.
+Nested CardTrader game/category IDs belong to that marketplace, not the outer
+TCGTracking category namespace. Catalog language/finish availability alone does
+not establish price availability. Static `data_modified`/`file_generated` times
+are separate from pricing/SKU freshness.
 
 Documentation and mocked tests do not prove live contracts. Continue missing
 response checks one at a time with HTTP status. These notes change no inventory,
