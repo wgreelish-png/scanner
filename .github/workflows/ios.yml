@@ -100,7 +100,6 @@ jobs:
     env:
       IMAGE_SESSION: ${{ inputs.image_session }}
       IMAGE_PARTS: ${{ inputs.image_parts }}
-      IMAGE_WORK_DIRECTORY: ${{ runner.temp }}/scanner-text-image
     steps:
       - uses: actions/checkout@v4
         with:
@@ -108,6 +107,8 @@ jobs:
       - name: Prepare private image receiver
         shell: bash
         run: |
+          export IMAGE_WORK_DIRECTORY="$RUNNER_TEMP/scanner-text-image"
+          echo "IMAGE_WORK_DIRECTORY=$IMAGE_WORK_DIRECTORY" >> "$GITHUB_ENV"
           python3 -m venv "$RUNNER_TEMP/image-test-python"
           "$RUNNER_TEMP/image-test-python/bin/python" -m pip install --disable-pip-version-check --quiet cryptography
           echo "IMAGE_TEST_PYTHON=$RUNNER_TEMP/image-test-python/bin/python" >> "$GITHUB_ENV"
@@ -147,13 +148,15 @@ jobs:
       IMAGE_PART: ${{ inputs.image_part }}
       IMAGE_PARTS: ${{ inputs.image_parts }}
       IMAGE_PAYLOAD: ${{ inputs.image_payload }}
-      IMAGE_WORK_DIRECTORY: ${{ runner.temp }}/scanner-text-image
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - name: Store encrypted payload fragment
-        run: python3 scripts/scanner_text_image_transfer.py part
+        run: |
+          export IMAGE_WORK_DIRECTORY="$RUNNER_TEMP/scanner-text-image"
+          echo "IMAGE_WORK_DIRECTORY=$IMAGE_WORK_DIRECTORY" >> "$GITHUB_ENV"
+          python3 scripts/scanner_text_image_transfer.py part
       - uses: actions/upload-artifact@v4
         with:
           name: scanner-image-part-${{ inputs.image_session }}-${{ inputs.image_part }}
