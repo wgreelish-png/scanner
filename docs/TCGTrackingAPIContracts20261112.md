@@ -101,7 +101,7 @@ app's implemented lifetimes. Public OpenAPI requests use no Beta credentials.
 | Method and route | Provider cache | Live response evidence |
 | --- | --- | --- |
 | `GET /v1/meta` | 5 minutes | Actual response reviewed: version 1.1, catalog/pricing timestamps, counts, file types and last-export statistics. |
-| `GET /v1/categories` | 7 days | Not verified; Beta categories are a different API. |
+| `GET /v1/categories` | 7 days | Actual public response reviewed: `categories` array containing 64 entries with `id`, `name`, `display_name`, counts and relative `api_url`. |
 | `GET /v1/{cat}/sets` | 7 days | Documented/tooling support; no confirmed live response retained here. |
 | `GET /v1/{cat}/sets/{set}` | 7 days | Not yet captured/verified. |
 | `GET /v1/{cat}/sets/{set}/cards` | 7 days | Documented/tooling support; no confirmed live response retained here. |
@@ -118,6 +118,12 @@ The reviewed public metadata snapshot reports 64 categories, 3,943 sets and
 exact-SKU observation timestamps. `last_export_stats` describes one export run;
 zero updated/exported counts do not establish an empty catalog or individual
 SKU freshness.
+
+The public category array identifies Pokémon as `id: 3`, with 218 sets and
+33,099 products in the reviewed snapshot. Its `api_url` is `/v1/3/sets`.
+Magic, Yu-Gi-Oh! and Pokémon Japan use IDs 1, 2 and 85. Preserve numeric IDs;
+the public `id`/`name` fields differ from the Beta category response's field
+names. Resolve relative API paths against the fixed public origin.
 
 Documentation and mocked tests do not prove live contracts. Continue missing
 response checks one at a time with HTTP status. These notes change no inventory,
