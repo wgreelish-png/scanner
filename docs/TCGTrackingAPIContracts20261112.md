@@ -108,7 +108,7 @@ app's implemented lifetimes. Public OpenAPI requests use no Beta credentials.
 | `GET /v1/{cat}/sets/{set}/sealed` | 7 days | Actual 3/23237 response reviewed: `product_type: "sealed"`, 34 products, exactly the full-set entries absent from the cards-only response. |
 | `GET /v1/{cat}/sets/{set}/product-detail` | 7 days | Actual returned hyphenated route 3/23237 verified: `success: true`, empty `errors`, `totalItems: 249` and matching `results` IDs. Screenshot's underscore alias remains unverified. |
 | `GET /v1/{cat}/sets/{set}/pricing` | 1 day | Actual 3/23237 response reviewed: `set_id`, offset-bearing `updated`, and 249 product entries in `prices[productID].tcg[printing]` with `low`/`market`. |
-| `GET /v1/{cat}/sets/{set}/skus` | 1 day | Actual 3/22872 response reviewed; exact-SKU market matched Beta. |
+| `GET /v1/{cat}/sets/{set}/skus` | 1 day | Actual 3/22872 and 3/23237 responses reviewed. The latter contains 1,874 unique SKUs across all 249 full-set product IDs; earlier exact promo SKU matched Beta's market reference. |
 | `GET /v1/products/{product_id}` | 7 days | Earlier real 512035 response: `Tests/Fixtures/OpenAPICharmanderProduct.json`. |
 | `POST /v1/scan` | No store | Not tested; need the upload/body schema rather than guessing fields. |
 | `GET /v1/{cat}/search?q={query}` | 5 minutes | Not yet verified; documented as set-name/abbreviation search. |
@@ -173,6 +173,18 @@ identity, so these values cannot substitute for exact-condition/language SKU
 quotes. Its Pokémon sample has only `tcg` source blocks; the documented Magic
 `mp` extension remains an assumed provider contract rather than a reviewed live
 response. Preserve product-price and exact-SKU price provenance separately.
+
+The 151 SKU response is a product-ID to SKU-ID object map with `cnd`, `var`,
+`var_a`, `vid`, `lng`, `mkt`, `low`, `hi` and `cnt`. Its snapshot contains only
+`EN`, five condition codes (NM/LP/MP/HP/DMG), and Normal/Reverse Holofoil/Holofoil
+printings. There are 501 null `mkt` values and no zero markets; retain unavailable
+prices rather than substituting zero or a different condition. Preserve reported
+prices even when different conditions are not monotonically priced. Public
+sealed-product examples use NM condition, so do not invent an Unopened identity.
+Do not interpret `cnt` as sold volume or owned stock without a documented
+definition. The SKU `updated` timestamp is November 11, while the separately
+reviewed product-pricing `updated` is November 12: those payloads have independent
+freshness, so a price difference cannot be attributed solely to identity/finish.
 
 Documentation and mocked tests do not prove live contracts. Continue missing
 response checks one at a time with HTTP status. These notes change no inventory,
