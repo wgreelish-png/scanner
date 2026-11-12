@@ -794,9 +794,28 @@ enum ScannerResourceMode: String, Equatable {
         textRequestID = UUID(); textTask?.cancel(); textTask = nil; textDeadline?.cancel(); textDeadline = nil
         textRecognitionBusy = false
         if resume && wasBusy && active && bridgeInstalled && !documentFailed {
+            let cancellationID = textRequestID, requestNonce = nonce
+            textDeadline = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                guard let self, self.active, self.nonce == requestNonce, self.textRequestID == cancellationID else { return }
+                self.retireUnreleasedTextCapture()
+            }
             webView.callAsyncJavaScript("return window.CardShowBridge?.finishTextRecognition(expectedNonce, operationID, false);",
-                arguments: ["expectedNonce": nonce, "operationID": previousID.uuidString], in: nil, in: .page) { _ in }
+                arguments: ["expectedNonce": requestNonce, "operationID": previousID.uuidString], in: nil, in: .page) { [weak self] result in
+                    guard let self, self.active, self.nonce == requestNonce, self.textRequestID == cancellationID else { return }
+                    self.textDeadline?.cancel(); self.textDeadline = nil
+                    // False also means the bridge already retired this owner.
+                    guard case .success(let value) = result, value is Bool else {
+                        self.retireUnreleasedTextCapture(); return
+                    }
+                }
         }
+    }
+
+    private func retireUnreleasedTextCapture() {
+        webView.setCameraCaptureState(.none, completionHandler: nil)
+        stop(); documentFailed = true; photoDocumentFailed()
+        status = "Scanner paused. Tap Retry Live Scanner."
     }
 
     @discardableResult func setCaptureMode(_ mode: ScannerCaptureMode) -> Bool {
@@ -941,7 +960,7 @@ enum ScannerResourceMode: String, Equatable {
         }
     }
     func refreshDatabase() {
-        guard active else { return }
+        guard active, !textRecognitionBusy else { return }
         manualSearchSuggested = false
         status = "Checking for database updates…"
         webView.evaluateJavaScript("window.CardShowBridge?.refreshDatabase(); null;", completionHandler: nil)
