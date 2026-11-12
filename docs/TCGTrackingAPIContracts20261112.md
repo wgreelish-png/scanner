@@ -102,7 +102,7 @@ app's implemented lifetimes. Public OpenAPI requests use no Beta credentials.
 | --- | --- | --- |
 | `GET /v1/meta` | 5 minutes | Actual response reviewed: version 1.1, catalog/pricing timestamps, counts, file types and last-export statistics. |
 | `GET /v1/categories` | 7 days | Actual public response reviewed: `categories` array containing 64 entries with `id`, `name`, `display_name`, counts and relative `api_url`. |
-| `GET /v1/{cat}/sets` | 7 days | Documented/tooling support; no confirmed live response retained here. |
+| `GET /v1/{cat}/sets` | 7 days | Actual category 3 response reviewed: `sets` array with 288 unique positive `id` values, names, modification timestamps, counts and per-format relative URLs. |
 | `GET /v1/{cat}/sets/{set}` | 7 days | Not yet captured/verified. |
 | `GET /v1/{cat}/sets/{set}/cards` | 7 days | Documented/tooling support; no confirmed live response retained here. |
 | `GET /v1/{cat}/sets/{set}/sealed` | 7 days | Not yet captured/verified. |
@@ -124,6 +124,16 @@ The public category array identifies Pokémon as `id: 3`, with 218 sets and
 Magic, Yu-Gi-Oh! and Pokémon Japan use IDs 1, 2 and 85. Preserve numeric IDs;
 the public `id`/`name` fields differ from the Beta category response's field
 names. Resolve relative API paths against the fixed public origin.
+
+The actual public Pokémon set list contains 288 unique entries, although the
+category summary reports 218 sets. Its summed product count is 33,099, matching
+the category's product count. Preserve the count discrepancy without inferring
+its cause; enumerate actual valid set IDs rather than treating the summary
+count as an exact completion target. All reviewed `product_detail_url` values
+end in `/product-detail` (hyphen), while the endpoint screenshot uses
+`/product_detail` (underscore). Verify the returned route before choosing an
+alias. Keep `products_modified`, `pricing_modified` and `skus_modified` separate;
+the plain `modified_on` string has no explicit time-zone offset.
 
 Documentation and mocked tests do not prove live contracts. Continue missing
 response checks one at a time with HTTP status. These notes change no inventory,
