@@ -104,7 +104,7 @@ app's implemented lifetimes. Public OpenAPI requests use no Beta credentials.
 | `GET /v1/categories` | 7 days | Actual public response reviewed: `categories` array containing 64 entries with `id`, `name`, `display_name`, counts and relative `api_url`. |
 | `GET /v1/{cat}/sets` | 7 days | Actual category 3 response reviewed: `sets` array with 288 unique positive `id` values, names, modification timestamps, counts and per-format relative URLs. |
 | `GET /v1/{cat}/sets/{set}` | 7 days | Actual 3/23237 response reviewed: 249 products in a `products` array, including card and sealed-product examples, with set metadata and relative per-format URLs. |
-| `GET /v1/{cat}/sets/{set}/cards` | 7 days | Documented/tooling support; no confirmed live response retained here. |
+| `GET /v1/{cat}/sets/{set}/cards` | 7 days | Actual 3/23237 response reviewed: `product_type: "cards"`, 215 unique products, all present in the reviewed full set. |
 | `GET /v1/{cat}/sets/{set}/sealed` | 7 days | Not yet captured/verified. |
 | `GET /v1/{cat}/sets/{set}/product_detail` | 7 days | Not yet captured/verified. |
 | `GET /v1/{cat}/sets/{set}/pricing` | 1 day | Not yet captured/verified; distinct from exact-SKU pricing. |
@@ -145,6 +145,14 @@ Nested CardTrader game/category IDs belong to that marketplace, not the outer
 TCGTracking category namespace. Catalog language/finish availability alone does
 not establish price availability. Static `data_modified`/`file_generated` times
 are separate from pricing/SKU freshness.
+
+The reviewed cards-only response has the same product field vocabulary as the
+full-set response, including collector `number` and `rarity`. Its 215 IDs form
+a strict subset of the full set's 249 IDs. Confirm the remaining 34 products
+against the sealed endpoint rather than inferring classification. The cards
+response does not include `product_detail_url`; cross-format URLs must be
+optional. Its static modification/generation timestamps differ from the
+full-set response and do not establish current pricing.
 
 Documentation and mocked tests do not prove live contracts. Continue missing
 response checks one at a time with HTTP status. These notes change no inventory,
