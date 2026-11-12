@@ -110,8 +110,8 @@ app's implemented lifetimes. Public OpenAPI requests use no Beta credentials.
 | `GET /v1/{cat}/sets/{set}/pricing` | 1 day | Actual 3/23237 response reviewed: `set_id`, offset-bearing `updated`, and 249 product entries in `prices[productID].tcg[printing]` with `low`/`market`. |
 | `GET /v1/{cat}/sets/{set}/skus` | 1 day | Actual 3/22872 and 3/23237 responses reviewed. The latter contains 1,874 unique SKUs across all 249 full-set product IDs; earlier exact promo SKU matched Beta's market reference. |
 | `GET /v1/products/{product_id}` | 7 days | Earlier real 512035 fixture plus current 517045 response reviewed: matching root/nested product identity, set/category mapping, five SKU rows, dimensions and sync status. |
-| `POST /v1/scan` | No store | Not tested; need the upload/body schema rather than guessing fields. |
-| `GET /v1/{cat}/search?q={query}` | 5 minutes | Not yet verified; documented as set-name/abbreviation search. |
+| `POST /v1/scan` | No store | Request contract verified from the provider's Scan documentation; no actual image-response sample yet. JSON or multipart image upload, not hashes. |
+| `GET /v1/{cat}/search?q={query}` | 5 minutes | Actual category 3 query `151` reviewed: `query`, `category_id`, `count: 1`, and one matching set object (23237) using discovery fields/URLs. |
 
 The reviewed public metadata snapshot reports 64 categories, 3,943 sets and
 493,861 products. `last_updated` and `pricing_updated` are distinct fields, not
@@ -199,6 +199,26 @@ reports 294 with a November 11 update. Do not replace newer exact-SKU set prices
 with these older product-response prices. The app's existing product lookup
 recovers catalog mapping only; preserve that separation. Nullable Manapool,
 presale and cross-marketplace mapping fields remain optional.
+
+## Public image-scan request contract
+
+Provider source reviewed: `https://openapi.tcgtracking.com/?tab=scan`. The route
+is unauthenticated `POST /v1/scan`, with no-store caching and a maximum decoded
+image size of 100 KiB. It accepts JSON (`game_id`, base64/data-URI `image`,
+optional numeric `set_ids`, `limit` 5 or 10), or multipart with text `game_id`,
+repeated `set_ids[]`, `limit`, and file field `image`. `game_id` uses the public
+category IDs, including Pokémon 3. The documentation also lists `set_id` as an
+alias. Leave set filtering absent for a full-game search.
+
+The image must be an upright, mostly full-card crop; the service performs no
+border detection, OCR or segmentation. Client hashes are rejected. Matching
+returns product IDs and scores, not exact SKU/printing/language/condition.
+The documented envelope has `success`, `game_id`, `set_ids`, `cropped_image`,
+`results[{product_id, score}]` and `candidates_scanned`. Treat echoed image data
+as transient and exclude it from diagnostics. Documented errors are 400 invalid
+input/hashes, 413 oversized decoded image, 422 unparseable image and 503 database
+or selected-scope hash unavailability. A live response is still pending; request
+documentation alone does not establish recognition accuracy or live coverage.
 
 Documentation and mocked tests do not prove live contracts. Continue missing
 response checks one at a time with HTTP status. These notes change no inventory,
