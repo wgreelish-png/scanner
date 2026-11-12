@@ -100,7 +100,7 @@ app's implemented lifetimes. Public OpenAPI requests use no Beta credentials.
 
 | Method and route | Provider cache | Live response evidence |
 | --- | --- | --- |
-| `GET /v1/meta` | 5 minutes | Not yet captured/verified in this review. |
+| `GET /v1/meta` | 5 minutes | Actual response reviewed: version 1.1, catalog/pricing timestamps, counts, file types and last-export statistics. |
 | `GET /v1/categories` | 7 days | Not verified; Beta categories are a different API. |
 | `GET /v1/{cat}/sets` | 7 days | Documented/tooling support; no confirmed live response retained here. |
 | `GET /v1/{cat}/sets/{set}` | 7 days | Not yet captured/verified. |
@@ -112,6 +112,12 @@ app's implemented lifetimes. Public OpenAPI requests use no Beta credentials.
 | `GET /v1/products/{product_id}` | 7 days | Earlier real 512035 response: `Tests/Fixtures/OpenAPICharmanderProduct.json`. |
 | `POST /v1/scan` | No store | Not tested; need the upload/body schema rather than guessing fields. |
 | `GET /v1/{cat}/search?q={query}` | 5 minutes | Not yet verified; documented as set-name/abbreviation search. |
+
+The reviewed public metadata snapshot reports 64 categories, 3,943 sets and
+493,861 products. `last_updated` and `pricing_updated` are distinct fields, not
+exact-SKU observation timestamps. `last_export_stats` describes one export run;
+zero updated/exported counts do not establish an empty catalog or individual
+SKU freshness.
 
 Documentation and mocked tests do not prove live contracts. Continue missing
 response checks one at a time with HTTP status. These notes change no inventory,
