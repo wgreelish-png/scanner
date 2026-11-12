@@ -109,7 +109,7 @@ app's implemented lifetimes. Public OpenAPI requests use no Beta credentials.
 | `GET /v1/{cat}/sets/{set}/product-detail` | 7 days | Actual returned hyphenated route 3/23237 verified: `success: true`, empty `errors`, `totalItems: 249` and matching `results` IDs. Screenshot's underscore alias remains unverified. |
 | `GET /v1/{cat}/sets/{set}/pricing` | 1 day | Actual 3/23237 response reviewed: `set_id`, offset-bearing `updated`, and 249 product entries in `prices[productID].tcg[printing]` with `low`/`market`. |
 | `GET /v1/{cat}/sets/{set}/skus` | 1 day | Actual 3/22872 and 3/23237 responses reviewed. The latter contains 1,874 unique SKUs across all 249 full-set product IDs; earlier exact promo SKU matched Beta's market reference. |
-| `GET /v1/products/{product_id}` | 7 days | Earlier real 512035 response: `Tests/Fixtures/OpenAPICharmanderProduct.json`. |
+| `GET /v1/products/{product_id}` | 7 days | Earlier real 512035 fixture plus current 517045 response reviewed: matching root/nested product identity, set/category mapping, five SKU rows, dimensions and sync status. |
 | `POST /v1/scan` | No store | Not tested; need the upload/body schema rather than guessing fields. |
 | `GET /v1/{cat}/search?q={query}` | 5 minutes | Not yet verified; documented as set-name/abbreviation search. |
 
@@ -185,6 +185,20 @@ Do not interpret `cnt` as sold volume or owned stock without a documented
 definition. The SKU `updated` timestamp is November 11, while the separately
 reviewed product-pricing `updated` is November 12: those payloads have independent
 freshness, so a price difference cannot be attributed solely to identity/finish.
+
+The current single-product response uses `success`, `product_id`, `product`,
+`prices`, a `skus` array, `sku_count`, `sku_dimensions`, `sku_sync_status` and
+CardTrader mappings. Root/nested product IDs match 517045, category 3 and group
+23237. Detailed SKU rows use full condition/variant/language names and numeric
+IDs, decimal-string prices, and separate price/checked/sync timestamps. These
+are not the compact fields/object maps used by set-level `/skus`.
+
+This sample demonstrates stale per-product price data: exact SKU 7436747 reports
+306.49 with an October 22 price timestamp, while the set-level SKU snapshot
+reports 294 with a November 11 update. Do not replace newer exact-SKU set prices
+with these older product-response prices. The app's existing product lookup
+recovers catalog mapping only; preserve that separation. Nullable Manapool,
+presale and cross-marketplace mapping fields remain optional.
 
 Documentation and mocked tests do not prove live contracts. Continue missing
 response checks one at a time with HTTP status. These notes change no inventory,
