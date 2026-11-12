@@ -21,7 +21,8 @@ def expression(source, values):
 def context(event="workflow_dispatch", job="native", test="all", branch="codex/2026-11-10", repository="owner/scanner"):
     return {"github.event_name": event, "inputs.job_scope": job, "inputs.test_scope": test,
             "github.workflow": "iOS workflow checks", "github.event.pull_request.head.repo.full_name": "",
-            "github.repository": repository, "github.head_ref": "", "github.ref_name": branch}
+            "github.repository": repository, "github.head_ref": "", "github.ref_name": branch,
+            "inputs.image_session": "", "inputs.image_part": ""}
 
 
 def selected_jobs(**kwargs):
@@ -40,7 +41,7 @@ class CIWorkflowTests(unittest.TestCase):
         self.assertIn("        default: native\n", inputs)
         for event in ("push", "pull_request"):
             self.assertEqual(selected_jobs(event=event, job="", test=""), {"tooling", "native"})
-        self.assertEqual(selected_jobs(job="all"), set(JOBS))
+        self.assertEqual(selected_jobs(job="all"), set(JOBS) - {"text_image_start", "text_image_part"})
         self.assertEqual(selected_jobs(job="tooling"), {"tooling"})
         self.assertEqual(selected_jobs(job="log_review"), {"tooling", "native", "ui"})
         self.assertEqual(selected_jobs(job="show_polish"), {"tooling", "native", "ui"})
@@ -63,6 +64,23 @@ class CIWorkflowTests(unittest.TestCase):
                 scope = re.search(r"(?m)^          SCANNER_TEST_SCOPE: \$\{\{ (.+) \}\}$", JOBS["native"])
                 self.assertIsNotNone(scope)
                 self.assertEqual(expression(scope.group(1), values), "text_assist")
+
+    def test_private_image_scopes_run_only_the_requested_transfer_phase(self):
+        self.assertEqual(selected_jobs(job="text_image_start"), {"text_image_start"})
+        self.assertEqual(selected_jobs(job="text_image_part"), {"text_image_part"})
+        for event in ("push", "pull_request"):
+            self.assertEqual(selected_jobs(event=event, job="", test=""), {"tooling", "native"})
+        receiver = JOBS["text_image_start"]
+        self.assertIn("scripts/scanner_text_image_transfer.py prepare", receiver)
+        self.assertIn("scripts/scanner_text_image_transfer.py receive", receiver)
+        self.assertIn("scripts/run_scanner_text_image_test.py", receiver)
+        self.assertIn("actions: read", receiver)
+        self.assertIn('run: rm -rf -- "$IMAGE_WORK_DIRECTORY"', receiver)
+        self.assertIn("/public.pem", receiver)
+        self.assertIn("/report.json", receiver)
+        self.assertNotIn("path: ${{ env.IMAGE_WORK_DIRECTORY }}/image.jpg", receiver)
+        self.assertNotIn("path: ${{ env.IMAGE_WORK_DIRECTORY }}/private.pem", receiver)
+        self.assertIn("IMAGE_PAYLOAD: ${{ inputs.image_payload }}", JOBS["text_image_part"])
 
     def test_scanner_polish_forces_focused_native_and_manual_ui_without_other_jobs(self):
         self.assertIn("          - scanner_polish\n", WORKFLOW.split("      test_scope:\n", 1)[0])
@@ -158,6 +176,12 @@ class CIWorkflowTests(unittest.TestCase):
         automatic["github.head_ref"] = regular["github.ref_name"]
         automatic["github.ref_name"] = "12/merge"
         self.assertEqual(key(regular), key(automatic))
+        first = context(job="text_image_part")
+        first["inputs.image_session"] = "session-a"
+        first["inputs.image_part"] = "0"
+        second = first.copy()
+        second["inputs.image_part"] = "1"
+        self.assertNotEqual(key(first), key(second), "Payload parts must not cancel each other")
 
     def test_diagnostic_and_release_commands_are_bounded(self):
         self.assertIn("testBatchSearchCopiesPreviewAndLeavingUnprintedQueueClearsBeforeRelaunch", JOBS["ui"])
