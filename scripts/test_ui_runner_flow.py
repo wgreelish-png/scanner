@@ -274,6 +274,34 @@ class UIRunnerFlowTests(unittest.TestCase):
         for target in navigation_targets:
             self.assertRegex(navigation_source, r"\bfunc\s+" + target.rsplit("/", 1)[1] + r"\s*\(")
 
+    def test_text_assist_keeps_exact_native_selection_without_ui_or_release(self):
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/ios.yml").read_text()
+        jobs = dict(re.findall(r"(?ms)^  (\w+):\n(.*?)(?=^  \w+:\n|\Z)", workflow.split("\njobs:\n", 1)[1]))
+        targets = tuple("CardShowScannerTests/" + name for name in (
+            "ScannerTextRecognitionTests", "ScannerTextProviderPreferenceTests", "ScannerTextRecognitionStateTests",
+            "ScannerTextRecognitionFlowTests", "PhotoScanStateTests",
+            "PhotoScanProviderPreferenceTests", "ManualCatalogFilterTests", "ScannerManualSearchLifecycleTests",
+            "ScannerDiagnosticsTests"))
+        for name, block in jobs.items():
+            self.assertEqual("inputs.job_scope == 'text_assist'" in block.splitlines()[0], name == "native")
+        options = workflow.split("      test_scope:\n", 1)[1].split("\n# PRs", 1)[0]
+        self.assertNotIn("          - text_assist\n", options)
+        branch = re.search(r'elif \[ "\$SCANNER_TEST_SCOPE" = text_assist \]; then\n'
+                           r'(.*?)(?=\n          (?:elif|else|fi)\b)', jobs["native"], re.DOTALL)
+        self.assertIsNotNone(branch)
+        self.assertEqual(branch.group(1).replace("\\\n", " ").split(),
+                         ["bash", "scripts/run_ios_tests.sh", *targets])
+        result, commands, _ = self.run_flow(target=targets[0], additional_targets=targets[1:])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        test = next(row["args"] for row in commands if row["tool"] == "xcodebuild" and row["args"][0] == "test")
+        self.assertEqual([value for value in test if value.startswith("-only-testing:")],
+                         ["-only-testing:" + target for target in targets])
+        self.assertFalse(any(value.startswith("-skip-testing:") for value in test))
+        for target in targets[:4]:
+            rejected, commands, _ = self.run_flow(target=target + "Typo")
+            self.assertEqual(rejected.returncode, 2); self.assertFalse(commands)
+
     def test_scanner_polish_keeps_exact_native_and_ui_selections_and_owned_cleanup(self):
         root = Path(__file__).resolve().parents[1]
         workflow = (root / ".github/workflows/ios.yml").read_text()
@@ -390,7 +418,8 @@ class UIRunnerFlowTests(unittest.TestCase):
         for name, targets in expected.items():
             with self.subTest(job=name):
                 block = job_blocks[name]
-                scope = "inputs.job_scope == 'scanner_polish' && 'scanner_polish' || "
+                scope = "inputs.job_scope == 'text_assist' && 'text_assist' || " if name == "native" else ""
+                scope += "inputs.job_scope == 'scanner_polish' && 'scanner_polish' || "
                 scope += "inputs.job_scope == 'photo_scan' && 'photo_scan' || "
                 scope += "inputs.job_scope == 'leftover_stock' && " + ("'leftover_stock'" if name == "ui" else "'all'") + " || "
                 scope += "inputs.job_scope == 'show_polish' && " + ("'show_polish'" if name == "ui" else "'all'") + " || "

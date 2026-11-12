@@ -120,7 +120,7 @@ struct ScannerManualSearchPromptPolicy {
             // its preceding hide can be coalesced by the newest-only stream.
             let changedCard = savedRecognitionRef.map { first.identity.productID != $0 } ?? false
             let newEpisode = savedRecognitionEpisode.map { scan.id != $0 } ?? false
-            guard first.confidence >= 50, changedCard || newEpisode else { return }
+            guard (scan.source == .text || first.confidence >= 50), changedCard || newEpisode else { return }
             waitingForRemoval = false; self.savedRecognitionRef = nil; savedRecognitionEpisode = nil
             DiagnosticLog.shared.record("recognition.next_card", ["reason": changedCard ? "different_match" : "new_episode"])
         }
@@ -129,7 +129,7 @@ struct ScannerManualSearchPromptPolicy {
         selected = card
         confirmed = !card.requiresPrintingSelection.orFalse
         refreshPrice(forceRefresh: false)
-        DiagnosticLog.shared.record("recognition.result", ["episode": scan.id.uuidString, "candidates": String(scan.candidates.count), "accepted": String(scan.accepted), "confidence": String(Int(first.confidence))])
+        DiagnosticLog.shared.record("recognition.result", ["episode": scan.id.uuidString, "candidates": String(scan.candidates.count), "accepted": String(scan.accepted), "confidence": String(Int(first.confidence)), "source": scan.source.rawValue])
     }
     func stop() {
         if consumer != nil { DiagnosticLog.shared.record("scanner.stop") }

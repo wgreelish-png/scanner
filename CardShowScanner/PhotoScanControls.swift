@@ -16,7 +16,7 @@ struct ScannerCaptureModeMenu: View {
     @Binding var selection: ScannerCaptureMode
     var blocked: Bool
     var body: some View {
-        ScannerCaptureModeSelector(selection: $selection, blocked: blocked || provider.photoState == .processing)
+        ScannerCaptureModeSelector(selection: $selection, blocked: blocked || provider.photoState == .processing || provider.textRecognitionBusy)
     }
 }
 
@@ -28,6 +28,32 @@ struct ScannerPhotoCaptureControls: View {
         PhotoScanActionPanel(state: provider.photoState, enabled: enabled,
             canCapture: provider.canCapturePhoto, canRetake: provider.canRetakePhoto,
             onCapture: provider.capturePhoto, onRetake: provider.retakePhoto, onRetry: onRetry)
+    }
+}
+
+struct ScannerTextRecognitionControls: View {
+    @ObservedObject var provider: TCGTrackingScannerProvider
+    let enabled: Bool
+
+    var body: some View {
+        VStack(spacing: 6) {
+            if provider.textRecognitionBusy {
+                ProgressView("Reading card text…")
+                    .accessibilityIdentifier("scanner.textRecognitionProgress")
+            } else {
+                if provider.captureMode == .live {
+                    Button(action: provider.readCardText) {
+                        Label("Read Card Text", systemImage: "text.viewfinder").frame(minHeight: 44)
+                    }.buttonStyle(.bordered)
+                        .disabled(!enabled || !provider.canReadCardText)
+                        .accessibilityIdentifier("scanner.readCardText")
+                }
+                if let message = provider.textRecognitionMessage {
+                    Text(message).font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("scanner.textRecognitionMessage")
+                }
+            }
+        }
     }
 }
 

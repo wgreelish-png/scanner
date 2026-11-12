@@ -30,6 +30,8 @@ struct CardCandidate: Identifiable, Codable, Hashable, Sendable {
     var marketPriceMetadata: MarketPriceMetadata? = nil
 }
 
+enum ScannerRecognitionSource: String { case visual, text }
+
 struct ScanResult: Identifiable {
     let id: UUID
     var candidates: [CardCandidate]
@@ -37,6 +39,8 @@ struct ScanResult: Identifiable {
     var same: Bool
     var visible: Bool = true
     var capturedImageData: Data? = nil
+    // Text search suggestions are reviewed explicitly, never visual matches.
+    var source: ScannerRecognitionSource = .visual
 }
 
 /// Tracks recognition episodes, independently of inventory identity and quantity.
@@ -55,7 +59,7 @@ struct RecognitionGate {
     }
     mutating func markAdded() { consumed = true }
     mutating func consumeAutomatic(_ result: ScanResult) -> Bool {
-        guard !consumed, result.visible, !result.same, result.accepted,
+        guard !consumed, result.source == .visual, result.visible, !result.same, result.accepted,
               let first = result.candidates.first, first.confidence >= 90, first.requiresPrintingSelection != true else { return false }
         consumed = true
         return true

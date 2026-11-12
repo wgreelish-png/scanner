@@ -21,6 +21,9 @@ on:
           - leftover_stock
           - photo_scan
           - scanner_polish
+          - text_assist
+          - text_image_start
+          - text_image_part
           - research_ui
           - evidence_ui
           - budget_ui
@@ -38,10 +41,26 @@ on:
           - show_readiness
           - navigation_price
           - camera_lifecycle
+      image_session:
+        description: Encrypted image test session ID
+        type: string
+        default: ''
+      image_part:
+        description: Encrypted payload part index
+        type: string
+        default: '0'
+      image_parts:
+        description: Encrypted payload part count
+        type: string
+        default: '0'
+      image_payload:
+        description: Encrypted image payload fragment only
+        type: string
+        default: ''
 # PRs validate work branches; main pushes validate integration. Avoid running
 # both push and pull_request checks for the same work-branch commit.
 concurrency:
-  group: ios-${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}-${{ inputs.job_scope || 'native' }}-${{ inputs.test_scope || 'all' }}
+  group: ios-${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}-${{ inputs.job_scope || 'native' }}-${{ inputs.test_scope || 'all' }}-${{ inputs.image_session || 'none' }}-${{ inputs.image_part || '0' }}
   # Replace stale work only for the same repository, branch and requested scope.
   # Independent focused requests retain their own run; commit SHA is not a key.
   cancel-in-progress: true
@@ -52,6 +71,7 @@ env:
   SCANNER_CLEANUP_TIMEOUT_SECONDS: '30'
 jobs:
   tooling:
+    if: ${{ inputs.job_scope != 'text_image_start' && inputs.job_scope != 'text_image_part' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -70,8 +90,85 @@ jobs:
       - run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - run: python3 scripts/check_xcode_sources.py
       - run: python3 scripts/check_scanner_runtime.py
+  text_image_start:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.job_scope == 'text_image_start' }}
+    runs-on: macos-15-intel
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    env:
+      IMAGE_SESSION: ${{ inputs.image_session }}
+      IMAGE_PARTS: ${{ inputs.image_parts }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prepare private image receiver
+        shell: bash
+        run: |
+          export IMAGE_WORK_DIRECTORY="$RUNNER_TEMP/scanner-text-image"
+          echo "IMAGE_WORK_DIRECTORY=$IMAGE_WORK_DIRECTORY" >> "$GITHUB_ENV"
+          python3 -m venv "$RUNNER_TEMP/image-test-python"
+          "$RUNNER_TEMP/image-test-python/bin/python" -m pip install --disable-pip-version-check --quiet cryptography
+          echo "IMAGE_TEST_PYTHON=$RUNNER_TEMP/image-test-python/bin/python" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/image-test-python/bin/python" scripts/scanner_text_image_transfer.py prepare
+      - name: Publish receiver public key
+        uses: actions/upload-artifact@v4
+        with:
+          name: scanner-image-key-${{ inputs.image_session }}
+          path: ${{ env.IMAGE_WORK_DIRECTORY }}/public.pem
+          if-no-files-found: error
+          retention-days: 1
+      - name: Receive encrypted image and run production OCR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          "$IMAGE_TEST_PYTHON" scripts/scanner_text_image_transfer.py receive
+          "$IMAGE_TEST_PYTHON" scripts/run_scanner_text_image_test.py "$IMAGE_WORK_DIRECTORY/image.jpg"
+      - name: Publish text-image test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scanner-image-report-${{ inputs.image_session }}
+          path: ${{ env.IMAGE_WORK_DIRECTORY }}/report.json
+          if-no-files-found: ignore
+          retention-days: 1
+      - name: Remove transient image and private key
+        if: always()
+        shell: bash
+        run: rm -rf -- "$IMAGE_WORK_DIRECTORY"
+  text_image_part:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.job_scope == 'text_image_part' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      IMAGE_SESSION: ${{ inputs.image_session }}
+      IMAGE_PART: ${{ inputs.image_part }}
+      IMAGE_PARTS: ${{ inputs.image_parts }}
+      IMAGE_PAYLOAD: ${{ inputs.image_payload }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Store encrypted payload fragment
+        run: |
+          export IMAGE_WORK_DIRECTORY="$RUNNER_TEMP/scanner-text-image"
+          echo "IMAGE_WORK_DIRECTORY=$IMAGE_WORK_DIRECTORY" >> "$GITHUB_ENV"
+          python3 scripts/scanner_text_image_transfer.py part
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scanner-image-part-${{ inputs.image_session }}-${{ inputs.image_part }}
+          path: ${{ env.IMAGE_WORK_DIRECTORY }}/part-*.txt
+          if-no-files-found: error
+          retention-days: 1
+      - name: Remove transient encrypted fragment
+        if: always()
+        shell: bash
+        run: rm -rf -- "$IMAGE_WORK_DIRECTORY"
   native:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job_scope == 'all' || inputs.job_scope == 'native' || inputs.job_scope == 'log_review' || inputs.job_scope == 'show_polish' || inputs.job_scope == 'leftover_stock' || inputs.job_scope == 'photo_scan' || inputs.job_scope == 'scanner_polish' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job_scope == 'all' || inputs.job_scope == 'native' || inputs.job_scope == 'log_review' || inputs.job_scope == 'show_polish' || inputs.job_scope == 'leftover_stock' || inputs.job_scope == 'photo_scan' || inputs.job_scope == 'scanner_polish' || inputs.job_scope == 'text_assist' }}
     runs-on: macos-15-intel
     timeout-minutes: 60
     steps:
@@ -79,7 +176,7 @@ jobs:
       - name: Build and run native regression tests
         id: native_tests
         env:
-          SCANNER_TEST_SCOPE: ${{ inputs.job_scope == 'scanner_polish' && 'scanner_polish' || inputs.job_scope == 'photo_scan' && 'photo_scan' || inputs.job_scope == 'leftover_stock' && 'all' || inputs.job_scope == 'show_polish' && 'all' || inputs.job_scope == 'log_review' && 'log_review' || inputs.test_scope || 'all' }}
+          SCANNER_TEST_SCOPE: ${{ inputs.job_scope == 'text_assist' && 'text_assist' || inputs.job_scope == 'scanner_polish' && 'scanner_polish' || inputs.job_scope == 'photo_scan' && 'photo_scan' || inputs.job_scope == 'leftover_stock' && 'all' || inputs.job_scope == 'show_polish' && 'all' || inputs.job_scope == 'log_review' && 'log_review' || inputs.test_scope || 'all' }}
         run: |
           if [ "$SCANNER_TEST_SCOPE" = printer_transport ] || [ "$SCANNER_TEST_SCOPE" = label_controls ]; then
             bash scripts/run_ios_tests.sh CardShowScannerTests/NiimbotProtocolTests CardShowScannerTests/ScannerDiagnosticsTests CardShowScannerTests/LabelPrintQueueTests CardShowScannerTests/NiimbotImageTransferPreferencesTests CardShowScannerTests/NiimbotRollReadCoordinatorTests CardShowScannerTests/NiimbotLabelCatalogTests CardShowScannerTests/NiimbotLabelProductResolverTests
@@ -87,6 +184,17 @@ jobs:
             bash scripts/run_ios_tests.sh CardShowScannerTests/InventoryLabelTests CardShowScannerTests/AdaptiveLabelRenderingTests CardShowScannerTests/CustomPriceTagTests CardShowScannerTests/CustomLabelQueueTests CardShowScannerTests/LabelPrintQueueTests CardShowScannerTests/NiimbotImageTransferPreferencesTests CardShowScannerTests/NiimbotRollReadCoordinatorTests CardShowScannerTests/NiimbotLabelCatalogTests CardShowScannerTests/ScannerDiagnosticsTests CardShowScannerTests/NiimbotLabelProductResolverTests CardShowScannerTests/ShowInventorySortTests CardShowScannerTests/InventoryLabelBatchTests
           elif [ "$SCANNER_TEST_SCOPE" = label_queue ]; then
             bash scripts/run_ios_tests.sh CardShowScannerTests/LabelPrintQueueTests CardShowScannerTests/LabelPrintRunOutcomeTests CardShowScannerTests/CustomPriceTagTests
+          elif [ "$SCANNER_TEST_SCOPE" = text_assist ]; then
+            bash scripts/run_ios_tests.sh \
+              CardShowScannerTests/ScannerTextRecognitionTests \
+              CardShowScannerTests/ScannerTextProviderPreferenceTests \
+              CardShowScannerTests/ScannerTextRecognitionStateTests \
+              CardShowScannerTests/ScannerTextRecognitionFlowTests \
+              CardShowScannerTests/PhotoScanStateTests \
+              CardShowScannerTests/PhotoScanProviderPreferenceTests \
+              CardShowScannerTests/ManualCatalogFilterTests \
+              CardShowScannerTests/ScannerManualSearchLifecycleTests \
+              CardShowScannerTests/ScannerDiagnosticsTests
           elif [ "$SCANNER_TEST_SCOPE" = scanner_polish ]; then
             bash scripts/run_ios_tests.sh \
               CardShowScannerTests/ManualCardSearchTests \

@@ -77,6 +77,7 @@ struct StockCountPricing: MarketPricing {
     @AppStorage("steadyCardBorder") private var steadyCardBorder = true
     @AppStorage("scannerDetailsCollapsed") private var detailsCollapsed = false
     @AppStorage("scannerCaptureMode") private var captureMode = ScannerCaptureMode.live
+    @AppStorage("scannerTextRecognitionEnabled") private var textRecognitionEnabled = false
     @State private var game: String
     @State private var pendingGame: String?
     @State private var confirmGame = false
@@ -246,6 +247,7 @@ struct StockCountPricing: MarketPricing {
         .onChange(of: captureMode) { _, selection in
             if let live = model.liveProvider, !live.setCaptureMode(selection) { captureMode = live.captureMode }
         }
+        .onChange(of: textRecognitionEnabled) { _, enabled in model.liveProvider?.setTextRecognitionEnabled(enabled) }
         .onChange(of: steadyCardBorder) { _, enabled in model.liveProvider?.setSteadyCardBorder(enabled) }
         .failureAlert(Binding(get: { model.selected == nil ? model.error : nil }, set: { model.error = $0 }))
     }
@@ -284,6 +286,9 @@ struct StockCountPricing: MarketPricing {
                     if let live = model.liveProvider {
                         ScannerCaptureModeMenu(provider: live, selection: $captureMode,
                             blocked: model.selected != nil || model.selectionInProgress || model.saving || model.paused)
+                        Toggle("Text Recognition Fallback", isOn: $textRecognitionEnabled)
+                            .accessibilityIdentifier("scanner.textRecognitionOption")
+                            .accessibilityHint("Reads card text once after a photo has no match. Live Scan offers Read Card Text.")
                     }
                     if purpose == .standard {
                         Picker("Game", selection: $game) { ForEach(CatalogOptions.games(including: game), id: \.self) { Text($0) } }
@@ -336,6 +341,10 @@ struct StockCountPricing: MarketPricing {
     private var cameraFooter: some View {
         let totals = OfferCalculator.calculate(list.cards.map(\.offerLine), rates: session.rates)
         return VStack(spacing: detailsCollapsed ? 6 : 10) {
+            if textRecognitionEnabled, let live = model.liveProvider {
+                ScannerTextRecognitionControls(provider: live,
+                    enabled: session.isActive && !model.paused && model.selected == nil && !model.saving && !model.selectionInProgress)
+            }
             if captureMode == .photo, let live = model.liveProvider {
                 ScannerPhotoCaptureControls(provider: live,
                     enabled: session.isActive && !model.paused && model.selected == nil && !model.saving && !model.selectionInProgress,
@@ -452,6 +461,11 @@ struct StockCountPricing: MarketPricing {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     if let card = model.selected {
+                        if model.result?.source == .text {
+                            Label("Found from card text. Check the name, number, printing and condition before adding.", systemImage: "text.viewfinder")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                                .accessibilityIdentifier("scanReview.textSource")
+                        }
                         if let data = model.result?.capturedImageData, let image = UIImage(data: data) {
                             Image(uiImage: image).resizable().scaledToFit().frame(height: 100)
                                 .accessibilityLabel("Captured card")
@@ -623,6 +637,7 @@ struct StockCountPricing: MarketPricing {
         model.resumeAfterManualSearch()
         guard !model.paused else { return }
         model.liveProvider?.setCaptureMode(captureMode)
+        model.liveProvider?.setTextRecognitionEnabled(textRecognitionEnabled)
         model.start(game: session.game ?? game, list: list, context: context, session: session, draft: draft)
     }
 
