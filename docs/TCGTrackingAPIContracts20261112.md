@@ -106,7 +106,7 @@ app's implemented lifetimes. Public OpenAPI requests use no Beta credentials.
 | `GET /v1/{cat}/sets/{set}` | 7 days | Actual 3/23237 response reviewed: 249 products in a `products` array, including card and sealed-product examples, with set metadata and relative per-format URLs. |
 | `GET /v1/{cat}/sets/{set}/cards` | 7 days | Actual 3/23237 response reviewed: `product_type: "cards"`, 215 unique products, all present in the reviewed full set. |
 | `GET /v1/{cat}/sets/{set}/sealed` | 7 days | Actual 3/23237 response reviewed: `product_type: "sealed"`, 34 products, exactly the full-set entries absent from the cards-only response. |
-| `GET /v1/{cat}/sets/{set}/product_detail` | 7 days | Not yet captured/verified. |
+| `GET /v1/{cat}/sets/{set}/product-detail` | 7 days | Actual returned hyphenated route 3/23237 verified: `success: true`, empty `errors`, `totalItems: 249` and matching `results` IDs. Screenshot's underscore alias remains unverified. |
 | `GET /v1/{cat}/sets/{set}/pricing` | 1 day | Not yet captured/verified; distinct from exact-SKU pricing. |
 | `GET /v1/{cat}/sets/{set}/skus` | 1 day | Actual 3/22872 response reviewed; exact-SKU market matched Beta. |
 | `GET /v1/products/{product_id}` | 7 days | Earlier real 512035 response: `Tests/Fixtures/OpenAPICharmanderProduct.json`. |
@@ -155,6 +155,17 @@ counterparts. The cards
 response does not include `product_detail_url`; cross-format URLs must be
 optional. Its static modification/generation timestamps differ from the
 full-set response and do not establish current pricing.
+
+The verified product-detail response uses a separate TCGplayer-style envelope
+(`totalItems`, `success`, `errors`, `results`) and camelCase product fields:
+`productId`, `categoryId`, `groupId`, `cleanName`, `imageUrl`, `imageCount`,
+`modifiedOn`, `presaleInfo` and `extendedData`. All 249 IDs match the full set;
+all category/group IDs are 3/23237. `presaleInfo` includes `isPresale` and
+nullable `releasedOn`/`note`. `extendedData` is an array of
+`{name, displayName, value}` rather than the full-set `ext_data` dictionary.
+Values can include HTML line breaks. `modifiedOn` examples lack an explicit
+time-zone offset; preserve that distinction. This route supplies product
+metadata, not an exact-condition SKU quote.
 
 Documentation and mocked tests do not prove live contracts. Continue missing
 response checks one at a time with HTTP status. These notes change no inventory,
