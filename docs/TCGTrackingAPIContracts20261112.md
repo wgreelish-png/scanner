@@ -107,7 +107,7 @@ app's implemented lifetimes. Public OpenAPI requests use no Beta credentials.
 | `GET /v1/{cat}/sets/{set}/cards` | 7 days | Actual 3/23237 response reviewed: `product_type: "cards"`, 215 unique products, all present in the reviewed full set. |
 | `GET /v1/{cat}/sets/{set}/sealed` | 7 days | Actual 3/23237 response reviewed: `product_type: "sealed"`, 34 products, exactly the full-set entries absent from the cards-only response. |
 | `GET /v1/{cat}/sets/{set}/product-detail` | 7 days | Actual returned hyphenated route 3/23237 verified: `success: true`, empty `errors`, `totalItems: 249` and matching `results` IDs. Screenshot's underscore alias remains unverified. |
-| `GET /v1/{cat}/sets/{set}/pricing` | 1 day | Not yet captured/verified; distinct from exact-SKU pricing. |
+| `GET /v1/{cat}/sets/{set}/pricing` | 1 day | Actual 3/23237 response reviewed: `set_id`, offset-bearing `updated`, and 249 product entries in `prices[productID].tcg[printing]` with `low`/`market`. |
 | `GET /v1/{cat}/sets/{set}/skus` | 1 day | Actual 3/22872 response reviewed; exact-SKU market matched Beta. |
 | `GET /v1/products/{product_id}` | 7 days | Earlier real 512035 response: `Tests/Fixtures/OpenAPICharmanderProduct.json`. |
 | `POST /v1/scan` | No store | Not tested; need the upload/body schema rather than guessing fields. |
@@ -166,6 +166,13 @@ nullable `releasedOn`/`note`. `extendedData` is an array of
 Values can include HTML line breaks. `modifiedOn` examples lack an explicit
 time-zone offset; preserve that distinction. This route supplies product
 metadata, not an exact-condition SKU quote.
+
+The reviewed pricing response covers all 249 full-set product IDs but groups
+prices by product and printing only. It contains neither condition nor language
+identity, so these values cannot substitute for exact-condition/language SKU
+quotes. Its Pokémon sample has only `tcg` source blocks; the documented Magic
+`mp` extension remains an assumed provider contract rather than a reviewed live
+response. Preserve product-price and exact-SKU price provenance separately.
 
 Documentation and mocked tests do not prove live contracts. Continue missing
 response checks one at a time with HTTP status. These notes change no inventory,
