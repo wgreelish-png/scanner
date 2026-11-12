@@ -117,6 +117,51 @@ import SwiftData
         for _ in 0..<15 { await Task.yield() }
         XCTAssertTrue(model.results.isEmpty); XCTAssertFalse(model.isSearching)
     }
+    func testChoosingCardCancelsInFlightTypeaheadAndLateResultsUntilBack() async throws {
+        let catalog = ControlledCardCatalog(), model = ManualCardSearchModel(game: "Pokémon", catalog: catalog, debounce: .zero)
+        model.updateQuery("darkrai"); try await requests(1, catalog)
+        await catalog.resolve(0, with: [card(1)]); await idle(model)
+        model.updateQuery("darkrai 99"); try await requests(2, catalog)
+        model.suspendForSelection()
+        XCTAssertTrue(model.isSuspendedForSelection); XCTAssertFalse(model.isSearching)
+        await catalog.resolve(1, with: [card(99)])
+        for _ in 0..<15 { await Task.yield() }
+        XCTAssertEqual(model.results.map { $0.identity.productID }, ["p:1"], "Late search cannot replace the selection snapshot")
+        model.updateQuery("darkrai 100")
+        for _ in 0..<15 { await Task.yield() }
+        let pausedCount = await catalog.count
+        XCTAssertEqual(pausedCount, 2, "Editing/notifications behind confirmation must not start searches")
+        model.resumeAfterSelection(); try await requests(3, catalog)
+        await catalog.resolve(2, with: [card(100)]); await idle(model)
+        XCTAssertEqual(model.query, "darkrai 100")
+        XCTAssertEqual(model.results.map { $0.identity.productID }, ["p:100"])
+    }
+
+    func testBackPreservesCompletedResultsQueryAndFiltersWithoutRepeatingSearch() async throws {
+        let catalog = RecordingFilteredManualCatalog(card: card(99))
+        let model = ManualCardSearchModel(game: "Pokémon", catalog: catalog, debounce: .zero)
+        model.updateQuery("darkrai"); await idle(model)
+        model.updateSetFilter("Triumphant"); await idle(model)
+        model.updateNumberFilter("99/102"); await idle(model)
+        let before = await catalog.requests
+        XCTAssertEqual(before.last?.query, "darkrai")
+        XCTAssertEqual(before.last?.filters, CardCatalogFilters(set: "Triumphant", number: "99/102"))
+        model.suspendForSelection()
+        model.updateQuery("darkrai"); model.updateSetFilter("Triumphant"); model.updateNumberFilter("99/102")
+        model.resumeAfterSelection()
+        for _ in 0..<15 { await Task.yield() }
+        let after = await catalog.requests
+        XCTAssertEqual(after.count, before.count)
+        XCTAssertEqual(model.query, "darkrai")
+        XCTAssertEqual(model.filters, CardCatalogFilters(set: "Triumphant", number: "99/102"))
+        XCTAssertEqual(model.results.map { $0.identity.productID }, ["p:99"])
+        XCTAssertFalse(model.isSearching)
+        model.clearFilters(); await idle(model)
+        XCTAssertTrue(model.filters.isEmpty)
+        let cleared = await catalog.requests
+        XCTAssertEqual(cleared.last?.filters, CardCatalogFilters())
+    }
+
     func testManualSelectionDefaultsToNMAndOnlyExplicitAddPersistsExactZeroQuote() async throws {
         let container = try store(), context = container.mainContext, list = CardList(name: "Manual")
         context.insert(list); try context.save()
@@ -304,4 +349,17 @@ private struct ExactManualPricing: MarketPricing {
 }
 private struct UnavailableManualPricing: MarketPricing {
     func quote(for card: CardCandidate) async throws -> MarketQuote? { throw URLError(.notConnectedToInternet) }
+}
+
+private actor RecordingFilteredManualCatalog: CardCatalogSearching {
+    struct Request: Sendable { let query: String; let filters: CardCatalogFilters }
+    let card: CardCandidate
+    private(set) var requests: [Request] = []
+    init(card: CardCandidate) { self.card = card }
+    func search(_ query: String, game: String, limit: Int) async throws -> [CardCandidate] {
+        try await search(query, game: game, limit: limit, filters: .init())
+    }
+    func search(_ query: String, game: String, limit: Int, filters: CardCatalogFilters) async throws -> [CardCandidate] {
+        try Task.checkCancellation(); requests.append(.init(query: query, filters: filters)); return [card]
+    }
 }

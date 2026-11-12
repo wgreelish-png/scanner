@@ -914,7 +914,12 @@ import SwiftUI
     func testCameraWorkloadRecognizesIdleReviewManualAndStoppedStatesWithoutInventingCameraMeasurements() throws {
         let scenarios: [(String, String, Double, Bool, String)] = [
             ("normal", "live", 30, true, "applied"),
+            ("normal", "review", 30, false, "applied"),
+            ("normal", "manual", 30, false, "applied"),
+            ("normal", "prompt", 30, false, "applied"),
             ("reduced", "review", 10, false, "pending"),
+            ("reduced", "manual", 10, false, "applied"),
+            // Older exported logs used a 1 FPS cap; they must still decode.
             ("reduced", "manual", 1, false, "applied"),
             ("normal", "prompt", 1, false, "failed"),
             ("cooling", "stopped", 0, false, "inactive")
@@ -998,6 +1003,106 @@ import SwiftUI
         defaults.set(false, forKey: "diagnosticsEnabled")
         log.record("web.camera_workload", expected)
         XCTAssertEqual(try Data(contentsOf: current), saved, "Opting out prevents even sanitized workload records")
+    }
+
+    func testCameraDeliveryKeepsObservedVideoFramesSeparateFromRequestedAndTrackRates() throws {
+        let record = try XCTUnwrap(ScannerDiagnosticRecord.validated(envelope([
+            "event": "camera_delivery", "deliveryState": "measured", "captureMode": "photo",
+            "windowMS": 5000, "cameraOnMS": 5000, "deliveredFrames": 150, "frameWindowMS": 5033,
+            "deliveredFPS": 29.8033, "targetFPS": 30, "cameraFPS": 60, "message": "PRIVATE_IMAGE"])))
+        XCTAssertEqual(record.event, "web.camera_delivery")
+        XCTAssertEqual(record.sampleEvery, 0, "Terminal short windows must not be sampled away")
+        XCTAssertEqual(record.fields, ["delivery_state": "measured", "capture_mode": "photo",
+            "delivery_window_ms": "5000", "camera_on_ms": "5000", "delivered_frames": "150",
+            "frame_window_ms": "5033", "delivered_fps": "29.803"])
+        XCTAssertNil(record.fields["target_fps"]); XCTAssertNil(record.fields["camera_fps"])
+    }
+
+    func testPendingAndUnsupportedCameraDeliveryNeverInventOrCopyAnFPS() throws {
+        for state in ["pending", "unavailable"] {
+            let record = try XCTUnwrap(ScannerDiagnosticRecord.validated(envelope([
+                "event": "camera_delivery", "deliveryState": state, "windowMS": 250, "cameraOnMS": 250,
+                "deliveredFrames": 0, "frameWindowMS": 100, "deliveredFPS": 30, "cameraFPS": 30,
+                "captureMode": "PRIVATE_MODE"])))
+            XCTAssertEqual(record.fields, ["delivery_state": state, "delivery_window_ms": "250", "camera_on_ms": "250"])
+        }
+        let unavailable = try XCTUnwrap(ScannerDiagnosticRecord.validated(envelope([
+            "event": "camera_delivery", "deliveryState": "unavailable", "captureMode": "live", "cameraFPS": 30])))
+        XCTAssertEqual(unavailable.fields, ["delivery_state": "unavailable", "capture_mode": "live"])
+        XCTAssertEqual(DiagnosticCameraDeliveryFields.validated(unavailable.fields), unavailable.fields)
+    }
+
+    func testCameraDeliveryRejectsNonfiniteBoundsIncompleteWindowsAndFractionalFrameCounts() throws {
+        let valid = try envelope(["event": "camera_delivery", "deliveryState": "measured",
+            "windowMS": 5000, "cameraOnMS": 4999, "deliveredFrames": 150, "frameWindowMS": 5000, "deliveredFPS": 30])
+        var invalid: [TCGBridgeEnvelope] = []
+        var wire = valid; wire.windowMS = .nan; invalid.append(wire)
+        wire = valid; wire.windowMS = 86_400_001; invalid.append(wire)
+        wire = valid; wire.cameraOnMS = 5001; invalid.append(wire)
+        wire = valid; wire.cameraOnMS = -1; invalid.append(wire)
+        wire = valid; wire.deliveredFrames = 1.5; invalid.append(wire)
+        wire = valid; wire.deliveredFrames = 1_000_001; invalid.append(wire)
+        wire = valid; wire.frameWindowMS = 0; invalid.append(wire)
+        wire = valid; wire.frameWindowMS = .infinity; invalid.append(wire)
+        wire = valid; wire.deliveredFPS = 240.001; invalid.append(wire)
+        wire = valid; wire.deliveredFPS = .nan; invalid.append(wire)
+        wire = valid; wire.deliveredFPS = nil; invalid.append(wire)
+        wire = valid; wire.deliveryState = "PRIVATE_STATE"; invalid.append(wire)
+        for wire in invalid {
+            XCTAssertTrue(try XCTUnwrap(ScannerDiagnosticRecord.validated(wire)).fields.isEmpty)
+        }
+    }
+
+    func testDeliveryFieldsCannotBeSmuggledThroughOtherDiagnosticEventsOrChannels() throws {
+        for event in ["scan_stats", "camera_workload", "pack_ready", "recognition_snapshot"] {
+            let record = try XCTUnwrap(ScannerDiagnosticRecord.validated(envelope([
+                "event": event, "deliveryState": "measured", "captureMode": "photo", "windowMS": 5000,
+                "cameraOnMS": 5000, "deliveredFrames": 150, "frameWindowMS": 5000, "deliveredFPS": 30])))
+            XCTAssertTrue(record.fields.isEmpty)
+        }
+        XCTAssertNil(ScannerDiagnosticRecord.validated(try envelope([
+            "kind": "scan", "event": "camera_delivery", "deliveryState": "unavailable", "windowMS": 1, "cameraOnMS": 1])))
+    }
+
+    func testCameraDeliveryStorageValidatesGroupScopePrivacyAndDiagnosticOptOut() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = "CameraDeliveryDiagnostics." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let log = DiagnosticLog(directory: directory, defaults: defaults)
+        let expected = ["delivery_state": "measured", "capture_mode": "live", "delivery_window_ms": "5000",
+            "camera_on_ms": "5000", "delivered_frames": "150", "frame_window_ms": "5000", "delivered_fps": "30.000"]
+        log.record("web.camera_delivery", expected.merging([
+            "image": "PRIVATE_IMAGE", "message": "PRIVATE_CARD", "body": "PRIVATE_RESPONSE", "camera_fps": "60"
+        ]) { _, value in value })
+        log.record("web.camera_delivery", ["delivery_state": "unavailable", "delivery_window_ms": "100",
+            "camera_on_ms": "100", "delivered_frames": "0", "frame_window_ms": "100", "delivered_fps": "30"])
+        log.record("web.camera_delivery", ["delivery_state": "measured", "delivery_window_ms": "100",
+            "camera_on_ms": "101", "delivered_frames": "3", "frame_window_ms": "100", "delivered_fps": "30"])
+        log.record("web.scan_stats", expected)
+        for invalid in ["-1", "+1", "01", "1.0", "1e1", " 1", "86400001", "PRIVATE_VALUE"] {
+            XCTAssertFalse(DiagnosticCameraDeliveryFields.accepts("camera_on_ms", invalid, event: "web.camera_delivery"))
+        }
+        for invalid in ["-1", "nan", "1e1", "01", "240.001", "1.0000", "PRIVATE_VALUE"] {
+            XCTAssertFalse(DiagnosticCameraDeliveryFields.accepts("delivered_fps", invalid, event: "web.camera_delivery"))
+        }
+        let url = try log.export()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let text = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertFalse(text.contains("PRIVATE_"))
+        let rows = try diagnosticRows(text)
+        let delivery = rows.filter { $0["event"] as? String == "web.camera_delivery" }
+        XCTAssertEqual(delivery.count, 3)
+        XCTAssertEqual(delivery[0]["fields"] as? [String: String], expected)
+        XCTAssertEqual(delivery[1]["fields"] as? [String: String], ["delivery_state": "unavailable",
+            "delivery_window_ms": "100", "camera_on_ms": "100"])
+        XCTAssertEqual(delivery[2]["fields"] as? [String: String], [:])
+        XCTAssertEqual(rows.first { $0["event"] as? String == "web.scan_stats" }?["fields"] as? [String: String], [:])
+        let current = directory.appendingPathComponent("current.jsonl"), saved = try Data(contentsOf: current)
+        defaults.set(false, forKey: "diagnosticsEnabled")
+        log.record("web.camera_delivery", expected)
+        XCTAssertEqual(try Data(contentsOf: current), saved)
     }
 
     func testCameraGeometryAndLightingDecodeIntoBoundedScalarFields() async throws {

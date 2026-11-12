@@ -76,6 +76,7 @@ struct StockCountPricing: MarketPricing {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("steadyCardBorder") private var steadyCardBorder = true
     @AppStorage("scannerDetailsCollapsed") private var detailsCollapsed = false
+    @AppStorage("scannerCaptureMode") private var captureMode = ScannerCaptureMode.live
     @State private var game: String
     @State private var pendingGame: String?
     @State private var confirmGame = false
@@ -242,6 +243,9 @@ struct StockCountPricing: MarketPricing {
             if !showing { startIfReady() }
         }
         .onChange(of: mode) { _, _ in restart() }
+        .onChange(of: captureMode) { _, selection in
+            if let live = model.liveProvider, !live.setCaptureMode(selection) { captureMode = live.captureMode }
+        }
         .onChange(of: steadyCardBorder) { _, enabled in model.liveProvider?.setSteadyCardBorder(enabled) }
         .failureAlert(Binding(get: { model.selected == nil ? model.error : nil }, set: { model.error = $0 }))
     }
@@ -259,7 +263,7 @@ struct StockCountPricing: MarketPricing {
                     HStack(spacing: 5) {
                         Circle().fill(model.paused ? Color.secondary : (mode == "Live" ? .green : .orange))
                             .frame(width: 5, height: 5).accessibilityHidden(true)
-                        Text(model.paused ? "Paused" : (mode == "Live" ? "Live" : "Mock · testing"))
+                        Text(model.paused ? "Paused" : (mode == "Live" ? (captureMode == .photo ? "Photo Scan" : "Live Scan") : "Mock · testing"))
                             .font(.caption2.weight(.semibold)).fixedSize()
                             .accessibilityIdentifier("scanner.mode")
                         if !model.paused, let live = model.liveProvider {
@@ -277,6 +281,10 @@ struct StockCountPricing: MarketPricing {
                 }.accessibilityLabel(model.paused ? "Resume camera" : "Pause camera")
                     .accessibilityIdentifier("scanner.pause")
                 Menu {
+                    if let live = model.liveProvider {
+                        ScannerCaptureModeMenu(provider: live, selection: $captureMode,
+                            blocked: model.selected != nil || model.selectionInProgress || model.saving || model.paused)
+                    }
                     if purpose == .standard {
                         Picker("Game", selection: $game) { ForEach(CatalogOptions.games(including: game), id: \.self) { Text($0) } }
                     }
@@ -288,7 +296,7 @@ struct StockCountPricing: MarketPricing {
                         DiagnosticLog.shared.activity(.action, screen: .scanner, action: .resetRecognition, state: activityState)
                         model.scanNextCard()
                     }
-                        .disabled(model.selectionInProgress || model.saving)
+                        .disabled(model.selectionInProgress || model.saving || captureMode == .photo)
                         .accessibilityIdentifier("scanner.resetRecognition")
                     Button("TCGTracking Account", systemImage: "person.crop.circle") {
                         openConnection()
@@ -297,7 +305,7 @@ struct StockCountPricing: MarketPricing {
                         model.liveProvider?.refreshDatabase()
                     }.disabled(model.liveProvider == nil || model.paused || model.selected != nil)
                     Toggle("Steady Card Border", isOn: $steadyCardBorder)
-                        .disabled(model.liveProvider == nil || model.selected != nil || model.selectionInProgress || model.saving)
+                        .disabled(captureMode == .photo || model.liveProvider == nil || model.selected != nil || model.selectionInProgress || model.saving)
                         .accessibilityHint("Briefly retries a recently matched card border after small movements.")
                     scanIssueMenu
                     Menu("Developer Testing") {
@@ -328,6 +336,13 @@ struct StockCountPricing: MarketPricing {
     private var cameraFooter: some View {
         let totals = OfferCalculator.calculate(list.cards.map(\.offerLine), rates: session.rates)
         return VStack(spacing: detailsCollapsed ? 6 : 10) {
+            if captureMode == .photo, let live = model.liveProvider {
+                ScannerPhotoCaptureControls(provider: live,
+                    enabled: session.isActive && !model.paused && model.selected == nil && !model.saving && !model.selectionInProgress,
+                    onRetry: {
+                        model.stop(); live.preparePhotoRetry(); model.paused = false; startIfReady()
+                    })
+            }
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(purpose == .leftoverStock ? "\(list.quantity) cards counted" : totals.quantity > 0 && totals.unpricedQuantity == totals.quantity
@@ -445,7 +460,9 @@ struct StockCountPricing: MarketPricing {
                             Text(metadata.summary).font(.caption).foregroundStyle(.secondary)
                                 .accessibilityIdentifier("scanReview.priceMetadata")
                         }
-                        Text("Tap the correct match to add it, then scan the next card.")
+                        Text(captureMode == .photo
+                             ? "Tap the correct match to add it. The camera stays off until your next photo."
+                             : "Tap the correct match to add it, then scan the next card.")
                             .font(.subheadline).foregroundStyle(.secondary)
                         if let message = model.priceMessage {
                             Text(message).font(.caption).foregroundStyle(.secondary)
@@ -516,7 +533,7 @@ struct StockCountPricing: MarketPricing {
                             .buttonStyle(.borderedProminent).frame(maxWidth: .infinity, minHeight: 44)
                             .disabled(model.selectionInProgress || model.saving || !session.isActive)
                             .accessibilityIdentifier("scanReview.manualSearch")
-                        Button("Discard & Scan Again") {
+                        Button(captureMode == .photo ? "Discard Photo" : "Discard & Scan Again") {
                             DiagnosticLog.shared.activity(.action, screen: .scanReview, action: .resetRecognition, state: activityState)
                             model.scanNextCard()
                         }.frame(minHeight: 44)
@@ -605,6 +622,7 @@ struct StockCountPricing: MarketPricing {
               !pendingManualSearchFromReview, selectedRecentCard == nil else { return }
         model.resumeAfterManualSearch()
         guard !model.paused else { return }
+        model.liveProvider?.setCaptureMode(captureMode)
         model.start(game: session.game ?? game, list: list, context: context, session: session, draft: draft)
     }
 

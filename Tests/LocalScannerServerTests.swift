@@ -176,8 +176,151 @@ import Network
         XCTAssertEqual(LocalScannerServer.pageURL.absoluteString, "http://127.0.0.1:18764/index.html")
     }
 
-    private func server(_ factory: FakeLocalScannerFactory, timeout: Duration = .seconds(2)) -> LocalScannerServer {
-        LocalScannerServer(listenerFactory: { try factory.make() }, startupTimeout: timeout, resourcesAvailable: { true })
+    func testReachabilityChecksShareOneProbeAndDoNotReplaceHealthyListener() async throws {
+        let listener = FakeLocalScannerListener(), factory = FakeLocalScannerFactory(), probe = ControlledLocalHealthProbe()
+        factory.listeners = [listener]
+        let server = server(factory, probe: probe.check); defer { server.stop() }
+        let first = Task { try await server.ensureReachable() }
+        try await waitFor { listener.starts == 1 }; listener.emit(.ready)
+        try await waitFor { probe.calls == 1 }
+        var secondEntered = false
+        let second = Task { secondEntered = true; try await server.ensureReachable() }
+        try await waitFor { secondEntered }
+        XCTAssertEqual(probe.calls, 1); XCTAssertEqual(factory.calls, 1)
+        probe.finish(0, reachable: true)
+        try await first.value; try await second.value
+        XCTAssertEqual(listener.cancels, 0)
+        // Each later foreground opening verifies liveness; ready is not cached
+        // forever, and successful verification does not recreate the listener.
+        let later = Task { try await server.ensureReachable() }
+        try await waitFor { probe.calls == 2 }; probe.finish(1, reachable: true)
+        try await later.value
+        XCTAssertEqual(factory.calls, 1)
+        XCTAssertEqual(probe.tokens, [server.cacheToken, server.cacheToken])
+        XCTAssertEqual(probe.generations[0], probe.generations[1])
+    }
+
+    func testUnreachableCachedListenerGetsOneReplacementAndVerification() async throws {
+        let old = FakeLocalScannerListener(), replacement = FakeLocalScannerListener(), factory = FakeLocalScannerFactory()
+        let probe = ControlledLocalHealthProbe(); factory.listeners = [old, replacement]
+        let server = server(factory, probe: probe.check); defer { server.stop() }
+        let check = Task { try await server.ensureReachable() }
+        try await waitFor { old.starts == 1 }; old.emit(.ready)
+        try await waitFor { probe.calls == 1 }; probe.finish(0, reachable: false)
+        try await waitFor { replacement.starts == 1 }; replacement.emit(.ready)
+        try await waitFor { probe.calls == 2 }; probe.finish(1, reachable: true)
+        try await check.value
+        XCTAssertEqual(factory.calls, 2); XCTAssertEqual(old.cancels, 1)
+        XCTAssertEqual(replacement.cancels, 0)
+        XCTAssertNotEqual(probe.generations[0], probe.generations[1])
+        XCTAssertEqual(probe.tokens[0], probe.tokens[1])
+    }
+
+    func testFailedReplacementVerificationStopsInsteadOfLooping() async throws {
+        let old = FakeLocalScannerListener(), replacement = FakeLocalScannerListener(), factory = FakeLocalScannerFactory()
+        let probe = ControlledLocalHealthProbe(); factory.listeners = [old, replacement]
+        let server = server(factory, probe: probe.check); defer { server.stop() }
+        let check = Task { try await server.ensureReachable() }
+        try await waitFor { old.starts == 1 }; old.emit(.ready)
+        try await waitFor { probe.calls == 1 }; probe.finish(0, reachable: false)
+        try await waitFor { replacement.starts == 1 }; replacement.emit(.ready)
+        try await waitFor { probe.calls == 2 }; probe.finish(1, reachable: false)
+        do { try await check.value; XCTFail("A second unreachable socket must fail, not restart indefinitely") }
+        catch { XCTAssertEqual(error as? LocalScannerFailure, .listenerUnavailable) }
+        XCTAssertEqual(factory.calls, 2); XCTAssertEqual(probe.calls, 2)
+    }
+
+    func testCancelingOneHealthWaiterKeepsAnotherProbeAndListenerActive() async throws {
+        let listener = FakeLocalScannerListener(), factory = FakeLocalScannerFactory(), probe = ControlledLocalHealthProbe()
+        factory.listeners = [listener]
+        let server = server(factory, probe: probe.check); defer { server.stop() }
+        let first = Task { try await server.ensureReachable() }
+        try await waitFor { listener.starts == 1 }; listener.emit(.ready)
+        try await waitFor { probe.calls == 1 }
+        var secondEntered = false
+        let second = Task { secondEntered = true; try await server.ensureReachable() }
+        try await waitFor { secondEntered }
+        first.cancel()
+        do { try await first.value; XCTFail("Cancelled caller must stop waiting") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(listener.cancels, 0); XCTAssertEqual(probe.calls, 1)
+        probe.finish(0, reachable: true); try await second.value
+        XCTAssertEqual(factory.calls, 1)
+    }
+
+    func testCancelledOldProbeCannotRestartOrCompleteANewerHealthOperation() async throws {
+        let listener = FakeLocalScannerListener(), factory = FakeLocalScannerFactory(), probe = ControlledLocalHealthProbe()
+        factory.listeners = [listener]
+        let server = server(factory, probe: probe.check); defer { server.stop() }
+        let first = Task { try await server.ensureReachable() }
+        try await waitFor { listener.starts == 1 }; listener.emit(.ready)
+        try await waitFor { probe.calls == 1 }
+        first.cancel()
+        do { try await first.value; XCTFail("Cancelled caller must stop waiting") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        var completed = false
+        let next = Task { try await server.ensureReachable(); completed = true }
+        try await waitFor { probe.calls == 2 }
+        // Deliberately ignore cancellation in the fake transport, modeling a
+        // late browser/network callback from the previous owner.
+        probe.finish(0, reachable: false)
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertFalse(completed); XCTAssertEqual(listener.cancels, 0)
+        XCTAssertEqual(factory.calls, 1)
+        probe.finish(1, reachable: true); try await next.value
+        XCTAssertTrue(completed)
+    }
+
+    func testOldFailedProbeDoesNotRestartListenerAlreadyReplacedByAnotherClient() async throws {
+        let old = FakeLocalScannerListener(), replacement = FakeLocalScannerListener(), factory = FakeLocalScannerFactory()
+        let probe = ControlledLocalHealthProbe(); factory.listeners = [old, replacement]
+        let server = server(factory, probe: probe.check); defer { server.stop() }
+        let check = Task { try await server.ensureReachable() }
+        try await waitFor { old.starts == 1 }; old.emit(.ready)
+        try await waitFor { probe.calls == 1 }
+        let external = Task { try await server.restart() }
+        try await waitFor { replacement.starts == 1 }; replacement.emit(.ready); try await external.value
+        probe.finish(0, reachable: false)
+        try await waitFor { probe.calls == 2 }
+        XCTAssertEqual(factory.calls, 2); XCTAssertEqual(replacement.cancels, 0)
+        probe.finish(1, reachable: true); try await check.value
+        XCTAssertEqual(factory.calls, 2)
+    }
+
+    func testHealthProbeDeadlineCanRecoverWithoutWaitingForAnUncooperativeOldProbe() async throws {
+        let old = FakeLocalScannerListener(), replacement = FakeLocalScannerListener(), factory = FakeLocalScannerFactory()
+        let probe = ControlledLocalHealthProbe(); factory.listeners = [old, replacement]
+        let server = server(factory, probeTimeout: .milliseconds(100), probe: probe.check); defer { server.stop() }
+        let check = Task { try await server.ensureReachable() }
+        try await waitFor { old.starts == 1 }; old.emit(.ready)
+        try await waitFor { probe.calls == 1 }
+        try await waitFor { replacement.starts == 1 }; replacement.emit(.ready)
+        try await waitFor { probe.calls == 2 }; probe.finish(1, reachable: true)
+        try await check.value
+        probe.finish(0, reachable: false)
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(factory.calls, 2); XCTAssertEqual(replacement.cancels, 0)
+    }
+
+    func testStoppingServerCancelsHealthWaitersAndRetiresLateProbeFailure() async throws {
+        let listener = FakeLocalScannerListener(), factory = FakeLocalScannerFactory(), probe = ControlledLocalHealthProbe()
+        factory.listeners = [listener]
+        let server = server(factory, probe: probe.check)
+        let check = Task { try await server.ensureReachable() }
+        try await waitFor { listener.starts == 1 }; listener.emit(.ready)
+        try await waitFor { probe.calls == 1 }
+        server.stop()
+        do { try await check.value; XCTFail("Stopping must release health waiters") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        probe.finish(0, reachable: false)
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(factory.calls, 1)
+    }
+
+    private func server(_ factory: FakeLocalScannerFactory, timeout: Duration = .seconds(2),
+                        probeTimeout: Duration = .seconds(1), probe: LocalScannerServer.ReachabilityProbe? = nil) -> LocalScannerServer {
+        LocalScannerServer(listenerFactory: { try factory.make() }, startupTimeout: timeout, resourcesAvailable: { true },
+                           probeTimeout: probeTimeout, reachabilityProbe: probe)
     }
     private func waitFor(_ condition: @MainActor () -> Bool) async throws {
         for _ in 0..<100 {
@@ -185,6 +328,21 @@ import Network
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTFail("Listener operation did not begin"); throw URLError(.timedOut)
+    }
+}
+
+@MainActor private final class ControlledLocalHealthProbe {
+    private var pending: [CheckedContinuation<Bool, Error>?] = []
+    private(set) var tokens: [String] = []
+    private(set) var generations: [UUID] = []
+    var calls: Int { pending.count }
+    func check(token: String, generation: UUID) async throws -> Bool {
+        tokens.append(token); generations.append(generation)
+        return try await withCheckedThrowingContinuation { pending.append($0) }
+    }
+    func finish(_ index: Int, reachable: Bool) {
+        let continuation = pending[index]; pending[index] = nil
+        continuation?.resume(returning: reachable)
     }
 }
 

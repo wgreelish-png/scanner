@@ -53,6 +53,42 @@ class CIWorkflowTests(unittest.TestCase):
         self.assertEqual(selected_jobs(job="all", test="printer_transport"), {"tooling", "native", "release"})
         self.assertEqual(selected_jobs(job="all", test="navigation_price"), {"tooling", "native", "evidence_ui", "release"})
 
+    def test_scanner_polish_forces_focused_native_and_manual_ui_without_other_jobs(self):
+        self.assertIn("          - scanner_polish\n", WORKFLOW.split("      test_scope:\n", 1)[0])
+        for test_scope in ("all", "printer_transport", "label_controls", "label_preview", "label_queue",
+                           "show_readiness", "navigation_price", "camera_lifecycle"):
+            with self.subTest(test_scope=test_scope):
+                values = context(job="scanner_polish", test=test_scope)
+                self.assertEqual(selected_jobs(job="scanner_polish", test=test_scope), {"tooling", "native", "ui"})
+                for name in ("native", "ui"):
+                    scope = re.search(r"(?m)^          SCANNER_TEST_SCOPE: \$\{\{ (.+) \}\}$", JOBS[name])
+                    self.assertIsNotNone(scope)
+                    self.assertEqual(expression(scope.group(1), values), "scanner_polish")
+
+    def test_photo_scan_forces_focused_native_and_ui_without_other_jobs(self):
+        self.assertIn("          - photo_scan\n", WORKFLOW.split("      test_scope:\n", 1)[0])
+        for test_scope in ("all", "printer_transport", "label_controls", "label_preview", "label_queue",
+                           "show_readiness", "navigation_price", "camera_lifecycle"):
+            with self.subTest(test_scope=test_scope):
+                values = context(job="photo_scan", test=test_scope)
+                self.assertEqual(selected_jobs(job="photo_scan", test=test_scope), {"tooling", "native", "ui"})
+                for name in ("native", "ui"):
+                    scope = re.search(r"(?m)^          SCANNER_TEST_SCOPE: \$\{\{ (.+) \}\}$", JOBS[name])
+                    self.assertIsNotNone(scope)
+                    self.assertEqual(expression(scope.group(1), values), "photo_scan")
+
+    def test_camera_lifecycle_selects_native_without_unrelated_ui_jobs(self):
+        options = WORKFLOW.split("      test_scope:\n", 1)[1].split("\n# PRs", 1)[0]
+        self.assertIn("          - camera_lifecycle", options.splitlines())
+        self.assertEqual(selected_jobs(job="native", test="camera_lifecycle"), {"tooling", "native"})
+        self.assertEqual(selected_jobs(job="all", test="camera_lifecycle"), {"tooling", "native", "release"})
+        for job in ("ui", "research_ui", "evidence_ui", "budget_ui"):
+            with self.subTest(job=job):
+                self.assertEqual(selected_jobs(job=job, test="camera_lifecycle"), {"tooling"})
+        scope = re.search(r"(?m)^          SCANNER_TEST_SCOPE: \$\{\{ (.+) \}\}$", JOBS["native"])
+        self.assertIsNotNone(scope)
+        self.assertEqual(expression(scope.group(1), context(job="native", test="camera_lifecycle")), "camera_lifecycle")
+
     def test_linux_project_checker_dependencies_are_installed_before_checks(self):
         tooling = JOBS["tooling"]
         setup = tooling.index("uses: actions/setup-python@v5")

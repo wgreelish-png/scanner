@@ -274,6 +274,104 @@ class UIRunnerFlowTests(unittest.TestCase):
         for target in navigation_targets:
             self.assertRegex(navigation_source, r"\bfunc\s+" + target.rsplit("/", 1)[1] + r"\s*\(")
 
+    def test_scanner_polish_keeps_exact_native_and_ui_selections_and_owned_cleanup(self):
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/ios.yml").read_text()
+        jobs = dict(re.findall(r"(?ms)^  (\w+):\n(.*?)(?=^  \w+:\n|\Z)", workflow.split("\njobs:\n", 1)[1]))
+        expected = {
+            "native": tuple("CardShowScannerTests/" + name for name in (
+                "ManualCardSearchTests", "ManualCatalogFilterTests", "LocalScannerServerTests", "ScannerDiagnosticsTests",
+                "ScannerManualSearchLifecycleTests", "PhotoScanStateTests", "PhotoScanProviderPreferenceTests")),
+            "ui": tuple("CardShowScannerUITests/ReviewPresentationUITests/" + name for name in (
+                "testSuccessfulManualAddClosesBothSheetsAndCommitsOneRow",
+                "testCancellingManualConfirmationKeepsSearchAndDoesNotSave",
+                "testManualFiltersAndQuerySurviveConfirmationBack")) + (
+                    "CardShowScannerUITests/PhotoScanUITests/testPhotoCaptureRequiresRetakeAndRemembersMode",)
+        }
+        for name, block in jobs.items():
+            self.assertEqual("inputs.job_scope == 'scanner_polish'" in block.splitlines()[0], name in expected)
+        options = workflow.split("      test_scope:\n", 1)[1].split("\n# PRs", 1)[0]
+        self.assertNotIn("          - scanner_polish\n", options)
+        for name, targets in expected.items():
+            with self.subTest(job=name):
+                branch = re.search(r'elif \[ "\$SCANNER_TEST_SCOPE" = scanner_polish \]; then\n'
+                                   r'(.*?)(?=\n          (?:elif|else|fi)\b)', jobs[name], re.DOTALL)
+                self.assertIsNotNone(branch)
+                self.assertEqual(branch.group(1).replace("\\\n", " ").split(),
+                                 ["bash", "scripts/run_ios_tests.sh", *targets])
+                result, commands, _ = self.run_flow(target=targets[0], additional_targets=targets[1:])
+                self.assertEqual(result.returncode, 0, result.stderr)
+                action = "test" if name == "native" else "test-without-building"
+                test = next(row["args"] for row in commands if row["tool"] == "xcodebuild" and row["args"][0] == action)
+                self.assertEqual([value for value in test if value.startswith("-only-testing:")],
+                                 ["-only-testing:" + target for target in targets])
+                self.assertFalse(any(value.startswith("-skip-testing:") for value in test))
+                if name == "ui": self.assert_shutdown(commands)
+        for target in expected["ui"]:
+            source = (root / "UITests" / (target.split("/")[1] + ".swift")).read_text()
+            self.assertRegex(source, r"\bfunc\s+" + target.rsplit("/", 1)[1] + r"\s*\(")
+        for target in ("CardShowScannerTests/ManualCatalogFilterTestsTypo", expected["ui"][2] + "Typo"):
+            rejected, commands, _ = self.run_flow(target=target)
+            self.assertEqual(rejected.returncode, 2); self.assertFalse(commands)
+
+    def test_photo_scan_forces_only_its_native_and_ui_cases_and_preserves_runner_safety(self):
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/ios.yml").read_text()
+        jobs = dict(re.findall(r"(?ms)^  (\w+):\n(.*?)(?=^  \w+:\n|\Z)", workflow.split("\njobs:\n", 1)[1]))
+        expected = {
+            "native": tuple("CardShowScannerTests/" + name for name in (
+                "ScannerDiagnosticsTests", "PhotoScanStateTests", "PhotoScanProviderPreferenceTests",
+                "ScannerPageRecoveryTests", "ScannerManualSearchLifecycleTests")),
+            "ui": ("CardShowScannerUITests/PhotoScanUITests/testPhotoCaptureRequiresRetakeAndRemembersMode",)
+        }
+        for name, block in jobs.items():
+            self.assertEqual("inputs.job_scope == 'photo_scan'" in block.splitlines()[0], name in expected)
+        options = workflow.split("      test_scope:\n", 1)[1].split("\n# PRs", 1)[0]
+        self.assertNotIn("          - photo_scan\n", options)
+        for name, targets in expected.items():
+            with self.subTest(job=name):
+                branch = re.search(r'elif \[ "\$SCANNER_TEST_SCOPE" = photo_scan \]; then\n'
+                                   r'(.*?)(?=\n          (?:elif|else|fi)\b)', jobs[name], re.DOTALL)
+                self.assertIsNotNone(branch)
+                self.assertEqual(branch.group(1).replace("\\\n", " ").split(),
+                                 ["bash", "scripts/run_ios_tests.sh", *targets])
+                result, commands, _ = self.run_flow(target=targets[0], additional_targets=targets[1:])
+                self.assertEqual(result.returncode, 0, result.stderr)
+                action = "test" if name == "native" else "test-without-building"
+                test = next(row["args"] for row in commands if row["tool"] == "xcodebuild" and row["args"][0] == action)
+                self.assertEqual([value for value in test if value.startswith("-only-testing:")],
+                                 ["-only-testing:" + target for target in targets])
+                self.assertFalse(any(value.startswith("-skip-testing:") for value in test))
+                if name == "ui": self.assert_shutdown(commands)
+        source = (root / "UITests/PhotoScanUITests.swift").read_text()
+        self.assertRegex(source, r"\bfunc\s+testPhotoCaptureRequiresRetakeAndRemembersMode\s*\(")
+        for target in ("CardShowScannerTests/PhotoScanStateTestsTypo", expected["ui"][0] + "Typo"):
+            rejected, commands, _ = self.run_flow(target=target)
+            self.assertEqual(rejected.returncode, 2); self.assertFalse(commands)
+
+    def test_camera_lifecycle_scope_preserves_focused_native_selection(self):
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/ios.yml").read_text()
+        jobs = dict(re.findall(r"(?ms)^  (\w+):\n(.*?)(?=^  \w+:\n|\Z)", workflow.split("\njobs:\n", 1)[1]))
+        targets = tuple("CardShowScannerTests/" + name for name in (
+            "ScannerDiagnosticsTests", "DeviceHealthMonitorTests", "DeviceHealthValuesTests",
+            "ScannerPageRecoveryTests", "ScannerManualSearchLifecycleTests"))
+        branch = re.search(r'elif \[ "\$SCANNER_TEST_SCOPE" = camera_lifecycle \]; then\n'
+                           r'(.*?)(?=\n          (?:elif|else|fi)\b)', jobs["native"], re.DOTALL)
+        self.assertIsNotNone(branch)
+        self.assertEqual(branch.group(1).replace("\\\n", " ").split(),
+                         ["bash", "scripts/run_ios_tests.sh", *targets])
+        result, commands, _ = self.run_flow(target=targets[0], additional_targets=targets[1:])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.actions(commands), ["test"])
+        test = next(row["args"] for row in commands if row["tool"] == "xcodebuild")
+        self.assertEqual([value for value in test if value.startswith("-only-testing:")],
+                         ["-only-testing:" + target for target in targets])
+        self.assertFalse(any(value.startswith("-skip-testing:") for value in test))
+        self.assertFalse(any(row["args"][:2] == ["simctl", "create"] for row in commands))
+        for job in ("ui", "research_ui", "evidence_ui", "budget_ui"):
+            self.assertIn("inputs.test_scope != 'camera_lifecycle'", jobs[job].splitlines()[0])
+
     def test_log_review_job_uses_only_its_focused_native_and_ui_selections(self):
         root = Path(__file__).resolve().parents[1]
         workflow = (root / ".github/workflows/ios.yml").read_text()
@@ -292,7 +390,9 @@ class UIRunnerFlowTests(unittest.TestCase):
         for name, targets in expected.items():
             with self.subTest(job=name):
                 block = job_blocks[name]
-                scope = "inputs.job_scope == 'leftover_stock' && " + ("'leftover_stock'" if name == "ui" else "'all'") + " || "
+                scope = "inputs.job_scope == 'scanner_polish' && 'scanner_polish' || "
+                scope += "inputs.job_scope == 'photo_scan' && 'photo_scan' || "
+                scope += "inputs.job_scope == 'leftover_stock' && " + ("'leftover_stock'" if name == "ui" else "'all'") + " || "
                 scope += "inputs.job_scope == 'show_polish' && " + ("'show_polish'" if name == "ui" else "'all'") + " || "
                 scope += "inputs.job_scope == 'log_review' && 'log_review' || "
                 if name == "ui":
@@ -397,9 +497,14 @@ class UIRunnerFlowTests(unittest.TestCase):
             self.assert_shutdown(commands)
 
     def test_cleanup_hang_does_not_override_test_failure(self):
+        # A 200 ms budget can expire before a cold Python fake tool even starts
+        # on macOS. Allow interpreter startup while still timing out its 60 s
+        # hang; the real runner's production cleanup budget remains unchanged.
         result, commands, _ = self.run_flow(SCANNER_FAIL_ACTION="test-without-building",
-            SCANNER_HANG_SIMCTL="shutdown", SCANNER_CLEANUP_TIMEOUT_SECONDS="0.2")
+            SCANNER_HANG_SIMCTL="shutdown", SCANNER_CLEANUP_TIMEOUT_SECONDS="2")
         self.assertEqual(result.returncode, 19)
+        self.assertIn("UI simulator shutdown failed: Command exceeded", result.stderr)
+        self.assertIn("Dedicated UI simulator delete completed.", result.stderr)
         self.assert_shutdown(commands)
 
     def test_local_invocation_without_runner_temp(self):

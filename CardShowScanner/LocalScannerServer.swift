@@ -62,10 +62,12 @@ enum LocalScannerListenerState: Sendable {
 /// A loopback HTTP origin gives WebKit a trustworthy local camera/worker context.
 /// Serves bundled assets and authenticated game-cache records; never a general file or network proxy.
 @MainActor final class LocalScannerServer {
+    typealias ReachabilityProbe = @MainActor (_ token: String, _ generation: UUID) async throws -> Bool
     static let shared = LocalScannerServer()
     static let port: UInt16 = 18764 // Stable origin preserves the game's IndexedDB downloads.
     static let origin = "http://127.0.0.1:\(port)"
     static let pageURL = URL(string: origin + "/index.html")!
+    private static let healthURL = URL(string: origin + "/scanner-health")!
     let cacheToken = UUID().uuidString
     private var connections: [UUID: (connection: NWConnection, buffer: RequestBuffer)] = [:]
     private var listener: (any LocalScannerListening)?
@@ -80,12 +82,154 @@ enum LocalScannerListenerState: Sendable {
     private let listenerFactory: @MainActor () throws -> any LocalScannerListening
     private let resourcesAvailable: @MainActor () -> Bool
     private let startupTimeout: Duration
+    private let reachabilityProbe: ReachabilityProbe
+    private let probeTimeout: Duration
+    private var healthID: UUID?
+    private var healthTask: Task<Void, Never>?
+    private var healthWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
+    private var probeID: UUID?
+    private var probeTask: Task<Void, Never>?
+    private var probeDeadline: Task<Void, Never>?
+    private var probeContinuation: CheckedContinuation<Bool, Error>?
 
     init(listenerFactory: (@MainActor () throws -> any LocalScannerListening)? = nil,
-         startupTimeout: Duration = .seconds(5), resourcesAvailable: (@MainActor () -> Bool)? = nil) {
+         startupTimeout: Duration = .seconds(5), resourcesAvailable: (@MainActor () -> Bool)? = nil,
+         probeTimeout: Duration = .seconds(1), reachabilityProbe: ReachabilityProbe? = nil) {
         self.listenerFactory = listenerFactory ?? { try NetworkScannerListener() }
         self.resourcesAvailable = resourcesAvailable ?? { Bundle.main.url(forResource: "ScannerRuntime", withExtension: nil) != nil }
         self.startupTimeout = startupTimeout
+        self.probeTimeout = probeTimeout
+        self.reachabilityProbe = reachabilityProbe ?? Self.probeLoopback
+    }
+
+    /// A cached NWListener.ready is not proof that its loopback socket survived
+    /// suspension. One foreground check is shared by all current callers. A
+    /// failed probe gets one replacement and verification, never a retry loop.
+    func ensureReachable() async throws {
+        try Task.checkCancellation()
+        let waiter = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                guard !Task.isCancelled else { continuation.resume(throwing: CancellationError()); return }
+                healthWaiters[waiter] = continuation
+                guard healthTask == nil else { return }
+                let id = UUID(); healthID = id
+                healthTask = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    do { try await self.verifyReachability(id); self.finishHealth(id, result: .success(Void())) }
+                    catch { self.finishHealth(id, result: .failure(error)) }
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.cancelHealthWaiter(waiter) }
+        }
+        try Task.checkCancellation()
+    }
+
+    private func verifyReachability(_ id: UUID) async throws {
+        for attempt in 0..<2 {
+            try requireCurrentHealth(id)
+            try await start()
+            let checkedGeneration = generation
+            let reachable = try await boundedProbe(health: id, generation: checkedGeneration)
+            try requireCurrentHealth(id)
+            // Another client may already have replaced the listener while this
+            // operation awaited I/O. An old failure cannot restart that socket.
+            guard generation == checkedGeneration else {
+                if attempt == 0 { continue }
+                throw LocalScannerFailure.listenerUnavailable
+            }
+            if reachable { return }
+            guard attempt == 0 else { throw LocalScannerFailure.listenerUnavailable }
+            DiagnosticLog.shared.record("local_server.health_recovery", ["phase": "foreground"])
+            try await restart()
+        }
+        throw LocalScannerFailure.listenerUnavailable
+    }
+
+    private func requireCurrentHealth(_ id: UUID) throws {
+        try Task.checkCancellation()
+        guard healthID == id, !healthWaiters.isEmpty else { throw CancellationError() }
+    }
+
+    private func boundedProbe(health: UUID, generation: UUID) async throws -> Bool {
+        let id = UUID()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Bool, Error>) in
+                guard healthID == health, !Task.isCancelled else { continuation.resume(throwing: CancellationError()); return }
+                probeID = id; probeContinuation = continuation
+                let timeout = probeTimeout
+                probeDeadline = Task { @MainActor [weak self] in
+                    do { try await Task.sleep(for: timeout) } catch { return }
+                    self?.finishProbe(id, result: .success(false))
+                }
+                probeTask = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    do {
+                        let reachable = try await self.reachabilityProbe(self.cacheToken, generation)
+                        self.finishProbe(id, result: .success(reachable))
+                    } catch {
+                        self.finishProbe(id, result: .success(false))
+                    }
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.finishProbe(id, result: .failure(CancellationError())) }
+        }
+    }
+
+    private func finishProbe(_ id: UUID, result: Result<Bool, Error>) {
+        guard probeID == id else { return }
+        probeID = nil
+        let continuation = probeContinuation; probeContinuation = nil
+        probeTask?.cancel(); probeTask = nil; probeDeadline?.cancel(); probeDeadline = nil
+        continuation?.resume(with: result)
+    }
+
+    private func finishHealth(_ id: UUID, result: Result<Void, Error>) {
+        guard healthID == id else { return }
+        healthID = nil; healthTask = nil
+        let pending = Array(healthWaiters.values); healthWaiters.removeAll()
+        for continuation in pending { continuation.resume(with: result) }
+    }
+
+    private func cancelHealthWaiter(_ id: UUID) {
+        healthWaiters.removeValue(forKey: id)?.resume(throwing: CancellationError())
+        guard healthWaiters.isEmpty else { return }
+        cancelHealth()
+    }
+
+    private func cancelHealth() {
+        healthID = nil
+        healthTask?.cancel(); healthTask = nil
+        if let probeID { finishProbe(probeID, result: .failure(CancellationError())) }
+        let pending = Array(healthWaiters.values); healthWaiters.removeAll()
+        for continuation in pending { continuation.resume(throwing: CancellationError()) }
+    }
+
+    private static func healthBody(token: String, generation: UUID) -> Data {
+        Data((token + ":" + generation.uuidString).utf8)
+    }
+
+    private static func probeLoopback(token: String, generation: UUID) async throws -> Bool {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpCookieStorage = nil; configuration.httpShouldSetCookies = false
+        configuration.urlCredentialStorage = nil; configuration.urlCache = nil
+        configuration.timeoutIntervalForRequest = 1; configuration.timeoutIntervalForResource = 1
+        let session = URLSession(configuration: configuration, delegate: LocalScannerHealthRedirectBlocker(), delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        var request = URLRequest(url: healthURL, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 1)
+        request.setValue(token, forHTTPHeaderField: "X-Scanner-Cache")
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let response = response as? HTTPURLResponse, response.statusCode == 200,
+              response.url == healthURL, response.expectedContentLength <= 128 else { return false }
+        var body = Data()
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            guard body.count < 128 else { return false }
+            body.append(byte)
+        }
+        return body == healthBody(token: token, generation: generation)
     }
 
     func start() async throws {
@@ -113,6 +257,7 @@ enum LocalScannerListenerState: Sendable {
         try await start()
     }
     func stop() {
+        cancelHealth()
         DiagnosticLog.shared.record("local_server.stopped", ["phase": "lifecycle"])
         invalidate(CancellationError())
     }
@@ -239,6 +384,15 @@ enum LocalScannerListenerState: Sendable {
         guard target.hasPrefix("/"), let components = URLComponents(string: Self.origin + target), components.host == "127.0.0.1" else {
             send(connection, buffer: buffer, status: "400 Bad Request", data: Data()); return
         }
+        if components.path == "/scanner-health" {
+            guard method == "GET", components.query == nil, body.isEmpty else {
+                send(connection, buffer: buffer, status: "400 Bad Request", data: Data()); return
+            }
+            guard ScannerCacheRequestPolicy.permits(headers: headers, origin: Self.origin, token: cacheToken) else {
+                send(connection, buffer: buffer, status: "403 Forbidden", data: Data()); return
+            }
+            send(connection, buffer: buffer, status: "200 OK", data: Self.healthBody(token: cacheToken, generation: generation)); return
+        }
         if components.path.hasPrefix("/scanner-cache/") {
             guard ScannerCacheRequestPolicy.permits(headers: headers, origin: Self.origin, token: cacheToken) else {
                 send(connection, buffer: buffer, status: "403 Forbidden", data: Data()); return
@@ -324,6 +478,14 @@ enum LocalScannerListenerState: Sendable {
         var body = Data(header.utf8); body.append(data)
         connection.send(content: body, completion: .contentProcessed { _ in Task { @MainActor in self.close(connection, buffer: buffer) } })
     }
+}
+
+/// Health requests never follow redirects, so the instance token remains on
+/// the exact loopback origin even if an unrelated process owns the old port.
+private final class LocalScannerHealthRedirectBlocker: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
 }
 
 enum LocalScannerFailure: LocalizedError, Equatable {

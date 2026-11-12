@@ -24,6 +24,7 @@ import XCTest
         let app = launchManualAdd()
         defer { app.terminate() }
         let add = await openManualCardConfirmation(in: app)
+        XCTAssertLessThanOrEqual(app.sheets.count, 1, "Manual confirmation uses the existing search sheet")
         _ = UITestInteraction.tap(add, in: app)
 
         let returned = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == true"), object: app.buttons["manualAdd.open"])
@@ -55,6 +56,43 @@ import XCTest
         XCTAssertEqual(app.staticTexts["manualAdd.quantity"].label, "Cards: 0")
         XCTAssertEqual(app.staticTexts["manualAdd.savedRows"].label, "Saved rows: 0")
         XCTAssertFalse(app.staticTexts["manualAdd.card"].exists)
+    }
+
+    func testManualFiltersAndQuerySurviveConfirmationBack() async throws {
+        continueAfterFailure = false
+        let app = launchManualAdd()
+        defer { app.terminate() }
+        _ = UITestInteraction.tap(app.buttons["manualAdd.open"], in: app)
+        let query = app.textFields["catalog.query"]
+        XCTAssertTrue(query.waitForExistence(timeout: 5))
+        _ = UITestInteraction.tap(query, in: app); query.typeText("Synthetic")
+        _ = UITestInteraction.tap(app.buttons["catalog.filters"], in: app)
+        let set = app.textFields["catalog.setFilter"], number = app.textFields["catalog.numberFilter"]
+        XCTAssertTrue(set.waitForExistence(timeout: 5))
+        _ = UITestInteraction.tap(set, in: app); set.typeText("test")
+        _ = UITestInteraction.tap(number, in: app); number.typeText("1")
+        _ = UITestInteraction.tap(app.buttons["catalog.keyboardDone"], in: app)
+        let result = app.buttons["catalog.result.mock:manual-add:1"]
+        let available = expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: result)
+        await fulfillment(of: [available], timeout: 5)
+        _ = UITestInteraction.tap(result, in: app)
+        XCTAssertTrue(app.navigationBars["Confirm Card"].waitForExistence(timeout: 5))
+        XCTAssertLessThanOrEqual(app.sheets.count, 1, "Confirmation is a page in the single presented search flow")
+        _ = UITestInteraction.tapToolbar(app.navigationBars["Confirm Card"].buttons["Cancel"], in: app)
+        XCTAssertTrue(query.waitForExistence(timeout: 5))
+        XCTAssertEqual(query.value as? String, "Synthetic")
+        XCTAssertEqual(set.value as? String, "test")
+        XCTAssertEqual(number.value as? String, "1")
+        XCTAssertTrue(result.exists)
+        _ = UITestInteraction.tap(result, in: app)
+        let add = app.buttons["catalog.confirmAdd"]
+        let priced = expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: add)
+        await fulfillment(of: [priced], timeout: 5)
+        _ = UITestInteraction.tap(add, in: app)
+        let returned = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: app.buttons["manualAdd.open"])
+        await fulfillment(of: [returned], timeout: 5)
+        XCTAssertFalse(app.navigationBars["Search & Add"].exists)
+        XCTAssertEqual(app.staticTexts["manualAdd.quantity"].label, "Cards: 1")
     }
 
     func testListLookupStaysVisibleAfterScrollingAndPreservesCardsAndOfferDraft() async throws {

@@ -10,35 +10,60 @@ function deferred() {
   return { promise, resolve, reject };
 }
 function harness({ denyCamera = false, cacheState = 'ok', beforePackReady, acquireCamera, playVideo,
-  cameraConstraintsSupported = false, applyCameraConstraints, cameraSettings } = {}) {
+  cameraConstraintsSupported = false, applyCameraConstraints, cameraSettings, scanPhoto, createPhotoBitmap, videoSize,
+  videoFrameCallbacks = false, monotonicClock = true } = {}) {
   const messages = [], elements = [], events = new Map(), windowEvents = new Map(), trackEvents = new Map(), draws = [];
   let overlayDestroyed = 0;
-  const packOptions = [], cameraTracks = [], cameraConstraintCalls = [];
-  const timers = new Map(), frames = new Map(); let scheduleID = 0;
-  let captureOptions, scannerOptions, scannerStarts = 0, activeLoops = 0, cameraRequests = 0, stopped = 0, disposed = 0, now = 0;
+  const packOptions = [], cameraTracks = [], cameraConstraintCalls = [], photoCalls = [], bitmaps = [], photoDraws = [];
+  const timers = new Map(), frames = new Map(), videoFrames = new Map(); let scheduleID = 0;
+  let captureOptions, scannerOptions, scannerStarts = 0, activeLoops = 0, cameraRequests = 0, stopped = 0, disposed = 0, packSets = 0, now = 0;
   const element = tag => {
     const e = { tag, style: {}, children: [], append(...items) { this.children.push(...items); }, setAttribute() {},
-      remove() { this.removed = true; }, async play() { await playVideo?.(); } };
+      remove() { this.removed = true; }, async play() { await playVideo?.(); },
+      videoWidth: videoSize?.[0] ?? 1920, videoHeight: videoSize?.[1] ?? 1080,
+      getContext() { return { drawImage(...args) { photoDraws.push({ args, tracksLive: cameraTracks.some(track => track.readyState === 'live') }); } }; } };
+    if (tag === 'video' && videoFrameCallbacks) {
+      e.requestVideoFrameCallback = fn => { const id = ++scheduleID; videoFrames.set(id, fn); return id; };
+      e.cancelVideoFrameCallback = id => videoFrames.delete(id);
+    }
     elements.push(e); return e;
   };
   const body = element('body');
   const document = { body, hidden: false, createElement: element,
     addEventListener(name, fn) { events.set(name, fn); }, removeEventListener(name) { events.delete(name); } };
-  const backend = { setPack() {}, dispose() { disposed++; } };
+  const backend = { setPack() { packSets++; }, dispose() { disposed++; },
+    async scanImage(bitmap, options) {
+      photoCalls.push({ bitmap, options: clean(options), tracksStopped: cameraTracks.every(track => track.readyState === 'ended') });
+      try { return scanPhoto ? await scanPhoto(bitmap, options) : photoResult(); }
+      finally { bitmap.close(); }
+    } };
+
   const modules = {
     'core/pack.js': { async loadPack(game, progress, options) {
       packOptions.push(options);
       if (game !== 'tcgp:3') throw new Error('No downloadable pack is available for this game.');
       progress(1, 1, { downloaded: 0, total: 0, cache: cacheState, cachedHashShards: 1, cachedMetaShards: 1, storage: { persisted: false } });
       await beforePackReady?.();
-      return { game };
+      return { game, refs: Array.from({ length: 8 }, (_, index) => tuple(123 + index)) };
+    } },
+    'app/desk-results.js': { candidatesFrom(pack, result, max) {
+      return (result.mockCands || result.top || [result.best]).slice(0, max).map(row => ({
+        tuple: pack.refs[row.i], ref: pack.refs[row.i]?.[0], confidence: row.confidence ?? result.confidence,
+        printingState: row.printing?.state ?? result.best.printing?.state
+      }));
     } },
     'app/scan-backends.js': { createBackend: async () => backend },
     'core/overlay.js': { createOverlay: () => ({ draw(options) { draws.push(options); }, clear() {}, setSource() {}, destroy() { overlayDestroyed++; } }) },
     'app/quickscan.js': { startQuickScan(options) { scannerStarts++; activeLoops++; scannerOptions = options; let active = true; return () => { if (active) { active = false; activeLoops--; stopped++; } }; } },
     'app/shared.js': { useScope(scope) { assert.equal(scope, 'price'); }, catalogDetail() {} }
   };
-  const sandbox = { URL, console, document, performance: { now: () => now },
+  const sandbox = { URL, console, document,
+    async createImageBitmap(canvas) {
+      if (createPhotoBitmap) await createPhotoBitmap(canvas);
+      const bitmap = { width: canvas.width, height: canvas.height, closed: false, close() { this.closed = true; } };
+      bitmaps.push(bitmap); return bitmap;
+    },
+    performance: monotonicClock ? { now: () => now } : undefined,
     setTimeout(fn, delay) { const id = ++scheduleID; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); },
     requestAnimationFrame(fn) { const id = ++scheduleID; frames.set(id, fn); return id; }, cancelAnimationFrame(id) { frames.delete(id); },
     navigator: { mediaDevices: { async getUserMedia(options) {
@@ -67,11 +92,18 @@ function harness({ denyCamera = false, cacheState = 'ok', beforePackReady, acqui
   return { bridge: sandbox.CardShowBridge, messages, elements, events, windowEvents, trackEvents, draws, document, timers, frames,
     flushTimers() { const pending = [...timers.values()]; timers.clear(); for (const timer of pending) timer.fn(); },
     flushFrames() { const pending = [...frames.values()]; frames.clear(); for (const frame of pending) frame(); },
+    videoFrames,
+    emitVideoFrame(metadata) { const pending = [...videoFrames.values()]; videoFrames.clear(); for (const fn of pending) fn(now, metadata); },
     get overlayDestroyed() { return overlayDestroyed; }, advance(ms) { now += ms; },
-    packOptions, cameraTracks, cameraConstraintCalls, get activeLoops() { return activeLoops; }, get scannerOptions() { return scannerOptions; }, get scannerStarts() { return scannerStarts; }, get cameraRequests() { return cameraRequests; }, get captureOptions() { return captureOptions; }, get stopped() { return stopped; }, get disposed() { return disposed; } };
+    packOptions, cameraTracks, cameraConstraintCalls, photoCalls, bitmaps, photoDraws, get activeLoops() { return activeLoops; }, get scannerOptions() { return scannerOptions; }, get scannerStarts() { return scannerStarts; }, get cameraRequests() { return cameraRequests; }, get captureOptions() { return captureOptions; }, get stopped() { return stopped; }, get disposed() { return disposed; }, get packSets() { return packSets; } };
 }
 const tuple = (id = 123, variants = [{ id: 10, label: 'Normal', nm: 1.25, primary: true }, { id: 11, label: 'Holofoil', nm: 2.5 }]) =>
   [`p:${id}`, `Sample ${id}`, '1/10', 'DEMO', 'Demo Set', '', 'https://cdn.tcgtracking.com/test.jpg', variants];
+function photoResult({ accepted = true, score = 96, count = 1, printingState = 'ambiguous' } = {}) {
+  return { cards: count ? [{ result: { accepted, confidence: score, gap: 3,
+    best: { i: 0, d: 7, confidence: score, printing: { state: printingState } },
+    top: Array.from({ length: 7 }, (_, i) => ({ i, confidence: score - i, d: 7 + i })) } }] : [], ms: { total: 44 } };
+}
 function settle(h, view) {
   h.scannerOptions.onShow(view);
   for (let i = 0; i < 2; i++) {
@@ -809,7 +841,7 @@ test('normal resource mode preserves the default scheduler; reduced mode bounds 
   assert.equal(h.cameraRequests, 1); assert.equal(h.packOptions.length, 1);
   const schedule = h.scannerOptions.frame; let ticks = 0;
   const cancel = schedule({}, () => ticks++);
-  assert.deepEqual([...h.timers.values()].map(timer => timer.delay), [200]);
+  assert.deepEqual([...h.timers.values()].filter(timer => timer.delay !== 5000).map(timer => timer.delay), [200]);
   assert.equal(ticks, 0); h.flushTimers(); assert.equal(ticks, 0);
   h.flushFrames(); assert.equal(ticks, 1); cancel();
   const cancelBeforeTimer = schedule({}, () => ticks++); cancelBeforeTimer(); h.flushTimers(); h.flushFrames();
@@ -953,10 +985,12 @@ test('a frozen native review stops all recognition callbacks and stays stopped a
   oldLoop.overlay.draw({ quad: [[0, 0]] });
   assert.equal(h.messages.filter(message => message.event === 'scan_stats').length, stats);
   assert.equal(h.draws.length, draws);
-  h.bridge.setResourceMode('reduced', 'review-load'); h.bridge.setResourceMode('normal', 'review-load');
+  h.bridge.setResourceMode('reduced', 'review-load'); await finishCameraWork();
+  assert.equal(h.cameraTracks[0].fps, 10); assert.equal(h.activeLoops, 0);
+  h.bridge.setResourceMode('normal', 'review-load');
   await finishCameraWork();
   assert.equal(h.scannerStarts, starts); assert.equal(h.activeLoops, 0);
-  assert.equal(h.cameraTracks[0].fps, 1); assert.equal(cameraWorkloads(h).at(-1).processingActive, false);
+  assert.equal(h.cameraTracks[0].fps, 30); assert.equal(cameraWorkloads(h).at(-1).processingActive, false);
   assert.equal(cameraWorkloads(h).at(-1).captureState, 'review');
   assert.equal(h.cameraRequests, 1); assert.equal(h.packOptions.length, 1);
   h.bridge.releaseReview(); assert.equal(h.activeLoops, 1);
@@ -970,9 +1004,10 @@ test('a pending manual-search prompt stops work until the existing decision resu
   await h.bridge.install({ nonce: 'prompt-load', game: 'tcgp:3', autoStart: true });
   await waitOnCard(h); await finishCameraWork();
   assert.equal(manualSuggestions(h).length, 1); assert.equal(h.activeLoops, 0);
-  assert.equal(h.cameraTracks[0].fps, 1); const starts = h.scannerStarts;
+  assert.equal(h.cameraTracks[0].fps, 30); const starts = h.scannerStarts;
   h.bridge.setResourceMode('reduced', 'prompt-load'); await finishCameraWork();
   assert.equal(h.scannerStarts, starts); assert.equal(h.activeLoops, 0);
+  assert.equal(h.cameraTracks[0].fps, 10);
   assert.equal(cameraWorkloads(h).at(-1).captureState, 'prompt');
   h.bridge.resumeAfterManualSearchPrompt(); await finishCameraWork();
   assert.equal(h.activeLoops, 1); assert.equal(h.cameraTracks[0].fps, 10);
@@ -980,15 +1015,15 @@ test('a pending manual-search prompt stops work until the existing decision resu
   h.bridge.stop();
 });
 
-test('manual entry lowers capture while retaining its mounted warm stream and reuses database on return', async () => {
+test('manual entry pauses recognition while keeping the preview smooth and reuses database on return', async () => {
   const h = harness({ cameraConstraintsSupported: true });
   await h.bridge.install({ nonce: 'manual-load', game: 'tcgp:3', autoStart: true });
   const video = h.elements.find(element => element.tag === 'video'), stream = video.srcObject;
   h.bridge.suspendForManualSearch('manual-load'); await finishCameraWork();
   assert.equal(h.activeLoops, 0); assert.equal(video.srcObject, stream);
-  assert.equal(h.cameraTracks[0].readyState, 'live'); assert.equal(h.cameraTracks[0].fps, 1);
+  assert.equal(h.cameraTracks[0].readyState, 'live'); assert.equal(h.cameraTracks[0].fps, 30);
   h.bridge.setResourceMode('reduced', 'manual-load'); await finishCameraWork();
-  assert.equal(h.activeLoops, 0); assert.equal(h.cameraTracks[0].fps, 1);
+  assert.equal(h.activeLoops, 0); assert.equal(h.cameraTracks[0].fps, 10);
   await h.bridge.resumeAfterManualSearch('manual-load'); await finishCameraWork();
   assert.equal(h.activeLoops, 1); assert.equal(h.cameraTracks[0].fps, 10);
   assert.equal(video.srcObject, stream); assert.equal(h.cameraRequests, 1);
@@ -1008,10 +1043,81 @@ test('camera constraints are serialized with one latest pending target and no st
   assert.equal(h.cameraConstraintCalls.length, 1, 'Readiness changes cannot launch concurrent operations');
   first.resolve(); await finishCameraWork();
   assert.equal(peak, 1);
-  assert.deepEqual(h.cameraConstraintCalls.map(call => call.constraints.frameRate.ideal), [30, 1]);
-  assert.equal(h.cameraTracks[0].fps, 1); assert.equal(h.activeLoops, 0);
+  assert.deepEqual(h.cameraConstraintCalls.map(call => call.constraints.frameRate.ideal), [30, 10]);
+  assert.equal(h.cameraTracks[0].fps, 10); assert.equal(h.activeLoops, 0);
   const applied = cameraWorkloads(h).filter(message => message.constraintState === 'applied');
-  assert.deepEqual(applied.map(message => [message.captureState, message.targetFPS]), [['manual', 1]]);
+  assert.deepEqual(applied.map(message => [message.captureState, message.targetFPS]), [['manual', 10]]);
+  h.bridge.stop();
+});
+
+test('manual, review and prompt transitions reuse the successful preview rate without reconfiguring the camera', async () => {
+  for (const [mode, fps] of [['normal', 30], ['reduced', 10]]) {
+    const h = harness({ cameraConstraintsSupported: true });
+    await h.bridge.install({ nonce: 'smooth', game: 'tcgp:3', autoStart: true, resourceMode: mode });
+    await finishCameraWork();
+    assert.equal(h.cameraConstraintCalls.length, 1);
+    settle(h, { ref: tuple(), accepted: true, confidence: 96 }); await finishCameraWork();
+    assert.equal(h.activeLoops, 0); assert.equal(h.cameraTracks[0].fps, fps);
+    assert.equal(cameraWorkloads(h).at(-1).captureState, 'review');
+    assert.equal(cameraWorkloads(h).at(-1).processingActive, false);
+    for (let i = 0; i < 5; i++) {
+      h.bridge.suspendForManualSearch('smooth');
+      assert.equal(h.activeLoops, 0); assert.equal(h.cameraTracks[0].fps, fps);
+      await h.bridge.resumeAfterManualSearch('smooth');
+    }
+    await finishCameraWork();
+    assert.equal(h.activeLoops, 1); assert.equal(h.cameraTracks[0].fps, fps);
+    await waitOnCard(h); await finishCameraWork();
+    assert.equal(h.activeLoops, 0); assert.equal(h.cameraTracks[0].fps, fps);
+    assert.equal(cameraWorkloads(h).at(-1).captureState, 'prompt');
+    h.bridge.resumeAfterManualSearchPrompt(); await finishCameraWork();
+    assert.equal(h.activeLoops, 1); assert.equal(h.cameraTracks[0].fps, fps);
+    assert.equal(h.cameraConstraintCalls.length, 1, 'Only changing presentation or processing state must not reconfigure the same track');
+    assert.equal(h.cameraRequests, 1); assert.equal(h.packOptions.length, 1); assert.equal(h.disposed, 0);
+    h.bridge.stop();
+  }
+});
+
+test('cooling recovery reacquires a smooth preview without resuming an unresolved review or prompt', async () => {
+  for (const [mode, fps] of [['normal', 30], ['reduced', 10]]) {
+    for (const state of ['review', 'prompt']) {
+      const h = harness({ cameraConstraintsSupported: true });
+      await h.bridge.install({ nonce: 'held-preview', game: 'tcgp:3', autoStart: true, resourceMode: mode });
+      if (state === 'review') settle(h, { ref: tuple(), accepted: true, confidence: 96 });
+      else await waitOnCard(h);
+      assert.equal(h.activeLoops, 0);
+      h.bridge.setResourceMode('cooling', 'held-preview');
+      assert.equal(h.cameraTracks[0].readyState, 'ended');
+      h.bridge.setResourceMode(mode, 'held-preview'); await waitForCameraReady(h, 2); await finishCameraWork();
+      assert.deepEqual(clean(h.captureOptions.video.frameRate), { ideal: fps, max: fps });
+      assert.equal(h.cameraTracks[1].fps, fps); assert.equal(h.activeLoops, 0);
+      assert.equal(cameraWorkloads(h).at(-1).captureState, state);
+      assert.equal(cameraWorkloads(h).at(-1).processingActive, false);
+      assert.equal(h.cameraRequests, 2); assert.equal(h.packOptions.length, 1); assert.equal(h.disposed, 0);
+      if (state === 'review') h.bridge.releaseReview(); else h.bridge.resumeAfterManualSearchPrompt();
+      await finishCameraWork();
+      assert.equal(h.activeLoops, 1); assert.equal(h.cameraTracks[1].fps, fps);
+      assert.equal(h.cameraConstraintCalls.length, 2, 'A replacement stream needs its own successful target; releasing its sheet does not');
+      h.bridge.stop();
+    }
+  }
+});
+
+test('a rejected rate change cannot reuse an earlier successful target or mask another failure', async () => {
+  let attempts = 0;
+  const h = harness({ applyCameraConstraints: async () => {
+    if ([2, 3].includes(++attempts)) throw new Error('PRIVATE_CAMERA_ERROR');
+  } });
+  await h.bridge.install({ nonce: 'rate-failure', game: 'tcgp:3', autoStart: true }); await finishCameraWork();
+  h.bridge.setResourceMode('reduced', 'rate-failure'); await finishCameraWork();
+  assert.equal(cameraWorkloads(h).at(-1).constraintState, 'failed');
+  h.bridge.setResourceMode('normal', 'rate-failure'); await finishCameraWork();
+  assert.equal(cameraWorkloads(h).at(-1).constraintState, 'failed');
+  h.bridge.suspendForManualSearch('rate-failure'); await finishCameraWork();
+  assert.deepEqual(h.cameraConstraintCalls.map(call => call.constraints.frameRate.ideal), [30, 10, 30, 30]);
+  assert.equal(cameraWorkloads(h).at(-1).constraintState, 'applied');
+  assert.equal(h.cameraTracks[0].fps, 30); assert.equal(h.activeLoops, 0);
+  assert.equal(JSON.stringify(cameraWorkloads(h)).includes('PRIVATE_CAMERA_ERROR'), false);
   h.bridge.stop();
 });
 
@@ -1096,4 +1202,290 @@ test('cooling or terminal stop during unsupported camera acquisition cannot trig
     assert.equal(h.messages.filter(message => message.event === 'startup_failed').length, 0);
     if (action === 'cooling') h.bridge.stop();
   }
+});
+
+
+const photoStates = h => h.messages.filter(message => message.kind === 'photoState').map(message => message.photoState);
+
+test('photo mode scans one bounded frozen frame with camera stopped and retains a warm backend for the next photo', async () => {
+  const h = harness({ cameraConstraintsSupported: true, videoSize: [4000, 3000] });
+  await h.bridge.install({ nonce: 'photo', game: 'tcgp:3', autoStart: true, captureMode: 'photo' });
+  assert.equal(h.activeLoops, 0); assert.equal(h.scannerStarts, 0); assert.equal(photoStates(h).at(-1), 'framing');
+  assert.equal(await h.bridge.capturePhoto('wrong'), false);
+  assert.equal(await h.bridge.capturePhoto('photo'), true);
+  assert.equal(h.photoDraws[0].tracksLive, true, 'Pixels are copied before capture is stopped');
+  assert.deepEqual(h.photoDraws[0].args.slice(1), [0, 0, 2048, 1536]);
+  assert.equal(h.photoCalls.length, 1); assert.equal(h.photoCalls[0].tracksStopped, true);
+  assert.deepEqual(h.photoCalls[0].options, { maxCards: 1 }); assert.equal(h.bitmaps[0].closed, true);
+  assert.equal(h.activeLoops, 0); assert.equal(h.scannerStarts, 0); assert.equal(h.cameraTracks[0].readyState, 'ended');
+  const result = h.messages.find(message => message.kind === 'scan');
+  assert.equal(result.accepted, true); assert.equal(result.confidence, 96); assert.equal(result.candidates.length, 5);
+  assert.equal(result.candidates[0].requiresPrintingSelection, true);
+  assert.equal(result.candidates[0].printings[1].skuID, '11'); assert.equal(photoStates(h).at(-1), 'ready');
+  const beforeRelease = h.cameraRequests; h.bridge.releaseReview('p:123');
+  assert.equal(h.cameraRequests, beforeRelease); assert.equal(h.activeLoops, 0);
+  assert.equal(await h.bridge.retakePhoto('photo'), true);
+  assert.equal(photoStates(h).at(-1), 'framing'); assert.equal(h.cameraRequests, 2);
+  h.bridge.releaseReview('p:123');
+  assert.equal(photoStates(h).at(-1), 'framing', 'A late release of the previous review cannot change a new framing phase');
+  assert.equal(h.packOptions.length, 1); assert.equal(h.disposed, 0); assert.equal(h.packSets, 1); assert.equal(h.activeLoops, 0);
+  assert.equal(await h.bridge.capturePhoto('photo'), true);
+  assert.equal(h.messages.filter(message => message.kind === 'scan').length, 2);
+  assert.ok(h.messages.filter(message => message.kind === 'hide').length >= 2, 'Every explicit photo begins a fresh recognition episode');
+  h.bridge.stop();
+});
+
+test('a missing or weak photo result leaves capture off and offers a retake without fabricating confidence', async () => {
+  for (const result of [photoResult({ count: 0 }), photoResult({ accepted: false, score: 49 })]) {
+    const h = harness({ scanPhoto: async () => result });
+    await h.bridge.install({ nonce: 'no-photo-match', game: 'tcgp:3', autoStart: true, captureMode: 'photo' });
+    assert.equal(await h.bridge.capturePhoto('no-photo-match'), true);
+    assert.equal(photoStates(h).at(-1), 'noMatch'); assert.equal(h.activeLoops, 0);
+    assert.equal(h.messages.some(message => message.kind === 'scan'), false); assert.equal(h.cameraRequests, 1);
+    h.bridge.releaseReview(); await finishCameraWork(); assert.equal(h.cameraRequests, 1);
+    h.bridge.stop();
+  }
+  const h = harness({ scanPhoto: async () => photoResult({ accepted: false, score: 64 }) });
+  await h.bridge.install({ nonce: 'guess-photo', game: 'tcgp:3', autoStart: true, captureMode: 'photo' });
+  await h.bridge.capturePhoto('guess-photo');
+  const guess = h.messages.find(message => message.kind === 'scan');
+  assert.equal(guess.accepted, false); assert.equal(guess.confidence, 64);
+  h.bridge.stop();
+});
+
+test('manual search cancels an in-flight photo, rejects double capture and does not restart capture behind its result', async () => {
+  const gate = deferred();
+  const h = harness({ scanPhoto: async () => { await gate.promise; return photoResult(); } });
+  await h.bridge.install({ nonce: 'photo-manual', game: 'tcgp:3', autoStart: true, captureMode: 'photo' });
+  const capture = h.bridge.capturePhoto('photo-manual'); await finishCameraWork();
+  assert.equal(photoStates(h).at(-1), 'processing'); assert.equal(h.photoCalls.length, 1);
+  assert.equal(await h.bridge.capturePhoto('photo-manual'), false);
+  assert.equal(await h.bridge.retakePhoto('photo-manual'), false);
+  assert.equal(h.bridge.suspendForManualSearch('photo-manual'), true);
+  assert.equal(h.disposed, 1, 'An in-flight image worker is retired when manual entry cancels it');
+  gate.resolve(); assert.equal(await capture, false);
+  assert.equal(h.messages.some(message => message.kind === 'scan'), false); assert.equal(h.bitmaps[0].closed, true);
+  await h.bridge.resumeAfterManualSearch('photo-manual');
+  assert.equal(h.cameraRequests, 1); assert.equal(photoStates(h).at(-1), 'failed');
+  assert.equal(await h.bridge.retakePhoto('photo-manual'), true); assert.equal(h.cameraRequests, 2);
+  assert.equal(h.packOptions.length, 1); assert.equal(h.packSets, 2, 'Only the replacement backend receives a pack copy');
+  h.bridge.stop();
+});
+
+test('manual entry while framing stops photo capture and restores only its framing preview using the same database', async () => {
+  const h = harness();
+  await h.bridge.install({ nonce: 'photo-frame', game: 'tcgp:3', autoStart: true, captureMode: 'photo' });
+  h.bridge.suspendForManualSearch('photo-frame');
+  assert.equal(h.cameraTracks[0].readyState, 'ended'); assert.equal(h.activeLoops, 0);
+  await h.bridge.resumeAfterManualSearch('photo-frame');
+  assert.equal(h.cameraRequests, 2); assert.equal(photoStates(h).at(-1), 'framing'); assert.equal(h.packOptions.length, 1);
+  await h.bridge.capturePhoto('photo-frame'); h.bridge.suspendForManualSearch('photo-frame');
+  await h.bridge.resumeAfterManualSearch('photo-frame');
+  assert.equal(h.cameraRequests, 2); assert.equal(photoStates(h).at(-1), 'ready');
+  assert.equal(h.disposed, 0, 'An already-finished photo keeps its warm backend during manual entry'); h.bridge.stop();
+});
+
+test('switching mode or disposing during bitmap creation closes the abandoned image without sending it to recognition', async () => {
+  for (const action of ['live', 'stop']) {
+    const gate = deferred(); const h = harness({ createPhotoBitmap: async () => { await gate.promise; } });
+    await h.bridge.install({ nonce: 'photo-bitmap', game: 'tcgp:3', autoStart: true, captureMode: 'photo' });
+    const capture = h.bridge.capturePhoto('photo-bitmap'); await finishCameraWork();
+    if (action === 'live') h.bridge.setCaptureMode('live', 'photo-bitmap'); else h.bridge.stop();
+    const scans = h.messages.filter(message => message.kind === 'scan').length;
+    gate.resolve(); assert.equal(await capture, false); await finishCameraWork();
+    assert.equal(h.bitmaps[0].closed, true); assert.equal(h.photoCalls.length, 0);
+    assert.equal(h.messages.filter(message => message.kind === 'scan').length, scans);
+    if (action === 'live') { assert.equal(h.activeLoops, 1); assert.equal(h.packOptions.length, 1); h.bridge.stop(); }
+  }
+});
+
+test('critical heat and background cancel an in-flight still and cannot auto-restart its camera on recovery', async () => {
+  for (const action of ['cooling', 'background']) {
+    const gate = deferred(); const h = harness({ scanPhoto: async () => { await gate.promise; return photoResult(); } });
+    await h.bridge.install({ nonce: 'photo-pressure', game: 'tcgp:3', autoStart: true, captureMode: 'photo' });
+    const capture = h.bridge.capturePhoto('photo-pressure'); await finishCameraWork();
+    h.bridge.setResourceMode(action === 'cooling' ? 'cooling' : 'normal', 'photo-pressure', action !== 'background');
+    assert.equal(h.disposed, 1, 'Critical heat or backgrounding retires active photo processing');
+    gate.resolve(); assert.equal(await capture, false);
+    h.bridge.setResourceMode('reduced', 'photo-pressure', true); await finishCameraWork();
+    assert.equal(h.messages.some(message => message.kind === 'scan'), false); assert.equal(h.cameraRequests, 1);
+    assert.equal(photoStates(h).at(-1), 'failed');
+    assert.equal(await h.bridge.retakePhoto('photo-pressure'), true); assert.equal(h.cameraRequests, 2);
+    assert.equal(h.cameraTracks[1].fps, 10); assert.equal(h.activeLoops, 0); h.bridge.stop();
+  }
+});
+
+test('a restored photo result initializes its backend without camera acquisition until explicit retake', async () => {
+  for (const state of ['ready', 'noMatch', 'failed']) {
+    const h = harness();
+    await h.bridge.install({ nonce: 'photo-restored', game: 'tcgp:3', autoStart: true, captureMode: 'photo', photoReviewState: state });
+    assert.equal(h.cameraRequests, 0); assert.equal(photoStates(h).at(-1), state); assert.equal(h.activeLoops, 0);
+    h.bridge.releaseReview('p:123'); await finishCameraWork(); assert.equal(h.cameraRequests, 0);
+    assert.equal(await h.bridge.retakePhoto('photo-restored'), true);
+    assert.equal(h.cameraRequests, 1); assert.equal(h.packOptions.length, 1); assert.equal(h.activeLoops, 0); h.bridge.stop();
+  }
+});
+
+test('photo errors are fixed messages, release bounded bitmaps and leave a retryable camera-off state', async () => {
+  const h = harness({ scanPhoto: async () => { throw new Error('PRIVATE_IMAGE_CONTENT'); } });
+  await h.bridge.install({ nonce: 'photo-failure', game: 'tcgp:3', autoStart: true, captureMode: 'photo' });
+  assert.equal(await h.bridge.capturePhoto('photo-failure'), true);
+  assert.equal(photoStates(h).at(-1), 'failed'); assert.equal(h.bitmaps[0].closed, true);
+  assert.equal(h.cameraTracks[0].readyState, 'ended'); assert.equal(JSON.stringify(h.messages).includes('PRIVATE_IMAGE_CONTENT'), false);
+  assert.equal(h.bridge.setCaptureMode('bad', 'photo-failure'), false);
+  assert.equal(h.bridge.setCaptureMode('live', 'stale'), false);
+  assert.equal(await h.bridge.retakePhoto('photo-failure'), true);
+  assert.equal(h.packOptions.length, 1); assert.equal(h.disposed, 0); h.bridge.stop();
+});
+
+const deliveryEvents = h => h.messages.filter(message => message.event === 'camera_delivery');
+
+test('camera delivery aggregates compositor frame-counter deltas without confusing the requested camera rate', async () => {
+  const h = harness({ videoFrameCallbacks: true, cameraSettings: () => ({ frameRate: 10 }) });
+  await h.bridge.install({ nonce: 'delivery', game: 'tcgp:3', autoStart: true });
+  assert.equal(h.videoFrames.size, 1); assert.equal(deliveryEvents(h).length, 0);
+  h.emitVideoFrame({ presentedFrames: 10 });
+  h.advance(5000); h.emitVideoFrame({ presentedFrames: 310 });
+  assert.equal(deliveryEvents(h).length, 0, 'Frame callbacks retain counters only, never write per-frame logs');
+  h.flushTimers();
+  let event = deliveryEvents(h).at(-1);
+  assert.equal(event.deliveryState, 'measured'); assert.equal(event.captureMode, 'live');
+  assert.equal(event.deliveredFrames, 300); assert.equal(event.frameWindowMS, 5000);
+  assert.equal(event.deliveredFPS, 60); assert.equal(event.windowMS, 5000); assert.equal(event.cameraOnMS, 5000);
+  assert.equal(h.photoDraws.length, 0, 'Measuring frames must not copy or process images');
+  h.advance(5000); h.emitVideoFrame({ presentedFrames: 460 }); h.flushTimers();
+  event = deliveryEvents(h).at(-1);
+  assert.equal(event.deliveredFrames, 150); assert.equal(event.frameWindowMS, 5000); assert.equal(event.deliveredFPS, 30);
+  h.advance(1000); h.emitVideoFrame({ presentedFrames: 520 }); h.bridge.stop();
+  event = deliveryEvents(h).at(-1);
+  assert.equal(event.windowMS, 1000); assert.equal(event.cameraOnMS, 1000); assert.equal(event.deliveredFrames, 60);
+  assert.equal(deliveryEvents(h).reduce((sum, row) => sum + row.cameraOnMS, 0), 11000);
+  assert.equal(h.videoFrames.size, 0); assert.equal(h.timers.size, 0);
+});
+
+test('unsupported or unavailable delivery counters keep camera-on timing without inventing a measured preview rate', async () => {
+  const h = harness({ cameraSettings: () => ({ frameRate: 120 }) });
+  await h.bridge.install({ nonce: 'no-delivery-counter', game: 'tcgp:3', autoStart: true });
+  h.advance(5000); h.flushTimers();
+  const event = deliveryEvents(h).at(-1);
+  assert.equal(event.deliveryState, 'unavailable'); assert.equal(event.cameraOnMS, 5000);
+  for (const field of ['deliveredFrames', 'frameWindowMS', 'deliveredFPS']) assert.equal(Object.hasOwn(event, field), false);
+  h.bridge.stop();
+
+  const malformed = harness({ videoFrameCallbacks: true });
+  await malformed.bridge.install({ nonce: 'invalid-delivery-counter', game: 'tcgp:3', autoStart: true });
+  malformed.emitVideoFrame({ presentedFrames: NaN, deviceId: 'PRIVATE_CAMERA' });
+  malformed.advance(5000); malformed.flushTimers();
+  assert.equal(deliveryEvents(malformed).at(-1).deliveryState, 'unavailable');
+  assert.equal(JSON.stringify(deliveryEvents(malformed)).includes('PRIVATE_CAMERA'), false);
+  malformed.emitVideoFrame({ presentedFrames: 100 });
+  malformed.advance(5000); malformed.emitVideoFrame({ presentedFrames: 250 }); malformed.flushTimers();
+  assert.equal(deliveryEvents(malformed).at(-1).deliveredFPS, 30);
+  malformed.bridge.stop();
+});
+
+test('photo framing delivery stops at capture and a stale callback cannot add camera-off dwell or enter a later stream', async () => {
+  const h = harness({ videoFrameCallbacks: true });
+  await h.bridge.install({ nonce: 'photo-delivery', game: 'tcgp:3', autoStart: true, captureMode: 'photo' });
+  h.advance(500); h.emitVideoFrame({ presentedFrames: 1 });
+  h.advance(2000); h.emitVideoFrame({ presentedFrames: 61 });
+  const stale = [...h.videoFrames.values()][0];
+  await h.bridge.capturePhoto('photo-delivery');
+  const first = deliveryEvents(h).at(-1);
+  assert.equal(first.captureMode, 'photo'); assert.equal(first.cameraOnMS, 2500);
+  assert.equal(first.deliveredFrames, 60); assert.equal(first.frameWindowMS, 2000);
+  assert.equal(h.videoFrames.size, 0); assert.equal(h.timers.size, 0);
+  const events = deliveryEvents(h).length;
+  h.advance(30000); stale(0, { presentedFrames: 999999 });
+  assert.equal(deliveryEvents(h).length, events); assert.equal(h.videoFrames.size, 0);
+  await h.bridge.retakePhoto('photo-delivery');
+  h.advance(500); h.emitVideoFrame({ presentedFrames: 1001 });
+  h.advance(1000); h.emitVideoFrame({ presentedFrames: 1031 });
+  h.bridge.stop();
+  assert.equal(deliveryEvents(h).at(-1).deliveredFrames, 30);
+  assert.equal(deliveryEvents(h).at(-1).cameraOnMS, 1500);
+  assert.equal(deliveryEvents(h).reduce((sum, row) => sum + row.cameraOnMS, 0), 4000);
+});
+
+test('counter rollback and thermal/background teardown reset delivery observations and fence old timer callbacks', async () => {
+  const h = harness({ videoFrameCallbacks: true });
+  await h.bridge.install({ nonce: 'delivery-teardown', game: 'tcgp:3', autoStart: true });
+  h.emitVideoFrame({ presentedFrames: 1000 }); h.advance(1000); h.emitVideoFrame({ presentedFrames: 4 });
+  h.advance(4000); h.flushTimers();
+  assert.equal(deliveryEvents(h).at(-1).deliveryState, 'pending');
+  assert.equal(Object.hasOwn(deliveryEvents(h).at(-1), 'deliveredFPS'), false);
+  h.advance(1000); h.emitVideoFrame({ presentedFrames: 34 });
+  const staleFrame = [...h.videoFrames.values()][0], staleTimer = [...h.timers.values()][0].fn;
+  h.bridge.setResourceMode('cooling', 'delivery-teardown');
+  assert.equal(h.videoFrames.size, 0); assert.equal(h.timers.size, 0);
+  const count = deliveryEvents(h).length;
+  h.advance(60000); staleFrame(0, { presentedFrames: 999 }); staleTimer();
+  assert.equal(deliveryEvents(h).length, count); assert.equal(h.videoFrames.size, 0); assert.equal(h.timers.size, 0);
+  h.bridge.setResourceMode('reduced', 'delivery-teardown'); await waitForCameraReady(h, 2);
+  h.emitVideoFrame({ presentedFrames: 1 }); h.advance(1000); h.emitVideoFrame({ presentedFrames: 11 });
+  h.document.hidden = true; h.events.get('visibilitychange')();
+  assert.equal(deliveryEvents(h).at(-1).cameraOnMS, 1000);
+  assert.equal(h.videoFrames.size, 0); assert.equal(h.timers.size, 0);
+  h.bridge.stop();
+});
+
+test('delivery measurement without a monotonic clock reports unavailable rather than substituting wall time', async () => {
+  const h = harness({ videoFrameCallbacks: true, monotonicClock: false });
+  await h.bridge.install({ nonce: 'no-monotonic-delivery', game: 'tcgp:3', autoStart: true });
+  const event = deliveryEvents(h).at(-1);
+  assert.equal(event.deliveryState, 'unavailable'); assert.equal(event.captureMode, 'live');
+  for (const field of ['windowMS', 'cameraOnMS', 'frameWindowMS', 'deliveredFPS', 'deliveredFrames']) {
+    assert.equal(Object.hasOwn(event, field), false);
+  }
+  assert.equal(h.videoFrames.size, 0); assert.equal(h.timers.size, 0);
+  h.bridge.stop();
+});
+
+test('delivery diagnostic opt-out cancels observers without a final log and re-enable starts a fresh current-stream window', async () => {
+  const h = harness({ videoFrameCallbacks: true });
+  await h.bridge.install({ nonce: 'delivery-optout', game: 'tcgp:3', autoStart: true, diagnosticsEnabled: false });
+  assert.equal(h.cameraRequests, 1); assert.equal(h.activeLoops, 1);
+  assert.equal(h.videoFrames.size, 0); assert.equal(h.timers.size, 0); assert.equal(deliveryEvents(h).length, 0);
+  h.advance(5000);
+  assert.equal(h.bridge.setDeliveryDiagnostics(true, 'old-document'), false);
+  assert.equal(h.bridge.setDeliveryDiagnostics('true', 'delivery-optout'), false);
+  assert.equal(h.videoFrames.size, 0);
+  assert.equal(h.bridge.setDeliveryDiagnostics(true, 'delivery-optout'), true);
+  h.emitVideoFrame({ presentedFrames: 200 });
+  h.advance(5000); h.emitVideoFrame({ presentedFrames: 350 }); h.flushTimers();
+  assert.equal(deliveryEvents(h).at(-1).cameraOnMS, 5000);
+  assert.equal(deliveryEvents(h).at(-1).deliveredFPS, 30);
+  const staleFrame = [...h.videoFrames.values()][0], staleTimer = [...h.timers.values()][0].fn;
+  const count = deliveryEvents(h).length;
+  h.advance(1000);
+  assert.equal(h.bridge.setDeliveryDiagnostics(false, 'delivery-optout'), true);
+  assert.equal(deliveryEvents(h).length, count, 'Disable must discard, not flush, its partial window');
+  assert.equal(h.videoFrames.size, 0); assert.equal(h.timers.size, 0);
+  h.advance(60000); staleFrame(0, { presentedFrames: 9999 }); staleTimer();
+  assert.equal(deliveryEvents(h).length, count); assert.equal(h.videoFrames.size, 0); assert.equal(h.timers.size, 0);
+  assert.equal(h.bridge.setDeliveryDiagnostics(true, 'delivery-optout'), true);
+  h.emitVideoFrame({ presentedFrames: 12000 });
+  h.advance(1000); h.emitVideoFrame({ presentedFrames: 12030 }); h.bridge.stop();
+  assert.equal(deliveryEvents(h).at(-1).cameraOnMS, 1000);
+  assert.equal(deliveryEvents(h).at(-1).deliveredFrames, 30);
+  assert.equal(deliveryEvents(h).reduce((sum, row) => sum + row.cameraOnMS, 0), 6000);
+  assert.equal(h.bridge.setDeliveryDiagnostics(true, 'delivery-optout'), false);
+  assert.equal(h.cameraRequests, 1, 'Changing diagnostic preference must not restart capture or recognition');
+});
+
+test('re-enabling delivery diagnostics while photo capture is off never opens the camera or records its idle dwell', async () => {
+  const h = harness({ videoFrameCallbacks: true });
+  await h.bridge.install({ nonce: 'photo-optout', game: 'tcgp:3', autoStart: true, captureMode: 'photo', diagnosticsEnabled: false });
+  await h.bridge.capturePhoto('photo-optout');
+  assert.equal(h.videoFrames.size, 0); assert.equal(h.timers.size, 0);
+  h.advance(30000);
+  assert.equal(h.bridge.setDeliveryDiagnostics(true, 'photo-optout'), true);
+  assert.equal(h.cameraRequests, 1); assert.equal(h.videoFrames.size, 0); assert.equal(h.timers.size, 0);
+  assert.equal(deliveryEvents(h).length, 0);
+  await h.bridge.retakePhoto('photo-optout');
+  assert.equal(h.cameraRequests, 2); assert.equal(h.videoFrames.size, 1);
+  h.emitVideoFrame({ presentedFrames: 5 }); h.advance(1000); h.emitVideoFrame({ presentedFrames: 35 });
+  h.bridge.stop();
+  assert.equal(deliveryEvents(h).at(-1).cameraOnMS, 1000);
+  assert.equal(deliveryEvents(h).at(-1).deliveredFPS, 30);
 });

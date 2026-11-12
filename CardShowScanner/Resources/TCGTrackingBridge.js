@@ -83,6 +83,10 @@
   let markScanIssue = () => false;
   let setSteadyCardBorder = () => {};
   let setResourceMode = () => false;
+  let setDeliveryDiagnostics = () => false;
+  let setCaptureMode = () => false;
+  let capturePhoto = async () => false;
+  let retakePhoto = async () => false;
   async function install(config) {
     dispose();
     globalThis.CardShowNativeCache = typeof config.cacheToken === 'string' && config.cacheToken.length >= 32 ? { token: config.cacheToken } : null;
@@ -91,12 +95,18 @@
     let steadyCardBorder = config.steadyCardBorder === true;
     let manualAttempt = null, manualPromptPending = false;
     let manualSearchSuspended = config.manualSearchSuspended === true;
+    let captureMode = config.captureMode === 'photo' ? 'photo' : 'live';
+    let photoRestState = ['ready', 'noMatch', 'failed'].includes(config.photoReviewState) ? config.photoReviewState : 'failed';
+    let photoFramingRequested = captureMode === 'photo' && !['ready', 'noMatch', 'failed'].includes(config.photoReviewState);
+    let photoGeneration = 0, photoOperation = null, photoState = 'off', imageCandidates = null;
+
     const validResourceMode = value => ['normal', 'reduced', 'cooling'].includes(value);
     let resourceMode = validResourceMode(config.resourceMode) ? config.resourceMode : 'normal';
     let foreground = config.foreground !== false;
+    let deliveryDiagnosticsEnabled = typeof config.diagnosticsEnabled === 'boolean' ? config.diagnosticsEnabled : true;
     let thermalResumePending = resourceMode === 'cooling' || !foreground;
     let resumeRequested = false, startupFailed = false, retiredPlayback = false, retiredResourceAcquisition = false, preserveRetiredReview = false, loopGeneration = 0;
-    let pack = null, cacheWarning = false;
+    let pack = null, backendPack = null, cacheWarning = false;
     let latestScan = null, heldScan = null;
     let running = true, stopLoop = null, stream = null, backend = null, overlay = null, starting = false, held = false, awaitingRemoval = false, beginLoop = null;
     const post = message => { if (running) window.webkit?.messageHandlers?.scanResult?.postMessage({ ...message, nonce: config.nonce }); };
@@ -105,12 +115,32 @@
     const cooling = () => resourceMode === 'cooling';
     const coolingMessage = 'Cooling down… Scanning resumes when your iPhone is ready.';
     const eligible = () => running && foreground && !manualSearchSuspended && !cooling() && !document.hidden;
-    const recognitionEligible = () => eligible() && !held && !manualPromptPending;
+    const recognitionEligible = () => eligible() && captureMode === 'live' && !held && !manualPromptPending;
+    const emitPhotoState = state => {
+      if (!running || (captureMode !== 'photo' && state !== 'off')) return;
+      photoState = state;
+      if (['ready', 'noMatch', 'failed'].includes(state)) photoRestState = state;
+      post({ kind: 'photoState', photoState: state });
+    };
+    const cancelPhoto = () => {
+      photoGeneration++;
+      // The worker can be stopped; a main-thread synchronous OpenCV pass cannot
+      // be preempted, but its result is still fenced. Keep the already-loaded pack.
+      const owner = photoOperation;
+      if (owner && !owner.cancelled) {
+        owner.cancelled = true; owner.backend?.dispose();
+        if (backend === owner.backend) { backend = null; backendPack = null; }
+      }
+    };
+
     const stopRecognition = () => { loopGeneration++; stopLoop?.(); stopLoop = null; };
     // One active track operation and one latest pending request. Camera promises
     // cannot be cancelled; stream/owner fences prevent a retired completion from
     // changing a replacement stream or announcing a stale setting as applied.
-    let cameraWorkload = null, pendingCameraWorkload = null, cameraWorkloadOwner = null;
+    let cameraWorkload = null, pendingCameraWorkload = null, cameraWorkloadOwner = null, appliedCameraTarget = null;
+    // A native sheet pauses recognition, not the camera visible behind it.
+    // Keep its preview responsive while retaining the reduced-power policy.
+    const previewFPS = () => resourceMode === 'reduced' ? 10 : 30;
     const workloadFields = (request, constraintState) => {
       const fields = { resourceMode: request.mode, captureState: request.state, targetFPS: request.fps,
         processingActive: request.processing, constraintState };
@@ -128,11 +158,20 @@
         while (cameraWorkloadOwner === owner && pendingCameraWorkload) {
           const request = pendingCameraWorkload; pendingCameraWorkload = null;
           if (!currentWorkload(request)) continue;
+          if (appliedCameraTarget?.stream === request.stream && appliedCameraTarget.track === request.track && appliedCameraTarget.fps === request.fps) {
+            diagnostic('camera_workload', workloadFields(request, 'applied')); continue;
+          }
           if (typeof request.track?.applyConstraints !== 'function') {
             diagnostic('camera_workload', workloadFields(request, 'unsupported')); continue;
           }
           try {
+            // A rejected change leaves its effective state uncertain. A later
+            // request must not reuse a successful target from before that try.
+            appliedCameraTarget = null;
             await request.track.applyConstraints({ frameRate: { ideal: request.fps, max: request.fps } });
+            if (cameraWorkloadOwner === owner && running && stream === request.stream && request.track.readyState !== 'ended') {
+              appliedCameraTarget = { stream: request.stream, track: request.track, fps: request.fps };
+            }
             if (currentWorkload(request)) diagnostic('camera_workload', workloadFields(request, 'applied'));
           } catch (_) {
             if (currentWorkload(request)) diagnostic('camera_workload', workloadFields(request, 'failed'));
@@ -145,7 +184,7 @@
     const updateCameraWorkload = () => {
       const state = !running || !stream || cooling() || !foreground || document.hidden ? 'stopped'
         : manualSearchSuspended ? 'manual' : held ? 'review' : manualPromptPending ? 'prompt' : 'live';
-      const fps = state === 'stopped' ? 0 : state !== 'live' ? 1 : resourceMode === 'reduced' ? 10 : 30;
+      const fps = state === 'stopped' ? 0 : previewFPS();
       const processing = !!stopLoop && recognitionEligible();
       const key = [resourceMode, state, fps, processing].join('|');
       if (cameraWorkload?.stream === stream && cameraWorkload.key === key) return;
@@ -254,21 +293,122 @@
     // dimensions and the inline baseline must never size the camera surface.
     video.style.cssText = 'position:absolute;inset:0;display:block;width:100%;height:100%;object-fit:cover;object-position:center;background:#000';
     const canvas = document.createElement('canvas'); canvas.style.cssText = 'position:absolute;inset:0;display:block;width:100%;height:100%;pointer-events:none';
-    frame.append(video, canvas); root.append(frame, button, hint); document.body.append(root);
+    const still = document.createElement('canvas'); still.hidden = true;
+    still.style.cssText = 'position:absolute;inset:0;display:none;width:100%;height:100%;object-fit:contain;background:#000;pointer-events:none';
+    frame.append(video, canvas, still); root.append(frame, button, hint); document.body.append(root);
+    const clearStill = () => { still.hidden = true; still.style.display = 'none'; still.width = still.height = 1; };
+
+    // Video delivery is separate from requested camera settings and recognition.
+    // This observer only retains counters/timestamps: no pixels, image copies or
+    // per-frame bridge messages. Aggregate windows and stop flushes do not overlap.
+    let deliveryOwner = null, deliveryPlaybackStream = null;
+    const deliveryClock = () => {
+      try {
+        const at = globalThis.performance?.now?.();
+        return typeof at === 'number' && Number.isFinite(at) && at >= 0 ? at : null;
+      } catch (_) { return null; }
+    };
+    const deliveryCurrent = owner => deliveryDiagnosticsEnabled && running && deliveryOwner === owner && stream === owner.stream;
+    const flushDelivery = (owner, stopping = false) => {
+      if (!deliveryCurrent(owner)) return;
+      const at = deliveryClock(), windowMS = at === null || owner.windowAt === null ? null : at - owner.windowAt;
+      if (windowMS === null || !Number.isFinite(windowMS) || windowMS < 1 || windowMS > 86400000) {
+        owner.windowAt = at; owner.base = owner.latest; return;
+      }
+      if (!stopping && windowMS < 5000) return;
+      const fields = { captureMode: owner.mode, deliveryState: owner.supported ? 'pending' : 'unavailable',
+        windowMS: Math.floor(windowMS), cameraOnMS: Math.floor(windowMS) };
+      if (owner.supported && owner.base && owner.latest) {
+        const frames = owner.latest.frames - owner.base.frames;
+        const frameWindowMS = owner.latest.at - owner.base.at;
+        const fps = frames * 1000 / frameWindowMS;
+        if (Number.isSafeInteger(frames) && frames >= 0 && frames <= 1_000_000 &&
+            Number.isFinite(frameWindowMS) && frameWindowMS >= 1 && frameWindowMS <= 86400000 &&
+            Number.isFinite(fps) && fps >= 0 && fps <= 240) {
+          Object.assign(fields, { deliveryState: 'measured', deliveredFrames: frames,
+            frameWindowMS: Math.floor(frameWindowMS), deliveredFPS: Math.round(fps * 1000) / 1000 });
+        }
+      }
+      diagnostic('camera_delivery', fields);
+      owner.windowAt = at; owner.base = owner.latest;
+    };
+    const stopDelivery = (flush = true) => {
+      const owner = deliveryOwner;
+      if (!owner) return;
+      if (flush) flushDelivery(owner, true);
+      deliveryOwner = null;
+      clearTimeout(owner.timer);
+      if (owner.callback !== null) {
+        try { video.cancelVideoFrameCallback(owner.callback); } catch (_) { /* Optional telemetry cannot interrupt capture. */ }
+      }
+    };
+    const startDelivery = ownedStream => {
+      stopDelivery();
+      if (!deliveryDiagnosticsEnabled) return;
+      const at = deliveryClock();
+      if (at === null) { diagnostic('camera_delivery', { captureMode, deliveryState: 'unavailable' }); return; }
+      const owner = { stream: ownedStream, mode: captureMode, windowAt: at, base: null, latest: null,
+        supported: typeof video.requestVideoFrameCallback === 'function' && typeof video.cancelVideoFrameCallback === 'function',
+        callback: null, timer: null };
+      deliveryOwner = owner;
+      const frameDelivered = (_, metadata) => {
+        owner.callback = null;
+        if (!deliveryCurrent(owner) || !foreground || document.hidden || cooling()) return;
+        const at = deliveryClock(), frames = metadata?.presentedFrames;
+        if (at !== null && Number.isSafeInteger(frames) && frames >= 0) {
+          const sample = { at, frames };
+          if (!owner.base || !owner.latest || at < owner.latest.at || frames < owner.latest.frames) owner.base = sample;
+          owner.latest = sample; owner.supported = true;
+        } else {
+          owner.base = owner.latest = null; owner.supported = false;
+          if (at === null) owner.windowAt = null;
+        }
+        requestDelivery();
+      };
+      const requestDelivery = () => {
+        if (!deliveryCurrent(owner) || !foreground || document.hidden || cooling()) return;
+        try { owner.callback = video.requestVideoFrameCallback(frameDelivered); }
+        catch (_) { owner.supported = false; owner.base = owner.latest = null; owner.callback = null; }
+      };
+      const sampleWindow = () => {
+        if (!deliveryCurrent(owner)) return;
+        flushDelivery(owner);
+        owner.timer = setTimeout(sampleWindow, 5000);
+      };
+      if (owner.supported) requestDelivery();
+      owner.timer = setTimeout(sampleWindow, 5000);
+    };
+    setDeliveryDiagnostics = (enabled, expectedNonce) => {
+      if (!running || typeof enabled !== 'boolean' || expectedNonce !== config.nonce) return false;
+      if (enabled === deliveryDiagnosticsEnabled) return true;
+      deliveryDiagnosticsEnabled = enabled;
+      // Opting out discards the partial window without producing a last log.
+      // Re-enabling starts now; time/frames from the disabled period stay absent.
+      if (!enabled) stopDelivery(false);
+      else if (stream && deliveryPlaybackStream === stream && foreground && !document.hidden && !cooling()) startDelivery(stream);
+      return true;
+    };
+
     const report = value => { value = cooling() ? coolingMessage : value; hint.hidden = config.autoStart === true || !!stream; hint.textContent = text(value); post({ kind: 'status', message: text(value) }); };
     const stopCamera = (preserveReview = false) => {
+      stopDelivery();
+      deliveryPlaybackStream = null;
       loopGeneration++;
       const promptPending = preserveReview && manualPromptPending;
       clearManualAttempt(); manualPromptPending = promptPending; removalAbsentSince = null;
       if (!preserveReview) { heldRef = removalRef = null; heldScan = null; }
       stopRecognition(); stream?.getTracks().forEach(t => t.stop()); stream = null;
       // A hung browser operation on a stopped track cannot block its replacement.
-      cameraWorkloadOwner = null; pendingCameraWorkload = null;
+      cameraWorkloadOwner = null; pendingCameraWorkload = null; appliedCameraTarget = null;
       video.srcObject = null; overlay?.destroy?.(); overlay = null; latestScan = null; updateCameraWorkload();
     };
     const visibility = () => {
       if (document.hidden) {
-        diagnostic('camera_backgrounded'); pending = null; stopCamera(); post({ kind: 'hide' });
+        diagnostic('camera_backgrounded'); pending = null;
+        if (captureMode === 'photo') { cancelPhoto(); if (photoState === 'processing') photoRestState = 'failed'; }
+        stopCamera(); post({ kind: 'hide' });
+        if (captureMode === 'photo') emitPhotoState(photoFramingRequested ? 'off' : photoRestState);
+
         button.disabled = false; button.hidden = false; button.textContent = 'Resume Camera';
       } else if (eligible() && (resumeRequested || thermalResumePending) && !starting) {
         resumeRequested = false;
@@ -276,13 +416,17 @@
       }
     };
     document.addEventListener('visibilitychange', visibility);
-    dispose = () => { diagnostic('bridge_stopped'); pending = null; stopCamera(); running = false; backend?.dispose(); backend = null; pack = null; root.remove(); document.removeEventListener('visibilitychange', visibility); window.removeEventListener?.('error', onError); window.removeEventListener?.('unhandledrejection', onRejection); };
+    dispose = () => { diagnostic('bridge_stopped'); cancelPhoto(); clearStill(); pending = null; stopCamera(); running = false; backend?.dispose(); backend = null; pack = null; root.remove(); document.removeEventListener('visibilitychange', visibility); window.removeEventListener?.('error', onError); window.removeEventListener?.('unhandledrejection', onRejection); };
     suspendForManualSearch = expectedNonce => {
       if (!running || (expectedNonce !== undefined && expectedNonce !== config.nonce)) return false;
       manualSearchSuspended = true; resumeRequested = false; loopGeneration++;
       clearManualAttempt(); pending = null; held = false; heldRef = removalRef = removalAbsentSince = null;
       heldScan = latestScan = null; awaitingRemoval = false;
       stopRecognition(); backend?.reset?.(); overlay?.clear(); updateCameraWorkload();
+      if (captureMode === 'photo') {
+        cancelPhoto(); if (photoState === 'processing') photoRestState = 'failed';
+        stopCamera(); emitPhotoState(photoFramingRequested ? 'off' : photoRestState);
+      }
       // Startup can still be awaiting camera playback. Retire that acquisition;
       // a ready preview stays mounted and keeps its already-authorized stream.
       if (starting) { retiredPlayback = stream !== null; stopCamera(); }
@@ -291,7 +435,8 @@
     resumeAfterManualSearch = async expectedNonce => {
       if (!running || startupFailed || (expectedNonce !== undefined && expectedNonce !== config.nonce)) return false;
       manualSearchSuspended = false;
-      if (cooling()) { thermalResumePending = true; report(coolingMessage); return true; }
+      if (cooling()) { thermalResumePending = true; report(coolingMessage); if (captureMode === 'photo') emitPhotoState('cooling'); return true; }
+      if (captureMode === 'photo' && !photoFramingRequested) { emitPhotoState(photoRestState); return true; }
       // Sheet dismissal can precede WebKit's visibility notification. Remember
       // this explicit resume, without acquiring a camera in a hidden document.
       if (document.hidden || !foreground) { resumeRequested = true; return true; }
@@ -306,6 +451,10 @@
       const previous = resourceMode, wasForeground = foreground;
       resourceMode = mode; foreground = isForeground;
       if (cooling() || !foreground) {
+        if (captureMode === 'photo') {
+          cancelPhoto(); if (photoState === 'processing') photoRestState = 'failed';
+          emitPhotoState(cooling() ? 'cooling' : (photoFramingRequested ? 'off' : photoRestState));
+        }
         thermalResumePending = true; pending = null;
         if (starting) retiredResourceAcquisition = true;
         if (starting && stream) { retiredPlayback = true; preserveRetiredReview = true; }
@@ -318,6 +467,87 @@
       updateCameraWorkload();
       return true;
     };
+    const photoCurrent = (token, sourcePack) => running && captureMode === 'photo' && eligible() &&
+      photoGeneration === token && pack === sourcePack;
+    capturePhoto = async expectedNonce => {
+      if (!running || expectedNonce !== config.nonce || captureMode !== 'photo' || !eligible() || starting ||
+          photoOperation || !photoFramingRequested || !stream || photoState !== 'framing' || !backend || !imageCandidates) return false;
+      const token = ++photoGeneration, sourcePack = pack, owner = { backend, cancelled: false }; photoOperation = owner;
+      let bitmap = null;
+      photoFramingRequested = false; pending = null; held = false; awaitingRemoval = false;
+      clearManualAttempt(); post({ kind: 'hide' });
+      try {
+        // Copy pixels before stopping tracks: decoding a bitmap from a stopped
+        // video element races its availability on WebKit. This canvas is bounded.
+        const w = video.videoWidth, h = video.videoHeight;
+        if (!Number.isFinite(w) || !Number.isFinite(h) || w < 1 || h < 1) throw new Error('No frame');
+        const scale = Math.min(1, 2048 / Math.max(w, h));
+        still.width = Math.max(1, Math.floor(w * scale)); still.height = Math.max(1, Math.floor(h * scale));
+        const context = still.getContext('2d', { alpha: false });
+        if (!context) throw new Error('No canvas');
+        context.drawImage(video, 0, 0, still.width, still.height); still.hidden = false; still.style.display = 'block';
+        stopCamera(true); emitPhotoState('processing'); report('Scanning photo…');
+        bitmap = await createImageBitmap(still);
+        if (!photoCurrent(token, sourcePack)) return false;
+        const result = await owner.backend.scanImage(bitmap, { maxCards: 1 });
+        // The backend owns/closes the submitted bitmap. close() below is also
+        // safe on a detached bitmap and covers a backend throwing before transfer.
+        if (!photoCurrent(token, sourcePack)) return false;
+        const match = result?.cards?.[0]?.result;
+        const cands = match?.best ? imageCandidates(sourcePack, match, 5) : [];
+        const winner = cands[0];
+        const update = winner ? normalizeView({ ref: winner.tuple, cands,
+          confidence: winner.confidence ?? match.confidence ?? match.best.confidence,
+          accepted: match.accepted === true, printing: { state: winner.printingState ?? match.best.printing?.state } }) : null;
+        if (!update?.candidates?.length || update.confidence < 50) {
+          emitPhotoState('noMatch'); report('No clear match. Take another photo or search manually.'); return true;
+        }
+        // A finite still-image pass is its own observation. Do not synthesize
+        // repeated live frames or raise acceptance/confidence from a single image.
+        held = true; heldRef = update.candidates[0].ref;
+        heldScan = { at: clock(), fields: scanMetadata({ matchDistance: match.best.d, matchGap: match.gap }) };
+        diagnostic('recognition_snapshot', issueFields());
+        emitPhotoState('ready'); post(update); report('Photo ready for review.'); return true;
+      } catch (_) {
+        if (!photoCurrent(token, sourcePack)) return false;
+        stopCamera(true); emitPhotoState('failed'); report('Photo could not be scanned. Take another photo or search manually.'); return true;
+      } finally {
+        try { bitmap?.close(); } catch (_) { /* Detached/closed bitmaps own no pixels. */ }
+        if (photoOperation === owner) photoOperation = null;
+      }
+    };
+    retakePhoto = async expectedNonce => {
+      if (!running || expectedNonce !== config.nonce || captureMode !== 'photo' || !eligible() || starting || photoOperation) return false;
+      cancelPhoto(); clearStill(); photoFramingRequested = true;
+      held = false; heldRef = removalRef = null; awaitingRemoval = false; pending = null; clearManualAttempt();
+      post({ kind: 'hide' }); backend?.reset?.();
+      if (stream) { emitPhotoState('framing'); return true; }
+      await button.onclick(); return !!stream && photoState === 'framing';
+    };
+    setCaptureMode = (mode, expectedNonce) => {
+      if (!running || expectedNonce !== config.nonce || !['live', 'photo'].includes(mode)) return false;
+      if (mode === captureMode) return true;
+      cancelPhoto(); clearStill(); stopRecognition(); backend?.reset?.();
+      captureMode = mode; photoFramingRequested = mode === 'photo';
+      held = false; heldRef = removalRef = null; awaitingRemoval = false; pending = null; clearManualAttempt(); post({ kind: 'hide' });
+      if (mode === 'photo') emitPhotoState(cooling() ? 'cooling' : stream && !starting ? 'framing' : 'off');
+      else emitPhotoState('off');
+      if (eligible() && !starting) {
+        if (stream && beginLoop && backend) { if (recognitionEligible()) stopLoop = beginLoop(); updateCameraWorkload(); }
+        else void button.onclick();
+      }
+      return true;
+    };
+    // These remain safe even if a restored photo review needs no camera startup.
+    resetRecognition = () => {
+      if (captureMode !== 'photo') return;
+      held = false; heldRef = null; pending = null; post({ kind: 'hide' }); emitPhotoState(photoRestState);
+    };
+    releaseReview = () => {
+      if (captureMode !== 'photo') return;
+      held = false; heldRef = null; pending = null; awaitingRemoval = false;
+      if (!photoFramingRequested && !photoOperation) emitPhotoState(photoRestState);
+    };
     report('Ready. Saved databases are reused; the first download may be large.');
     button.onclick = async (options = {}) => {
       if (starting || !running) return;
@@ -329,13 +559,13 @@
       try {
         report('Loading scanner modules…');
         const base = '/newscanplus/assets/js/';
-        const [packs, backends, overlays, quick, shared] = await Promise.all([
+        const [packs, backends, overlays, quick, shared, imageResults] = await Promise.all([
           import(base + 'core/pack.js'), import(base + 'app/scan-backends.js'), import(base + 'core/overlay.js'),
-          import(base + 'app/quickscan.js'), import(base + 'app/shared.js')
+          import(base + 'app/quickscan.js'), import(base + 'app/shared.js'), import(base + 'app/desk-results.js')
         ]);
         if (!running) { pack = null; return; }
         diagnostic('modules_ready', { elapsedMS: clock() - began });
-        shared.useScope('price');
+        shared.useScope('price'); imageCandidates = imageResults.candidatesFrom;
         if (!pack || options.refreshDatabase) {
           stage = 'pack'; began = clock();
           report(options.refreshDatabase ? 'Checking for database updates…' : 'Opening saved game database…');
@@ -361,14 +591,20 @@
           if (cacheWarning) diagnostic('pack_cache_warning', cacheFields);
         }
         stage = 'backend'; began = clock();
-        if (!backend) backend = await backends.createBackend();
+        if (!backend) { backend = await backends.createBackend(); backendPack = null; }
         if (!running) { backend.dispose(); return; }
-        backend.setPack(pack);
+        // A retained backend already owns its pack. Reopening the framing
+        // camera must not recopy all recognition shards for each photo.
+        if (backendPack !== pack) { backend.setPack(pack); backendPack = pack; }
         diagnostic('backend_ready', { elapsedMS: clock() - began, backend: backend.kind });
-        if (!eligible()) { if (cooling()) report(coolingMessage); return; }
+        if (!eligible()) { if (cooling()) { report(coolingMessage); if (captureMode === 'photo') emitPhotoState('cooling'); } return; }
+        if (captureMode === 'photo' && !photoFramingRequested) {
+          emitPhotoState(photoRestState); diagnostic('scanner_ready');
+          button.hidden = true; report('Take another photo when you are ready.'); return;
+        }
         stage = 'camera'; began = clock(); diagnostic('camera_requested');
         report('Starting rear camera…');
-        const acquisitionFPS = held || manualPromptPending ? 1 : resourceMode === 'reduced' ? 10 : 30;
+        const acquisitionFPS = previewFPS();
         const cameraOptions = { audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: acquisitionFPS, max: acquisitionFPS } } };
         let captured;
         try { captured = await navigator.mediaDevices.getUserMedia(cameraOptions); }
@@ -391,6 +627,8 @@
         video.srcObject = stream; await video.play();
         if (!eligible() || stream !== captured) { stopCamera(preserveRetiredReview || cooling()); return; }
         diagnostic('video_playing', { elapsedMS: clock() - began });
+        deliveryPlaybackStream = captured;
+        startDelivery(captured);
         stage = 'scan';
         overlay = overlays.createOverlay(canvas, { fit: 'cover' });
         // The camera outlines a detection; only the candidate sheet names a card.
@@ -492,11 +730,17 @@
           } });
         };
         resetRecognition = () => {
+          if (captureMode === 'photo') { held = false; pending = null; emitPhotoState(photoRestState); return; }
           clearManualAttempt(); pending = null; held = false; heldRef = removalRef = removalAbsentSince = null; heldScan = null; latestScan = null; awaitingRemoval = false; stopRecognition(); backend?.reset?.();
           if (recognitionEligible() && stream) stopLoop = beginLoop();
           updateCameraWorkload();
         };
         releaseReview = ref => {
+          if (captureMode === 'photo') {
+            held = false; heldRef = null; pending = null; awaitingRemoval = false;
+            if (!photoFramingRequested && !photoOperation) emitPhotoState(photoRestState);
+            return;
+          }
           if (awaitingRemoval) return;
           clearManualAttempt(); pending = null;
           removalRef = typeof ref === 'string' && referencePattern.test(ref) ? ref : heldRef;
@@ -521,19 +765,21 @@
         updateCameraWorkload();
         thermalResumePending = false;
         diagnostic('scanner_ready');
-        button.hidden = true; report(cacheWarning ? 'Camera ready. Database could not be saved; it may download again next time.' : 'Live camera ready — hold a card steady.'); hint.hidden = true;
+        if (captureMode === 'photo') emitPhotoState('framing');
+        button.hidden = true; report(cacheWarning ? 'Camera ready. Database could not be saved; it may download again next time.' : captureMode === 'photo' ? 'Frame one card, then take a photo.' : 'Live camera ready — hold a card steady.'); hint.hidden = true;
       } catch (error) {
         if (!running || (retiredPlayback && stage === 'video' && error?.name === 'AbortError') ||
             (retiredResourceAcquisition && stage === 'camera' && error?.name === 'NotAllowedError')) return;
         startupFailed = true; resumeRequested = false;
         diagnostic('startup_failed', { stage, errorKind: errorKind(error), elapsedMS: clock() - began });
         stopCamera(); backend?.dispose(); backend = null;
+        if (captureMode === 'photo') emitPhotoState('failed');
         report(`Scanner unavailable: ${text(error?.message) || 'Check your connection and camera permission.'}`);
         button.hidden = false; button.textContent = 'Retry Scanner';
       } finally {
         starting = false; button.disabled = false;
         if (!running || stream) resumeRequested = false;
-        if ((resumeRequested || thermalResumePending) && eligible() && !stream && !startupFailed) {
+        if ((resumeRequested || thermalResumePending) && eligible() && !stream && !startupFailed && (captureMode !== 'photo' || photoFramingRequested)) {
           resumeRequested = false;
           await button.onclick();
         }
@@ -545,7 +791,8 @@
       backend?.dispose(); backend = null;
       return button.onclick({ refreshDatabase: true });
     };
+    if (captureMode === 'photo') emitPhotoState(cooling() ? 'cooling' : (photoFramingRequested ? 'off' : photoRestState));
     if (config.autoStart) await button.onclick();
   }
-  globalThis.CardShowBridge = { install, stop: () => dispose(), resetRecognition: () => resetRecognition(), releaseReview: ref => releaseReview(ref), resumeAfterManualSearchPrompt: () => resumeAfterManualSearchPrompt(), suspendForManualSearch: nonce => suspendForManualSearch(nonce), resumeAfterManualSearch: nonce => resumeAfterManualSearch(nonce), setResourceMode: (mode, nonce, foreground) => setResourceMode(mode, nonce, foreground), refreshDatabase: () => refreshDatabase(), markScanIssue: reason => markScanIssue(reason), setSteadyCardBorder: enabled => setSteadyCardBorder(enabled), normalizeView };
+  globalThis.CardShowBridge = { install, stop: () => dispose(), resetRecognition: () => resetRecognition(), releaseReview: ref => releaseReview(ref), resumeAfterManualSearchPrompt: () => resumeAfterManualSearchPrompt(), suspendForManualSearch: nonce => suspendForManualSearch(nonce), resumeAfterManualSearch: nonce => resumeAfterManualSearch(nonce), setResourceMode: (mode, nonce, foreground) => setResourceMode(mode, nonce, foreground), setDeliveryDiagnostics: (enabled, nonce) => setDeliveryDiagnostics(enabled, nonce), refreshDatabase: () => refreshDatabase(), markScanIssue: reason => markScanIssue(reason), setSteadyCardBorder: enabled => setSteadyCardBorder(enabled), setCaptureMode: (mode, nonce) => setCaptureMode(mode, nonce), capturePhoto: nonce => capturePhoto(nonce), retakePhoto: nonce => retakePhoto(nonce), normalizeView };
 })();

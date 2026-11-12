@@ -1,7 +1,9 @@
 # Device health monitoring and heat protection
 
-Build 103, revision `scanner-workload-reduction`, extends the build 76
-`device-health-protection` controls.
+Build 111, revision `apple-thermal-camera-threshold`, follows Apple’s recommendation
+to reduce demand at serious heat and stop camera use at critical heat. Build 110’s
+`smooth-review-camera-preview` behavior and the build 76 device monitoring remain
+active. See [Apple thermal guidance](AppleThermal111.md) for the source and limits.
 
 ## Recorded measurements
 
@@ -63,15 +65,16 @@ Protection uses iOS resource notifications independently of diagnostic opt-out:
 
 - Normal thermal state keeps the existing recognition scheduler and requests
   a maximum 30 FPS camera stream. Recognition resolution remains unchanged.
-- Fair thermal state or Low Power Mode limits the card scanner processing /
+- Fair or serious thermal state, or Low Power Mode, limits the card scanner processing /
   overlay scheduler to approximately 5 Hz (200 ms between frame requests) and
   requests a maximum 10 FPS camera stream. Actual rates depend on camera support.
 - A held choose-card review, manual-search sheet or unresolved manual-search
-  prompt stops recognition/outline work and requests a 1 FPS camera stream.
-  The warm stream remains mounted to preserve the stable preview when returning;
-  the loaded database/backend and frozen review remain available. This reduces
-  hidden work without reopening the database or changing matching thresholds.
-- Serious or critical thermal state stops card recognition and camera capture
+  prompt stops recognition/outline work while retaining the existing preview
+  cap: 30 FPS normally or 10 FPS in reduced mode. The warm stream remains mounted,
+  and the loaded database/backend and frozen review remain available. Review or
+  manual entry alone no longer requests 1 FPS. Processing stays paused without
+  reopening the database or changing matching thresholds.
+- Critical thermal state stops card recognition and camera capture
   and shows Cooling down. The loaded database/backend and frozen card review
   remain available. Capture can resume after cooling only when the scanner is
   still active and foreground, manual search is closed and the user has not
@@ -81,8 +84,8 @@ Protection uses iOS resource notifications independently of diagnostic opt-out:
   deadline backs up the WebKit command. If delivery fails or hangs, the public
   WebKit camera-stop API retires capture and exposes Retry instead of claiming
   successful cooling recovery.
-- The separate PSA barcode camera also refuses startup and pauses at serious /
-  critical heat. Captured certification codes remain available; its existing
+- The separate PSA barcode camera also refuses startup and pauses at critical
+  heat. Captured certification codes remain available; its existing
   Retry Camera action resumes when eligible, and manual number entry works.
 
 No app can promise zero battery consumption or prevent every OS/app crash.
@@ -102,12 +105,15 @@ memory warnings and heartbeat-lag counts. The native process sample excludes
 WebKit and camera work, so it cannot establish total phone load or the cause of
 heat. No crash report was present; report delivery can be delayed.
 
-Review previously froze result delivery while recognition continued behind its
-sheet. Manual search stopped recognition but retained a camera with no explicit
-frame-rate limit. Build 103 reduces both avoidable workloads. Camera constraint
+Before build 103, review froze result delivery while recognition continued behind
+its sheet. Manual search stopped recognition but retained a camera with no explicit
+frame-rate limit. Build 103 stopped hidden recognition and capped held previews at
+1 FPS. Diagnostic 22 then confirmed that this cap made review and manual transitions
+jerky even in nominal conditions. Build 110 retains the recognition pause and uses
+the normal/reduced preview caps instead. Camera constraint
 updates use one serialized pump, coalesce to the latest state and ignore retired
 stream callbacks. A pending browser constraint operation is not cancellable;
-serious/critical heat still stops its track immediately. Unsupported or rejected
+critical heat still stops its track immediately. Unsupported or rejected
 constraints are logged, never represented as measured success.
 
 `web.camera_workload` records transitions, not frames:
@@ -116,8 +122,8 @@ constraints are logged, never represented as measured success.
 | --- | --- |
 | `resource_mode` | Normal, reduced or cooling policy |
 | `capture_state` | Live, review, manual, prompt or stopped |
-| `target_fps` | Requested cap (30, 10, 1 or 0 when inactive) |
-| `camera_fps` | Bounded frame rate reported by track settings, omitted if unavailable; not a measured energy value |
+| `target_fps` | Requested cap (30, 10 or 0 when inactive; older builds also used 1) |
+| `camera_fps` | Bounded frame rate reported by track settings, omitted if unavailable; not measured rendered cadence or energy |
 | `processing_active` | Whether the recognition loop is active |
 | `constraint_state` | Pending, applied, unsupported, failed or inactive |
 
@@ -143,11 +149,12 @@ heat/battery improvement remains pending a sustained physical-device session.
    this app. Avoid drawing conclusions from a single 30-second battery sample.
 6. Exercise cooling transitions with injected test states in automated tests;
    do not intentionally heat a physical device. On an organically warm phone,
-   verify Cooling down stops capture, keeps saved data/review usable and
+   verify serious heat uses reduced card scanning and critical-heat Cooling down
+   stops capture, keeps saved data/review usable and
    respects user pause/manual-entry/background state during recovery.
 7. While choosing a match or entering a card manually, inspect the new workload
-   events for `processing_active=false` and the 1 FPS request. Return to scanning
-   and confirm the proper live cap returns without a repeated pack load, a preview
+   events for `processing_active=false` and the same normal/reduced preview cap.
+   Return to scanning and confirm recognition resumes without a repeated pack load, a preview
    glitch or a stale match. In ordinary use at fair heat, check the 10 FPS camera
    request and 200 ms recognition scheduler; send diagnostics after the session.
 

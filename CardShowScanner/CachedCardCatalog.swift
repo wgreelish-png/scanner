@@ -2,6 +2,28 @@ import Foundation
 
 protocol CardCatalogSearching: Sendable {
     func search(_ query: String, game: String, limit: Int) async throws -> [CardCandidate]
+    func search(_ query: String, game: String, limit: Int, filters: CardCatalogFilters) async throws -> [CardCandidate]
+}
+
+struct CardCatalogFilters: Equatable, Sendable {
+    var set = ""
+    var number = ""
+    var isEmpty: Bool {
+        self.set.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            number.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+extension CardCatalogSearching {
+    /// Compatibility for injected catalogs that expose the original combined
+    /// query interface. The production cache applies field filters before its
+    /// result limit; this fallback never filters an already truncated result.
+    func search(_ query: String, game: String, limit: Int, filters: CardCatalogFilters) async throws -> [CardCandidate] {
+        let combined = [query, filters.set, filters.number]
+            .map { String($0.prefix(256)).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }.joined(separator: " ")
+        return try await search(combined, game: game, limit: limit)
+    }
 }
 
 enum CardCatalogFailure: LocalizedError {
@@ -23,6 +45,8 @@ actor CachedCardCatalog: CardCatalogSearching {
         var card: CardCandidate
         var name: String
         var number: String
+        var set: String
+        var filterNumber: String
         var text: String
     }
     private struct Index: Sendable { var signature: String; var entries: [Entry] }
@@ -33,6 +57,11 @@ actor CachedCardCatalog: CardCatalogSearching {
     init(cache: ScannerDatabaseCache = .shared) { self.cache = cache }
 
     func search(_ query: String, game: String, limit: Int = 5) async throws -> [CardCandidate] {
+        try await search(query, game: game, limit: limit, filters: CardCatalogFilters())
+    }
+
+    func search(_ query: String, game: String, limit: Int = 5, filters: CardCatalogFilters) async throws -> [CardCandidate] {
+        try Task.checkCancellation()
         guard let key = TCGGameRegistry.scannerKey(for: game) else { throw CardCatalogFailure.unsupportedGame }
         let source = try await source(for: key)
         let entries: [Entry]
@@ -56,11 +85,24 @@ actor CachedCardCatalog: CardCatalogSearching {
             } catch { loading[loadKey] = nil; throw error }
         }
         let tokens = Self.normalize(query).split(separator: " ").map(String.init)
-        guard !tokens.isEmpty else { return [] }
+        guard !tokens.isEmpty || !filters.isEmpty else { return [] }
+        let setTokens = Self.normalize(String(filters.set.prefix(256))).split(separator: " ").map(String.init)
+        let rawNumber = String(filters.number.prefix(128)).trimmingCharacters(in: .whitespacesAndNewlines)
+        let numberFilter = rawNumber.isEmpty ? nil : Self.collectorNumber(rawNumber)
+        // A nonempty filter containing no useful characters must not broaden
+        // into an unfiltered list by accident.
+        if !filters.set.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && setTokens.isEmpty { return [] }
+        if numberFilter == "" { return [] }
         let cap = min(5, max(1, limit))
         var best: [(entry: Entry, score: Int)] = []
         for (offset, entry) in entries.enumerated() {
             if offset % 256 == 0 { try Task.checkCancellation() }
+            guard setTokens.allSatisfy({ entry.set.contains($0) }) else { continue }
+            if let numberFilter {
+                let matched = numberFilter.contains("/") ? entry.filterNumber == numberFilter
+                    : entry.filterNumber.split(separator: "/", omittingEmptySubsequences: false).first.map(String.init) == numberFilter
+                guard matched else { continue }
+            }
             guard let score = Self.score(entry, tokens: tokens) else { continue }
             best.append((entry, score))
             best.sort {
@@ -115,6 +157,7 @@ actor CachedCardCatalog: CardCatalogSearching {
     }
     private static func load(_ source: Source, cache: ScannerDatabaseCache, game: String) async throws -> [Entry] {
         var cards: [String: Entry] = [:]
+        var filterSets: [String: String] = [:]
         for key in source.metadataKeys {
             guard let data = try await cache.read(key) else { throw CardCatalogFailure.incomplete }
             let refs: [Any]
@@ -155,7 +198,12 @@ actor CachedCardCatalog: CardCatalogSearching {
                     let card = CardCandidate(identity: CardIdentity(game: game, productID: ref, printing: printing,
                         language: TCGGameRegistry.defaultLanguage(for: game)),
                         name: name, set: set, number: number, marketPrice: nil, imageURL: image, confidence: 0, printings: printings)
-                    cards[ref] = Entry(card: card, name: normalize(name), number: canonicalNumber(number),
+                    let setKey = set + " " + abbreviation
+                    let filterSet = filterSets[setKey] ?? normalize(setKey)
+                    filterSets[setKey] = filterSet
+                    let rankedNumber = canonicalNumber(number), filteredNumber = collectorNumber(number)
+                    cards[ref] = Entry(card: card, name: normalize(name), number: rankedNumber,
+                        set: filterSet, filterNumber: rankedNumber == filteredNumber ? rankedNumber : filteredNumber,
                         text: normalize(name + " " + set + " " + abbreviation + " " + number))
                     guard cards.count <= 500_000 else { throw CardCatalogFailure.invalid }
                 }
@@ -172,6 +220,33 @@ actor CachedCardCatalog: CardCatalogSearching {
     private static func canonicalNumber(_ value: String) -> String {
         normalize(value).replacingOccurrences(of: " ", with: "").split(separator: "/", omittingEmptySubsequences: false)
             .map { Int($0).map(String.init) ?? String($0).replacingOccurrences(of: #"^([a-z]+)0+([0-9]+)$"#, with: "$1$2", options: .regularExpression) }.joined(separator: "/")
+    }
+    /// Compare collector-number components without converting them to integers.
+    /// This handles long/alphanumeric codes and cosmetic zero padding while
+    /// retaining the original collector number in every returned card.
+    private static func collectorNumber(_ value: String) -> String {
+        let components = value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .split(separator: "/", omittingEmptySubsequences: false)
+        guard components.count <= 2 else { return "" }
+        var result: [String] = []
+        for component in components {
+            let compact = component.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.map { String($0) }.joined()
+            guard !compact.isEmpty else { return "" }
+            var output = "", digits = ""
+            func flushDigits() {
+                if !digits.isEmpty {
+                    let trimmed = digits.drop(while: { $0 == "0" })
+                    output += trimmed.isEmpty ? "0" : String(trimmed)
+                    digits = ""
+                }
+            }
+            for character in compact {
+                if character.isNumber { digits.append(character) }
+                else { flushDigits(); output.append(character) }
+            }
+            flushDigits(); result.append(output)
+        }
+        return result.joined(separator: "/")
     }
     private static func score(_ entry: Entry, tokens: [String]) -> Int? {
         var score = 0
