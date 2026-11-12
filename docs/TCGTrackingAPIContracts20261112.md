@@ -110,7 +110,7 @@ app's implemented lifetimes. Public OpenAPI requests use no Beta credentials.
 | `GET /v1/{cat}/sets/{set}/pricing` | 1 day | Actual 3/23237 response reviewed: `set_id`, offset-bearing `updated`, and 249 product entries in `prices[productID].tcg[printing]` with `low`/`market`. |
 | `GET /v1/{cat}/sets/{set}/skus` | 1 day | Actual 3/22872 and 3/23237 responses reviewed. The latter contains 1,874 unique SKUs across all 249 full-set product IDs; earlier exact promo SKU matched Beta's market reference. |
 | `GET /v1/products/{product_id}` | 7 days | Earlier real 512035 fixture plus current 517045 response reviewed: matching root/nested product identity, set/category mapping, five SKU rows, dimensions and sync status. |
-| `POST /v1/scan` | No store | Request contract verified from the provider's Scan documentation; no actual image-response sample yet. JSON or multipart image upload, not hashes. |
+| `POST /v1/scan` | No store | Actual JSON-upload response reviewed: `success: true`, game 3 / set 23237, product 517045 ranked first with score 97, 220 candidates scanned. Known public catalog-image control, not a physical-camera accuracy test. |
 | `GET /v1/{cat}/search?q={query}` | 5 minutes | Actual category 3 query `151` reviewed: `query`, `category_id`, `count: 1`, and one matching set object (23237) using discovery fields/URLs. |
 
 The reviewed public metadata snapshot reports 64 categories, 3,943 sets and
@@ -214,12 +214,23 @@ The image must be an upright, mostly full-card crop; the service performs no
 border detection, OCR or segmentation. Client hashes are rejected. Matching
 returns product IDs and scores, not exact SKU/printing/language/condition.
 The documented envelope has `success`, `game_id`, `set_ids`, `cropped_image`,
-`results[{product_id, score}]` and `candidates_scanned`. Treat echoed image data
+`results[{product_id, score}]` and `candidates_scanned`. The reviewed live result
+also contains `name`, `number`, `printing` and `set_id`; preserve the documented
+product-only matching scope. It labels Charizard ex 199/165 as `printing: Normal`,
+while its verified exact-SKU data uses Holofoil. Do not use the image result's
+printing label to select an exact SKU or quote without catalog/SKU verification.
+Treat echoed image data
 as transient and exclude it from diagnostics. Documented errors are 400 invalid
 input/hashes, 413 oversized decoded image, 422 unparseable image and 503 database
-or selected-scope hash unavailability. A live response is still pending; request
-documentation alone does not establish recognition accuracy or live coverage.
+or selected-scope hash unavailability. The catalog-image control returned the
+expected product and collector number; its image echo was transcoded. This
+does not establish accuracy on live camera photographs, glare, sleeves or other
+game/set scopes. `limit` is a maximum; the reviewed limit-5 request returned one
+result. Do not require every successful response to contain five candidates.
 
-Documentation and mocked tests do not prove live contracts. Continue missing
-response checks one at a time with HTTP status. These notes change no inventory,
-settings, pricing provenance, camera behavior or UI.
+Live response examples have now been reviewed for all 12 documented OpenAPI
+endpoint types (using the provider's returned hyphenated product-detail route).
+This covers normal response formats, not every alias, game, SKU, error, retry or
+offline behavior. Research daily history still lacks a populated live example,
+and the separate Beta chart-bucket encoding remains unconfirmed. These notes
+change no inventory, settings, pricing provenance, camera behavior or UI.
