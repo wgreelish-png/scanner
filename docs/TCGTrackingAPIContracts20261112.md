@@ -105,7 +105,7 @@ app's implemented lifetimes. Public OpenAPI requests use no Beta credentials.
 | `GET /v1/{cat}/sets` | 7 days | Actual category 3 response reviewed: `sets` array with 288 unique positive `id` values, names, modification timestamps, counts and per-format relative URLs. |
 | `GET /v1/{cat}/sets/{set}` | 7 days | Actual 3/23237 response reviewed: 249 products in a `products` array, including card and sealed-product examples, with set metadata and relative per-format URLs. |
 | `GET /v1/{cat}/sets/{set}/cards` | 7 days | Actual 3/23237 response reviewed: `product_type: "cards"`, 215 unique products, all present in the reviewed full set. |
-| `GET /v1/{cat}/sets/{set}/sealed` | 7 days | Not yet captured/verified. |
+| `GET /v1/{cat}/sets/{set}/sealed` | 7 days | Actual 3/23237 response reviewed: `product_type: "sealed"`, 34 products, exactly the full-set entries absent from the cards-only response. |
 | `GET /v1/{cat}/sets/{set}/product_detail` | 7 days | Not yet captured/verified. |
 | `GET /v1/{cat}/sets/{set}/pricing` | 1 day | Not yet captured/verified; distinct from exact-SKU pricing. |
 | `GET /v1/{cat}/sets/{set}/skus` | 1 day | Actual 3/22872 response reviewed; exact-SKU market matched Beta. |
@@ -148,8 +148,10 @@ are separate from pricing/SKU freshness.
 
 The reviewed cards-only response has the same product field vocabulary as the
 full-set response, including collector `number` and `rarity`. Its 215 IDs form
-a strict subset of the full set's 249 IDs. Confirm the remaining 34 products
-against the sealed endpoint rather than inferring classification. The cards
+a strict subset of the full set's 249 IDs. The sealed response independently
+confirms the remaining 34 IDs, with zero card overlap and an exact union equal
+to all 249 full-set products. Its product records also equal their full-set
+counterparts. The cards
 response does not include `product_detail_url`; cross-format URLs must be
 optional. Its static modification/generation timestamps differ from the
 full-set response and do not establish current pricing.
