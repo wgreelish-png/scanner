@@ -21,6 +21,7 @@ on:
           - leftover_stock
           - photo_scan
           - scanner_polish
+          - text_assist
           - research_ui
           - evidence_ui
           - budget_ui
@@ -71,7 +72,7 @@ jobs:
       - run: python3 scripts/check_xcode_sources.py
       - run: python3 scripts/check_scanner_runtime.py
   native:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job_scope == 'all' || inputs.job_scope == 'native' || inputs.job_scope == 'log_review' || inputs.job_scope == 'show_polish' || inputs.job_scope == 'leftover_stock' || inputs.job_scope == 'photo_scan' || inputs.job_scope == 'scanner_polish' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job_scope == 'all' || inputs.job_scope == 'native' || inputs.job_scope == 'log_review' || inputs.job_scope == 'show_polish' || inputs.job_scope == 'leftover_stock' || inputs.job_scope == 'photo_scan' || inputs.job_scope == 'scanner_polish' || inputs.job_scope == 'text_assist' }}
     runs-on: macos-15-intel
     timeout-minutes: 60
     steps:
@@ -79,7 +80,7 @@ jobs:
       - name: Build and run native regression tests
         id: native_tests
         env:
-          SCANNER_TEST_SCOPE: ${{ inputs.job_scope == 'scanner_polish' && 'scanner_polish' || inputs.job_scope == 'photo_scan' && 'photo_scan' || inputs.job_scope == 'leftover_stock' && 'all' || inputs.job_scope == 'show_polish' && 'all' || inputs.job_scope == 'log_review' && 'log_review' || inputs.test_scope || 'all' }}
+          SCANNER_TEST_SCOPE: ${{ inputs.job_scope == 'text_assist' && 'text_assist' || inputs.job_scope == 'scanner_polish' && 'scanner_polish' || inputs.job_scope == 'photo_scan' && 'photo_scan' || inputs.job_scope == 'leftover_stock' && 'all' || inputs.job_scope == 'show_polish' && 'all' || inputs.job_scope == 'log_review' && 'log_review' || inputs.test_scope || 'all' }}
         run: |
           if [ "$SCANNER_TEST_SCOPE" = printer_transport ] || [ "$SCANNER_TEST_SCOPE" = label_controls ]; then
             bash scripts/run_ios_tests.sh CardShowScannerTests/NiimbotProtocolTests CardShowScannerTests/ScannerDiagnosticsTests CardShowScannerTests/LabelPrintQueueTests CardShowScannerTests/NiimbotImageTransferPreferencesTests CardShowScannerTests/NiimbotRollReadCoordinatorTests CardShowScannerTests/NiimbotLabelCatalogTests CardShowScannerTests/NiimbotLabelProductResolverTests
@@ -87,6 +88,17 @@ jobs:
             bash scripts/run_ios_tests.sh CardShowScannerTests/InventoryLabelTests CardShowScannerTests/AdaptiveLabelRenderingTests CardShowScannerTests/CustomPriceTagTests CardShowScannerTests/CustomLabelQueueTests CardShowScannerTests/LabelPrintQueueTests CardShowScannerTests/NiimbotImageTransferPreferencesTests CardShowScannerTests/NiimbotRollReadCoordinatorTests CardShowScannerTests/NiimbotLabelCatalogTests CardShowScannerTests/ScannerDiagnosticsTests CardShowScannerTests/NiimbotLabelProductResolverTests CardShowScannerTests/ShowInventorySortTests CardShowScannerTests/InventoryLabelBatchTests
           elif [ "$SCANNER_TEST_SCOPE" = label_queue ]; then
             bash scripts/run_ios_tests.sh CardShowScannerTests/LabelPrintQueueTests CardShowScannerTests/LabelPrintRunOutcomeTests CardShowScannerTests/CustomPriceTagTests
+          elif [ "$SCANNER_TEST_SCOPE" = text_assist ]; then
+            bash scripts/run_ios_tests.sh \
+              CardShowScannerTests/ScannerTextRecognitionTests \
+              CardShowScannerTests/ScannerTextProviderPreferenceTests \
+              CardShowScannerTests/ScannerTextRecognitionStateTests \
+              CardShowScannerTests/ScannerTextRecognitionFlowTests \
+              CardShowScannerTests/PhotoScanStateTests \
+              CardShowScannerTests/PhotoScanProviderPreferenceTests \
+              CardShowScannerTests/ManualCatalogFilterTests \
+              CardShowScannerTests/ScannerManualSearchLifecycleTests \
+              CardShowScannerTests/ScannerDiagnosticsTests
           elif [ "$SCANNER_TEST_SCOPE" = scanner_polish ]; then
             bash scripts/run_ios_tests.sh \
               CardShowScannerTests/ManualCardSearchTests \

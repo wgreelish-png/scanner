@@ -88,6 +88,15 @@ enum ScannerPhotoCommandPolicy {
     }
 }
 
+enum ScannerTextRecognitionPolicy {
+    static func allows(enabled: Bool, busy: Bool, mode: ScannerCaptureMode, photoState: PhotoScanState,
+                       active: Bool, foreground: Bool, manual: Bool, cooling: Bool,
+                       documentReady: Bool, reviewing: Bool) -> Bool {
+        enabled && !busy && active && foreground && !manual && !cooling && documentReady && !reviewing
+            && (mode == .live || photoState == .noMatch)
+    }
+}
+
 /// Diagnostics have their own strict scalar schema. Neither recognition payloads
 /// nor arbitrary webpage strings become diagnostic fields.
 struct ScannerDiagnosticRecord {
@@ -411,6 +420,16 @@ enum ScannerResourceMode: String, Equatable {
     @Published private(set) var manualSearchSuggested = false
     @Published private(set) var captureMode = ScannerCaptureMode.live
     @Published private(set) var photoState = PhotoScanState.off
+    @Published private(set) var textRecognitionEnabled = false
+    @Published private(set) var textRecognitionBusy = false
+    @Published private(set) var textRecognitionMessage: String?
+    private let textRecognizer: any ScannerTextRecognizing
+    private let textCatalog: ScannerTextCatalogMatcher
+    private var textTask: Task<Void, Never>?
+    private var textDeadline: Task<Void, Never>?
+    private var textRequestID = UUID()
+    private var photoTextAttempted = false
+    private var recognitionReviewHeld = false
     private var active = false
     private var manualSearchSuspended = false
     private var documentFailed = false
@@ -438,7 +457,10 @@ enum ScannerResourceMode: String, Equatable {
     private static let deniedCameraStatus = "Camera access is off. Enable Camera in iPhone Settings → Card Show Scanner, then tap Retry Live Scanner."
     private static let coolingStatus = "Cooling down… Scanning resumes when your iPhone is ready."
 
-    override init() {
+    init(textRecognizer: any ScannerTextRecognizing = ScannerTextRecognizer(),
+         textCatalog: any CardCatalogSearching = CachedCardCatalog.shared) {
+        self.textRecognizer = textRecognizer
+        self.textCatalog = ScannerTextCatalogMatcher(catalog: textCatalog)
         let stream = AsyncStream<ScanResult>.makeStream(bufferingPolicy: .bufferingNewest(1))
         results = stream.stream; continuation = stream.continuation
         let config = WKWebViewConfiguration()
@@ -466,6 +488,7 @@ enum ScannerResourceMode: String, Equatable {
         webView.scrollView.isScrollEnabled = false
     }
     deinit {
+        textTask?.cancel(); textDeadline?.cancel()
         resourcePauseDeadline?.cancel()
         photoCommandDeadline?.cancel()
         for observer in resourceObservers { NotificationCenter.default.removeObserver(observer) }
@@ -518,6 +541,8 @@ enum ScannerResourceMode: String, Equatable {
     }
     func stop() {
         if active { DiagnosticLog.shared.record("web.stopped") }
+        invalidateTextRecognition()
+        photoTextAttempted = false; recognitionReviewHeld = false; textRecognitionMessage = nil
         active = false; manualSearchSuspended = false; bridgeInstalled = false; nonce = UUID().uuidString; manualSearchSuggested = false
         for observer in resourceObservers { NotificationCenter.default.removeObserver(observer) }
         resourceObservers.removeAll()
@@ -551,6 +576,7 @@ enum ScannerResourceMode: String, Equatable {
                     guard mode != self.resourceMode || foreground != self.resourceForeground else { return }
                     self.resourceMode = mode; self.resourceForeground = foreground
                     if mode == .cooling || !foreground {
+                        self.invalidateTextRecognition()
                         self.invalidatePhotoCommand()
                         self.updatePhotoState(self.captureMode == .photo && mode == .cooling ? .cooling : .off)
                     }
@@ -630,6 +656,7 @@ enum ScannerResourceMode: String, Equatable {
             url.path == "/index.html" && url.query == nil && url.user == nil && url.password == nil
     }
     func releaseReview(recognitionRef: String? = nil) {
+        recognitionReviewHeld = false
         manualSearchSuggested = false
         // The frozen recognition can outlive a WebKit restart. Pass its identity
         // explicitly so removal waiting never attaches to a later camera guess.
@@ -652,12 +679,131 @@ enum ScannerResourceMode: String, Equatable {
         DiagnosticLog.shared.record("scanner.steady_border_changed", ["reason": enabled ? "enabled" : "disabled"])
         webView.evaluateJavaScript("window.CardShowBridge?.setSteadyCardBorder(\(enabled ? "true" : "false")); null;", completionHandler: nil)
     }
-    var canCapturePhoto: Bool { allowsPhotoCommand(retake: false) }
-    var canRetakePhoto: Bool { allowsPhotoCommand(retake: true) }
+    var canCapturePhoto: Bool { !textRecognitionBusy && allowsPhotoCommand(retake: false) }
+    var canRetakePhoto: Bool { !textRecognitionBusy && allowsPhotoCommand(retake: true) }
+
+    var canReadCardText: Bool {
+        ScannerTextRecognitionPolicy.allows(enabled: textRecognitionEnabled, busy: textRecognitionBusy,
+            mode: captureMode, photoState: photoState, active: active, foreground: resourceForeground,
+            manual: manualSearchSuspended || manualSearchSuggested, cooling: resourceMode == .cooling,
+            documentReady: bridgeInstalled && !documentFailed && Self.allowed(webView.url), reviewing: recognitionReviewHeld)
+            && (captureMode == .live || !photoTextAttempted)
+    }
+
+    func setTextRecognitionEnabled(_ enabled: Bool) {
+        guard textRecognitionEnabled != enabled else { return }
+        textRecognitionEnabled = enabled
+        DiagnosticLog.shared.record("scanner.text_option", ["phase": enabled ? "enabled" : "disabled"])
+        if !enabled { invalidateTextRecognition(resume: true); textRecognitionMessage = nil }
+        else if captureMode == .photo && photoState == .noMatch { readCardText() }
+    }
+
+    /// One user-requested live frame, or one failed still. Never called from a
+    /// video-frame callback. Only bounded temporary JPEG data crosses WebKit.
+    func readCardText() {
+        guard canReadCardText else { return }
+        if captureMode == .photo { photoTextAttempted = true }
+        invalidateTextRecognition()
+        let id = textRequestID, requestNonce = nonce, requestedMode = captureMode, requestedGame = game
+        let started = ProcessInfo.processInfo.systemUptime
+        textRecognitionBusy = true; textRecognitionMessage = nil; manualSearchSuggested = false
+        status = "Reading card text on this iPhone…"
+        DiagnosticLog.shared.record("scanner.text_started", ["source": requestedMode.rawValue])
+        textDeadline = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(20)) } catch { return }
+            guard let self, self.isCurrentTextRequest(id, nonce: requestNonce) else { return }
+            // An unresponsive page may still own a snapshot operation. Retire
+            // it rather than letting a late result enter another capture.
+            DiagnosticLog.shared.record("scanner.text_finished", ["phase": "timeout", "elapsed_ms": "20000"])
+            self.webView.setCameraCaptureState(.none, completionHandler: nil)
+            self.stop(); self.documentFailed = true; self.photoDocumentFailed()
+            self.status = "Reading card text could not finish. Retry the scanner."
+        }
+        textTask = Task { [weak self] in
+            guard let self else { return }
+            var observations = 0
+            do {
+                let value = try await self.webView.callAsyncJavaScript(
+                    "return await window.CardShowBridge?.captureTextImage(expectedNonce, operationID);",
+                    arguments: ["expectedNonce": requestNonce, "operationID": id.uuidString], in: nil, contentWorld: .page)
+                guard self.isCurrentTextRequest(id, nonce: requestNonce) else { return }
+                guard let snapshot = value as? [String: Any], snapshot["source"] as? String == requestedMode.rawValue,
+                      let base64 = snapshot["imageBase64"] as? String, base64.utf8.count <= 2_800_000,
+                      let image = Data(base64Encoded: base64), image.count <= 2_000_000 else {
+                    await self.finishTextRecognition(id, nonce: requestNonce, cards: [], observations: 0,
+                        started: started, phase: "no_frame", message: requestedMode == .photo
+                            ? "This photo could not provide readable text. Retake it or search manually."
+                            : "Frame one card clearly, then try Read Card Text again.")
+                    return
+                }
+                let text = try await self.textRecognizer.recognize(image)
+                guard self.isCurrentTextRequest(id, nonce: requestNonce) else { return }
+                observations = text.count
+                let cards = try await self.textCatalog.candidates(from: text, game: requestedGame)
+                guard self.isCurrentTextRequest(id, nonce: requestNonce) else { return }
+                await self.finishTextRecognition(id, nonce: requestNonce, cards: cards, observations: observations,
+                    started: started, phase: cards.isEmpty ? "no_match" : "suggestions",
+                    message: cards.isEmpty ? "No catalog match from this text. Try another photo or search manually." : "Text suggestions ready. Check the card, printing and condition.")
+            } catch {
+                guard self.isCurrentTextRequest(id, nonce: requestNonce) else { return }
+                // Vision errors and recognized text can contain private input.
+                // Log only the bounded outcome and timings, never raw errors.
+                await self.finishTextRecognition(id, nonce: requestNonce, cards: [], observations: observations,
+                    started: started, phase: "unavailable", message: "Card text could not be matched. Try another photo or search manually.")
+            }
+        }
+    }
+
+    private func isCurrentTextRequest(_ id: UUID, nonce requestNonce: String) -> Bool {
+        active && nonce == requestNonce && textRequestID == id && textRecognitionEnabled && textRecognitionBusy
+            && resourceForeground && resourceMode != .cooling && !manualSearchSuspended && !documentFailed
+            && !Task.isCancelled
+    }
+
+    private func finishTextRecognition(_ id: UUID, nonce requestNonce: String, cards: [CardCandidate], observations: Int,
+                                       started: TimeInterval, phase: String, message: String) async {
+        guard isCurrentTextRequest(id, nonce: requestNonce) else { return }
+        let finished = try? await webView.callAsyncJavaScript(
+            "return window.CardShowBridge?.finishTextRecognition(expectedNonce, operationID, matched);",
+            arguments: ["expectedNonce": requestNonce, "operationID": id.uuidString, "matched": !cards.isEmpty],
+            in: nil, contentWorld: .page)
+        guard isCurrentTextRequest(id, nonce: requestNonce) else { return }
+        let delivered = finished as? Bool == true
+        if !delivered && phase != "no_frame" {
+            DiagnosticLog.shared.record("scanner.text_finished", ["phase": "interrupted"])
+            webView.setCameraCaptureState(.none, completionHandler: nil)
+            stop(); documentFailed = true; photoDocumentFailed()
+            status = "Card text could not finish. Retry the scanner."
+            return
+        }
+        textDeadline?.cancel(); textDeadline = nil; textTask = nil; textRequestID = UUID(); textRecognitionBusy = false
+        let suggestions = delivered ? Array(cards.prefix(5)) : []
+        textRecognitionMessage = message
+        status = textRecognitionMessage ?? message
+        DiagnosticLog.shared.record("scanner.text_finished", ["phase": phase,
+            "elapsed_ms": String(Int(max(0, min(20_000, (ProcessInfo.processInfo.systemUptime - started) * 1000)))),
+            "observed_count": String(min(128, observations)), "candidates": String(suggestions.count)])
+        guard !suggestions.isEmpty else { return }
+        normalizer = TCGBridgeNormalizer(); recognitionReviewHeld = true
+        if captureMode == .photo { photoAwaitingRetake = true; photoRestingState = .ready; updatePhotoState(.ready) }
+        continuation.yield(ScanResult(id: UUID(), candidates: suggestions, accepted: false, same: false, source: .text))
+    }
+
+    private func invalidateTextRecognition(resume: Bool = false) {
+        let previousID = textRequestID, wasBusy = textRecognitionBusy
+        textRequestID = UUID(); textTask?.cancel(); textTask = nil; textDeadline?.cancel(); textDeadline = nil
+        textRecognitionBusy = false
+        if resume && wasBusy && active && bridgeInstalled && !documentFailed {
+            webView.callAsyncJavaScript("return window.CardShowBridge?.finishTextRecognition(expectedNonce, operationID, false);",
+                arguments: ["expectedNonce": nonce, "operationID": previousID.uuidString], in: nil, in: .page) { _ in }
+        }
+    }
 
     @discardableResult func setCaptureMode(_ mode: ScannerCaptureMode) -> Bool {
         guard mode != captureMode else { return true }
-        guard photoState != .processing else { return false }
+        guard photoState != .processing, !textRecognitionBusy else { return false }
+        invalidateTextRecognition()
+        photoTextAttempted = false; recognitionReviewHeld = false; textRecognitionMessage = nil
         invalidatePhotoCommand()
         captureMode = mode; photoAwaitingRetake = false; photoRestingState = .failed
         normalizer = TCGBridgeNormalizer(); manualSearchSuggested = false
@@ -669,7 +815,8 @@ enum ScannerResourceMode: String, Equatable {
     }
 
     func capturePhoto() {
-        guard canCapturePhoto else { return }
+        guard canCapturePhoto, !textRecognitionBusy else { return }
+        photoTextAttempted = false; recognitionReviewHeld = false; textRecognitionMessage = nil
         photoAwaitingRetake = true; photoRestingState = .failed
         normalizer = TCGBridgeNormalizer(); reviewRelease.discardPending()
         updatePhotoState(.processing)
@@ -678,7 +825,9 @@ enum ScannerResourceMode: String, Equatable {
     }
 
     func retakePhoto() {
-        guard canRetakePhoto else { return }
+        guard canRetakePhoto, !textRecognitionBusy else { return }
+        invalidateTextRecognition()
+        photoTextAttempted = false; recognitionReviewHeld = false; textRecognitionMessage = nil
         photoAwaitingRetake = false
         normalizer = TCGBridgeNormalizer(); reviewRelease.discardPending()
         updatePhotoState(.off)
@@ -751,6 +900,7 @@ enum ScannerResourceMode: String, Equatable {
         status = "Photo Scan could not finish. Retry the scanner, then take another photo."
     }
     private func photoDocumentFailed() {
+        invalidateTextRecognition()
         invalidatePhotoCommand()
         if captureMode == .photo { updatePhotoState(.failed) }
     }
@@ -762,7 +912,9 @@ enum ScannerResourceMode: String, Equatable {
     }
     func suspendForManualSearch() {
         guard active, !manualSearchSuspended else { return }
+        invalidateTextRecognition()
         manualSearchSuspended = true; manualSearchSuggested = false
+        recognitionReviewHeld = false; textRecognitionMessage = nil
         invalidatePhotoCommand()
         if captureMode == .photo { updatePhotoState(.off) }
         normalizer = TCGBridgeNormalizer(); reviewRelease.discardPending()
@@ -795,6 +947,8 @@ enum ScannerResourceMode: String, Equatable {
         webView.evaluateJavaScript("window.CardShowBridge?.refreshDatabase(); null;", completionHandler: nil)
     }
     func resetRecognition() {
+        invalidateTextRecognition()
+        recognitionReviewHeld = false; textRecognitionMessage = nil
         manualSearchSuggested = false
         reviewRelease.discardPending()
         normalizer = TCGBridgeNormalizer()
@@ -961,6 +1115,7 @@ enum ScannerResourceMode: String, Equatable {
                 if resourceMode == .cooling { updatePhotoState(captureMode == .photo ? .cooling : .off); return }
                 guard resourceForeground, !manualSearchSuspended else { return }
                 if state == .processing {
+                    photoTextAttempted = false; recognitionReviewHeld = false; textRecognitionMessage = nil
                     normalizer = TCGBridgeNormalizer(); photoAwaitingRetake = true; photoRestingState = .failed
                 } else if state.isResting {
                     photoAwaitingRetake = true; photoRestingState = state
@@ -968,13 +1123,16 @@ enum ScannerResourceMode: String, Equatable {
                 updatePhotoState(state)
                 switch state {
                 case .off: break
-                case .framing: status = "Frame one card, then tap Take Photo."
+                case .framing:
+                    photoTextAttempted = false; textRecognitionMessage = nil
+                    status = "Frame one card, then tap Take Photo."
                 case .processing: status = "Scanning photo… Camera is off."
                 case .ready: status = "Photo scanned. Review the card or take another photo."
                 case .noMatch: status = "No card found in this photo. Retake it or search manually."
                 case .failed: status = "Photo could not be scanned. Retake it or search manually."
                 case .cooling: status = Self.coolingStatus
                 }
+                if state == .noMatch && !photoTextAttempted { readCardText() }
                 return
             }
             if envelope.kind == "photoState" { return }
@@ -984,6 +1142,8 @@ enum ScannerResourceMode: String, Equatable {
             }
             if resourceMode == .cooling && envelope.kind != "status" { return }
             if manualSearchSuspended && envelope.kind != "status" { return }
+            // The one-shot text operation owns the snapshot/review boundary.
+            if (textRecognitionBusy || recognitionReviewHeld) && ["scan", "hide", "manualSearchSuggested"].contains(envelope.kind) { return }
             if envelope.kind == "manualSearchSuggested" {
                 guard !manualSearchSuggested else { return }
                 manualSearchSuggested = true
@@ -991,6 +1151,7 @@ enum ScannerResourceMode: String, Equatable {
                 return
             }
             if envelope.kind == "status" {
+                if textRecognitionBusy { return }
                 let cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
                 status = cameraStatus == .denied || cameraStatus == .restricted
                     ? Self.deniedCameraStatus : resourceMode == .cooling ? Self.coolingStatus : String((envelope.message ?? "").prefix(1000))
@@ -999,7 +1160,10 @@ enum ScannerResourceMode: String, Equatable {
             // The popup owns this unresolved attempt. A late recognition/hide
             // message must not present another screen while the user decides.
             if manualSearchSuggested && (envelope.kind == "scan" || envelope.kind == "hide") { return }
-            if let result = try normalizer.receive(envelope, game: game) { continuation.yield(result) }
+            if let result = try normalizer.receive(envelope, game: game) {
+                recognitionReviewHeld = result.visible && !result.candidates.isEmpty
+                continuation.yield(result)
+            }
         } catch { DiagnosticLog.shared.failure("bridge.result_rejected", error); status = "Scanner result rejected: \(error.localizedDescription)" }
     }
     private func logDiagnostic(_ message: TCGBridgeEnvelope) {

@@ -87,6 +87,8 @@
   let setCaptureMode = () => false;
   let capturePhoto = async () => false;
   let retakePhoto = async () => false;
+  let captureTextImage = async () => null;
+  let finishTextRecognition = () => false;
   async function install(config) {
     dispose();
     globalThis.CardShowNativeCache = typeof config.cacheToken === 'string' && config.cacheToken.length >= 32 ? { token: config.cacheToken } : null;
@@ -99,6 +101,7 @@
     let photoRestState = ['ready', 'noMatch', 'failed'].includes(config.photoReviewState) ? config.photoReviewState : 'failed';
     let photoFramingRequested = captureMode === 'photo' && !['ready', 'noMatch', 'failed'].includes(config.photoReviewState);
     let photoGeneration = 0, photoOperation = null, photoState = 'off', imageCandidates = null;
+    let textCapture = null, textPhotoGeneration = null;
 
     const validResourceMode = value => ['normal', 'reduced', 'cooling'].includes(value);
     let resourceMode = validResourceMode(config.resourceMode) ? config.resourceMode : 'normal';
@@ -123,6 +126,7 @@
       post({ kind: 'photoState', photoState: state });
     };
     const cancelPhoto = () => {
+      cancelTextCapture();
       photoGeneration++;
       // The worker can be stopped; a main-thread synchronous OpenCV pass cannot
       // be preempted, but its result is still fenced. Keep the already-loaded pack.
@@ -131,6 +135,13 @@
         owner.cancelled = true; owner.backend?.dispose();
         if (backend === owner.backend) { backend = null; backendPack = null; }
       }
+    };
+
+    const cancelTextCapture = () => {
+      // Retire the RPC owner before a later frame can be captured. An old native
+      // OCR completion can never release or replace another review.
+      if (textCapture?.source === 'live') held = false;
+      textCapture = null;
     };
 
     const stopRecognition = () => { loopGeneration++; stopLoop?.(); stopLoop = null; };
@@ -391,6 +402,7 @@
 
     const report = value => { value = cooling() ? coolingMessage : value; hint.hidden = config.autoStart === true || !!stream; hint.textContent = text(value); post({ kind: 'status', message: text(value) }); };
     const stopCamera = (preserveReview = false) => {
+      cancelTextCapture();
       stopDelivery();
       deliveryPlaybackStream = null;
       loopGeneration++;
@@ -419,6 +431,7 @@
     dispose = () => { diagnostic('bridge_stopped'); cancelPhoto(); clearStill(); pending = null; stopCamera(); running = false; backend?.dispose(); backend = null; pack = null; root.remove(); document.removeEventListener('visibilitychange', visibility); window.removeEventListener?.('error', onError); window.removeEventListener?.('unhandledrejection', onRejection); };
     suspendForManualSearch = expectedNonce => {
       if (!running || (expectedNonce !== undefined && expectedNonce !== config.nonce)) return false;
+      cancelTextCapture();
       manualSearchSuspended = true; resumeRequested = false; loopGeneration++;
       clearManualAttempt(); pending = null; held = false; heldRef = removalRef = removalAbsentSince = null;
       heldScan = latestScan = null; awaitingRemoval = false;
@@ -469,6 +482,64 @@
     };
     const photoCurrent = (token, sourcePack) => running && captureMode === 'photo' && eligible() &&
       photoGeneration === token && pack === sourcePack;
+    captureTextImage = async (expectedNonce, operationID) => {
+      // Native requests one bounded frame only after visual recognition fails,
+      // or after an explicit live-camera action. There is no text frame loop.
+      await Promise.resolve();
+      if (!running || expectedNonce !== config.nonce || typeof operationID !== 'string' ||
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(operationID) ||
+          !eligible() || starting || textCapture || !backend) return null;
+      const source = captureMode;
+      if (source === 'photo') {
+        if (photoState !== 'noMatch' || photoFramingRequested || photoOperation ||
+            textPhotoGeneration === photoGeneration || still.width < 2 || still.height < 2) return null;
+      } else if (!stream || held || manualPromptPending || !beginLoop) return null;
+      const owner = { id: operationID, source, photo: photoGeneration }; textCapture = owner;
+      if (source === 'photo') textPhotoGeneration = photoGeneration;
+      else {
+        clearManualAttempt(); awaitingRemoval = false; removalRef = removalAbsentSince = null;
+        held = true; heldRef = null; pending = null;
+        stopRecognition(); updateCameraWorkload();
+      }
+      const snapshot = document.createElement('canvas');
+      try {
+        const image = source === 'photo' ? still : video;
+        const width = source === 'photo' ? still.width : video.videoWidth;
+        const height = source === 'photo' ? still.height : video.videoHeight;
+        if (!Number.isFinite(width) || !Number.isFinite(height) || width < 2 || height < 2) throw new Error('No frame');
+        const scale = Math.min(1, 2048 / Math.max(width, height));
+        snapshot.width = Math.max(1, Math.floor(width * scale)); snapshot.height = Math.max(1, Math.floor(height * scale));
+        const context = snapshot.getContext('2d', { alpha: false });
+        if (!context) throw new Error('No canvas');
+        context.drawImage(image, 0, 0, snapshot.width, snapshot.height);
+        const encoded = snapshot.toDataURL('image/jpeg', 0.88), prefix = 'data:image/jpeg;base64,';
+        if (typeof encoded !== 'string' || !encoded.startsWith(prefix) || encoded.length > 2_800_000 + prefix.length) throw new Error('Frame too large');
+        if (textCapture !== owner || !eligible() || captureMode !== source) return null;
+        // The image is returned only to the authenticated native RPC caller.
+        // It never enters postMessage diagnostics or persistent storage.
+        return { imageBase64: encoded.slice(prefix.length), source };
+      } catch (_) {
+        finishTextRecognition(expectedNonce, operationID, false); return null;
+      } finally {
+        snapshot.width = snapshot.height = 1; snapshot.remove();
+      }
+    };
+    finishTextRecognition = (expectedNonce, operationID, matched) => {
+      const owner = textCapture;
+      if (!running || expectedNonce !== config.nonce || typeof matched !== 'boolean' || !owner ||
+          owner.id !== operationID || owner.source !== captureMode || !eligible() ||
+          (owner.source === 'photo' && owner.photo !== photoGeneration)) return false;
+      textCapture = null;
+      if (owner.source === 'photo') {
+        if (matched) { held = true; emitPhotoState('ready'); }
+      } else if (!matched) {
+        held = false; heldRef = null; pending = null;
+        stopRecognition(); backend?.reset?.();
+        if (recognitionEligible() && stream && beginLoop) stopLoop = beginLoop();
+        updateCameraWorkload();
+      }
+      return true;
+    };
     capturePhoto = async expectedNonce => {
       if (!running || expectedNonce !== config.nonce || captureMode !== 'photo' || !eligible() || starting ||
           photoOperation || !photoFramingRequested || !stream || photoState !== 'framing' || !backend || !imageCandidates) return false;
@@ -540,6 +611,7 @@
     };
     // These remain safe even if a restored photo review needs no camera startup.
     resetRecognition = () => {
+      cancelTextCapture();
       if (captureMode !== 'photo') return;
       held = false; heldRef = null; pending = null; post({ kind: 'hide' }); emitPhotoState(photoRestState);
     };
@@ -730,6 +802,7 @@
           } });
         };
         resetRecognition = () => {
+          cancelTextCapture();
           if (captureMode === 'photo') { held = false; pending = null; emitPhotoState(photoRestState); return; }
           clearManualAttempt(); pending = null; held = false; heldRef = removalRef = removalAbsentSince = null; heldScan = null; latestScan = null; awaitingRemoval = false; stopRecognition(); backend?.reset?.();
           if (recognitionEligible() && stream) stopLoop = beginLoop();
@@ -794,5 +867,5 @@
     if (captureMode === 'photo') emitPhotoState(cooling() ? 'cooling' : (photoFramingRequested ? 'off' : photoRestState));
     if (config.autoStart) await button.onclick();
   }
-  globalThis.CardShowBridge = { install, stop: () => dispose(), resetRecognition: () => resetRecognition(), releaseReview: ref => releaseReview(ref), resumeAfterManualSearchPrompt: () => resumeAfterManualSearchPrompt(), suspendForManualSearch: nonce => suspendForManualSearch(nonce), resumeAfterManualSearch: nonce => resumeAfterManualSearch(nonce), setResourceMode: (mode, nonce, foreground) => setResourceMode(mode, nonce, foreground), setDeliveryDiagnostics: (enabled, nonce) => setDeliveryDiagnostics(enabled, nonce), refreshDatabase: () => refreshDatabase(), markScanIssue: reason => markScanIssue(reason), setSteadyCardBorder: enabled => setSteadyCardBorder(enabled), setCaptureMode: (mode, nonce) => setCaptureMode(mode, nonce), capturePhoto: nonce => capturePhoto(nonce), retakePhoto: nonce => retakePhoto(nonce), normalizeView };
+  globalThis.CardShowBridge = { install, stop: () => dispose(), resetRecognition: () => resetRecognition(), releaseReview: ref => releaseReview(ref), resumeAfterManualSearchPrompt: () => resumeAfterManualSearchPrompt(), suspendForManualSearch: nonce => suspendForManualSearch(nonce), resumeAfterManualSearch: nonce => resumeAfterManualSearch(nonce), setResourceMode: (mode, nonce, foreground) => setResourceMode(mode, nonce, foreground), setDeliveryDiagnostics: (enabled, nonce) => setDeliveryDiagnostics(enabled, nonce), refreshDatabase: () => refreshDatabase(), markScanIssue: reason => markScanIssue(reason), setSteadyCardBorder: enabled => setSteadyCardBorder(enabled), setCaptureMode: (mode, nonce) => setCaptureMode(mode, nonce), capturePhoto: nonce => capturePhoto(nonce), retakePhoto: nonce => retakePhoto(nonce), captureTextImage: (nonce, operationID) => captureTextImage(nonce, operationID), finishTextRecognition: (nonce, operationID, matched) => finishTextRecognition(nonce, operationID, matched), normalizeView };
 })();

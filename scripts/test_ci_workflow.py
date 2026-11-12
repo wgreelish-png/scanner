@@ -53,6 +53,17 @@ class CIWorkflowTests(unittest.TestCase):
         self.assertEqual(selected_jobs(job="all", test="printer_transport"), {"tooling", "native", "release"})
         self.assertEqual(selected_jobs(job="all", test="navigation_price"), {"tooling", "native", "evidence_ui", "release"})
 
+    def test_text_assist_forces_focused_native_without_unrelated_ui_or_release(self):
+        self.assertIn("          - text_assist\n", WORKFLOW.split("      test_scope:\n", 1)[0])
+        for test_scope in ("all", "printer_transport", "label_controls", "label_preview", "label_queue",
+                           "show_readiness", "navigation_price", "camera_lifecycle"):
+            with self.subTest(test_scope=test_scope):
+                values = context(job="text_assist", test=test_scope)
+                self.assertEqual(selected_jobs(job="text_assist", test=test_scope), {"tooling", "native"})
+                scope = re.search(r"(?m)^          SCANNER_TEST_SCOPE: \$\{\{ (.+) \}\}$", JOBS["native"])
+                self.assertIsNotNone(scope)
+                self.assertEqual(expression(scope.group(1), values), "text_assist")
+
     def test_scanner_polish_forces_focused_native_and_manual_ui_without_other_jobs(self):
         self.assertIn("          - scanner_polish\n", WORKFLOW.split("      test_scope:\n", 1)[0])
         for test_scope in ("all", "printer_transport", "label_controls", "label_preview", "label_queue",
