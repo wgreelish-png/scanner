@@ -3,7 +3,7 @@ import XCTest
 /// Exercises the actual saved setting through relaunch without opening the
 /// camera, touching an account or editing any inventory records.
 @MainActor final class CardImageQualityUITests: XCTestCase {
-    func testLowAndHighQualityPersistAcrossRelaunchWithoutChangingListsOrHaptics() async throws {
+    func testImageQualityModesPersistAcrossRelaunchWithoutChangingListsOrHaptics() async throws {
         continueAfterFailure = false
         let app = XCUIApplication()
         if let path = ProcessInfo.processInfo.environment["DYLD_FALLBACK_LIBRARY_PATH"] {
@@ -20,26 +20,22 @@ import XCTest
         XCTAssertTrue(listCount.waitForExistence(timeout: 5))
         let originalListCount = listCount.label
 
-        let quality = openImageQuality(in: app)
-        let originalChoice = quality.buttons["Low (200px)"].isSelected ? "Low (200px)" : "High (400px)"
+        var quality = openImageQuality(in: app)
+        let choices = ["Automatic", "Low (200px)", "High (400px)"]
+        let originalChoice = try XCTUnwrap(choices.first { quality.buttons[$0].isSelected },
+                                          "One image-quality mode must be selected")
         let originalHaptics = hapticsValue(in: app)
-        choose("Low (200px)", in: quality, app: app)
-
-        app.terminate()
-        app.launch()
-        let lowAfterRelaunch = openImageQuality(in: app)
-        assertSelected("Low (200px)", in: lowAfterRelaunch)
-        XCTAssertEqual(hapticsValue(in: app), originalHaptics)
-        choose("High (400px)", in: lowAfterRelaunch, app: app)
-
-        app.terminate()
-        app.launch()
-        let highAfterRelaunch = openImageQuality(in: app)
-        assertSelected("High (400px)", in: highAfterRelaunch)
-        XCTAssertEqual(hapticsValue(in: app), originalHaptics)
+        for choice in choices {
+            choose(choice, in: quality, app: app)
+            app.terminate()
+            app.launch()
+            quality = openImageQuality(in: app)
+            assertSelected(choice, in: quality)
+            XCTAssertEqual(hapticsValue(in: app), originalHaptics)
+        }
 
         // Restore this simulator's initial choice through the same user flow.
-        choose(originalChoice, in: highAfterRelaunch, app: app)
+        choose(originalChoice, in: quality, app: app)
         selectTab("Lists", in: app)
         XCTAssertTrue(listCount.waitForExistence(timeout: 5))
         XCTAssertEqual(listCount.label, originalListCount)

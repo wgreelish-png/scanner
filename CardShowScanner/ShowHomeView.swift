@@ -443,7 +443,7 @@ private struct ShowInventoryTransactionSelectionStyle: ButtonStyle {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            ShowInventoryArtwork(card: item.card, width: 48)
+            ShowInventoryArtwork(card: item.card, width: 48, context: .thumbnail)
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.card.name).font(.subheadline.weight(.semibold))
                 Text(showCardSetLabel(item.card)).font(.caption).foregroundStyle(.secondary)
@@ -484,7 +484,7 @@ private struct ShowInventoryTransactionSelectionStyle: ButtonStyle {
             if let item {
                 Section {
                     HStack(alignment: .top, spacing: 16) {
-                        ShowInventoryArtwork(card: item.card, width: 76)
+                        ShowInventoryArtwork(card: item.card, width: 76, context: .detail)
                         VStack(alignment: .leading, spacing: 6) {
                             Text(item.card.name).font(.title3.bold())
                             Text(showCardSetLabel(item.card)).font(.subheadline).foregroundStyle(.secondary)
@@ -715,8 +715,9 @@ private struct ShowInventoryTransactionSelectionStyle: ButtonStyle {
 private struct ShowInventoryArtwork: View {
     let card: CardCandidate
     let width: CGFloat
+    let context: CardImageContext
     var body: some View {
-        CardImageView(url: card.imageURL) { phase in
+        CardImageView(url: card.imageURL, context: context) { phase in
             if let image = phase.image { image.resizable().scaledToFit() }
             else {
                 RoundedRectangle(cornerRadius: 5).fill(.quaternary)

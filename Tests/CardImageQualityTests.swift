@@ -9,13 +9,28 @@ final class CardImageQualityTests: XCTestCase {
         for path in ["517045", "517045_2"] {
             let small = try url("https://cdn.tcgtracking.com/product/\(path)_200w.jpg")
             let detailed = try url("https://cdn.tcgtracking.com/product/\(path)_400w.jpg")
-            XCTAssertEqual(CardImageQuality.low.imageURL(detailed), small)
-            XCTAssertEqual(CardImageQuality.high.imageURL(small), detailed)
-            XCTAssertEqual(CardImageQuality.low.imageURL(small), small)
-            XCTAssertEqual(CardImageQuality.high.imageURL(detailed), detailed)
+            for context in CardImageContext.allCases {
+                XCTAssertEqual(CardImageQuality.low.imageURL(detailed, context: context), small)
+                XCTAssertEqual(CardImageQuality.high.imageURL(small, context: context), detailed)
+                XCTAssertEqual(CardImageQuality.low.imageURL(small, context: context), small)
+                XCTAssertEqual(CardImageQuality.high.imageURL(detailed, context: context), detailed)
+                let automatic = context == .thumbnail ? small : detailed
+                XCTAssertEqual(CardImageQuality.automatic.imageURL(small, context: context), automatic)
+                XCTAssertEqual(CardImageQuality.automatic.imageURL(detailed, context: context), automatic)
+            }
         }
-        XCTAssertEqual(CardImageQuality.low.pixelWidth, 200)
-        XCTAssertEqual(CardImageQuality.high.pixelWidth, 400)
+    }
+
+    func testResolutionAndSettingsTitlesForEveryQualityAndContext() {
+        XCTAssertEqual(CardImageQuality.automatic.pixelWidth(for: .thumbnail), 200)
+        XCTAssertEqual(CardImageQuality.automatic.pixelWidth(for: .detail), 400)
+        for context in CardImageContext.allCases {
+            XCTAssertEqual(CardImageQuality.low.pixelWidth(for: context), 200)
+            XCTAssertEqual(CardImageQuality.high.pixelWidth(for: context), 400)
+        }
+        XCTAssertEqual(CardImageQuality.automatic.settingTitle, "Automatic")
+        XCTAssertEqual(CardImageQuality.low.settingTitle, "Low (200px)")
+        XCTAssertEqual(CardImageQuality.high.settingTitle, "High (400px)")
     }
 
     func testUnrecognizedOrSignedURLsRemainExactlyAsProvided() throws {
@@ -39,11 +54,17 @@ final class CardImageQualityTests: XCTestCase {
         for value in originals {
             let original = try url(value)
             for quality in CardImageQuality.allCases {
-                XCTAssertEqual(quality.imageURL(original)?.absoluteString, original.absoluteString, value)
+                for context in CardImageContext.allCases {
+                    XCTAssertEqual(quality.imageURL(original, context: context)?.absoluteString,
+                                   original.absoluteString, value)
+                }
             }
         }
-        XCTAssertNil(CardImageQuality.low.imageURL(nil))
-        XCTAssertNil(CardImageQuality.high.imageURL(nil))
+        for quality in CardImageQuality.allCases {
+            for context in CardImageContext.allCases {
+                XCTAssertNil(quality.imageURL(nil, context: context))
+            }
+        }
     }
 
     func testPreferenceDefaultsToHighAndReadingDoesNotWriteOrChangeOtherSettings() throws {
@@ -69,11 +90,22 @@ final class CardImageQualityTests: XCTestCase {
         }
     }
 
+    func testStoredRawValuesRemainCompatible() throws {
+        let suite = "CardImageQualityTests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        for (rawValue, expected) in [("automatic", CardImageQuality.automatic), ("low", .low), ("high", .high)] {
+            defaults.set(rawValue, forKey: CardImageQuality.defaultsKey)
+            XCTAssertEqual(CardImageQuality.current(defaults: defaults), expected)
+            XCTAssertEqual(defaults.string(forKey: CardImageQuality.defaultsKey), rawValue)
+        }
+    }
+
     func testUnknownStoredValuesFallBackToHighWithoutMigratingSettings() throws {
         let suite = "CardImageQualityTests." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let invalid: [Any] = ["", "medium", "LOW", "400", true, 200, Data([1])]
+        let invalid: [Any] = ["", "medium", "LOW", "auto", "AUTOMATIC", "400", true, 200, Data([1])]
         for value in invalid {
             defaults.set(value, forKey: CardImageQuality.defaultsKey)
             let before = defaults.persistentDomain(forName: suite) as NSDictionary?
@@ -85,7 +117,14 @@ final class CardImageQualityTests: XCTestCase {
     func testDisplayResolutionDoesNotMutateTheSavedSourceURL() throws {
         let original = try url("https://cdn.tcgtracking.com/product/517045_400w.jpg")
         let saved = original.absoluteString
-        XCTAssertEqual(CardImageQuality.low.imageURL(original)?.lastPathComponent, "517045_200w.jpg")
+        for quality in CardImageQuality.allCases {
+            for context in CardImageContext.allCases {
+                _ = quality.imageURL(original, context: context)
+                XCTAssertEqual(original.absoluteString, saved)
+            }
+        }
+        XCTAssertEqual(CardImageQuality.low.imageURL(original, context: .detail)?.lastPathComponent,
+                       "517045_200w.jpg")
         XCTAssertEqual(original.absoluteString, saved)
     }
 }

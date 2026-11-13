@@ -45,13 +45,13 @@ struct SettingsView: View {
                     set: { imageQuality = $0.rawValue }
                 )) {
                     ForEach(CardImageQuality.allCases) { quality in
-                        Text("\(quality.title) (\(quality.pixelWidth)px)").tag(quality)
+                        Text(quality.settingTitle).tag(quality)
                     }
                 }.pickerStyle(.segmented).accessibilityIdentifier("settings.cardImageQuality")
             } header: {
                 Text("Card images")
             } footer: {
-                Text("Low uses less data and storage. High shows more detail. Your choice is remembered and applies to card artwork; camera scanning and label print quality stay the same.")
+                Text("Automatic uses smaller list images and detailed images when a card is opened. Low saves data and storage; High shows more detail throughout. Your choice is remembered. Scanning and label print quality stay the same.")
             }
             Section {
                 MarketPricingInfo()

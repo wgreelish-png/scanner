@@ -1420,7 +1420,7 @@ private struct LabelInventoryThumbnail: View {
         let quality = CardImageQuality(rawValue: storedQuality) ?? .defaultValue
         // Prefer the chosen rendition when already cached; retain the original
         // fallback without starting any artwork download from a print screen.
-        for cachedURL in [quality.imageURL(url), url].compactMap({ $0 }) {
+        for cachedURL in [quality.imageURL(url, context: .thumbnail), url].compactMap({ $0 }) {
             if let response = URLCache.shared.cachedResponse(for: URLRequest(url: cachedURL)),
                let image = UIImage(data: response.data) { return image }
         }

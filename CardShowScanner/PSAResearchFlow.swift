@@ -47,7 +47,7 @@ struct PSAResearchFlow: View {
                 ForEach(search.results) { card in
                     Button { match = PSACatalogMatch(card: card, metadata: certificate.metadata) } label: {
                         HStack(alignment: .top, spacing: 14) {
-                            PSAResearchArtwork(url: card.imageURL).frame(width: 85, height: 118)
+                            PSAResearchArtwork(url: card.imageURL, context: .thumbnail).frame(width: 85, height: 118)
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(card.name).font(.headline)
                                 Text(card.set).font(.subheadline)
@@ -159,7 +159,7 @@ private struct PSACatalogMatchView: View {
     var body: some View {
         Form {
             Section {
-                PSAResearchArtwork(url: card.imageURL).frame(maxWidth: .infinity).frame(height: 260)
+                PSAResearchArtwork(url: card.imageURL, context: .detail).frame(maxWidth: .infinity).frame(height: 260)
                 Text(card.name).font(.title3.bold())
                 LabeledContent("Set", value: card.set)
                 LabeledContent("Card number", value: card.number)
@@ -195,8 +195,9 @@ private struct PSACatalogMatchView: View {
 
 private struct PSAResearchArtwork: View {
     let url: URL?
+    let context: CardImageContext
     var body: some View {
-        CardImageView(url: url) { phase in
+        CardImageView(url: url, context: context) { phase in
             if let image = phase.image { image.resizable().scaledToFit() }
             else {
                 RoundedRectangle(cornerRadius: 8).fill(.quaternary)

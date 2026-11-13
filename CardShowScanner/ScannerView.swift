@@ -713,7 +713,7 @@ private struct ScannerRecentCardRow: View {
     var body: some View {
         let card = item.snapshot
         HStack(spacing: 10) {
-            CardImageView(url: card.imageURL) { phase in
+            CardImageView(url: card.imageURL, context: .thumbnail) { phase in
                 if let image = phase.image { image.resizable().scaledToFit() }
                 else { Image(systemName: "rectangle.portrait").foregroundStyle(.white.opacity(0.7)) }
             }.frame(width: 32, height: 44).accessibilityHidden(true)
@@ -771,7 +771,7 @@ struct CandidateMatchTile: View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack {
                 Color.secondary.opacity(0.08)
-                CardImageView(url: candidate.imageURL) { phase in
+                CardImageView(url: candidate.imageURL, context: .thumbnail) { phase in
                     if let image = phase.image { image.resizable().scaledToFit() }
                     else { Image(systemName: "rectangle.portrait").font(.largeTitle).foregroundStyle(.secondary) }
                 }.padding(4)
@@ -800,7 +800,7 @@ struct CardSummaryView: View {
     let card: CardCandidate
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
-            CardImageView(url: card.imageURL) { phase in
+            CardImageView(url: card.imageURL, context: .detail) { phase in
                 if let image = phase.image { image.resizable().scaledToFit() }
                 else { Image(systemName: "rectangle.portrait.on.rectangle.portrait").resizable().scaledToFit().padding().foregroundStyle(.secondary) }
             }.frame(width: 84, height: 118).background(.quaternary).clipShape(RoundedRectangle(cornerRadius: 8))

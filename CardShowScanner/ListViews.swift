@@ -596,7 +596,7 @@ struct ListDeletionConfirmationView: View {
                 selectedCard = item
             } label: {
                 HStack(alignment: .top, spacing: 12) {
-                    CardImageView(url: item.snapshot.imageURL) { phase in
+                    CardImageView(url: item.snapshot.imageURL, context: .thumbnail) { phase in
                         if let image = phase.image { image.resizable().scaledToFit() }
                         else {
                             RoundedRectangle(cornerRadius: 5).fill(.quaternary)
@@ -1105,7 +1105,7 @@ struct CardEditorView: View {
 
     private var artworkButton: some View {
         Button { focusedField = nil; sheet = .artwork } label: {
-            CardDetailsArtwork(url: pricing.card.imageURL)
+            CardDetailsArtwork(url: pricing.card.imageURL, context: .detail)
                 .frame(width: textSize.isAccessibilitySize ? 120 : 104, height: textSize.isAccessibilitySize ? 168 : 146)
         }.buttonStyle(.plain).accessibilityLabel("Enlarge card image")
             .accessibilityIdentifier("cardEditor.artwork")
@@ -1289,8 +1289,9 @@ struct CardConditionPicker: View {
 
 private struct CardDetailsArtwork: View {
     let url: URL?
+    let context: CardImageContext
     var body: some View {
-        CardImageView(url: url) { phase in
+        CardImageView(url: url, context: context) { phase in
             if let image = phase.image { image.resizable().scaledToFit() }
             else {
                 RoundedRectangle(cornerRadius: 8).fill(.quaternary)
@@ -1305,7 +1306,7 @@ private struct CardArtworkSheet: View {
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
-            CardDetailsArtwork(url: card.imageURL).padding(20).frame(maxWidth: .infinity, maxHeight: .infinity)
+            CardDetailsArtwork(url: card.imageURL, context: .detail).padding(20).frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color(uiColor: .systemGroupedBackground))
                 .navigationTitle(card.name).navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
@@ -1343,7 +1344,7 @@ private struct CardMatchCorrectionSheet: View {
                 ForEach(search.results) { card in
                     Button { onSelect(card) } label: {
                         HStack(spacing: 14) {
-                            CardDetailsArtwork(url: card.imageURL).frame(width: 64, height: 90)
+                            CardDetailsArtwork(url: card.imageURL, context: .thumbnail).frame(width: 64, height: 90)
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(card.name).font(.headline)
                                 Text(card.set).font(.caption).foregroundStyle(.secondary)
