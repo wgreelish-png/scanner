@@ -596,7 +596,7 @@ struct ListDeletionConfirmationView: View {
                 selectedCard = item
             } label: {
                 HStack(alignment: .top, spacing: 12) {
-                    AsyncImage(url: item.snapshot.imageURL) { phase in
+                    CardImageView(url: item.snapshot.imageURL) { phase in
                         if let image = phase.image { image.resizable().scaledToFit() }
                         else {
                             RoundedRectangle(cornerRadius: 5).fill(.quaternary)
@@ -1290,7 +1290,7 @@ struct CardConditionPicker: View {
 private struct CardDetailsArtwork: View {
     let url: URL?
     var body: some View {
-        AsyncImage(url: url) { phase in
+        CardImageView(url: url) { phase in
             if let image = phase.image { image.resizable().scaledToFit() }
             else {
                 RoundedRectangle(cornerRadius: 8).fill(.quaternary)

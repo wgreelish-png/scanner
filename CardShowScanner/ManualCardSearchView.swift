@@ -155,7 +155,7 @@ private struct CatalogSearchTile: View {
     let card: CardCandidate
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            AsyncImage(url: card.imageURL) { phase in
+            CardImageView(url: card.imageURL) { phase in
                 if let image = phase.image { image.resizable().scaledToFit() }
                 else { Image(systemName: "rectangle.portrait").resizable().scaledToFit().padding(24).foregroundStyle(.secondary) }
             }.frame(maxWidth: .infinity).aspectRatio(5.0 / 7.0, contentMode: .fit)
@@ -171,7 +171,7 @@ private struct CatalogCardPreview: View {
     let card: CardCandidate
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
-            AsyncImage(url: card.imageURL) { phase in
+            CardImageView(url: card.imageURL) { phase in
                 if let image = phase.image { image.resizable().scaledToFit() }
                 else { Image(systemName: "rectangle.portrait").resizable().scaledToFit().padding(16).foregroundStyle(.secondary) }
             }.frame(width: 76, height: 106).background(.quaternary).clipShape(RoundedRectangle(cornerRadius: 8)).accessibilityHidden(true)

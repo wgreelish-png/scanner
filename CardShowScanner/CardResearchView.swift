@@ -203,7 +203,7 @@ struct CardResearchView: View {
     }
 
     private var artwork: some View {
-        AsyncImage(url: model.card.imageURL) { phase in
+        CardImageView(url: model.card.imageURL) { phase in
             if let image = phase.image { image.resizable().scaledToFit() }
             else {
                 RoundedRectangle(cornerRadius: 8).fill(.quaternary)

@@ -26,6 +26,7 @@ struct SettingsView: View {
     @AppStorage("defaultGame") private var game = "Pokémon"
     @AppStorage("sound") private var sound = false
     @AppStorage("haptics") private var haptics = true
+    @AppStorage(CardImageQuality.defaultsKey) private var imageQuality = CardImageQuality.defaultValue.rawValue
     @State private var showingConnection = false
     @State private var returningFromConnection = false
 
@@ -37,6 +38,20 @@ struct SettingsView: View {
                 }.accessibilityIdentifier("settings.defaultGame")
                 Toggle("Sound effects", isOn: $sound).accessibilityIdentifier("settings.sound")
                 Toggle("Haptic feedback", isOn: $haptics).accessibilityIdentifier("settings.haptics")
+            }
+            Section {
+                Picker("Image quality", selection: Binding(
+                    get: { CardImageQuality(rawValue: imageQuality) ?? .defaultValue },
+                    set: { imageQuality = $0.rawValue }
+                )) {
+                    ForEach(CardImageQuality.allCases) { quality in
+                        Text("\(quality.title) (\(quality.pixelWidth)px)").tag(quality)
+                    }
+                }.pickerStyle(.segmented).accessibilityIdentifier("settings.cardImageQuality")
+            } header: {
+                Text("Card images")
+            } footer: {
+                Text("Low uses less data and storage. High shows more detail. Your choice is remembered and applies to card artwork; camera scanning and label print quality stay the same.")
             }
             Section {
                 MarketPricingInfo()

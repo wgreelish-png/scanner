@@ -1413,11 +1413,18 @@ private struct LabelBitmapImage: View {
 /// Artwork uses an already-cached response or local file, never a network fetch.
 private struct LabelInventoryThumbnail: View {
     let card: CardCandidate
+    @AppStorage(CardImageQuality.defaultsKey) private var storedQuality = CardImageQuality.defaultValue.rawValue
     private var image: UIImage? {
         guard let url = card.imageURL else { return nil }
         if url.isFileURL, let data = try? Data(contentsOf: url) { return UIImage(data: data) }
-        guard let response = URLCache.shared.cachedResponse(for: URLRequest(url: url)) else { return nil }
-        return UIImage(data: response.data)
+        let quality = CardImageQuality(rawValue: storedQuality) ?? .defaultValue
+        // Prefer the chosen rendition when already cached; retain the original
+        // fallback without starting any artwork download from a print screen.
+        for cachedURL in [quality.imageURL(url), url].compactMap({ $0 }) {
+            if let response = URLCache.shared.cachedResponse(for: URLRequest(url: cachedURL)),
+               let image = UIImage(data: response.data) { return image }
+        }
+        return nil
     }
     var body: some View {
         Group {

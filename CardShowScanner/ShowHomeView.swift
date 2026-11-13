@@ -716,7 +716,7 @@ private struct ShowInventoryArtwork: View {
     let card: CardCandidate
     let width: CGFloat
     var body: some View {
-        AsyncImage(url: card.imageURL) { phase in
+        CardImageView(url: card.imageURL) { phase in
             if let image = phase.image { image.resizable().scaledToFit() }
             else {
                 RoundedRectangle(cornerRadius: 5).fill(.quaternary)

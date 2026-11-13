@@ -280,8 +280,8 @@ class UIRunnerFlowTests(unittest.TestCase):
         jobs = dict(re.findall(r"(?ms)^  (\w+):\n(.*?)(?=^  \w+:\n|\Z)", workflow.split("\njobs:\n", 1)[1]))
         native_targets = tuple("CardShowScannerTests/" + name for name in (
             "OpportunitiesTests", "MarketActivityPresentationTests", "MarketEvidenceTests", "MarketInsightsTests",
-            "CardResearchModelTests", "ResearchEvidenceTests", "ResearchTests"))
-        ui_targets = ("CardShowScannerUITests/MarketEvidenceUITests",)
+            "CardResearchModelTests", "ResearchEvidenceTests", "ResearchTests", "CardImageQualityTests"))
+        ui_targets = ("CardShowScannerUITests/MarketEvidenceUITests", "CardShowScannerUITests/CardImageQualityUITests")
         for name, block in jobs.items():
             self.assertEqual("inputs.job_scope == 'market_activity'" in block.splitlines()[0], name in ("native", "evidence_ui"))
         options = workflow.split("      test_scope:\n", 1)[1].split("\n# PRs", 1)[0]
@@ -302,6 +302,11 @@ class UIRunnerFlowTests(unittest.TestCase):
                 test = next(row["args"] for row in commands if row["tool"] == "xcodebuild" and row["args"][0] == action)
                 self.assertEqual([value for value in test if value.startswith("-only-testing:")],
                                  ["-only-testing:" + target for target in targets])
+        for target in ("CardShowScannerTests/CardImageQualityTests", "CardShowScannerUITests/CardImageQualityUITests"):
+            with self.subTest(rejected_target=target):
+                rejected, commands, _ = self.run_flow(target=target + "Typo")
+                self.assertEqual(rejected.returncode, 2)
+                self.assertFalse(commands, "Reject mistyped image-quality selections before invoking Apple tools")
 
     def test_text_assist_keeps_exact_native_selection_without_ui_or_release(self):
         root = Path(__file__).resolve().parents[1]

@@ -193,7 +193,8 @@ jobs:
               CardShowScannerTests/MarketInsightsTests \
               CardShowScannerTests/CardResearchModelTests \
               CardShowScannerTests/ResearchEvidenceTests \
-              CardShowScannerTests/ResearchTests
+              CardShowScannerTests/ResearchTests \
+              CardShowScannerTests/CardImageQualityTests
           elif [ "$SCANNER_TEST_SCOPE" = text_assist ]; then
             bash scripts/run_ios_tests.sh \
               CardShowScannerTests/ScannerTextRecognitionTests \
@@ -403,7 +404,7 @@ jobs:
         run: |
           case "$SCANNER_TEST_SCOPE" in
             market_activity)
-              bash scripts/run_ios_tests.sh CardShowScannerUITests/MarketEvidenceUITests
+              bash scripts/run_ios_tests.sh CardShowScannerUITests/MarketEvidenceUITests CardShowScannerUITests/CardImageQualityUITests
               ;;
             navigation_price)
               bash scripts/run_ios_tests.sh \

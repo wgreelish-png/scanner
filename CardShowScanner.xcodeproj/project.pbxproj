@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        AAF4AF50118511995B446011 /* CardImageQualityUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 307E3B665E200BE78A6A22B9; };
+        5A04E2C7A08AEB5205FC4D52 /* CardImageQualityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99ECB2A71029C96A4D3D9B33; };
+        5128655F7FBE8592E8005F06 /* CardImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0109958989492FB978C1E5EA; };
+        151628982586459503AFB4D5 /* CardImageQuality.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7F032A538BDC1A600DE01AE; };
         E0769F0A055A49231AC1E13F /* MarketActivityPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 596A71B9C6FF23FE9D3D0028; };
         E00B180F6C9F109D84E3EE83 /* MarketActivityChartsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 356E6DD138BB54CEC85661EF; };
         7A6E2BDD7FB12EABF8B1EE4D /* MarketActivityPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA910BDB35291F82011491AC; };
@@ -273,6 +277,10 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        307E3B665E200BE78A6A22B9 /* CardImageQualityUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardImageQualityUITests.swift; sourceTree = "<group>"; };
+        99ECB2A71029C96A4D3D9B33 /* CardImageQualityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardImageQualityTests.swift; sourceTree = "<group>"; };
+        0109958989492FB978C1E5EA /* CardImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardImageView.swift; sourceTree = "<group>"; };
+        C7F032A538BDC1A600DE01AE /* CardImageQuality.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardImageQuality.swift; sourceTree = "<group>"; };
         596A71B9C6FF23FE9D3D0028 /* MarketActivityPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketActivityPresentationTests.swift; sourceTree = "<group>"; };
         356E6DD138BB54CEC85661EF /* MarketActivityChartsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketActivityChartsView.swift; sourceTree = "<group>"; };
         EA910BDB35291F82011491AC /* MarketActivityPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketActivityPresentation.swift; sourceTree = "<group>"; };
@@ -563,6 +571,7 @@
                 A418D9B7A3E4BA5F6D1CC438 /* ShowBudgetUITests.swift */,
                 31F4E1795737798B2B1C527F /* AppNavigationUITests.swift */,
                 EED30A256E53674E34B5D154 /* MarketEvidenceUITests.swift */,
+                307E3B665E200BE78A6A22B9 /* CardImageQualityUITests.swift */,
                 D17A1F0A7B6E4A8395D1001C /* ResearchUITests.swift */,
                 D16A1F0A7B6E4A8395D10012 /* PricingSourceUITests.swift */,C4D311E710AB4F79A8B0000C /* ListDeletionUITests.swift */, D12C0F1A7B6E4A8395D10002 /* ScanConfirmationUITests.swift */, D14A1F0A7B6E4A8395D10006 /* ListOutcomeUITests.swift */,);
             path = UITests;
@@ -637,6 +646,7 @@
                 7B39FC9A1215D9690EA1A0B8 /* ResearchEvidenceTests.swift */,
                 B56E2592783CBD081634725E /* MarketEvidenceTests.swift */,
                 596A71B9C6FF23FE9D3D0028 /* MarketActivityPresentationTests.swift */,
+                99ECB2A71029C96A4D3D9B33 /* CardImageQualityTests.swift */,
                 E8D7863F83D8465351776EE3 /* BetaAPICadenceTests.swift */,
                 45A5D4C11FA4CAFD671CC0A6 /* OpenAPIProductLookupTests.swift */,
                 8953F864B6E1055A7601AA2B /* OpportunitiesTests.swift */,
@@ -751,9 +761,11 @@
                 10531D41EEA263E01C9CCD8D /* ResearchEvidence.swift */,
                 E5874570413827D2816F3D64 /* MarketEvidenceView.swift */,
                 356E6DD138BB54CEC85661EF /* MarketActivityChartsView.swift */,
+                0109958989492FB978C1E5EA /* CardImageView.swift */,
                 CFE80D47AE5842C852674F84 /* MarketEvidenceFixtures.swift */,
                 1AAB0B0117C0788F9EB37FF6 /* MarketEvidence.swift */,
                 EA910BDB35291F82011491AC /* MarketActivityPresentation.swift */,
+                C7F032A538BDC1A600DE01AE /* CardImageQuality.swift */,
                 F5CEFDAE66D37A8C2248D8AD /* BetaAPIDiskCache.swift */,
                 8EF9FD3AA38991E6EF78D3CF /* BetaAPICadence.swift */,
                 77F08FF0783D6A737278D49E /* OpenAPIProductLookup.swift */,
@@ -977,6 +989,7 @@
                 47547ECCAE7611356359E7FC /* ShowBudgetUITests.swift in Sources */,
                 F176FBDC753D27E4B0EFEFDB /* AppNavigationUITests.swift in Sources */,
                 130B3E6752948EB7194DB6A1 /* MarketEvidenceUITests.swift in Sources */,
+                AAF4AF50118511995B446011 /* CardImageQualityUITests.swift in Sources */,
                 D17A1F0A7B6E4A8395D1001B /* ResearchUITests.swift in Sources */,
                 D16A1F0A7B6E4A8395D10011 /* PricingSourceUITests.swift in Sources */,C4D311E710AB4F79A8B0000D /* ListDeletionUITests.swift in Sources */, D12C0F1A7B6E4A8395D10001 /* ScanConfirmationUITests.swift in Sources */, D14A1F0A7B6E4A8395D10005 /* ListOutcomeUITests.swift in Sources */,);
             runOnlyForDeploymentPostprocessing = 0;
@@ -1041,6 +1054,7 @@
                 89B4779AB14D9FA0CD1E1F95 /* ResearchEvidenceTests.swift in Sources */,
                 4E8922FB6173D0D16BB86D1E /* MarketEvidenceTests.swift in Sources */,
                 E0769F0A055A49231AC1E13F /* MarketActivityPresentationTests.swift in Sources */,
+                5A04E2C7A08AEB5205FC4D52 /* CardImageQualityTests.swift in Sources */,
                 DDDB2F4EB4BF02BCCAF10BB9 /* BetaAPICadenceTests.swift in Sources */,
                 2386A5FFC727F19648D5A85F /* OpenAPIProductLookupTests.swift in Sources */,
                 876E7DF0BC19BF316CBEDA58 /* OpportunitiesTests.swift in Sources */,
@@ -1153,9 +1167,11 @@
                 05310EB67146D2FD47D32D56 /* ResearchEvidence.swift in Sources */,
                 AC2CBA94F01977A612A3ABF3 /* MarketEvidenceView.swift in Sources */,
                 E00B180F6C9F109D84E3EE83 /* MarketActivityChartsView.swift in Sources */,
+                5128655F7FBE8592E8005F06 /* CardImageView.swift in Sources */,
                 02AA2CA953BB21330A3576C6 /* MarketEvidenceFixtures.swift in Sources */,
                 05A5838014C13EA54A7ABAFB /* MarketEvidence.swift in Sources */,
                 7A6E2BDD7FB12EABF8B1EE4D /* MarketActivityPresentation.swift in Sources */,
+                151628982586459503AFB4D5 /* CardImageQuality.swift in Sources */,
                 745DEEE75356CFFFD0B3FC92 /* BetaAPIDiskCache.swift in Sources */,
                 BABD2D5D412DAD7767D1589F /* BetaAPICadence.swift in Sources */,
                 F0BFD9F9BDA677A3D8355D02 /* OpenAPIProductLookup.swift in Sources */,
@@ -1277,7 +1293,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 115;
+				CURRENT_PROJECT_VERSION = 116;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -1314,7 +1330,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 115;
+				CURRENT_PROJECT_VERSION = 116;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";

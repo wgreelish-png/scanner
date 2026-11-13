@@ -713,7 +713,7 @@ private struct ScannerRecentCardRow: View {
     var body: some View {
         let card = item.snapshot
         HStack(spacing: 10) {
-            AsyncImage(url: card.imageURL) { phase in
+            CardImageView(url: card.imageURL) { phase in
                 if let image = phase.image { image.resizable().scaledToFit() }
                 else { Image(systemName: "rectangle.portrait").foregroundStyle(.white.opacity(0.7)) }
             }.frame(width: 32, height: 44).accessibilityHidden(true)
@@ -767,19 +767,11 @@ struct CandidateMatchTile: View {
     let selected: CardCandidate
     let priceLoading: Bool
     private var isSelected: Bool { candidate.identity.productID == selected.identity.productID }
-    private var artworkURL: URL? {
-        guard let url = candidate.imageURL, url.scheme == "https", url.host == "cdn.tcgtracking.com", url.query == nil,
-              url.path.range(of: #"^/product/[0-9]+_200w\.jpg$"#, options: .regularExpression) != nil,
-              var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return candidate.imageURL }
-        // The public detail response supplies this 400px format for full artwork.
-        components.path = url.path.replacingOccurrences(of: "_200w.jpg", with: "_400w.jpg")
-        return components.url ?? url
-    }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack {
                 Color.secondary.opacity(0.08)
-                AsyncImage(url: artworkURL) { phase in
+                CardImageView(url: candidate.imageURL) { phase in
                     if let image = phase.image { image.resizable().scaledToFit() }
                     else { Image(systemName: "rectangle.portrait").font(.largeTitle).foregroundStyle(.secondary) }
                 }.padding(4)
@@ -808,7 +800,7 @@ struct CardSummaryView: View {
     let card: CardCandidate
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
-            AsyncImage(url: card.imageURL) { phase in
+            CardImageView(url: card.imageURL) { phase in
                 if let image = phase.image { image.resizable().scaledToFit() }
                 else { Image(systemName: "rectangle.portrait.on.rectangle.portrait").resizable().scaledToFit().padding().foregroundStyle(.secondary) }
             }.frame(width: 84, height: 118).background(.quaternary).clipShape(RoundedRectangle(cornerRadius: 8))

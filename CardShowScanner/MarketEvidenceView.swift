@@ -145,64 +145,97 @@ struct MarketEvidenceView: View {
 
     private var volumeSection: some View {
         Section("Reported sales volume") {
-            Picker("Reporting window", selection: $selectedWindow) {
-                Text("30 days").tag(30)
-                Text("90 days").tag(90)
-                Text("365 days").tag(365)
-            }.pickerStyle(.segmented).accessibilityIdentifier("marketEvidence.volumeWindow")
-            if !selectedVolume.isEmpty {
-                Chart {
-                    ForEach(selectedVolume) { point in
-                        BarMark(x: .value("Marketplace", point.source), y: .value("Average units per day", dailyRate(point)))
-                            .foregroundStyle(point.source == "TCGplayer" ? Color.blue : Color.teal)
-                            .accessibilityLabel(point.source + " • " + String(selectedWindow) + " days")
-                            .accessibilityValue("\(point.quantity.formatted()) reported units; \(dailyLabel(dailyRate(point))) units per day")
-                    }
-                    if let point = inspectedVolumePoint {
-                        RuleMark(x: .value("Selected marketplace", point.source)).foregroundStyle(.secondary)
-                    }
-                }
-                .chartXScale(domain: selectedVolume.map(\.source))
-                .chartYScale(domain: 0...volumeUpperBound)
-                .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) }
-                .chartYAxisLabel("Units / day")
-                .chartXSelection(value: marketplaceSelection)
-                .frame(height: 180)
-                .accessibilityHint("Touch and drag to inspect the original reported quantity and average daily units.")
-                .accessibilityIdentifier("marketEvidence.volumeChart")
-            } else {
-                Text("No quantities were returned for this window.").foregroundStyle(.secondary)
-                    .accessibilityIdentifier("marketEvidence.volumeEmpty")
-            }
-            if let point = inspectedVolumePoint {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text(point.source + " • " + String(selectedWindow) + " days").font(.caption.bold())
-                        Spacer()
-                        Button("Clear") { inspectedMarketplace = nil }.font(.caption).accessibilityLabel("Clear volume selection")
-                    }
-                    LabeledContent("Reported units", value: point.quantity.formatted())
-                    LabeledContent("Average units / day", value: dailyLabel(dailyRate(point)))
-                    Text("Sales data updated " + (MarketEvidence.timestamp(activity?.sku.timestamps?.tcgSalesUpdatedAt)?.formatted(date: .abbreviated, time: .shortened) ?? "time unavailable"))
-                        .foregroundStyle(.secondary)
-                }.font(.caption).padding(8).background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-                    .accessibilityElement(children: .contain).accessibilityIdentifier("marketEvidence.volumeSelection")
-            }
-            LabeledContent("TCGplayer reported units") {
-                Text(quantity(for: "TCGplayer")).monospacedDigit().accessibilityIdentifier("marketEvidence.tcgQuantity")
-            }
-            LabeledContent("TCGplayer average units / day") {
-                Text(rate(for: "TCGplayer")).monospacedDigit().accessibilityIdentifier("marketEvidence.tcgUnitsPerDay")
-            }
-            LabeledContent("Manapool reported units") {
-                Text(quantity(for: "Manapool")).monospacedDigit().accessibilityIdentifier("marketEvidence.mpQuantity")
-            }
-            LabeledContent("Manapool average units / day") {
-                Text(rate(for: "Manapool")).monospacedDigit().accessibilityIdentifier("marketEvidence.mpUnitsPerDay")
-            }
+            volumePicker
+            volumePlot
+            volumeInspection
+            volumeTotals
             Text("Bars show average units per day: the returned quantity divided by the selected window length. Each window ends at the provider’s reporting time. Windows overlap and must not be added together. Unknown quantities remain unavailable; returned zeroes remain zero. These rates do not predict your sale speed.")
                 .font(.caption).foregroundStyle(.secondary)
         }
+    }
+
+    private var volumePicker: some View {
+        Picker("Reporting window", selection: $selectedWindow) {
+            Text("30 days").tag(30)
+            Text("90 days").tag(90)
+            Text("365 days").tag(365)
+        }.pickerStyle(.segmented).accessibilityIdentifier("marketEvidence.volumeWindow")
+    }
+
+    @ViewBuilder private var volumePlot: some View {
+        if selectedVolume.isEmpty {
+            Text("No quantities were returned for this window.").foregroundStyle(.secondary)
+                .accessibilityIdentifier("marketEvidence.volumeEmpty")
+        } else {
+            volumeChart
+        }
+    }
+
+    private var volumeChart: some View {
+        Chart {
+            ForEach(selectedVolume) { point in
+                BarMark(x: .value("Marketplace", point.source),
+                        y: .value("Average units per day", dailyRate(point)))
+                    .foregroundStyle(point.source == "TCGplayer" ? Color.blue : Color.teal)
+                    .accessibilityLabel(point.source + " • " + String(selectedWindow) + " days")
+                    .accessibilityValue(volumeAccessibilityValue(point))
+            }
+            if let point = inspectedVolumePoint {
+                RuleMark(x: .value("Selected marketplace", point.source)).foregroundStyle(.secondary)
+            }
+        }
+        .chartXScale(domain: selectedVolume.map(\.source))
+        .chartYScale(domain: 0...volumeUpperBound)
+        .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) }
+        .chartYAxisLabel("Units / day")
+        .chartXSelection(value: marketplaceSelection)
+        .frame(height: 180)
+        .accessibilityHint("Touch and drag to inspect the original reported quantity and average daily units.")
+        .accessibilityIdentifier("marketEvidence.volumeChart")
+    }
+
+    @ViewBuilder private var volumeInspection: some View {
+        if let point = inspectedVolumePoint {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(point.source + " • " + String(selectedWindow) + " days").font(.caption.bold())
+                    Spacer()
+                    Button("Clear") { inspectedMarketplace = nil }.font(.caption)
+                        .accessibilityLabel("Clear volume selection")
+                }
+                LabeledContent("Reported units", value: point.quantity.formatted())
+                LabeledContent("Average units / day", value: dailyLabel(dailyRate(point)))
+                Text(volumeUpdateLabel).foregroundStyle(.secondary)
+            }.font(.caption).padding(8)
+                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("marketEvidence.volumeSelection")
+        }
+    }
+
+    @ViewBuilder private var volumeTotals: some View {
+        LabeledContent("TCGplayer reported units") {
+            Text(quantity(for: "TCGplayer")).monospacedDigit().accessibilityIdentifier("marketEvidence.tcgQuantity")
+        }
+        LabeledContent("TCGplayer average units / day") {
+            Text(rate(for: "TCGplayer")).monospacedDigit().accessibilityIdentifier("marketEvidence.tcgUnitsPerDay")
+        }
+        LabeledContent("Manapool reported units") {
+            Text(quantity(for: "Manapool")).monospacedDigit().accessibilityIdentifier("marketEvidence.mpQuantity")
+        }
+        LabeledContent("Manapool average units / day") {
+            Text(rate(for: "Manapool")).monospacedDigit().accessibilityIdentifier("marketEvidence.mpUnitsPerDay")
+        }
+    }
+
+    private var volumeUpdateLabel: String {
+        let date = MarketEvidence.timestamp(activity?.sku.timestamps?.tcgSalesUpdatedAt)
+        let updated = date?.formatted(date: .abbreviated, time: .shortened) ?? "time unavailable"
+        return "Sales data updated " + updated
+    }
+
+    private func volumeAccessibilityValue(_ point: MarketEvidence.VolumePoint) -> String {
+        point.quantity.formatted() + " reported units; " + dailyLabel(dailyRate(point)) + " units per day"
     }
 
     private var inspectedPricePoint: MarketEvidence.PricePoint? { evidence.priceComparisons.first { $0.label == inspectedPrice } }

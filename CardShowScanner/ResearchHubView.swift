@@ -200,7 +200,7 @@ struct ResearchSearchTile: View {
 private struct ResearchHubArtwork: View {
     let url: URL?
     var body: some View {
-        AsyncImage(url: url) { phase in
+        CardImageView(url: url) { phase in
             if let image = phase.image { image.resizable().scaledToFit() }
             else {
                 RoundedRectangle(cornerRadius: 10).fill(.quaternary)

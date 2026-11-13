@@ -67,6 +67,8 @@ class CIWorkflowTests(unittest.TestCase):
 
     def test_market_activity_forces_focused_native_and_chart_ui_only(self):
         self.assertIn("          - market_activity\n", WORKFLOW.split("      test_scope:\n", 1)[0])
+        self.assertIn("CardShowScannerTests/CardImageQualityTests", JOBS["native"])
+        self.assertIn("CardShowScannerUITests/CardImageQualityUITests", JOBS["evidence_ui"])
         for test_scope in ("all", "printer_transport", "label_controls", "label_preview", "label_queue",
                            "show_readiness", "navigation_price", "camera_lifecycle"):
             with self.subTest(test_scope=test_scope):

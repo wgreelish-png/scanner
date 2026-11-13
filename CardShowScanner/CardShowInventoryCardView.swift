@@ -15,7 +15,7 @@ struct CardShowInventoryCardView: View {
                     ? AnyLayout(VStackLayout(alignment: .leading, spacing: 14))
                     : AnyLayout(HStackLayout(alignment: .top, spacing: 14))
                 layout {
-                    AsyncImage(url: card.imageURL) { phase in
+                    CardImageView(url: card.imageURL) { phase in
                         if let image = phase.image { image.resizable().scaledToFit() }
                         else {
                             RoundedRectangle(cornerRadius: 8).fill(.quaternary)

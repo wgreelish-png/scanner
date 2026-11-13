@@ -196,9 +196,12 @@ private struct PSACatalogMatchView: View {
 private struct PSAResearchArtwork: View {
     let url: URL?
     var body: some View {
-        AsyncImage(url: url) { image in image.resizable().scaledToFit() } placeholder: {
-            RoundedRectangle(cornerRadius: 8).fill(.quaternary)
-                .overlay(Image(systemName: "photo").foregroundStyle(.secondary))
+        CardImageView(url: url) { phase in
+            if let image = phase.image { image.resizable().scaledToFit() }
+            else {
+                RoundedRectangle(cornerRadius: 8).fill(.quaternary)
+                    .overlay(Image(systemName: "photo").foregroundStyle(.secondary))
+            }
         }.accessibilityLabel("Card artwork")
     }
 }

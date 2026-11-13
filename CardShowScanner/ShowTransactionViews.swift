@@ -1307,7 +1307,7 @@ struct ShowTransactionCardRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            AsyncImage(url: card.imageURL) { phase in
+            CardImageView(url: card.imageURL) { phase in
                 if let image = phase.image { image.resizable().scaledToFit() }
                 else {
                     RoundedRectangle(cornerRadius: 6).fill(.quaternary)
