@@ -172,19 +172,8 @@ struct MarketEvidenceView: View {
     }
 
     private var volumeChart: some View {
-        Chart {
-            ForEach(selectedVolume) { point in
-                BarMark(x: .value("Marketplace", point.source),
-                        y: .value("Average units per day", dailyRate(point)))
-                    .foregroundStyle(point.source == "TCGplayer" ? Color.blue : Color.teal)
-                    .accessibilityLabel(point.source + " • " + String(selectedWindow) + " days")
-                    .accessibilityValue(volumeAccessibilityValue(point))
-            }
-            if let point = inspectedVolumePoint {
-                RuleMark(x: .value("Selected marketplace", point.source)).foregroundStyle(.secondary)
-            }
-        }
-        .chartXScale(domain: selectedVolume.map(\.source))
+        volumeChartMarks
+        .chartXScale(domain: volumeSources)
         .chartYScale(domain: 0...volumeUpperBound)
         .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) }
         .chartYAxisLabel("Units / day")
@@ -192,6 +181,37 @@ struct MarketEvidenceView: View {
         .frame(height: 180)
         .accessibilityHint("Touch and drag to inspect the original reported quantity and average daily units.")
         .accessibilityIdentifier("marketEvidence.volumeChart")
+    }
+
+    private var volumeChartMarks: some View {
+        Chart {
+            ForEach(selectedVolume) { point in
+                volumeBar(point)
+            }
+            volumeSelectionRule
+        }
+    }
+
+    private var volumeSources: [String] { selectedVolume.map(\.source) }
+
+    private func volumeBar(_ point: MarketEvidence.VolumePoint) -> some ChartContent {
+        let source: String = point.source
+        let unitsPerDay: Double = dailyRate(point)
+        let tint: Color = source == "TCGplayer" ? .blue : .teal
+        let label: String = source + " • " + String(selectedWindow) + " days"
+        let value: String = volumeAccessibilityValue(point)
+        return BarMark(x: .value("Marketplace", source),
+                       y: .value("Average units per day", unitsPerDay))
+            .foregroundStyle(tint)
+            .accessibilityLabel(Text(label))
+            .accessibilityValue(Text(value))
+    }
+
+    @ChartContentBuilder private var volumeSelectionRule: some ChartContent {
+        if let point = inspectedVolumePoint {
+            RuleMark(x: .value("Selected marketplace", point.source))
+                .foregroundStyle(Color.secondary)
+        }
     }
 
     @ViewBuilder private var volumeInspection: some View {
