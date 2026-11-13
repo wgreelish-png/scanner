@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        E0769F0A055A49231AC1E13F /* MarketActivityPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 596A71B9C6FF23FE9D3D0028; };
+        E00B180F6C9F109D84E3EE83 /* MarketActivityChartsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 356E6DD138BB54CEC85661EF; };
+        7A6E2BDD7FB12EABF8B1EE4D /* MarketActivityPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA910BDB35291F82011491AC; };
         87765794BD3FD535208A304E /* LabelPrintRunOutcomeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A68C9175DD55D8DA9ABC42D; };
         4DBE04D3038F36DCBDE59F28 /* LabelPrintProgressSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DC6FAB2EF4A4062C4CAEFF9; };
         A0BB7A74EE78A11AF2E278BF /* LabelPrintProgressSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAACE416640EBC0819907652; };
@@ -270,6 +273,9 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        596A71B9C6FF23FE9D3D0028 /* MarketActivityPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketActivityPresentationTests.swift; sourceTree = "<group>"; };
+        356E6DD138BB54CEC85661EF /* MarketActivityChartsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketActivityChartsView.swift; sourceTree = "<group>"; };
+        EA910BDB35291F82011491AC /* MarketActivityPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketActivityPresentation.swift; sourceTree = "<group>"; };
         8A68C9175DD55D8DA9ABC42D /* LabelPrintRunOutcomeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabelPrintRunOutcomeTests.swift; sourceTree = "<group>"; };
         8DC6FAB2EF4A4062C4CAEFF9 /* LabelPrintProgressSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabelPrintProgressSessionTests.swift; sourceTree = "<group>"; };
         AAACE416640EBC0819907652 /* LabelPrintProgressSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabelPrintProgressSession.swift; sourceTree = "<group>"; };
@@ -630,6 +636,7 @@
                 6C87DEF57A956046DCBD0CB3 /* ShowBudgetStoreTests.swift */,
                 7B39FC9A1215D9690EA1A0B8 /* ResearchEvidenceTests.swift */,
                 B56E2592783CBD081634725E /* MarketEvidenceTests.swift */,
+                596A71B9C6FF23FE9D3D0028 /* MarketActivityPresentationTests.swift */,
                 E8D7863F83D8465351776EE3 /* BetaAPICadenceTests.swift */,
                 45A5D4C11FA4CAFD671CC0A6 /* OpenAPIProductLookupTests.swift */,
                 8953F864B6E1055A7601AA2B /* OpportunitiesTests.swift */,
@@ -743,8 +750,10 @@
                 0DFDE604B5B629EC60142B1B /* ResearchEvidenceView.swift */,
                 10531D41EEA263E01C9CCD8D /* ResearchEvidence.swift */,
                 E5874570413827D2816F3D64 /* MarketEvidenceView.swift */,
+                356E6DD138BB54CEC85661EF /* MarketActivityChartsView.swift */,
                 CFE80D47AE5842C852674F84 /* MarketEvidenceFixtures.swift */,
                 1AAB0B0117C0788F9EB37FF6 /* MarketEvidence.swift */,
+                EA910BDB35291F82011491AC /* MarketActivityPresentation.swift */,
                 F5CEFDAE66D37A8C2248D8AD /* BetaAPIDiskCache.swift */,
                 8EF9FD3AA38991E6EF78D3CF /* BetaAPICadence.swift */,
                 77F08FF0783D6A737278D49E /* OpenAPIProductLookup.swift */,
@@ -1031,6 +1040,7 @@
                 D7E5FC52BC9F312725FA5CE5 /* ShowBudgetStoreTests.swift in Sources */,
                 89B4779AB14D9FA0CD1E1F95 /* ResearchEvidenceTests.swift in Sources */,
                 4E8922FB6173D0D16BB86D1E /* MarketEvidenceTests.swift in Sources */,
+                E0769F0A055A49231AC1E13F /* MarketActivityPresentationTests.swift in Sources */,
                 DDDB2F4EB4BF02BCCAF10BB9 /* BetaAPICadenceTests.swift in Sources */,
                 2386A5FFC727F19648D5A85F /* OpenAPIProductLookupTests.swift in Sources */,
                 876E7DF0BC19BF316CBEDA58 /* OpportunitiesTests.swift in Sources */,
@@ -1142,8 +1152,10 @@
                 6573520F67AD523945A4EB59 /* ResearchEvidenceView.swift in Sources */,
                 05310EB67146D2FD47D32D56 /* ResearchEvidence.swift in Sources */,
                 AC2CBA94F01977A612A3ABF3 /* MarketEvidenceView.swift in Sources */,
+                E00B180F6C9F109D84E3EE83 /* MarketActivityChartsView.swift in Sources */,
                 02AA2CA953BB21330A3576C6 /* MarketEvidenceFixtures.swift in Sources */,
                 05A5838014C13EA54A7ABAFB /* MarketEvidence.swift in Sources */,
+                7A6E2BDD7FB12EABF8B1EE4D /* MarketActivityPresentation.swift in Sources */,
                 745DEEE75356CFFFD0B3FC92 /* BetaAPIDiskCache.swift in Sources */,
                 BABD2D5D412DAD7767D1589F /* BetaAPICadence.swift in Sources */,
                 F0BFD9F9BDA677A3D8355D02 /* OpenAPIProductLookup.swift in Sources */,
@@ -1265,7 +1277,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 114;
+				CURRENT_PROJECT_VERSION = 115;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";
@@ -1302,7 +1314,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 114;
+				CURRENT_PROJECT_VERSION = 115;
 
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Card Show Scanner";

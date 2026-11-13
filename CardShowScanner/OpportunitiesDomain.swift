@@ -151,10 +151,11 @@ struct OpportunitiesSKU: Decodable, Equatable, Sendable {
     let language: String
     let timestamps: OpportunitiesTimestamps?
     let pricing: OpportunitiesPricing?
+    let opportunity: OpportunitiesOpportunity?
     let marketplaces: [String: OpportunitiesMarketplace]
     let trends: OpportunitiesTrends?
     enum CodingKeys: String, CodingKey {
-        case skuID = "sku_id", conditionID = "condition_id", condition, finish, language, timestamps, pricing, marketplaces, trends
+        case skuID = "sku_id", conditionID = "condition_id", condition, finish, language, timestamps, pricing, opportunity, marketplaces, trends
     }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -173,9 +174,11 @@ struct OpportunitiesSKU: Decodable, Equatable, Sendable {
         }
         timestamps = try values.decodeIfPresent(OpportunitiesTimestamps.self, forKey: .timestamps)
         pricing = try values.decodeIfPresent(OpportunitiesPricing.self, forKey: .pricing)
-        marketplaces = try values.decodeIfPresent([String: OpportunitiesMarketplace].self, forKey: .marketplaces) ?? [:]
+        opportunity = try values.decodeIfPresent(OpportunitiesOpportunity.self, forKey: .opportunity)
+        let returnedMarkets = try values.decodeIfPresent([String: OpportunitiesMarketplace?].self, forKey: .marketplaces) ?? [:]
+        marketplaces = returnedMarkets.compactMapValues { $0 }
         trends = try values.decodeIfPresent(OpportunitiesTrends.self, forKey: .trends)
-        guard marketplaces.count <= 8 else { throw DecodingError.dataCorruptedError(forKey: .marketplaces, in: values, debugDescription: "Too many marketplaces") }
+        guard returnedMarkets.count <= 8 else { throw DecodingError.dataCorruptedError(forKey: .marketplaces, in: values, debugDescription: "Too many marketplaces") }
     }
 }
 
@@ -221,6 +224,54 @@ struct OpportunitiesPricing: Decodable, Equatable, Sendable {
         liveMarket = v.opportunitiesDecimal(.liveMarket); average30Days = v.opportunitiesDecimal(.average30Days)
         listedLowCard = v.opportunitiesDecimal(.listedLowCard); listedLowShipping = v.opportunitiesDecimal(.listedLowShipping)
         listedLowTotal = v.opportunitiesDecimal(.listedLowTotal); directLowCard = v.opportunitiesDecimal(.directLowCard)
+    }
+}
+
+/// Marketplace acquisition opportunities remain separate from customer cash offers.
+struct OpportunitiesOpportunity: Decodable, Equatable, Sendable {
+    let isAvailable: Bool?
+    let unavailableReason: String?
+    let bestSource: String?
+    let buyCard: Decimal?
+    let costOne: Decimal?
+    let shippingOne: Decimal?
+    let benchmarks: [String: OpportunitiesBenchmark]
+    enum CodingKeys: String, CodingKey {
+        case isAvailable = "is_available", unavailableReason = "unavailable_reason", bestSource = "best_source"
+        case buyCard = "buy_card", costOne = "cost_1x", shippingOne = "ship_1x", benchmarks
+    }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        isAvailable = try values.decodeIfPresent(Bool.self, forKey: .isAvailable)
+        unavailableReason = try values.opportunitiesText(.unavailableReason, maximum: 256)
+        bestSource = try values.opportunitiesText(.bestSource, maximum: 64)
+        buyCard = values.opportunitiesDecimal(.buyCard)
+        costOne = values.opportunitiesDecimal(.costOne)
+        shippingOne = values.opportunitiesDecimal(.shippingOne)
+        let returned = try values.decodeIfPresent([String: OpportunitiesBenchmark?].self, forKey: .benchmarks) ?? [:]
+        guard returned.count <= 16 else {
+            throw DecodingError.dataCorruptedError(forKey: .benchmarks, in: values, debugDescription: "Too many reference benchmarks")
+        }
+        benchmarks = returned.compactMapValues { $0 }
+    }
+}
+
+struct OpportunitiesBenchmark: Decodable, Equatable, Sendable {
+    let reference: Decimal?
+    let comparisonBasis: String?
+    let comparisonCost: Decimal?
+    let savings: Decimal?
+    let discountPercent: Decimal?
+    enum CodingKeys: String, CodingKey {
+        case reference = "ref", comparisonBasis = "cmp_basis", comparisonCost = "cmp_cost", savings, discountPercent = "discount_pct"
+    }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        reference = values.opportunitiesDecimal(.reference)
+        comparisonBasis = try values.opportunitiesText(.comparisonBasis, maximum: 64)
+        comparisonCost = values.opportunitiesDecimal(.comparisonCost)
+        savings = values.opportunitiesSignedDecimal(.savings)
+        discountPercent = values.opportunitiesSignedDecimal(.discountPercent)
     }
 }
 
@@ -271,13 +322,15 @@ struct OpportunitiesMarketplace: Decodable, Equatable, Sendable {
     let available: Bool?
     let updatedAt: String?
     let totalQuantityAvailable: Int?
+    let productURL: URL?
     let listings: [OpportunitiesListing]
-    enum CodingKeys: String, CodingKey { case available, updatedAt = "updated_at", totalQuantityAvailable = "total_qty_available", listings }
+    enum CodingKeys: String, CodingKey { case available, updatedAt = "updated_at", totalQuantityAvailable = "total_qty_available", productURL = "product_url", listings }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         available = try values.decodeIfPresent(Bool.self, forKey: .available)
         updatedAt = try values.opportunitiesText(.updatedAt, maximum: 128)
         totalQuantityAvailable = values.opportunitiesCount(.totalQuantityAvailable)
+        productURL = try values.opportunitiesURL(.productURL)
         listings = try values.decodeIfPresent([OpportunitiesListing].self, forKey: .listings) ?? []
         guard listings.count <= 100 else { throw DecodingError.dataCorruptedError(forKey: .listings, in: values, debugDescription: "Too many listings") }
     }
@@ -289,15 +342,20 @@ struct OpportunitiesListing: Decodable, Equatable, Sendable {
     let shipping: Decimal?
     let landedPrice: Decimal?
     let sellerQuantity: Int?
+    let sellerName: String?
+    let sellerURL: URL?
     let updatedAt: String?
     enum CodingKeys: String, CodingKey {
-        case rank, price, shipping = "ship_price", landedPrice = "landed_price", sellerQuantity = "seller_qty", updatedAt = "updated_at"
+        case rank, price, shipping = "ship_price", landedPrice = "landed_price", sellerQuantity = "seller_qty"
+        case sellerName = "seller_name", sellerURL = "seller_url", updatedAt = "updated_at"
     }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         rank = values.opportunitiesCount(.rank); price = values.opportunitiesDecimal(.price)
         shipping = values.opportunitiesDecimal(.shipping); landedPrice = values.opportunitiesDecimal(.landedPrice)
         sellerQuantity = values.opportunitiesCount(.sellerQuantity)
+        sellerName = try values.opportunitiesText(.sellerName, maximum: 256)
+        sellerURL = try values.opportunitiesURL(.sellerURL)
         updatedAt = try values.opportunitiesText(.updatedAt, maximum: 128)
     }
 }
@@ -321,16 +379,23 @@ enum OpportunitiesIdentity {
 
 private struct OpportunitiesDecimal: Decodable {
     let value: Decimal?
-    init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws { value = try Self.read(from: decoder, signed: false) }
+    static func read(from decoder: Decoder, signed: Bool) throws -> Decimal? {
         let values = try decoder.singleValueContainer()
-        if values.decodeNil() || (try? values.decode(Bool.self)) != nil { value = nil; return }
+        if values.decodeNil() || (try? values.decode(Bool.self)) != nil { return nil }
         let number: Decimal?
         if let text = try? values.decode(String.self) {
-            guard text.utf8.count <= 64, text.range(of: #"^[0-9]+(?:\.[0-9]+)?$"#, options: .regularExpression) != nil else { value = nil; return }
+            let pattern = signed ? #"^-?[0-9]+(?:\.[0-9]+)?$"# : #"^[0-9]+(?:\.[0-9]+)?$"#
+            guard text.utf8.count <= 64, text.range(of: pattern, options: .regularExpression) != nil else { return nil }
             number = Decimal(string: text, locale: Locale(identifier: "en_US_POSIX"))
         } else { number = try? values.decode(Decimal.self) }
-        value = number.flatMap { !$0.isNaN && $0 >= 0 ? $0 : nil }
+        return number.flatMap { !$0.isNaN && (signed || $0 >= 0) ? $0 : nil }
     }
+}
+
+private struct OpportunitiesSignedDecimal: Decodable {
+    let value: Decimal?
+    init(from decoder: Decoder) throws { value = try OpportunitiesDecimal.read(from: decoder, signed: true) }
 }
 
 private struct OpportunitiesCount: Decodable {
@@ -360,8 +425,15 @@ private struct OpportunitiesPercent: Decodable {
 
 private extension KeyedDecodingContainer {
     func opportunitiesDecimal(_ key: Key) -> Decimal? { (try? decodeIfPresent(OpportunitiesDecimal.self, forKey: key))?.value }
+    func opportunitiesSignedDecimal(_ key: Key) -> Decimal? { (try? decodeIfPresent(OpportunitiesSignedDecimal.self, forKey: key))?.value }
     func opportunitiesCount(_ key: Key) -> Int? { (try? decodeIfPresent(OpportunitiesCount.self, forKey: key))?.value }
     func opportunitiesPercent(_ key: Key) -> Int? { (try? decodeIfPresent(OpportunitiesPercent.self, forKey: key))?.value }
+    func opportunitiesURL(_ key: Key) throws -> URL? {
+        guard let text = try opportunitiesText(key, maximum: 2_048), let url = URL(string: text),
+              url.scheme?.lowercased() == "https", let host = url.host, !host.isEmpty,
+              url.user == nil, url.password == nil, url.port == nil || url.port == 443 else { return nil }
+        return url
+    }
     func opportunitiesText(_ key: Key, maximum: Int) throws -> String? {
         guard let value = try decodeIfPresent(String.self, forKey: key) else { return nil }
         guard value.count <= maximum else { throw DecodingError.dataCorruptedError(forKey: key, in: self, debugDescription: "Text exceeds maximum length") }

@@ -1,14 +1,14 @@
 import XCTest
 
 @MainActor final class MarketEvidenceUITests: XCTestCase {
-    func testCombinedResearchRetainsSharedSelectionAndSwitchesModesWithoutCharts() async throws {
+    func testCombinedResearchRetainsSharedSelectionAndDetailedModes() async throws {
         continueAfterFailure = false
         let app = launchEvidence("--uitest-card-research")
         defer { app.terminate() }
         XCTAssertTrue(app.navigationBars["Card Research"].waitForExistence(timeout: 10))
         let modes = app.segmentedControls["cardResearch.section"]
         XCTAssertTrue(modes.waitForExistence(timeout: 5))
-        assertCompactResearchLayout(in: app)
+        assertResearchHeaderLayout(in: app)
         let condition = app.buttons["cardResearch.condition.LP"]
         UITestInteraction.tap(condition, in: app, identifier: "cardResearch.condition.LP")
         let period = app.segmentedControls["marketDetails.period"]
@@ -21,7 +21,9 @@ import XCTest
         scrollToTop(in: app)
         XCTAssertEqual(app.staticTexts.matching(identifier: "cardResearch.name").count, 1)
         XCTAssertFalse(app.staticTexts["Evidence at a glance"].exists)
-        XCTAssertFalse(app.descendants(matching: .any)["research.historyChart"].exists)
+        let gradedHistory = app.descendants(matching: .any).matching(identifier: "research.historyChart").firstMatch
+        revealChart(gradedHistory, in: app)
+        XCTAssertTrue(gradedHistory.exists, "Returned graded history remains available in the detailed view")
         UITestInteraction.tap(modes.buttons["Market"], in: app, identifier: "cardResearch.section.Market")
         scrollToTop(in: app)
         reveal(condition, in: app)
@@ -30,6 +32,49 @@ import XCTest
         XCTAssertTrue(period.buttons["90D"].isSelected)
         XCTAssertFalse(app.descendants(matching: .any)["marketEvidence.priceChart"].exists)
         XCTAssertTrue(app.navigationBars["Card Research"].exists)
+    }
+
+    func testMarketActivityChartsInspectNormalizedPeriodsAndLabelAnnualMarketFallback() async throws {
+        continueAfterFailure = false
+        let app = launchEvidence("--uitest-card-research")
+        defer { app.terminate() }
+        XCTAssertTrue(app.navigationBars["Card Research"].waitForExistence(timeout: 10))
+        let windows = app.segmentedControls["marketDetails.period"]
+        reveal(windows, in: app)
+        XCTAssertTrue(windows.buttons["30D"].isSelected, "Recent activity is the initial period")
+
+        let price = app.descendants(matching: .any).matching(identifier: "marketActivity.priceChart").firstMatch
+        let volume = app.descendants(matching: .any).matching(identifier: "marketActivity.volumeChart").firstMatch
+        inspectChart(price, from: 0.75, to: 0.25, in: app)
+        let selection = app.descendants(matching: .any).matching(identifier: "marketActivity.selection").firstMatch
+        XCTAssertTrue(selection.waitForExistence(timeout: 5), "The inspected point remains readable after lifting a finger")
+        let selectedPeriod = app.staticTexts["marketActivity.selectedPeriod"]
+        XCTAssertTrue(selectedPeriod.waitForExistence(timeout: 5))
+        XCTAssertEqual(selectedPeriod.label, "30 days", "The left point is the 30-day summary")
+        let rate = app.descendants(matching: .any).matching(identifier: "marketActivity.unitsPerDay").firstMatch
+        XCTAssertTrue(rate.waitForExistence(timeout: 5))
+        XCTAssertTrue(rate.label.contains("0.4"), "12 reported units / 30 days = 0.4 units per day")
+
+        UITestInteraction.tap(windows.buttons["365D"], in: app, identifier: "marketDetails.period.365D")
+        let annualRate = app.descendants(matching: .any).matching(identifier: "marketDetails.unitsPerDay365").firstMatch
+        reveal(annualRate, in: app)
+        XCTAssertTrue(annualRate.label.contains("0.33"), "Annual quantity is normalized by 365 days")
+        inspectChart(volume, from: 0.55, to: 0.86, in: app)
+        XCTAssertTrue(selection.waitForExistence(timeout: 5))
+        XCTAssertEqual(selectedPeriod.label, "1 year")
+        let basis = app.descendants(matching: .any).matching(identifier: "marketActivity.selectedPriceBasis").firstMatch
+        XCTAssertTrue(basis.label.localizedCaseInsensitiveContains("market average"),
+                      "The annual point uses the explicitly labeled market average, not a fabricated sold average")
+        XCTAssertTrue(selection.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "9.25")).firstMatch.exists)
+        let quantity = app.descendants(matching: .any).matching(identifier: "marketActivity.selectedQuantity").firstMatch
+        XCTAssertTrue(quantity.label == "120" || quantity.label.hasSuffix(", 120"),
+                      "Inspection retains the raw annual quantity")
+
+        // Chart inspection must not strand the parent List at the chart.
+        scrollToTop(in: app)
+        let tcgplayer = app.descendants(matching: .any).matching(identifier: "cardResearch.tcgplayer").firstMatch
+        XCTAssertTrue(tcgplayer.isHittable, "The page remains vertically scrollable after horizontal chart inspection")
+        XCTAssertFalse(app.alerts.firstMatch.exists)
     }
 
     func testMarketEvidenceKeepsReportedZeroDistinctFromMissingAcrossWindows() async throws {
@@ -45,9 +90,16 @@ import XCTest
         reveal(manapool, in: app)
         assertReportedValue("12", title: "TCGplayer reported units", element: tcg)
         assertReportedValue("0", title: "Manapool reported units", element: manapool)
+        let tcgRate = app.staticTexts["marketEvidence.tcgUnitsPerDay"]
+        let manapoolRate = app.staticTexts["marketEvidence.mpUnitsPerDay"]
+        reveal(manapoolRate, in: app)
+        assertReportedValue("0.4", title: "TCGplayer average units / day", element: tcgRate)
+        assertReportedValue("0", title: "Manapool average units / day", element: manapoolRate)
         UITestInteraction.tap(windows.buttons["365 days"], in: app)
         assertReportedValue("120", title: "TCGplayer reported units", element: tcg)
         assertReportedValue("Unavailable", title: "Manapool reported units", element: manapool)
+        assertReportedValue("0.33", title: "TCGplayer average units / day", element: tcgRate)
+        assertReportedValue("Unavailable", title: "Manapool average units / day", element: manapoolRate)
         UITestInteraction.tap(windows.buttons["90 days"], in: app)
         assertReportedValue("30", title: "TCGplayer reported units", element: tcg)
         assertReportedValue("7", title: "Manapool reported units", element: manapool)
@@ -84,7 +136,7 @@ import XCTest
         XCTAssertFalse(app.alerts.firstMatch.exists)
     }
 
-    private func assertCompactResearchLayout(in app: XCUIApplication,
+    private func assertResearchHeaderLayout(in app: XCUIApplication,
                                               file: StaticString = #filePath, line: UInt = #line) {
         let price = app.staticTexts["marketDetails.marketPrice"]
         XCTAssertTrue(price.waitForExistence(timeout: 5), file: file, line: line)
@@ -170,6 +222,24 @@ import XCTest
         XCTAssertTrue(chartIsVisible(element, in: app),
                       "The chart must occupy the visible content area; chart: \(element.frame), window: \(app.windows.firstMatch.frame)",
                       file: file, line: line)
+    }
+
+    private func inspectChart(_ chart: XCUIElement, from startX: CGFloat, to endX: CGFloat,
+                              in app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        revealChart(chart, in: app, file: file, line: line)
+        guard chart.exists else { return }
+        let frame = chart.frame
+        let viewport = app.windows.firstMatch.frame.insetBy(dx: 0, dy: 100)
+        let visible = frame.intersection(viewport)
+        guard !visible.isNull, visible.height >= 60 else {
+            XCTFail("Chart needs a visible plot for point inspection", file: file, line: line)
+            return
+        }
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let y = visible.midY
+        let start = origin.withOffset(CGVector(dx: frame.minX + frame.width * startX, dy: y))
+        let end = origin.withOffset(CGVector(dx: frame.minX + frame.width * endX, dy: y))
+        start.press(forDuration: 0.2, thenDragTo: end)
     }
 
     private func chartIsVisible(_ element: XCUIElement, in app: XCUIApplication) -> Bool {

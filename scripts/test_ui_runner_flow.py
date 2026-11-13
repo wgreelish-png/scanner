@@ -274,6 +274,35 @@ class UIRunnerFlowTests(unittest.TestCase):
         for target in navigation_targets:
             self.assertRegex(navigation_source, r"\bfunc\s+" + target.rsplit("/", 1)[1] + r"\s*\(")
 
+    def test_market_activity_keeps_exact_native_and_chart_ui_selections(self):
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/ios.yml").read_text()
+        jobs = dict(re.findall(r"(?ms)^  (\w+):\n(.*?)(?=^  \w+:\n|\Z)", workflow.split("\njobs:\n", 1)[1]))
+        native_targets = tuple("CardShowScannerTests/" + name for name in (
+            "OpportunitiesTests", "MarketActivityPresentationTests", "MarketEvidenceTests", "MarketInsightsTests",
+            "CardResearchModelTests", "ResearchEvidenceTests", "ResearchTests"))
+        ui_targets = ("CardShowScannerUITests/MarketEvidenceUITests",)
+        for name, block in jobs.items():
+            self.assertEqual("inputs.job_scope == 'market_activity'" in block.splitlines()[0], name in ("native", "evidence_ui"))
+        options = workflow.split("      test_scope:\n", 1)[1].split("\n# PRs", 1)[0]
+        self.assertNotIn("          - market_activity\n", options)
+        branch = re.search(r'elif \[ "\$SCANNER_TEST_SCOPE" = market_activity \]; then\n'
+                           r'(.*?)(?=\n          (?:elif|else|fi)\b)', jobs["native"], re.DOTALL)
+        self.assertIsNotNone(branch)
+        self.assertEqual(branch.group(1).replace("\\\n", " ").split(),
+                         ["bash", "scripts/run_ios_tests.sh", *native_targets])
+        ui_branch = re.search(r'            market_activity\)\n(.*?)\n              ;;', jobs["evidence_ui"], re.DOTALL)
+        self.assertIsNotNone(ui_branch)
+        self.assertEqual(ui_branch.group(1).split(), ["bash", "scripts/run_ios_tests.sh", *ui_targets])
+        for name, targets in (("native", native_targets), ("evidence_ui", ui_targets)):
+            with self.subTest(job=name):
+                result, commands, _ = self.run_flow(target=targets[0], additional_targets=targets[1:])
+                self.assertEqual(result.returncode, 0, result.stderr)
+                action = "test" if name == "native" else "test-without-building"
+                test = next(row["args"] for row in commands if row["tool"] == "xcodebuild" and row["args"][0] == action)
+                self.assertEqual([value for value in test if value.startswith("-only-testing:")],
+                                 ["-only-testing:" + target for target in targets])
+
     def test_text_assist_keeps_exact_native_selection_without_ui_or_release(self):
         root = Path(__file__).resolve().parents[1]
         workflow = (root / ".github/workflows/ios.yml").read_text()
@@ -418,7 +447,7 @@ class UIRunnerFlowTests(unittest.TestCase):
         for name, targets in expected.items():
             with self.subTest(job=name):
                 block = job_blocks[name]
-                scope = "inputs.job_scope == 'text_assist' && 'text_assist' || " if name == "native" else ""
+                scope = "inputs.job_scope == 'market_activity' && 'market_activity' || inputs.job_scope == 'text_assist' && 'text_assist' || " if name == "native" else ""
                 scope += "inputs.job_scope == 'scanner_polish' && 'scanner_polish' || "
                 scope += "inputs.job_scope == 'photo_scan' && 'photo_scan' || "
                 scope += "inputs.job_scope == 'leftover_stock' && " + ("'leftover_stock'" if name == "ui" else "'all'") + " || "

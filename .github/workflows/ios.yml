@@ -22,6 +22,7 @@ on:
           - photo_scan
           - scanner_polish
           - text_assist
+          - market_activity
           - text_image_start
           - text_image_part
           - research_ui
@@ -168,7 +169,7 @@ jobs:
         shell: bash
         run: rm -rf -- "$IMAGE_WORK_DIRECTORY"
   native:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job_scope == 'all' || inputs.job_scope == 'native' || inputs.job_scope == 'log_review' || inputs.job_scope == 'show_polish' || inputs.job_scope == 'leftover_stock' || inputs.job_scope == 'photo_scan' || inputs.job_scope == 'scanner_polish' || inputs.job_scope == 'text_assist' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job_scope == 'all' || inputs.job_scope == 'native' || inputs.job_scope == 'log_review' || inputs.job_scope == 'show_polish' || inputs.job_scope == 'leftover_stock' || inputs.job_scope == 'photo_scan' || inputs.job_scope == 'scanner_polish' || inputs.job_scope == 'text_assist' || inputs.job_scope == 'market_activity' }}
     runs-on: macos-15-intel
     timeout-minutes: 60
     steps:
@@ -176,7 +177,7 @@ jobs:
       - name: Build and run native regression tests
         id: native_tests
         env:
-          SCANNER_TEST_SCOPE: ${{ inputs.job_scope == 'text_assist' && 'text_assist' || inputs.job_scope == 'scanner_polish' && 'scanner_polish' || inputs.job_scope == 'photo_scan' && 'photo_scan' || inputs.job_scope == 'leftover_stock' && 'all' || inputs.job_scope == 'show_polish' && 'all' || inputs.job_scope == 'log_review' && 'log_review' || inputs.test_scope || 'all' }}
+          SCANNER_TEST_SCOPE: ${{ inputs.job_scope == 'market_activity' && 'market_activity' || inputs.job_scope == 'text_assist' && 'text_assist' || inputs.job_scope == 'scanner_polish' && 'scanner_polish' || inputs.job_scope == 'photo_scan' && 'photo_scan' || inputs.job_scope == 'leftover_stock' && 'all' || inputs.job_scope == 'show_polish' && 'all' || inputs.job_scope == 'log_review' && 'log_review' || inputs.test_scope || 'all' }}
         run: |
           if [ "$SCANNER_TEST_SCOPE" = printer_transport ] || [ "$SCANNER_TEST_SCOPE" = label_controls ]; then
             bash scripts/run_ios_tests.sh CardShowScannerTests/NiimbotProtocolTests CardShowScannerTests/ScannerDiagnosticsTests CardShowScannerTests/LabelPrintQueueTests CardShowScannerTests/NiimbotImageTransferPreferencesTests CardShowScannerTests/NiimbotRollReadCoordinatorTests CardShowScannerTests/NiimbotLabelCatalogTests CardShowScannerTests/NiimbotLabelProductResolverTests
@@ -184,6 +185,15 @@ jobs:
             bash scripts/run_ios_tests.sh CardShowScannerTests/InventoryLabelTests CardShowScannerTests/AdaptiveLabelRenderingTests CardShowScannerTests/CustomPriceTagTests CardShowScannerTests/CustomLabelQueueTests CardShowScannerTests/LabelPrintQueueTests CardShowScannerTests/NiimbotImageTransferPreferencesTests CardShowScannerTests/NiimbotRollReadCoordinatorTests CardShowScannerTests/NiimbotLabelCatalogTests CardShowScannerTests/ScannerDiagnosticsTests CardShowScannerTests/NiimbotLabelProductResolverTests CardShowScannerTests/ShowInventorySortTests CardShowScannerTests/InventoryLabelBatchTests
           elif [ "$SCANNER_TEST_SCOPE" = label_queue ]; then
             bash scripts/run_ios_tests.sh CardShowScannerTests/LabelPrintQueueTests CardShowScannerTests/LabelPrintRunOutcomeTests CardShowScannerTests/CustomPriceTagTests
+          elif [ "$SCANNER_TEST_SCOPE" = market_activity ]; then
+            bash scripts/run_ios_tests.sh \
+              CardShowScannerTests/OpportunitiesTests \
+              CardShowScannerTests/MarketActivityPresentationTests \
+              CardShowScannerTests/MarketEvidenceTests \
+              CardShowScannerTests/MarketInsightsTests \
+              CardShowScannerTests/CardResearchModelTests \
+              CardShowScannerTests/ResearchEvidenceTests \
+              CardShowScannerTests/ResearchTests
           elif [ "$SCANNER_TEST_SCOPE" = text_assist ]; then
             bash scripts/run_ios_tests.sh \
               CardShowScannerTests/ScannerTextRecognitionTests \
@@ -381,7 +391,7 @@ jobs:
             NativeTests.log
             NativeCrashSummary.log
   evidence_ui:
-    if: ${{ github.event_name == 'workflow_dispatch' && ((inputs.job_scope == 'all' || inputs.job_scope == 'evidence_ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'camera_lifecycle' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness' && inputs.test_scope != 'label_controls') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.job_scope == 'market_activity' || ((inputs.job_scope == 'all' || inputs.job_scope == 'evidence_ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'camera_lifecycle' && inputs.test_scope != 'label_preview' && inputs.test_scope != 'label_queue' && inputs.test_scope != 'show_readiness' && inputs.test_scope != 'label_controls')) }}
     runs-on: macos-15-intel
     timeout-minutes: 110
     steps:
@@ -389,9 +399,12 @@ jobs:
       - name: Build and run navigation and chart UI checks independently
         id: evidence_ui_tests
         env:
-          SCANNER_TEST_SCOPE: ${{ inputs.test_scope || 'all' }}
+          SCANNER_TEST_SCOPE: ${{ inputs.job_scope == 'market_activity' && 'market_activity' || inputs.test_scope || 'all' }}
         run: |
           case "$SCANNER_TEST_SCOPE" in
+            market_activity)
+              bash scripts/run_ios_tests.sh CardShowScannerUITests/MarketEvidenceUITests
+              ;;
             navigation_price)
               bash scripts/run_ios_tests.sh \
                 CardShowScannerUITests/AppNavigationUITests/testEditableCardRetainsMainTabsAndUnsavedDraftThroughResearchAndConnection \

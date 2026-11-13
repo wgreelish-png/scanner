@@ -65,19 +65,35 @@ private enum EvidenceFixtureData {
         let card = selected ?? Self.card
         let conditionID = (CatalogOptions.conditions.firstIndex(of: card.identity.condition) ?? 0) + 1
         let skuID = String(conditionID * 100)
+        let pricing: [String: Any] = ["market_sku": "12.25", "live_market": "12.75", "listed_low_card": "10.00",
+                                      "listed_low_ship": "1.00", "listed_low_total": "11.00", "direct_low_card": "13.00"]
+        let benchmarks: [String: Any] = [
+            "listed_card": ["ref": "10.00"], "listed_total": ["ref": "11.00"],
+            "avg_30d": ["ref": "11.75"], "market_sku": ["ref": "12.25"],
+            "market_product": ["ref": NSNull()], "listed_direct": ["ref": "13.00"]
+        ]
+        let offer: [String: Any] = ["rank": 1, "price": "10.00", "ship_price": "1.00", "landed_price": "11.00",
+                                   "seller_name": "Synthetic seller", "seller_qty": 1,
+                                   "seller_url": "https://example.com/fixture-seller", "updated_at": timestamp]
+        let marketplaces: [String: Any] = ["manapool": NSNull(), "tcgplayer": ["available": true,
+            "total_qty_available": 1, "updated_at": timestamp, "listings": [offer]]]
+        let windows: [String: Any] = [
+            "30d": ["tcg_qty": 12, "mp_qty": 0, "tcg_sold_avg": "11.75", "tcg_market_avg": "11.25"],
+            "90d": ["tcg_qty": 30, "mp_qty": 7, "tcg_sold_avg": "10.50", "tcg_market_avg": "10.25"],
+            "365d": ["tcg_qty": 120, "mp_qty": NSNull(), "tcg_sold_avg": NSNull(), "tcg_market_avg": "9.25"]
+        ]
+        let row: [String: Any] = [
+            "sku_id": conditionID * 100, "condition_id": conditionID, "condition": card.identity.condition,
+            "finish": card.identity.printing, "language": card.identity.language, "pricing": pricing,
+            "opportunity": ["is_available": true, "best_source": "tcg", "buy_card": "10.00", "cost_1x": "11.00",
+                            "benchmarks": benchmarks],
+            "marketplaces": marketplaces,
+            "timestamps": ["tcgp_sales_updated_at": timestamp, "tcgp_live_updated_at": timestamp],
+            "trends": ["updated_at": timestamp, "windows": windows]
+        ]
         let body: [String: Any] = [
             "meta": ["category_id": 3, "group_id": 1430, "generated_at": timestamp],
-            "product": ["product_id": 42, "name": "Synthetic evidence fixture", "skus": [
-                skuID: ["sku_id": conditionID * 100, "condition_id": conditionID, "condition": card.identity.condition,
-                        "finish": card.identity.printing, "language": card.identity.language,
-                        "pricing": ["market_sku": "12.25", "listed_low_card": "10.00"],
-                        "timestamps": ["tcgp_sales_updated_at": timestamp],
-                        "trends": ["updated_at": timestamp, "windows": [
-                            "30d": ["tcg_qty": 12, "mp_qty": 0, "tcg_sold_avg": "11.75"],
-                            "90d": ["tcg_qty": 30, "mp_qty": 7, "tcg_sold_avg": "10.50"],
-                            "365d": ["tcg_qty": 120, "mp_qty": NSNull()]
-                        ]]]
-            ]]
+            "product": ["product_id": 42, "name": "Synthetic evidence fixture", "skus": [skuID: row]]
         ]
         return try OpportunitiesDetails.decode(JSONSerialization.data(withJSONObject: body), for: card,
                                                expectedCategoryID: 3, expectedGroupID: 1430, expectedProductID: 42)

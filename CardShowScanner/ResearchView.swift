@@ -15,7 +15,7 @@ struct ResearchView: View {
     }
 }
 
-/// Numeric research sections; charts remain deferred and selections are local.
+/// Full grade details and returned daily history; selections remain local.
 struct GradedResearchContent: View {
     @Bindable var model: ResearchModel
     var body: some View {
@@ -62,6 +62,14 @@ struct GradedResearchContent: View {
                     if let date = grade.dailyHistory?.stats?.lastSale?.date ?? grade.lastSoldAt {
                         LabeledContent("Latest recorded sale", value: date)
                     }
+                }
+            }
+            if grade.dailyHistory?.series.isEmpty == false {
+                ResearchEvidenceView(grade: grade)
+            } else {
+                Section("Daily history") {
+                    Text("No daily history was returned for this grade. Valuations, population and reported totals remain available above.")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
             }
         }

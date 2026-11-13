@@ -6,6 +6,14 @@ struct ResearchEvidenceView: View {
     let grade: ResearchGrade
     @State private var range: ResearchHistoryRange = .quarter
     @State private var selectedDate: Date?
+    private var selectedPoint: ResearchDailyPoint? {
+        selectedDate.flatMap { evidence.point(nearest: $0) }
+    }
+    private var historySelection: Binding<Date?> {
+        // Preserve the inspected day after a drag ends so its values remain
+        // readable. The projection still rejects dates within reporting gaps.
+        Binding(get: { selectedDate }, set: { if let date = $0 { selectedDate = date } })
+    }
     private var evidence: ResearchEvidence { ResearchEvidence(history: grade.dailyHistory, range: range) }
 
     var body: some View {
@@ -65,12 +73,17 @@ struct ResearchEvidenceView: View {
             } else {
                 salesChart.frame(height: 170)
             }
-            if let selectedDate, let point = evidence.point(nearest: selectedDate) {
+            if let point = selectedPoint {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(point.day).font(.subheadline.bold())
+                    HStack {
+                        Text(point.day).font(.subheadline.bold())
+                        Spacer()
+                        Button("Clear", action: clearSelection)
+                            .accessibilityLabel("Clear reported day selection")
+                    }
                     LabeledContent("Recorded sales", value: point.sales?.formatted() ?? "Unavailable")
                     LabeledContent("Sold average", value: point.average?.money ?? "Unavailable")
-                }.font(.caption).accessibilityElement(children: .combine)
+                }.font(.caption).accessibilityElement(children: .contain)
                     .accessibilityIdentifier("research.historySelection")
             }
             Text("Tap or drag across a chart to inspect a reported day. Gaps do not establish that no sales occurred.")
@@ -89,7 +102,8 @@ struct ResearchEvidenceView: View {
                 }
             }.accessibilityIdentifier("research.historyValues")
         }
-        .onChange(of: range) { _, _ in selectedDate = nil }
+        .onChange(of: range) { _, _ in clearSelection() }
+        .onChange(of: grade) { _, _ in clearSelection() }
     }
 
     private var priceChart: some View {
@@ -103,16 +117,22 @@ struct ResearchEvidenceView: View {
                     .accessibilityLabel(Text(point.id))
                     .accessibilityValue(Text(point.value.formatted(.currency(code: "USD"))))
             }
-            if let selectedDate, let point = evidence.point(nearest: selectedDate) {
-                RuleMark(x: .value("Selected day", point.date)).foregroundStyle(.secondary)
+            if let point = selectedPoint {
+                RuleMark(x: .value("Selected day", point.date))
+                    .foregroundStyle(.secondary)
+                    .annotation(position: .top, spacing: 4,
+                                overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
+                        selectionTooltip(point, identifier: "research.priceHistorySelection")
+                    }
             }
         }
         .chartXScale(domain: evidence.domain)
         .chartYScale(domain: .automatic(includesZero: true))
         .chartXAxis { AxisMarks(values: .automatic(desiredCount: 4)) }
         .chartYAxisLabel("USD")
-        .chartXSelection(value: $selectedDate)
+        .chartXSelection(value: historySelection)
         .environment(\.timeZone, TimeZone(secondsFromGMT: 0)!)
+        .accessibilityHint("Drag horizontally to inspect a reported day. Missing dates remain gaps.")
         .accessibilityLabel("Daily recorded sold average in US dollars")
         .accessibilityIdentifier("research.historyChart")
     }
@@ -127,17 +147,39 @@ struct ResearchEvidenceView: View {
                         .accessibilityValue(Text("\(count.formatted()) recorded sales"))
                 }
             }
-            if let selectedDate, let point = evidence.point(nearest: selectedDate) {
-                RuleMark(x: .value("Selected day", point.date)).foregroundStyle(.secondary)
+            if let point = selectedPoint {
+                RuleMark(x: .value("Selected day", point.date))
+                    .foregroundStyle(.secondary)
+                    .annotation(position: .top, spacing: 4,
+                                overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
+                        selectionTooltip(point, identifier: "research.salesHistorySelection")
+                    }
             }
         }
         .chartXScale(domain: evidence.domain)
         .chartYScale(domain: .automatic(includesZero: true))
         .chartXAxis { AxisMarks(values: .automatic(desiredCount: 4)) }
         .chartYAxisLabel("Sales")
-        .chartXSelection(value: $selectedDate)
+        .chartXSelection(value: historySelection)
         .environment(\.timeZone, TimeZone(secondsFromGMT: 0)!)
+        .accessibilityHint("Drag horizontally to inspect a reported day. Missing counts remain unavailable.")
         .accessibilityLabel("Daily recorded sales counts")
         .accessibilityIdentifier("research.salesHistoryChart")
     }
+    private func selectionTooltip(_ point: ResearchDailyPoint, identifier: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(point.day).fontWeight(.semibold)
+            Text("Sold average: \(point.average?.money ?? "Unavailable")")
+            Text("Recorded sales: \(point.sales?.formatted() ?? "Unavailable")")
+        }
+        .font(.caption2).monospacedDigit()
+        .padding(8).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .combine).accessibilityIdentifier(identifier)
+        .allowsHitTesting(false)
+    }
+
+    private func clearSelection() {
+        selectedDate = nil
+    }
+
 }

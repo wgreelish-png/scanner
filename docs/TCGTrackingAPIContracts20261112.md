@@ -234,3 +234,7 @@ This covers normal response formats, not every alias, game, SKU, error, retry or
 offline behavior. Research daily history still lacks a populated live example,
 and the separate Beta chart-bucket encoding remains unconfirmed. These notes
 change no inventory, settings, pricing provenance, camera behavior or UI.
+
+## Native implementation update — November 13, 2026
+
+Build 115 fixes the nullable marketplace decoding noted above and retains documented opportunity benchmarks and seller identities. It adds read-only, interactive summary-window and benchmark charts, normalized units/day and explicit market-average fallback. The compressed bucket format remains unverified and is not enabled as dated native history. See [implementation and device checks](MarketActivityCharts20261113.md).

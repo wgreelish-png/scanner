@@ -65,6 +65,18 @@ class CIWorkflowTests(unittest.TestCase):
                 self.assertIsNotNone(scope)
                 self.assertEqual(expression(scope.group(1), values), "text_assist")
 
+    def test_market_activity_forces_focused_native_and_chart_ui_only(self):
+        self.assertIn("          - market_activity\n", WORKFLOW.split("      test_scope:\n", 1)[0])
+        for test_scope in ("all", "printer_transport", "label_controls", "label_preview", "label_queue",
+                           "show_readiness", "navigation_price", "camera_lifecycle"):
+            with self.subTest(test_scope=test_scope):
+                values = context(job="market_activity", test=test_scope)
+                self.assertEqual(selected_jobs(job="market_activity", test=test_scope), {"tooling", "native", "evidence_ui"})
+                for name in ("native", "evidence_ui"):
+                    scope = re.search(r"(?m)^          SCANNER_TEST_SCOPE: \$\{\{ (.+) \}\}$", JOBS[name])
+                    self.assertIsNotNone(scope)
+                    self.assertEqual(expression(scope.group(1), values), "market_activity")
+
     def test_private_image_scopes_run_only_the_requested_transfer_phase(self):
         self.assertEqual(selected_jobs(job="text_image_start"), {"text_image_start"})
         self.assertEqual(selected_jobs(job="text_image_part"), {"text_image_part"})

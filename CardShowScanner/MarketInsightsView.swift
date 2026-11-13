@@ -91,6 +91,8 @@ struct MarketInsightsContent: View {
                     ForEach([30, 90, 365], id: \.self) { Text("\($0)D").tag($0) }
                 }.pickerStyle(.segmented).accessibilityIdentifier("marketDetails.period")
                 salesSummary(details.sku.trends?.windows["\(window)d"])
+                MarketActivityChartsView(sku: details.sku, selectedWindow: $window,
+                    salesUpdatedAt: details.sku.timestamps?.tcgSalesUpdatedAt)
                 DisclosureGroup("More activity") {
                     LabeledContent("30-day vs 90-day trend", value: percent(details.sku.trends?.trend30DaysVersus90DaysPercent))
                     LabeledContent("90-day trend", value: percent(details.sku.trends?.trend90DaysPercent))
@@ -102,16 +104,23 @@ struct MarketInsightsContent: View {
                     ForEach(details.sku.marketplaces.keys.sorted(), id: \.self) { name in
                         if let marketplace = details.sku.marketplaces[name] { marketplaceRows(name, marketplace) }
                     }
+                    sourceRows(details)
                 }
             }
         } header: {
             Text("Market Activity").accessibilityIdentifier("marketDetails.activityHeader")
+        }
+        if let details = model.activityDetails {
+            benchmarkSection(details)
+            coveredSKUsSection(details)
         }
     }
 
     @ViewBuilder private func salesSummary(_ value: OpportunitiesSalesWindow?) -> some View {
         LabeledContent("Reported units", value: count(value?.tcgQuantity)).accessibilityIdentifier("marketDetails.sales\(window)d")
         LabeledContent("Sold average", value: money(value?.tcgSoldAverage)).accessibilityIdentifier("marketDetails.soldAverage\(window)d")
+        LabeledContent("Average units / day", value: dailyRate(value?.tcgQuantity))
+            .accessibilityIdentifier("marketDetails.unitsPerDay\(window)d")
         if let withShipping = value?.tcgSoldAverageWithShipping { LabeledContent("Sold average with shipping", value: withShipping.money) }
         if let quantity = value?.manapoolQuantity { LabeledContent("Manapool units", value: quantity.formatted()) }
         if let average = value?.manapoolAverage { LabeledContent("Manapool sold average", value: average.money) }
@@ -119,19 +128,117 @@ struct MarketInsightsContent: View {
 
     @ViewBuilder private func marketplaceRows(_ name: String, _ marketplace: OpportunitiesMarketplace) -> some View {
         DisclosureGroup(name) {
-            LabeledContent("Available quantity", value: count(marketplace.totalQuantityAvailable))
+            LabeledContent("Provider-reported quantity", value: count(marketplace.totalQuantityAvailable))
+            Text("Returned offers are a partial snapshot. The provider quantity can cover a different scope than these rows.")
+                .font(.caption).foregroundStyle(.secondary)
             if marketplace.available == false { Text("Listings unavailable").foregroundStyle(.secondary) }
             ForEach(Array(marketplace.listings.enumerated()), id: \.offset) { index, listing in
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Listing \(listing.rank ?? index + 1)").font(.subheadline.weight(.semibold))
+                    if let url = listing.sellerURL {
+                        Link(listing.sellerName ?? "Listing \(listing.rank ?? index + 1)", destination: url)
+                            .font(.subheadline.weight(.semibold))
+                    } else {
+                        Text(listing.sellerName ?? "Listing \(listing.rank ?? index + 1)")
+                            .font(.subheadline.weight(.semibold))
+                    }
                     LabeledContent("Card price", value: money(listing.price))
                     LabeledContent("Shipping", value: money(listing.shipping))
                     LabeledContent("Total", value: money(listing.landedPrice))
                     LabeledContent("Quantity", value: count(listing.sellerQuantity))
+                    if let updated = listing.updatedAt { LabeledContent("Snapshot updated", value: timestamp(updated)) }
                 }.font(.caption)
             }
             if marketplace.listings.isEmpty { Text("No individual listings returned").foregroundStyle(.secondary) }
         }
+    }
+
+    private func benchmarkSection(_ details: OpportunitiesDetails) -> some View {
+        let benchmarks = MarketActivityPresentation(sku: details.sku).benchmarks
+        return Section("Price references & purchase costs") {
+            MarketBenchmarkChartView(benchmarks: benchmarks)
+            DisclosureGroup("View all reference values") {
+                ForEach(benchmarks) { reference in
+                    LabeledContent {
+                        Text(money(reference.value)).monospacedDigit()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(reference.label)
+                            Text(reference.includesShipping ? "Includes shipping" : "Card price · excludes shipping")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                if let opportunity = details.sku.opportunity {
+                    if let source = opportunity.bestSource { LabeledContent("Marketplace source", value: source) }
+                    LabeledContent("Opportunity available", value: opportunity.isAvailable.map { $0 ? "Yes" : "No" } ?? "Unavailable")
+                    if let benchmark = opportunity.benchmarks["market_sku"] {
+                        LabeledContent("Reported market-reference savings", value: money(benchmark.savings))
+                        LabeledContent("Reported market-reference discount", value: decimalPercent(benchmark.discountPercent))
+                    }
+                }
+            }.accessibilityIdentifier("marketDetails.benchmarkValues")
+            Text("Buy card and landed cost describe a marketplace purchase, separate from the cash offer you give a customer. Reference savings are not a profit forecast.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func coveredSKUsSection(_ details: OpportunitiesDetails) -> some View {
+        let skus = details.product.skus.sorted { left, right in
+            let a = left.value, b = right.value
+            if a.finish != b.finish { return a.finish < b.finish }
+            if a.language != b.language { return a.language < b.language }
+            if a.conditionID != b.conditionID { return a.conditionID < b.conditionID }
+            return left.key < right.key
+        }
+        return Section {
+            DisclosureGroup("Covered SKUs (\(skus.count))") {
+                ForEach(skus, id: \.key) { key, sku in
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(sku.condition).font(.subheadline.weight(.semibold))
+                            if key == details.selectedSKUID {
+                                Text("Selected").font(.caption).foregroundStyle(.indigo)
+                            }
+                        }
+                        Text(sku.finish + " · " + sku.language).font(.caption).foregroundStyle(.secondary)
+                        LabeledContent("SKU market", value: money(sku.pricing?.marketSKU))
+                        LabeledContent("30-day sold average", value: money(sku.trends?.windows["30d"]?.tcgSoldAverage))
+                        LabeledContent("30-day reported units", value: count(sku.trends?.windows["30d"]?.tcgQuantity))
+                        LabeledContent("Buy card", value: money(sku.opportunity?.buyCard))
+                        LabeledContent("Landed 1×", value: money(sku.opportunity?.costOne))
+                        LabeledContent("SKU", value: key)
+                    }.font(.caption).padding(.vertical, 4)
+                }
+                Text("This table contains the SKUs returned in this Beta snapshot. Other conditions or printings can still have public pricing. Use the card controls above to change the research selection.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }.accessibilityIdentifier("marketDetails.coveredSKUs")
+        }
+    }
+
+    @ViewBuilder private func sourceRows(_ details: OpportunitiesDetails) -> some View {
+        DisclosureGroup("Activity source dates") {
+            LabeledContent("Dataset generated", value: timestamp(details.meta.generatedAt))
+            LabeledContent("TCGplayer sales updated", value: timestamp(details.sku.timestamps?.tcgSalesUpdatedAt))
+            LabeledContent("TCGplayer snapshot updated", value: timestamp(details.sku.timestamps?.tcgLiveUpdatedAt))
+            LabeledContent("Exact SKU", value: details.selectedSKUID)
+            LabeledContent("Live market reference", value: money(details.sku.pricing?.liveMarket))
+            Text("Source update times describe snapshots, not the date of the most recent individual sale.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func timestamp(_ value: String?) -> String {
+        MarketEvidence.timestamp(value)?.formatted(date: .abbreviated, time: .shortened) ?? "Unavailable"
+    }
+    private func decimalPercent(_ value: Decimal?) -> String {
+        value.map { $0.formatted(.number.precision(.fractionLength(0...1))) + "%" } ?? "Unavailable"
+    }
+    private func dailyRate(_ quantity: Int?) -> String {
+        guard let quantity else { return "Unavailable" }
+        let value = Double(quantity) / Double(window)
+        if value >= 1 { return value.formatted(.number.precision(.fractionLength(0...1))) }
+        if value >= 0.1 { return value.formatted(.number.precision(.fractionLength(0...2))) }
+        return value.formatted(.number.precision(.significantDigits(1...3)))
     }
     private func money(_ value: Decimal?) -> String { value?.money ?? "Unavailable" }
     private func count(_ value: Int?) -> String { value.map { $0.formatted() } ?? "Unavailable" }

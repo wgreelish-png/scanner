@@ -116,6 +116,75 @@ test('opportunities preserves exact product, condition, finish, language, explic
   assert.equal(Object.hasOwn(body.product.skus[1002], 'pricing'), false);
 });
 
+test('detailed chart inputs and seller snapshots survive normalization without inventing missing data', async () => {
+  const source = fixture();
+  const row = source.products[101].skus[1001];
+  row.pricing = { market_sku: 17.86, live_market: 18.78, listed_low_card: 15.99, listed_low_ship: 1.49, listed_low_total: 17.48 };
+  row.opportunity = {
+    is_available: true, best_source: 'tcg', buy_card: 14.20, ship_1x: 1.48, cost_1x: 15.68,
+    benchmarks: {
+      market_product: { ref: null, cmp_basis: 'card', cmp_cost: 14.20, savings: null, discount_pct: null },
+      market_sku: { ref: 17.86, cmp_basis: 'card', cmp_cost: 14.20, savings: 3.66, discount_pct: 20.5 },
+      avg_30d: { ref: 18.13, cmp_basis: 'card', cmp_cost: 14.20, savings: 3.93, discount_pct: 21.7 },
+      listed_card: { ref: 15.99, cmp_basis: 'product_plus_fee', cmp_cost: 14.20, savings: 1.79, discount_pct: 11.2 },
+      listed_direct: { ref: 18.86, cmp_basis: 'product_plus_fee', cmp_cost: 14.20, savings: 4.66, discount_pct: 24.7 },
+      listed_total: { ref: 17.48, cmp_basis: 'landed', cmp_cost: 15.68, savings: 1.80, discount_pct: 10.3 },
+    },
+  };
+  row.trends.windows = {
+    '30d': { tcg_qty: 820, tcg_sold_avg: 18.13, tcg_market_avg: 18.14, mp_qty: null, mp_avg: null },
+    '90d': { tcg_qty: 933, tcg_sold_avg: 20.24, tcg_market_avg: 18.42, mp_qty: null, mp_avg: null },
+    '365d': { tcg_qty: 8258, tcg_sold_avg: null, tcg_market_avg: 19.51, mp_qty: null, mp_avg: null },
+  };
+  row.trends.chart_buckets_90d = { v: 3, undocumented: [1, 2, 3] };
+  row.marketplaces.manapool = null;
+  row.marketplaces.tcgplayer = {
+    available: true, product_url: 'https://www.tcgplayer.com/product/101?Printing=Holofoil&Condition=Near+Mint',
+    total_qty_available: 1,
+    listings: [
+      { rank: 1, seller_name: 'Fixture seller A', seller_url: 'https://shop.tcgplayer.com/sellerfeedback/fixture-a', price: 14.20, ship_price: 1.48, landed_price: 15.68, seller_qty: 1 },
+      { rank: 2, seller_name: 'Fixture seller B', seller_url: 'https://shop.tcgplayer.com/sellerfeedback/fixture-b', price: 15.99, ship_price: 1.49, landed_price: 17.48, seller_qty: 1 },
+    ],
+  };
+  const handle = createResearchHandler({ ...options, fetchImpl: loader([reply(source)]).fetchImpl });
+  const response = await handle(request()); assert.equal(response.status, 200);
+  const normalized = (await response.json()).product.skus[1001];
+  assert.deepEqual(normalized.pricing, row.pricing);
+  assert.deepEqual(normalized.opportunity, row.opportunity);
+  assert.deepEqual(normalized.trends.windows, row.trends.windows);
+  assert.deepEqual(normalized.marketplaces, row.marketplaces);
+  assert.equal(normalized.trends.windows['365d'].tcg_sold_avg, null, 'A market average must remain separate from the missing sold average');
+  assert.equal(normalized.marketplaces.tcgplayer.total_qty_available, 1, 'The proxy does not invent a full-stock total from partial seller rows');
+  assert.equal(Object.hasOwn(normalized.trends, 'chart_buckets_90d'), false, 'Documented charts do not need an unverified bucket decoder');
+});
+
+test('detailed optional fields keep existing schema bounds and unsafe links do not discard useful values', async () => {
+  const malformed = [
+    row => { row.opportunity.buy_card = { private: KEY }; },
+    row => { row.opportunity.benchmarks.market_sku.ref = false; },
+    row => { row.opportunity.benchmarks.market_sku.cmp_basis = 'x'.repeat(513); },
+    row => { row.marketplaces.manapool = []; },
+    row => { row.marketplaces.tcgplayer.listings[0].seller_name = 'x'.repeat(513); },
+  ];
+  for (const mutate of malformed) {
+    const source = fixture(); mutate(source.products[101].skus[1001]);
+    const handle = createResearchHandler({ ...options, fetchImpl: loader([reply(source)]).fetchImpl });
+    const response = await handle(request()); assert.equal(response.status, 502);
+    assert.equal((await response.json()).error.code, 'upstream_invalid_response');
+  }
+  for (const url of ['http://shop.tcgplayer.com/sellerfeedback/fixture', 'javascript:alert(1)', 'https://shop.tcgplayer.com.evil.example/sellerfeedback/fixture']) {
+    const source = fixture();
+    const listing = source.products[101].skus[1001].marketplaces.tcgplayer.listings[0];
+    listing.seller_name = 'Fixture seller'; listing.seller_url = url;
+    const handle = createResearchHandler({ ...options, fetchImpl: loader([reply(source)]).fetchImpl });
+    const response = await handle(request()); assert.equal(response.status, 200);
+    const safe = (await response.json()).product.skus[1001].marketplaces.tcgplayer.listings[0];
+    assert.equal(Object.hasOwn(safe, 'seller_url'), false);
+    assert.equal(safe.seller_name, 'Fixture seller');
+    assert.equal(safe.price, 0); assert.equal(safe.ship_price, null); assert.equal(safe.landed_price, 0);
+  }
+});
+
 test('opportunities health reports credential configuration without testing provider access or Research subscription', async () => {
   const upstream = loader([]);
   const configured = createResearchHandler({ ...options, fetchImpl: upstream.fetchImpl });

@@ -62,6 +62,84 @@ import XCTest
         BetaAPICadence(now: { clock.now() }, wait: { _ in throw URLError(.timedOut) })
     }
 
+    func testNullMarketplacesAreOmittedWhileValidSellerDetailsRemainAvailable() throws {
+        let markets: [String: Any] = [
+            "manapool": NSNull(),
+            "tcgplayer": ["available": true, "product_url": "https://www.tcgplayer.com/product/42", "listings": [[
+                "rank": 1, "price": 0, "ship_price": NSNull(), "seller_qty": 1,
+                "seller_name": "Fixture seller", "seller_url": "https://shop.tcgplayer.com/sellerfeedback/fixture"
+            ]]]
+        ]
+        let result = try decode(fixture(skus: ["101": sku(fields: ["marketplaces": markets])]))
+        XCTAssertEqual(result.sku.marketplaces.keys.sorted(), ["tcgplayer"])
+        let marketplace = try XCTUnwrap(result.sku.marketplaces["tcgplayer"])
+        XCTAssertEqual(marketplace.productURL?.absoluteString, "https://www.tcgplayer.com/product/42")
+        XCTAssertEqual(marketplace.listings.first?.sellerName, "Fixture seller")
+        XCTAssertEqual(marketplace.listings.first?.sellerURL?.absoluteString, "https://shop.tcgplayer.com/sellerfeedback/fixture")
+        XCTAssertEqual(marketplace.listings.first?.price, 0)
+        XCTAssertNil(marketplace.listings.first?.shipping)
+    }
+
+    func testNullableMarketplacesDoNotHideMalformedNonNullValuesOrBypassEntryLimit() throws {
+        for malformed: Any in ["not-an-object", 1, true, ["listings": "not-an-array"]] {
+            let markets: [String: Any] = ["manapool": NSNull(), "tcgplayer": malformed]
+            XCTAssertThrowsError(try decode(fixture(skus: ["101": sku(fields: ["marketplaces": markets])]))) {
+                XCTAssertEqual($0 as? OpportunitiesFailure, .invalidResponse)
+            }
+        }
+        let tooMany = Dictionary(uniqueKeysWithValues: (0..<9).map { ("source\($0)", NSNull()) })
+        XCTAssertThrowsError(try decode(fixture(skus: ["101": sku(fields: ["marketplaces": tooMany])]))) {
+            XCTAssertEqual($0 as? OpportunitiesFailure, .invalidResponse)
+        }
+    }
+
+    func testNullMarketplaceSupportStillRequiresTheExactSKUSelection() throws {
+        let fields: [String: Any] = ["language": "Japanese", "marketplaces": ["manapool": NSNull()]]
+        XCTAssertThrowsError(try decode(fixture(skus: ["101": sku(fields: fields)]))) {
+            XCTAssertEqual($0 as? OpportunitiesFailure, .skuNotCovered)
+        }
+    }
+
+    func testSellerLinksRequireHTTPSWithoutCredentialsAndSellerTextRemainsBounded() throws {
+        for url in ["http://example.com/seller", "javascript:alert(1)", "https://user:secret@example.com/", "https://example.com:8443/", "not a URL"] {
+            let markets: [String: Any] = ["tcgplayer": ["product_url": url, "listings": [["seller_url": url]]]]
+            let result = try decode(fixture(skus: ["101": sku(fields: ["marketplaces": markets])]))
+            XCTAssertNil(result.sku.marketplaces["tcgplayer"]?.productURL)
+            XCTAssertNil(result.sku.marketplaces["tcgplayer"]?.listings.first?.sellerURL)
+        }
+        let markets: [String: Any] = ["tcgplayer": ["listings": [["seller_name": String(repeating: "x", count: 257)]]]]
+        XCTAssertThrowsError(try decode(fixture(skus: ["101": sku(fields: ["marketplaces": markets])]))) {
+            XCTAssertEqual($0 as? OpportunitiesFailure, .invalidResponse)
+        }
+    }
+
+    func testOpportunityReferencesPreserveZeroMissingAndSignedSavingsSeparatelyFromPrices() throws {
+        let opportunity: [String: Any] = [
+            "is_available": true, "best_source": "tcg", "buy_card": "14.20", "cost_1x": "15.68", "ship_1x": "1.48",
+            "benchmarks": [
+                "market_sku": ["ref": "17.86", "cmp_basis": "card", "cmp_cost": "14.20", "savings": "-3.66", "discount_pct": "-20.5"],
+                "listed_card": ["ref": 0], "market_product": ["ref": NSNull()], "unavailable": NSNull(),
+                "bad_price": ["ref": -1, "cmp_cost": true, "savings": "NaN"]
+            ]
+        ]
+        let result = try decode(fixture(skus: ["101": sku(fields: ["opportunity": opportunity])]))
+        let value = try XCTUnwrap(result.sku.opportunity)
+        XCTAssertEqual(value.isAvailable, true)
+        XCTAssertEqual(value.bestSource, "tcg")
+        XCTAssertEqual(value.buyCard, Decimal(string: "14.20"))
+        XCTAssertEqual(value.costOne, Decimal(string: "15.68"))
+        XCTAssertEqual(value.shippingOne, Decimal(string: "1.48"))
+        XCTAssertEqual(value.benchmarks["market_sku"]?.reference, Decimal(string: "17.86"))
+        XCTAssertEqual(value.benchmarks["market_sku"]?.savings, Decimal(string: "-3.66"))
+        XCTAssertEqual(value.benchmarks["market_sku"]?.discountPercent, Decimal(string: "-20.5"))
+        XCTAssertEqual(value.benchmarks["listed_card"]?.reference, 0)
+        XCTAssertNil(value.benchmarks["market_product"]?.reference)
+        XCTAssertNil(value.benchmarks["unavailable"])
+        XCTAssertNil(value.benchmarks["bad_price"]?.reference)
+        XCTAssertNil(value.benchmarks["bad_price"]?.comparisonCost)
+        XCTAssertNil(value.benchmarks["bad_price"]?.savings)
+    }
+
     func testFixedDirectRequestExactSKUAndReportedSalesDoNotChangeSavedPrice() async throws {
         let loader = OpportunitiesLoader([.init(data: try fixture())]), saved = card()
         let client = DirectOpportunitiesClient(credentials: credentials, resolver: OpportunitiesResolver(1430), loader: loader, cache: OpportunitiesSetCache(), cadence: nil)
