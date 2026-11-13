@@ -64,6 +64,13 @@ actor ScannerDatabaseCache {
         return key
     }
     func keys() throws -> [String] { try prepare(); return (sizes ?? [:]).keys.sorted() }
+    /// File sizes only: a download preview must not load every recognition shard.
+    func recordSizes() throws -> [String: Int] { try prepare(); return sizes ?? [:] }
+    func availableStorageBytes() throws -> Int64? {
+        try prepare()
+        return try root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+            .volumeAvailableCapacityForImportantUsage
+    }
     func read(_ key: String) throws -> Data? {
         let url = try location(key); try prepare()
         guard sizes?[key] != nil else { return nil }

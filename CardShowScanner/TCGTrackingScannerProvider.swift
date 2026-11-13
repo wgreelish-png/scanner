@@ -417,6 +417,7 @@ enum ScannerResourceMode: String, Equatable {
     private var continuation: AsyncStream<ScanResult>.Continuation
     let webView: WKWebView
     @Published private(set) var status = "Preparing TCGTracking…"
+    @Published private(set) var downloadPreviewState: ScannerDownloadGateState = .idle
     @Published private(set) var manualSearchSuggested = false
     @Published private(set) var captureMode = ScannerCaptureMode.live
     @Published private(set) var photoState = PhotoScanState.off
@@ -448,6 +449,12 @@ enum ScannerResourceMode: String, Equatable {
     private var nonce = UUID().uuidString
     private var normalizer = TCGBridgeNormalizer()
     private var pageTask: Task<Void, Never>?
+    private lazy var downloadGate = ScannerDownloadGate(stateChanged: { [weak self] state in
+        self?.downloadPreviewState = state
+    })
+    private var downloadRefreshSuspended = false
+    private var downloadRefreshStatus: String?
+    private var preparedDownloadAction: ScannerDownloadGateAction?
     private var pageNavigation: WKNavigation?
     private var recoveryAttempts = 0
     private var reviewRelease = ScannerReviewReleaseQueue()
@@ -514,8 +521,8 @@ enum ScannerResourceMode: String, Equatable {
         observeResources()
         updatePhotoState(captureMode == .photo && resourceMode == .cooling ? .cooling : .off)
         recoveryAttempts = 0
-        status = resourceMode == .cooling ? Self.coolingStatus : "Starting bundled scanner…"
-        loadBundledPage(restartingServer: false)
+        status = resourceMode == .cooling ? Self.coolingStatus : "Checking database download size…"
+        beginDownloadPreview(action: .initialLoad)
     }
     private func loadBundledPage(restartingServer: Bool) {
         bridgeInstalled = false
@@ -541,6 +548,9 @@ enum ScannerResourceMode: String, Equatable {
     }
     func stop() {
         if active { DiagnosticLog.shared.record("web.stopped") }
+        downloadGate.cancel()
+        downloadRefreshSuspended = false; downloadRefreshStatus = nil
+        preparedDownloadAction = nil
         invalidateTextRecognition()
         photoTextAttempted = false; recognitionReviewHeld = false; textRecognitionMessage = nil
         active = false; manualSearchSuspended = false; bridgeInstalled = false; nonce = UUID().uuidString; manualSearchSuggested = false
@@ -585,6 +595,7 @@ enum ScannerResourceMode: String, Equatable {
                         self.status = Self.coolingStatus
                     }
                     self.dispatchResourceMode()
+                    if foreground { self.continuePreparedDownload() }
                 }
             })
         }
@@ -608,6 +619,9 @@ enum ScannerResourceMode: String, Equatable {
     }
     private func dispatchResourceMode() {
         guard active, !documentFailed else { return }
+        // Metadata-only checks have no camera document to acknowledge a pause.
+        // A warm cached result may also be waiting for foreground before load.
+        guard downloadPreviewState.action != .initialLoad, preparedDownloadAction != .initialLoad else { return }
         let requestNonce = nonce
         let requestID = UUID(); resourceRequestID = requestID
         if (resourceMode == .cooling || !resourceForeground), resourcePauseDeadline == nil {
@@ -960,10 +974,62 @@ enum ScannerResourceMode: String, Equatable {
         }
     }
     func refreshDatabase() {
-        guard active, !textRecognitionBusy else { return }
+        guard active, resourceForeground, !textRecognitionBusy, !manualSearchSuspended,
+              downloadPreviewState.action == nil else { return }
+        downloadRefreshStatus = status
+        suspendForManualSearch()
+        downloadRefreshSuspended = true
         manualSearchSuggested = false
-        status = "Checking for database updates…"
-        webView.evaluateJavaScript("window.CardShowBridge?.refreshDatabase(); null;", completionHandler: nil)
+        status = "Checking database download size…"
+        beginDownloadPreview(action: .refresh)
+    }
+    private func beginDownloadPreview(action: ScannerDownloadGateAction) {
+        let requestNonce = nonce
+        downloadGate.begin(game: game, action: action) { [weak self] in
+            guard let self, self.active, self.nonce == requestNonce else { return }
+            self.preparedDownloadAction = action
+            self.continuePreparedDownload()
+        }
+    }
+    private func continuePreparedDownload() {
+        guard active, resourceForeground, let action = preparedDownloadAction else { return }
+        preparedDownloadAction = nil
+        switch action {
+        case .initialLoad:
+            status = resourceMode == .cooling ? Self.coolingStatus : "Starting bundled scanner…"
+            loadBundledPage(restartingServer: false)
+        case .refresh:
+            releaseDownloadRefreshHold()
+            manualSearchSuggested = false
+            status = "Checking for database updates…"
+            webView.evaluateJavaScript("window.CardShowBridge?.refreshDatabase(); null;", completionHandler: nil)
+        }
+    }
+    func approveDownloadPreview() {
+        guard active, resourceForeground else { return }
+        downloadGate.approve()
+    }
+    func continueWithoutDownloadEstimate() {
+        guard active, resourceForeground else { return }
+        downloadGate.continueWithoutEstimate()
+    }
+    func retryDownloadPreview() {
+        guard active, resourceForeground else { return }
+        downloadGate.retry()
+    }
+    func cancelDownloadPreview() {
+        let action = downloadPreviewState.action
+        downloadGate.cancel()
+        if action == .initialLoad { stop() }
+        else if action == .refresh { releaseDownloadRefreshHold() }
+    }
+    private func releaseDownloadRefreshHold() {
+        guard downloadRefreshSuspended else { return }
+        let previousStatus = downloadRefreshStatus
+        downloadRefreshSuspended = false; downloadRefreshStatus = nil
+        resumeAfterManualSearch()
+        if resourceMode == .cooling { status = Self.coolingStatus }
+        else if let previousStatus { status = previousStatus }
     }
     func resetRecognition() {
         invalidateTextRecognition()

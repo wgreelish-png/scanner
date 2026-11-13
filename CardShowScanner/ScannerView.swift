@@ -249,6 +249,14 @@ struct StockCountPricing: MarketPricing {
         }
         .onChange(of: textRecognitionEnabled) { _, enabled in model.liveProvider?.setTextRecognitionEnabled(enabled) }
         .onChange(of: steadyCardBorder) { _, enabled in model.liveProvider?.setSteadyCardBorder(enabled) }
+        .overlay {
+            if let live = model.liveProvider {
+                ScannerDownloadPreviewOverlay(provider: live, game: session.game ?? game) {
+                    model.stop()
+                    dismiss()
+                }
+            }
+        }
         .failureAlert(Binding(get: { model.selected == nil ? model.error : nil }, set: { model.error = $0 }))
     }
     private var cameraHeader: some View {

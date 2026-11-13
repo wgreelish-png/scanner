@@ -162,6 +162,13 @@ private struct ScannerDatabaseSettingsView: View {
     @State private var clearingCache = false
     @State private var cacheMessage = false
     @State private var error: String?
+    @State private var downloadReview: DatabaseDownloadReview?
+
+    private struct DatabaseDownloadReview: Identifiable {
+        let id = UUID()
+        let game: String
+        let refreshRequested: Bool
+    }
 
     var body: some View {
         Form {
@@ -197,8 +204,13 @@ private struct ScannerDatabaseSettingsView: View {
                 if let date = databaseUpdater.lastAttempt(for: game) {
                     LabeledContent("Last refresh attempt", value: date.formatted(date: .abbreviated, time: .shortened))
                 }
+                Button("Preview Download Size", systemImage: "externaldrive") {
+                    downloadReview = DatabaseDownloadReview(game: game, refreshRequested: false)
+                }.frame(minHeight: 44)
+                    .disabled(databaseUpdater.isRefreshing || clearingCache)
+                    .accessibilityIdentifier("settings.previewDatabaseDownload")
                 Button(databaseUpdater.isRefreshing ? "Refreshing Database…" : "Refresh Database Now", systemImage: "arrow.clockwise") {
-                    databaseUpdater.refreshNow(game: game)
+                    downloadReview = DatabaseDownloadReview(game: game, refreshRequested: true)
                 }.buttonStyle(.borderless).frame(minHeight: 44)
                     .disabled(databaseUpdater.isRefreshing || clearingCache)
                     .accessibilityIdentifier("settings.refreshDatabase")
@@ -222,6 +234,13 @@ private struct ScannerDatabaseSettingsView: View {
             }
         }
         .navigationTitle("Scanner Database").navigationBarTitleDisplayMode(.inline)
+        .sheet(item: $downloadReview) { review in
+            ScannerDatabaseDownloadReviewSheet(game: review.game, refreshRequested: review.refreshRequested) {
+                guard isVisible, scenePhase == .active, game == review.game, !clearingCache,
+                      !databaseUpdater.isRefreshing else { return }
+                databaseUpdater.refreshNow(game: review.game)
+            }
+        }
         .task {
             guard scenePhase == .active else { return }
             await gameCatalog.refreshIfNeeded()
@@ -233,15 +252,17 @@ private struct ScannerDatabaseSettingsView: View {
         }
         .onDisappear {
             isVisible = false
+            downloadReview = nil
             gameCatalog.cancel()
             databaseUpdater.setSettingsVisible(false, game: game)
         }
         .onChange(of: game) { _, game in
+            downloadReview = nil
             if isVisible { databaseUpdater.setSettingsVisible(true, game: game) }
         }
         .onChange(of: scenePhase) { _, phase in
             databaseUpdater.setForeground(phase == .active)
-            if phase != .active { gameCatalog.cancel() }
+            if phase != .active { downloadReview = nil; gameCatalog.cancel() }
             else if isVisible {
                 Task {
                     guard isVisible, scenePhase == .active else { return }

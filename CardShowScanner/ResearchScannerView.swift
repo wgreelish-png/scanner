@@ -27,6 +27,11 @@ struct ResearchScannerView: View {
             if phase == .active { startIfReady() }
             else if phase == .background { model.stop() }
         }
+        .overlay {
+            if let provider = model.liveProvider {
+                ScannerDownloadPreviewOverlay(provider: provider, game: game) { finish(nil) }
+            }
+        }
     }
 
     private var camera: some View {

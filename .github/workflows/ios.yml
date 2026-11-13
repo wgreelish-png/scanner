@@ -23,6 +23,7 @@ on:
           - scanner_polish
           - text_assist
           - market_activity
+          - download_preview
           - text_image_start
           - text_image_part
           - research_ui
@@ -169,7 +170,7 @@ jobs:
         shell: bash
         run: rm -rf -- "$IMAGE_WORK_DIRECTORY"
   native:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job_scope == 'all' || inputs.job_scope == 'native' || inputs.job_scope == 'log_review' || inputs.job_scope == 'show_polish' || inputs.job_scope == 'leftover_stock' || inputs.job_scope == 'photo_scan' || inputs.job_scope == 'scanner_polish' || inputs.job_scope == 'text_assist' || inputs.job_scope == 'market_activity' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job_scope == 'all' || inputs.job_scope == 'native' || inputs.job_scope == 'log_review' || inputs.job_scope == 'show_polish' || inputs.job_scope == 'leftover_stock' || inputs.job_scope == 'photo_scan' || inputs.job_scope == 'scanner_polish' || inputs.job_scope == 'text_assist' || inputs.job_scope == 'market_activity' || inputs.job_scope == 'download_preview' }}
     runs-on: macos-15-intel
     timeout-minutes: 60
     steps:
@@ -177,7 +178,7 @@ jobs:
       - name: Build and run native regression tests
         id: native_tests
         env:
-          SCANNER_TEST_SCOPE: ${{ inputs.job_scope == 'market_activity' && 'market_activity' || inputs.job_scope == 'text_assist' && 'text_assist' || inputs.job_scope == 'scanner_polish' && 'scanner_polish' || inputs.job_scope == 'photo_scan' && 'photo_scan' || inputs.job_scope == 'leftover_stock' && 'all' || inputs.job_scope == 'show_polish' && 'all' || inputs.job_scope == 'log_review' && 'log_review' || inputs.test_scope || 'all' }}
+          SCANNER_TEST_SCOPE: ${{ inputs.job_scope == 'download_preview' && 'download_preview' || inputs.job_scope == 'market_activity' && 'market_activity' || inputs.job_scope == 'text_assist' && 'text_assist' || inputs.job_scope == 'scanner_polish' && 'scanner_polish' || inputs.job_scope == 'photo_scan' && 'photo_scan' || inputs.job_scope == 'leftover_stock' && 'all' || inputs.job_scope == 'show_polish' && 'all' || inputs.job_scope == 'log_review' && 'log_review' || inputs.test_scope || 'all' }}
         run: |
           if [ "$SCANNER_TEST_SCOPE" = printer_transport ] || [ "$SCANNER_TEST_SCOPE" = label_controls ]; then
             bash scripts/run_ios_tests.sh CardShowScannerTests/NiimbotProtocolTests CardShowScannerTests/ScannerDiagnosticsTests CardShowScannerTests/LabelPrintQueueTests CardShowScannerTests/NiimbotImageTransferPreferencesTests CardShowScannerTests/NiimbotRollReadCoordinatorTests CardShowScannerTests/NiimbotLabelCatalogTests CardShowScannerTests/NiimbotLabelProductResolverTests
@@ -185,6 +186,13 @@ jobs:
             bash scripts/run_ios_tests.sh CardShowScannerTests/InventoryLabelTests CardShowScannerTests/AdaptiveLabelRenderingTests CardShowScannerTests/CustomPriceTagTests CardShowScannerTests/CustomLabelQueueTests CardShowScannerTests/LabelPrintQueueTests CardShowScannerTests/NiimbotImageTransferPreferencesTests CardShowScannerTests/NiimbotRollReadCoordinatorTests CardShowScannerTests/NiimbotLabelCatalogTests CardShowScannerTests/ScannerDiagnosticsTests CardShowScannerTests/NiimbotLabelProductResolverTests CardShowScannerTests/ShowInventorySortTests CardShowScannerTests/InventoryLabelBatchTests
           elif [ "$SCANNER_TEST_SCOPE" = label_queue ]; then
             bash scripts/run_ios_tests.sh CardShowScannerTests/LabelPrintQueueTests CardShowScannerTests/LabelPrintRunOutcomeTests CardShowScannerTests/CustomPriceTagTests
+          elif [ "$SCANNER_TEST_SCOPE" = download_preview ]; then
+            bash scripts/run_ios_tests.sh \
+              CardShowScannerTests/ScannerDownloadPreviewTests \
+              CardShowScannerTests/ScannerDownloadGateTests \
+              CardShowScannerTests/ScannerDatabaseCacheTests \
+              CardShowScannerTests/ScannerDatabaseUpdaterTests \
+              CardShowScannerTests/ScannerGameCatalogTests
           elif [ "$SCANNER_TEST_SCOPE" = market_activity ]; then
             bash scripts/run_ios_tests.sh \
               CardShowScannerTests/OpportunitiesTests \
@@ -277,7 +285,7 @@ jobs:
             NativeTests.log
             NativeCrashSummary.log
   ui:
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.job_scope == 'scanner_polish' || inputs.job_scope == 'photo_scan' || inputs.job_scope == 'leftover_stock' || inputs.job_scope == 'show_polish' || inputs.job_scope == 'log_review' || inputs.job_scope == 'ui_diagnostic' || ((inputs.job_scope == 'all' || inputs.job_scope == 'ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'camera_lifecycle' && inputs.test_scope != 'navigation_price')) }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.job_scope == 'download_preview' || inputs.job_scope == 'scanner_polish' || inputs.job_scope == 'photo_scan' || inputs.job_scope == 'leftover_stock' || inputs.job_scope == 'show_polish' || inputs.job_scope == 'log_review' || inputs.job_scope == 'ui_diagnostic' || ((inputs.job_scope == 'all' || inputs.job_scope == 'ui') && inputs.test_scope != 'printer_transport' && inputs.test_scope != 'camera_lifecycle' && inputs.test_scope != 'navigation_price')) }}
     runs-on: macos-15-intel
     # Total CLI budgets stop a stall cascade before the outer job deadline.
     timeout-minutes: 110
@@ -288,7 +296,7 @@ jobs:
       - name: Build and run UI regression tests
         id: ui_tests
         env:
-          SCANNER_TEST_SCOPE: ${{ inputs.job_scope == 'scanner_polish' && 'scanner_polish' || inputs.job_scope == 'photo_scan' && 'photo_scan' || inputs.job_scope == 'leftover_stock' && 'leftover_stock' || inputs.job_scope == 'show_polish' && 'show_polish' || inputs.job_scope == 'log_review' && 'log_review' || inputs.job_scope == 'ui_diagnostic' && 'ui_diagnostic' || inputs.test_scope || 'all' }}
+          SCANNER_TEST_SCOPE: ${{ inputs.job_scope == 'download_preview' && 'download_preview' || inputs.job_scope == 'scanner_polish' && 'scanner_polish' || inputs.job_scope == 'photo_scan' && 'photo_scan' || inputs.job_scope == 'leftover_stock' && 'leftover_stock' || inputs.job_scope == 'show_polish' && 'show_polish' || inputs.job_scope == 'log_review' && 'log_review' || inputs.job_scope == 'ui_diagnostic' && 'ui_diagnostic' || inputs.test_scope || 'all' }}
           SCANNER_TEST_TIMEOUT_SECONDS: ${{ inputs.job_scope == 'ui_diagnostic' && '900' || '3600' }}
         run: |
           if [ "$SCANNER_TEST_SCOPE" = label_preview ]; then
@@ -321,6 +329,8 @@ jobs:
               CardShowScannerUITests/InventoryLabelsUITests/testSingleCardDraftCancelPreservesInventoryAndBudget \
               CardShowScannerUITests/InventoryLabelsUITests/testInventoryPrintOrderSortsNumericPricesAndRemembersSelection \
               CardShowScannerUITests/InventoryLabelsUITests/testLeavingCustomAndBulkPrintQueuesClearsThemAndPreservesPreferences
+          elif [ "$SCANNER_TEST_SCOPE" = download_preview ]; then
+            bash scripts/run_ios_tests.sh CardShowScannerUITests/ScannerDownloadPreviewUITests
           elif [ "$SCANNER_TEST_SCOPE" = scanner_polish ]; then
             bash scripts/run_ios_tests.sh \
               CardShowScannerUITests/ReviewPresentationUITests/testSuccessfulManualAddClosesBothSheetsAndCommitsOneRow \

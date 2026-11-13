@@ -19,6 +19,9 @@ for SCANNER_ALLOWED_TARGET in "$@"; do
     CardShowScannerTests/OpportunitiesTests|CardShowScannerTests/MarketActivityPresentationTests|CardShowScannerTests/MarketEvidenceTests|CardShowScannerTests/MarketInsightsTests) ;;
     CardShowScannerTests/CardResearchModelTests|CardShowScannerTests/ResearchEvidenceTests|CardShowScannerTests/ResearchTests) ;;
     CardShowScannerTests/CardImageQualityTests|CardShowScannerUITests/CardImageQualityUITests) ;;
+    CardShowScannerTests/ScannerDownloadPreviewTests|CardShowScannerTests/ScannerDownloadGateTests) ;;
+    CardShowScannerTests/ScannerDatabaseCacheTests|CardShowScannerTests/ScannerDatabaseUpdaterTests|CardShowScannerTests/ScannerGameCatalogTests) ;;
+    CardShowScannerUITests/ScannerDownloadPreviewUITests) ;;
     CardShowScannerTests/ManualCardSearchTests|CardShowScannerTests/OpenAPIMarketPricingTests|CardShowScannerTests/TCGGameRegistryTests|CardShowScannerTests/TCGGamePricingTests|CardShowScannerTests/CardEditorPricingTests) ;;
     CardShowScannerTests/PhotoScanStateTests|CardShowScannerTests/PhotoScanProviderPreferenceTests|CardShowScannerTests/ScannerManualSearchLifecycleTests) ;;
     CardShowScannerUITests/PhotoScanUITests/testPhotoCaptureRequiresRetakeAndRemembersMode) ;;

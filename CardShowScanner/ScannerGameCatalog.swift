@@ -147,7 +147,7 @@ enum ScannerGameCatalogFailure: Error {
         configuration.urlCredentialStorage = nil
         let session = URLSession(configuration: configuration)
         defer { session.invalidateAndCancel() }
-        let url = URL(string: "https://nsp-static.tcgtracking.com/newscanplus/packs/index.json")!
+        let url = URL(string: "https://nsp-static.tcgtracking.com/packs/index.json")!
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let (bytes, response) = try await session.bytes(for: request)
